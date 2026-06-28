@@ -1,0 +1,43 @@
+{
+  "title": "Set up your environment",
+  "comment": "Generic default plan — what nearly everyone needs to run Claude. Pure data, no logic. The engine reads this, runs each `install` in a pty, and shows it. `detect` is how the engine knows a step is already done. a corporate network-specific steps never live here — they arrive as a plugin recipe.",
+  "steps": [
+    {
+      "name": "Node.js",
+      "description": "JavaScript runtime — required by Claude Code (and by this tool itself)",
+      "detect": "node --version",
+      "install": "winget install --id OpenJS.NodeJS -e --accept-source-agreements --accept-package-agreements",
+      "uninstall": "winget uninstall --id OpenJS.NodeJS -e",
+      "selfHost": true,
+      "_selfHost": "The panel itself runs ON node. Uninstalling it from inside the panel's own pty would kill the server mid-op (node.exe locked). So a selfHost uninstall runs in a DETACHED window and the server shuts down first to release node.exe."
+    },
+    {
+      "name": "Git",
+      "description": "Version control — required by Claude plugin marketplaces",
+      "detect": "git --version",
+      "install": "winget install --id Git.Git -e --accept-source-agreements --accept-package-agreements",
+      "uninstall": "winget uninstall --id Git.Git -e"
+    },
+    {
+      "name": "Visual Studio Code",
+      "description": "Editor surface preferred by Claude Code",
+      "detect": "code --version",
+      "install": "winget install --id Microsoft.VisualStudioCode -e --accept-source-agreements --accept-package-agreements",
+      "uninstall": "winget uninstall --id Microsoft.VisualStudioCode -e"
+    },
+    {
+      "name": "jq",
+      "description": "JSON CLI — required by some Claude plugin hooks",
+      "detect": "jq --version",
+      "install": "winget install --id jqlang.jq -e --accept-source-agreements --accept-package-agreements",
+      "uninstall": "winget uninstall --id jqlang.jq -e"
+    },
+    {
+      "name": "Claude Code",
+      "description": "The agent itself — installed globally via npm",
+      "detect": "claude --version",
+      "install": "npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code",
+      "uninstall": "npm uninstall -g @anthropic-ai/claude-code"
+    }
+  ]
+}

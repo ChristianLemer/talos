@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Set up your environment</title>
+    <link rel="stylesheet" href="/vendor/xterm.css" />
+    <style>
+      :root { --bg:#1a1b26; --fg:#c0caf5; --line:#2a2e42; --dim:#565f89; }
+      body { margin:0; background:var(--bg); color:var(--fg); font-family:system-ui,sans-serif; }
+      /* Thin theme-matched scrollbar for the whole page. */
+      *::-webkit-scrollbar { width:10px; height:10px; }
+      *::-webkit-scrollbar-track { background:transparent; }
+      *::-webkit-scrollbar-thumb { background:var(--line); border-radius:8px; }
+      *::-webkit-scrollbar-thumb:hover { background:var(--dim); }
+      /* Hero intro — a little welcoming, a little selling. */
+      header { padding:26px 24px 22px; border-bottom:1px solid var(--line);
+               background:radial-gradient(120% 140% at 0% 0%, #24283b 0%, var(--bg) 60%); position:relative; }
+      h1 { font-size:22px; margin:0 0 6px; font-weight:700; letter-spacing:-0.2px; }
+      h1 .accent { background:linear-gradient(90deg,#7aa2f7,#bb9af7); -webkit-background-clip:text; background-clip:text; color:transparent; }
+      .tagline { font-size:14px; color:#a9b1d6; margin:0; max-width:62ch; line-height:1.5; }
+      .tagline b { color:var(--fg); font-weight:600; }
+      #overall { position:absolute; top:14px; right:18px; font-size:12px; color:var(--dim); }
+      #steps { padding:8px 12px; }
+      details { border:1px solid var(--line); border-radius:8px; margin:6px 0; overflow:hidden; }
+      summary { padding:9px 12px; cursor:pointer; display:flex; gap:10px; align-items:center; list-style:none; font-size:14px; }
+      summary::-webkit-details-marker { display:none; }
+      .badge { font-family:"JetBrains Mono",monospace; width:1.2em; text-align:center; }
+      .name { flex:1; }
+      .desc { color:var(--dim); font-size:12px; }
+      .statusLabel { font-family:"JetBrains Mono",monospace; font-size:12px; }
+      .waiting      { color:var(--dim); }
+      .installing   { color:#e0af68; }
+      .uninstalling { color:#e0af68; }
+      .ok           { color:#9ece6a; }
+      .absent       { color:var(--dim); }
+      .fail         { color:#f7768e; font-weight:700; }
+      #globalbar { display:flex; gap:8px; padding:12px 12px 0; }
+      .globalbtn { background:#3d59a1; color:var(--fg); border:0; padding:7px 14px; border-radius:7px; cursor:pointer; font-size:13px; font-weight:600; }
+      .globalbtn:hover { filter:brightness(1.15); }
+      /* Danger zone — uninstall lives far from install, dim, off to the right. */
+      #dangerzone { display:flex; align-items:center; gap:12px; margin:24px 12px 16px; padding:12px 14px;
+                    background:#15161f; border:1px solid var(--line); border-radius:8px; }
+      #dangerzone .dz-label { font-size:12px; color:var(--dim); flex:1; }
+      .dangerbtn { background:none; color:var(--dim); border:1px solid var(--line); padding:6px 12px;
+                   border-radius:6px; cursor:pointer; font-size:12px; }
+      .dangerbtn:hover { color:#f7768e; border-color:#f7768e; }
+      /* Per-block actions: discreet by default, light up on hover/row-hover. */
+      .rerun { background:none; color:var(--dim); border:1px solid transparent; padding:3px 9px;
+               border-radius:6px; cursor:pointer; font-size:12px; opacity:.55; transition:opacity .12s; }
+      details:hover .rerun { opacity:1; }
+      .rerun:hover { color:var(--fg); border-color:var(--line); background:var(--line); }
+      .panel { position:relative; border-top:1px solid var(--line); }
+      .term-host { padding:6px 10px; }
+      .copy { position:absolute; top:8px; right:12px; z-index:2; background:var(--line); color:var(--dim);
+              border:0; padding:5px; border-radius:6px; cursor:pointer; display:flex; opacity:.6; }
+      .copy:hover { color:var(--fg); opacity:1; }
+      /* Thin, theme-matched scrollbars (replaces the chunky default). xterm
+         scrolls inside .xterm-viewport, so target that too. */
+      .term-host ::-webkit-scrollbar,
+      .xterm-viewport::-webkit-scrollbar { width:8px; height:8px; }
+      .term-host ::-webkit-scrollbar-track,
+      .xterm-viewport::-webkit-scrollbar-track { background:transparent; }
+      .term-host ::-webkit-scrollbar-thumb,
+      .xterm-viewport::-webkit-scrollbar-thumb { background:var(--line); border-radius:8px; }
+      .term-host ::-webkit-scrollbar-thumb:hover,
+      .xterm-viewport::-webkit-scrollbar-thumb:hover { background:var(--dim); }
+      /* Full-screen overlay shown when the panel must close on purpose
+         (e.g. uninstalling node, which the panel runs on). */
+      #overlay { position:fixed; inset:0; z-index:50; display:none; align-items:center; justify-content:center;
+                 background:rgba(16,17,24,.92); backdrop-filter:blur(3px); padding:40px; }
+      #overlay.show { display:flex; }
+      .overlay-card { max-width:46ch; text-align:center; }
+      .overlay-card .spin { font-size:28px; color:#e0af68; margin-bottom:14px; }
+      .overlay-card h2 { font-size:19px; margin:0 0 10px; }
+      .overlay-card p { color:#a9b1d6; font-size:14px; line-height:1.5; margin:0; }
+    </style>
+  </head>
+  <body>
+    <div id="overlay"><div class="overlay-card">
+      <div class="spin">⏳</div>
+      <h2 id="overlay-title"></h2>
+      <p id="overlay-body"></p>
+    </div></div>
+    <header>
+      <h1><span class="accent">Your workspace</span>, ready in one click.</h1>
+      <p class="tagline">Everything you need to run <b>Claude Code</b> — installed, kept current, and shown
+        to you as it happens. No terminal know-how required: press <b>Install all</b> and watch it work.</p>
+      <span id="overall">connecting…</span>
+    </header>
+    <div id="globalbar">
+      <button id="install-all" class="globalbtn">Install all</button>
+    </div>
+    <div id="steps"></div>
+    <div id="dangerzone">
+      <span class="dz-label">Remove everything this tool installed.</span>
+      <button id="uninstall-all" class="dangerbtn">Uninstall all</button>
+    </div>
+
+    <script src="/vendor/xterm.js"></script>
+    <script>
+      const stepsEl = document.getElementById("steps");
+      const overall = document.getElementById("overall");
+      const b64dec = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+      const dec = new TextDecoder();
+      const rows = {}; // i → { details, badge, statusLabel, host, term }
+
+      const newTerm = () => new Terminal({
+        cols:100, rows:18, fontSize:12, convertEol:false,
+        theme:{ background:"#1a1b26", foreground:"#c0caf5" },
+      });
+
+      const GLYPH = { waiting:"·", installing:"⠹", uninstalling:"⠹", ok:"✓", absent:"·", fail:"✗" };
+      const LABEL = { waiting:"—", installing:"installing…", uninstalling:"removing…", ok:"present", absent:"removed", fail:"failed" };
+
+      function renderPlan(steps) {
+        for (const s of steps) {
+          const d = document.createElement("details");
+          const sum = document.createElement("summary");
+          const badge = document.createElement("span");
+          badge.className = "badge waiting"; badge.textContent = "·";
+          const name = document.createElement("span");
+          name.className = "name";
+          name.innerHTML = `${s.name}` + (s.description ? ` <span class="desc">— ${s.description}</span>` : "");
+          const st = document.createElement("span");
+          st.className = "statusLabel waiting"; st.textContent = "—";
+          const install = document.createElement("button");
+          install.className = "rerun"; install.textContent = "install"; install.title = "Install this";
+          install.onclick = (e) => { e.preventDefault(); ws.send(JSON.stringify({ type:"install", i:s.i })); };
+          sum.append(badge, name, st, install);
+          if (s.canUninstall) {                          // no uninstall button for foundations (e.g. node)
+            const uninstall = document.createElement("button");
+            uninstall.className = "rerun"; uninstall.textContent = "uninstall"; uninstall.title = "Uninstall this";
+            uninstall.onclick = (e) => { e.preventDefault(); ws.send(JSON.stringify({ type:"uninstall", i:s.i })); };
+            sum.append(uninstall);
+          }
+          // Output panel with a corner copy icon — affordance sits next to what it acts on.
+          const panel = document.createElement("div");
+          panel.className = "panel";
+          const ICON_COPY = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+          const ICON_OK = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+          const copy = document.createElement("button");
+          copy.className = "copy"; copy.innerHTML = ICON_COPY; copy.title = "Copy this step's output";
+          copy.onclick = (e) => {
+            e.preventDefault();
+            const text = (rows[s.i].log || "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ""); // strip ANSI
+            navigator.clipboard.writeText(text).then(() => {
+              copy.innerHTML = ICON_OK; setTimeout(() => copy.innerHTML = ICON_COPY, 1200);
+            });
+          };
+          const host = document.createElement("div");
+          host.className = "term-host";
+          panel.append(copy, host);
+          d.append(sum, panel);
+          stepsEl.append(d);
+          rows[s.i] = { details:d, badge, statusLabel:st, host, term:null, log:"" };
+        }
+      }
+
+      function ensureTerm(i) {
+        const r = rows[i];
+        if (!r.term) { r.term = newTerm(); r.term.open(r.host); }
+        return r.term;
+      }
+
+      function setStatus(i, status) {
+        const r = rows[i]; if (!r) return;
+        if (status === "installing" || status === "uninstalling") { r.log = ""; if (r.term) r.term.reset(); } // fresh run
+        r.badge.className = "badge " + status; r.badge.textContent = GLYPH[status] || "·";
+        r.statusLabel.className = "statusLabel " + status; r.statusLabel.textContent = LABEL[status] || status;
+        if (status === "installing" || status === "uninstalling" || status === "fail") r.details.open = true; // show activity / failures
+        if (status === "ok" || status === "absent") r.details.open = false;       // fold completed (frame stays)
+      }
+
+      const ws = new WebSocket(`ws://${location.host}`);
+
+      document.getElementById("install-all").onclick = () => ws.send(JSON.stringify({ type:"install-all" }));
+      document.getElementById("uninstall-all").onclick = () => ws.send(JSON.stringify({ type:"uninstall-all" }));
+
+      ws.onopen = () => overall.textContent = "ready";
+      ws.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+        switch (msg.type) {
+          case "plan": renderPlan(msg.steps); break;
+          case "step": setStatus(msg.i, msg.status); break;
+          case "out": {
+            const text = dec.decode(b64dec(msg.data));
+            ensureTerm(msg.i).write(text);
+            if (rows[msg.i]) rows[msg.i].log += text;   // keep raw for the copy button
+            break;
+          }
+          case "done": overall.textContent = "done"; break;
+          case "overlay":
+            document.getElementById("overlay-title").textContent = msg.title || "";
+            document.getElementById("overlay-body").textContent = msg.body || "";
+            document.getElementById("overlay").classList.add("show");
+            break;
+        }
+      };
+      ws.onclose = () => overall.textContent = "disconnected";
+    </script>
+  </body>
+</html>
