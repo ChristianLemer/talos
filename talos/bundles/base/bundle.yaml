@@ -58,6 +58,7 @@ packages:
   - name: Obsidian
     description: Local Markdown knowledge base
     winget: Obsidian.Obsidian
+    detect: winget list --id Obsidian.Obsidian --exact   # GUI app, no CLI — detect/version via winget
 
   - name: Claude Code
     description: The agent itself — installed globally via npm

@@ -22,10 +22,11 @@
 //   {type:"done"}
 
 import http from "node:http";
-import { readFileSync, readdirSync, existsSync, createWriteStream } from "node:fs";
+import { readFileSync, readdirSync, existsSync, mkdirSync, appendFileSync, writeFileSync, rmSync, createWriteStream } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { execFile } from "node:child_process";
+import os from "node:os";
 import { WebSocketServer } from "ws";
 import { parse as parseYaml } from "yaml";
 import pty from "node-pty";
@@ -34,6 +35,46 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");        // talos/  (the machinery)
 const PORT = 7682;
 const isWindows = process.platform === "win32";
+const HOST = os.hostname();
+const USER = (os.userInfo().username || "user").replace(/[^\w.-]/g, "_");
+
+// --- local state (per machine, outside the coque) --------------------------
+// Consent + private history live here. The repo stays generic; nothing
+// personal is written into it.
+const STATE_DIR = join(process.env.LOCALAPPDATA || process.env.HOME || os.tmpdir(), "Talos");
+const CONSENT_FILE = join(STATE_DIR, "consent.json");
+// Shared/collective history sits NEXT TO the system (repo root), so the disk's
+// topology decides reach: personal disk → just you; collective disk → the team.
+const SHARED_LOG_DIR = join(ROOT, "..", "logs", HOST);
+const SHARED_LOG = join(SHARED_LOG_DIR, `${USER}.jsonl`);
+const PRIVATE_LOG = join(STATE_DIR, "history.jsonl");
+
+function ensureDir(d) { try { mkdirSync(d, { recursive: true }); } catch {} }
+// Consent: { decided: bool, share: bool }. opt-in by default (share=false).
+function readConsent() {
+  try { return JSON.parse(readFileSync(CONSENT_FILE, "utf8")); } catch { return { decided: false, share: false }; }
+}
+function writeConsent(c) { ensureDir(STATE_DIR); try { writeFileSync(CONSENT_FILE, JSON.stringify(c, null, 2)); } catch (e) { log(`consent write failed: ${e.message}`); } }
+
+// Append one history entry. Shared file if consented, else private to this
+// machine — the Log tab works either way; only the LOCATION (and thus who can
+// see it) changes. Talos never sends anything outbound — it just writes a file.
+function appendHistory(entry) {
+  const line = JSON.stringify({ ...entry, host: HOST, user: USER }) + "\n";
+  const share = readConsent().share;
+  const target = share ? SHARED_LOG : PRIVATE_LOG;
+  ensureDir(dirname(target));
+  try { appendFileSync(target, line); } catch (e) { log(`history write failed: ${e.message}`); }
+}
+function readHistory() {
+  const share = readConsent().share;
+  const target = share ? SHARED_LOG : PRIVATE_LOG;
+  try { return readFileSync(target, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)); }
+  catch { return []; }
+}
+function clearHistory() {
+  for (const f of [SHARED_LOG, PRIVATE_LOG]) { try { rmSync(f); } catch {} }
+}
 
 // --- trace, since node runs hidden (no console to watch) -------------------
 const logFile = createWriteStream(join(ROOT, "panel.log"), { flags: "a" });
@@ -168,7 +209,7 @@ wss.on("connection", (ws) => {
   // Draw the plan and STOP — nothing runs on its own. The user drives every
   // action (per-step install/uninstall, or the global buttons). A refuge acts
   // only when asked.
-  send(ws, { type: "plan", bundles: BUNDLES,
+  send(ws, { type: "plan", bundles: BUNDLES, consent: readConsent(),
     steps: STEPS.map((s, i) => ({ i, name: s.name, description: s.description, bundle: s.bundle, canUninstall: !!s.uninstall })) });
   detectAll(ws).catch((e) => log(`detect error: ${e.stack || e}`));   // ground truth → pre-check the cards
 
@@ -182,6 +223,16 @@ wss.on("connection", (ws) => {
       // msg.want = array of package indices the user wants present. Apply the
       // DIFF only: install wanted-but-absent, uninstall unwanted-but-present.
       applyDiff(ws, msg.want || []).catch((e) => log(`apply error: ${e.stack || e}`));
+    } else if (msg.type === "get-log") {
+      send(ws, { type: "log", consent: readConsent(), history: readHistory() });
+    } else if (msg.type === "set-consent") {
+      writeConsent({ decided: true, share: !!msg.share });
+      log(`consent set: share=${!!msg.share}`);
+      send(ws, { type: "log", consent: readConsent(), history: readHistory() });
+    } else if (msg.type === "clear-log") {
+      clearHistory();
+      log("history cleared by user");
+      send(ws, { type: "log", consent: readConsent(), history: readHistory() });
     }
   });
   ws.on("close", () => { log("client disconnected"); scheduleShutdownIfIdle(); });
@@ -239,6 +290,21 @@ function detectPresent(step) {
   });
 }
 
+// Capture a package's installed VERSION by running its `detect` command and
+// grabbing the first version-looking token. Silent, for the log — not shown.
+function captureVersion(step) {
+  return new Promise((resolve) => {
+    if (!step.detect) return resolve(null);
+    const done = (out) => {
+      const m = (out || "").match(/\d+\.\d+(\.\d+)?/);
+      resolve(m ? m[0] : (out || "").trim().split("\n")[0]?.slice(0, 40) || null);
+    };
+    if (!isWindows) return execFile("/bin/sh", ["-c", step.detect], (e, o) => done(o));
+    const ps = `$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User'); ${step.detect}`;
+    execFile("powershell.exe", ["-NoProfile", "-Command", ps], (e, o) => done(o));
+  });
+}
+
 // Detect every package's state and send it so the panel pre-checks what's
 // already installed. The diff (apply) compares the user's wishes to THIS.
 async function detectAll(ws) {
@@ -281,6 +347,10 @@ async function doStepNow(ws, i, action) {
     const ok = code === 0 || BENIGN_CODES.has(code);
     log(`step ${i} ${action} ${ok ? "OK" : "FAILED"} (exit ${code}): ${s.name}`);
     send(ws, { type: "step", i, status: ok ? (action === "uninstall" ? "absent" : "ok") : "fail" });
+    // Journal the outcome (version captured for installs). Location depends on
+    // consent; either way the Log tab can show it.
+    const version = ok && action === "install" ? await captureVersion(s) : null;
+    appendHistory({ at: new Date().toISOString(), package: s.name, bundle: s.bundle, action, ok, exit: code, version });
     if (ok && action === "uninstall" && s.selfHost) {
       send(ws, { type: "overlay", title: `${s.name} removed`,
         body: "This panel runs on it, so it can't keep running. You can close this window — re-open the tool later to set things up again." });

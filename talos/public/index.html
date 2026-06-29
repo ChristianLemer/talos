@@ -110,6 +110,43 @@
         .tagline { display:none; }
         header { padding:10px 16px 8px; }
       }
+      /* Tabs + views */
+      nav { display:flex; gap:4px; padding:0 12px; border-bottom:1px solid var(--line); }
+      .tab { background:none; border:0; color:var(--dim); padding:9px 14px; cursor:pointer; font-size:13px;
+             border-bottom:2px solid transparent; }
+      .tab:hover { color:var(--fg); }
+      .tab.active { color:var(--fg); border-bottom-color:#3d59a1; }
+      .view { display:none; } .view.active { display:block; }
+      /* Settings rows + history */
+      #settings { padding:14px 14px 4px; }
+      .set-row { display:flex; align-items:center; gap:14px; padding:12px 0; border-bottom:1px solid var(--line); }
+      .set-row > div:first-child { flex:1; }
+      .set-title { font-size:14px; font-weight:600; }
+      .set-desc { font-size:12px; color:var(--dim); line-height:1.4; margin-top:2px; }
+      .switch { position:relative; display:inline-block; width:40px; height:22px; flex:none; }
+      .switch input { opacity:0; width:0; height:0; }
+      .slider { position:absolute; inset:0; background:var(--line); border-radius:22px; cursor:pointer; transition:.15s; }
+      .slider::before { content:""; position:absolute; width:16px; height:16px; left:3px; top:3px; background:var(--fg); border-radius:50%; transition:.15s; }
+      .switch input:checked + .slider { background:#3d59a1; }
+      .switch input:checked + .slider::before { transform:translateX(18px); }
+      .dangerbtn { background:none; color:var(--dim); border:1px solid var(--line); padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px; }
+      .dangerbtn:hover { color:#f7768e; border-color:#f7768e; }
+      #history { padding:8px 14px 16px; }
+      .hist-empty { color:var(--dim); font-size:13px; padding:12px 0; }
+      .hist-row { display:flex; gap:12px; align-items:baseline; padding:6px 0; border-bottom:1px solid var(--line); font-size:13px; }
+      .hist-row .h-when { color:var(--dim); font-size:11px; font-family:"JetBrains Mono",monospace; width:130px; flex:none; }
+      .hist-row .h-pkg { flex:1; }
+      .hist-row .h-ver { color:var(--dim); font-family:"JetBrains Mono",monospace; font-size:12px; }
+      .hist-row .h-act.ok { color:#9ece6a; } .hist-row .h-act.fail { color:#f7768e; }
+      /* Consent dialog reuses the overlay box */
+      #consent { position:fixed; inset:0; z-index:60; display:none; align-items:center; justify-content:center;
+                 background:rgba(16,17,24,.94); backdrop-filter:blur(3px); padding:40px; }
+      #consent.show { display:flex; }
+      .consent-card { max-width:48ch; }
+      .consent-card h2 { font-size:19px; margin:0 0 12px; }
+      .consent-card p { color:#a9b1d6; font-size:14px; line-height:1.55; margin:0 0 10px; }
+      .consent-card p.muted { color:var(--dim); font-size:13px; }
+      .consent-actions { display:flex; gap:10px; margin-top:18px; }
     </style>
   </head>
   <body>
@@ -118,17 +155,54 @@
       <h2 id="overlay-title"></h2>
       <p id="overlay-body"></p>
     </div></div>
+    <!-- First-boot consent dialog -->
+    <div id="consent"><div class="overlay-card consent-card">
+      <h2>Share setup data for support?</h2>
+      <p>Talos can record <b>what it installs</b> (software, versions, dates) so your team
+        can offer support and see who still needs to update. Depending on where this tool
+        lives, that record may be visible to your team.</p>
+      <p class="muted">It is saved next to this tool — nothing is sent anywhere. You can change
+        this any time in the <b>Log</b> tab, and delete what was collected.</p>
+      <div class="consent-actions">
+        <button id="consent-yes" class="globalbtn">Yes, share for support</button>
+        <button id="consent-no" class="rerun">Keep it private</button>
+      </div>
+    </div></div>
+
     <header>
       <h1><span class="accent">Your workspace</span>, ready in one click.</h1>
       <p class="tagline">Everything you need to run <b>Claude Code</b> — installed, kept current, and shown
         to you as it happens. No terminal know-how required: check what you want and press <b>Apply</b>.</p>
       <span id="overall">connecting…</span>
     </header>
-    <div id="globalbar">
-      <button id="install-all" class="globalbtn">Apply selection</button>
-      <span id="globalhint">Installs what you checked, removes what you unchecked.</span>
+    <nav>
+      <button class="tab active" data-view="setup">Setup</button>
+      <button class="tab" data-view="log">Log &amp; settings</button>
+    </nav>
+
+    <div id="view-setup" class="view active">
+      <div id="globalbar">
+        <button id="install-all" class="globalbtn">Apply selection</button>
+        <span id="globalhint">Installs what you checked, removes what you unchecked.</span>
+      </div>
+      <div id="steps"></div>
     </div>
-    <div id="steps"></div>
+
+    <div id="view-log" class="view">
+      <div id="settings">
+        <div class="set-row">
+          <div><div class="set-title">Share setup data for support</div>
+            <div class="set-desc">When on, the install history is saved next to the tool (visible to your team if the disk is shared). When off, it stays private to this machine.</div></div>
+          <label class="switch"><input type="checkbox" id="consent-toggle"><span class="slider"></span></label>
+        </div>
+        <div class="set-row">
+          <div><div class="set-title">Delete collected data</div>
+            <div class="set-desc">Remove the recorded install history.</div></div>
+          <button id="clear-log" class="dangerbtn">Delete</button>
+        </div>
+      </div>
+      <div id="history"></div>
+    </div>
 
     <script src="/vendor/xterm.js"></script>
     <script>
@@ -275,11 +349,50 @@
         ws.send(JSON.stringify({ type:"apply", want:[...wanted] }));
       };
 
+      // --- tabs ---
+      document.querySelectorAll(".tab").forEach((tab) => {
+        tab.onclick = () => {
+          document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t === tab));
+          const v = tab.dataset.view;
+          document.getElementById("view-setup").classList.toggle("active", v === "setup");
+          document.getElementById("view-log").classList.toggle("active", v === "log");
+          if (v === "log") ws.send(JSON.stringify({ type:"get-log" }));
+        };
+      });
+
+      // --- consent dialog + settings ---
+      const consentEl = document.getElementById("consent");
+      function setConsent(share) { ws.send(JSON.stringify({ type:"set-consent", share })); consentEl.classList.remove("show"); }
+      document.getElementById("consent-yes").onclick = () => setConsent(true);
+      document.getElementById("consent-no").onclick = () => setConsent(false);
+      document.getElementById("consent-toggle").onchange = (e) => ws.send(JSON.stringify({ type:"set-consent", share: e.target.checked }));
+      document.getElementById("clear-log").onclick = () => ws.send(JSON.stringify({ type:"clear-log" }));
+
+      function renderLog(consent, history) {
+        document.getElementById("consent-toggle").checked = !!(consent && consent.share);
+        const h = document.getElementById("history");
+        if (!history || !history.length) { h.innerHTML = '<div class="hist-empty">No install history yet.</div>'; return; }
+        h.innerHTML = "";
+        for (const e of history.slice().reverse()) {     // newest first
+          const row = document.createElement("div"); row.className = "hist-row";
+          const when = (e.at || "").replace("T", " ").slice(0, 16);
+          row.innerHTML =
+            `<span class="h-when">${when}</span>` +
+            `<span class="h-pkg">${e.package || ""}${e.version ? ` <span class="h-ver">${e.version}</span>` : ""}</span>` +
+            `<span class="h-act ${e.ok ? "ok" : "fail"}">${e.action}${e.ok ? "" : " ✗"}</span>`;
+          h.append(row);
+        }
+      }
+
       ws.onopen = () => overall.textContent = "checking…";
       ws.onmessage = (ev) => {
         const msg = JSON.parse(ev.data);
         switch (msg.type) {
-          case "plan": render(msg.bundles || [], msg.steps); break;
+          case "plan":
+            render(msg.bundles || [], msg.steps);
+            if (msg.consent && !msg.consent.decided) consentEl.classList.add("show"); // first boot
+            break;
+          case "log": renderLog(msg.consent, msg.history); break;
           case "state":                                  // ground truth from the machine
             if (rows[msg.i]) { setWanted(msg.i, msg.present); setStatus(msg.i, msg.present ? "ok" : "waiting"); }
             break;

@@ -1,3 +1,5 @@
 node_modules/
 panel.log
 package-lock.json
+# Runtime install history (per machine/user) — never code, never committed.
+logs/
