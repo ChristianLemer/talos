@@ -30,7 +30,15 @@ set "PATH=%MACHPATH%;%USERPATH%"
 
 :haveNode
 
-if exist "%DIR%node_modules" goto done
+REM Reinstall if node_modules is missing OR any declared dep is absent (e.g. a
+REM newly added module like yaml). `npm install` is idempotent — safe to re-run.
+set DEPS_OK=1
+if not exist "%DIR%node_modules" set DEPS_OK=
+if not exist "%DIR%node_modules\yaml" set DEPS_OK=
+if not exist "%DIR%node_modules\node-pty" set DEPS_OK=
+if not exist "%DIR%node_modules\ws" set DEPS_OK=
+if not exist "%DIR%node_modules\@xterm" set DEPS_OK=
+if defined DEPS_OK goto done
 echo.
 echo   Installing panel components...
 echo.

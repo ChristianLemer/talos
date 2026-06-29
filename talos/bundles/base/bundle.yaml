@@ -1,0 +1,68 @@
+# The Base bundle — shipped inside the coque, always present.
+# A bundle is a folder: this manifest + an optional config/ for files packages
+# deposit or patch. The engine renders one card per bundle from the metadata
+# below; it hardcodes nothing.
+#
+# YAML by indentation (never {} inline). Package managers are named fields
+# (winget:, npm:) — winget is winget, known; we don't abstract into opaque
+# command strings. requires: lists dependencies (installed first).
+
+bundle: Base
+emoji: 🧠
+description: Everything the AI needs to run and work — installed and shown live.
+priority: 0
+selectable: false      # always on; the refuge guarantees the base, can't be unchecked
+
+packages:
+  - name: Node.js
+    description: JavaScript runtime — required by Claude Code (and by this tool itself)
+    winget: OpenJS.NodeJS
+    detect: node --version
+    selfHost: true       # the panel runs on it — uninstall handled specially
+
+  - name: Git
+    description: Version control — required by Claude plugin marketplaces
+    winget: Git.Git
+    detect: git --version
+
+  - name: uv
+    description: Python package manager — lets the AI build and run programs for you
+    winget: astral-sh.uv
+    detect: uv --version
+
+  - name: jq
+    description: JSON CLI — required by some Claude plugin hooks
+    winget: jqlang.jq
+    detect: jq --version
+
+  - name: Nushell
+    description: Structured shell — the family's automation language and surgical-config instrument
+    winget: Nushell.Nushell
+    detect: nu --version
+
+  - name: Visual Studio Code
+    description: Where you see and edit what the AI produces
+    winget: Microsoft.VisualStudioCode
+    detect: code --version
+
+  - name: Helix
+    description: Modal terminal editor
+    winget: Helix.Helix
+    detect: hx --version
+
+  - name: Starship
+    description: Cross-shell prompt
+    winget: Starship.Starship
+    detect: starship --version
+
+  - name: Obsidian
+    description: Local Markdown knowledge base
+    winget: Obsidian.Obsidian
+
+  - name: Claude Code
+    description: The agent itself — installed globally via npm
+    npm: "@anthropic-ai/claude-code"
+    npmFlags: "--allow-scripts=@anthropic-ai/claude-code"
+    detect: claude --version
+    requires:
+      - Node.js

@@ -1,0 +1,26 @@
+# An example bundle OUTSIDE the coque (lives in ./bundles/, not talos/bundles/).
+# It proves the scan picks up additions with zero code change: drop a folder
+# here and a new selectable card appears. An integrator (e.g. a corporate network) adds its own
+# bundles the same way. Delete this folder freely — it's only a demonstration.
+
+bundle: Power tools
+emoji: 🛠️
+description: Optional command-line tools for power users.
+priority: 50
+selectable: true
+
+packages:
+  - name: ripgrep
+    description: Blazingly fast search
+    winget: BurntSushi.ripgrep.MSVC
+    detect: rg --version
+
+  - name: fd
+    description: Fast, friendly alternative to find
+    winget: sharkdp.fd
+    detect: fd --version
+
+  - name: bat
+    description: cat with syntax highlighting
+    winget: sharkdp.bat
+    detect: bat --version

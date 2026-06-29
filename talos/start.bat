@@ -23,10 +23,16 @@ for /f "tokens=5" %%p in ('netstat -ano ^| findstr /r /c:":%PORT% .*LISTENING"')
   taskkill /F /PID %%p >nul 2>&1
 )
 
-REM Decide if cold setup is needed (Node missing, or panel deps missing).
+REM Decide if cold setup is needed: Node missing, node_modules missing, OR a
+REM declared dependency missing (so adding a new module like `yaml` triggers a
+REM reinstall instead of crashing the server silently). Check each top-level dep.
 set NEED=
 where node >nul 2>&1 || set NEED=1
 if not exist "%DIR%node_modules" set NEED=1
+if not exist "%DIR%node_modules\yaml" set NEED=1
+if not exist "%DIR%node_modules\node-pty" set NEED=1
+if not exist "%DIR%node_modules\ws" set NEED=1
+if not exist "%DIR%node_modules\@xterm" set NEED=1
 
 REM Run cold setup in a VISIBLE window so the user sees it work - once.
 if defined NEED (

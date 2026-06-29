@@ -1,34 +1,37 @@
-// server.js — the engine: an imperative host that runs DECLARATIVE recipes.
+// server.js — the engine: an imperative host that runs DECLARATIVE bundles.
 //
-// It reads recipes/default.json (pure data — name/detect/install/uninstall),
-// and for each step:
-//   1. DETECT  — run the recipe's `detect` command; if it succeeds, the step
-//                is already done (green, folded). Detection is cheap.
-//   2. INSTALL — only if detect failed: run `install` in a pty so the package
-//                manager's own progress bar streams through and xterm projects
-//                the live redraw (winget/npm fill in place, not stacked).
+// A bundle is a FOLDER (bundle.yaml + optional config/). The engine scans two
+// places — talos/bundles/ (the Base, inside the coque) and ../bundles/ (extras
+// and integrator bundles, OUTSIDE the coque) — parses each bundle.yaml, and
+// builds a flat list of packages tagged by bundle. The engine knows no specific
+// tool: it runs whatever bundles are present (host/plugins model).
 //
-// The browser can also ask to re-run ONE step ({type:"run", i}) — that is the
-// "by hand" facility without a script: every row is individually replayable.
+// Each package declares a package manager as a NAMED field (winget: / npm:) —
+// winget is winget, known; we don't abstract into opaque command strings. The
+// install/uninstall commands are DERIVED from that field. `requires:` lists
+// dependencies. `detect:` is used to capture the installed version (not to
+// decide whether to act — winget is idempotent and decides that itself).
 //
-// One language owns the loop here (Node). Recipes carry no logic; if a step
-// needs logic, its command is `nu -c "…"` (nushell as surgical instrument).
+// One language owns the loop here (Node). Bundles carry no logic; if a step
+// needs logic, use a `nu -c "…"` package (nushell as surgical instrument).
 //
 // Events over one WebSocket (pure JSON, no prefix):
-//   {type:"plan", steps}              — render every accordion row first
-//   {type:"step", i, status}          — waiting | checking | installing | ok | fail
+//   {type:"plan", steps, bundles}     — render cards + rows
+//   {type:"step", i, status}          — waiting | installing | uninstalling | ok | absent | fail
 //   {type:"out",  i, data}            — raw pty bytes (base64), tagged by step
 //   {type:"done"}
 
 import http from "node:http";
-import { readFileSync, readdirSync, createWriteStream } from "node:fs";
+import { readFileSync, readdirSync, existsSync, createWriteStream } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { execFile } from "node:child_process";
 import { WebSocketServer } from "ws";
+import { parse as parseYaml } from "yaml";
 import pty from "node-pty";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(__dirname, "..");
+const ROOT = join(__dirname, "..");        // talos/  (the machinery)
 const PORT = 7682;
 const isWindows = process.platform === "win32";
 
@@ -41,29 +44,67 @@ function log(msg) {
 }
 log(`--- panel start (pid ${process.pid}, platform ${process.platform}) ---`);
 
-// --- recipes: pure data, no logic ------------------------------------------
-// Scan recipes/*.json and merge their steps. This is the host/plugins model:
-// the engine knows nothing of any specific tool — it reads whatever recipes
-// are present. default.json is the core (strict minimum to run Claude) and
-// loads first; other files (nushell.json now, an integrator's file later) add
-// extras. Same mechanism, different content.
-const RECIPES_DIR = join(ROOT, "recipes");
-function loadRecipes() {
-  const files = readdirSync(RECIPES_DIR).filter((f) => f.endsWith(".json"));
-  files.sort((a, b) => (a === "default.json" ? -1 : b === "default.json" ? 1 : a.localeCompare(b)));
-  const steps = [];
-  for (const f of files) {
-    try {
-      const r = JSON.parse(readFileSync(join(RECIPES_DIR, f), "utf8"));
-      for (const s of (r.steps || [])) steps.push(s);
-      log(`recipe loaded: ${f} (${(r.steps || []).length} steps)`);
-    } catch (e) {
-      log(`recipe skipped (bad JSON): ${f} — ${e.message}`);
+// --- bundles: pure data, no logic ------------------------------------------
+// Two scan roots: the Base inside the coque, then extras outside it. Each
+// subfolder with a bundle.yaml is a bundle. A broken YAML is skipped with a
+// logged message, not defended against (robust, not maternal).
+const BUNDLE_ROOTS = [
+  join(ROOT, "bundles"),            // coque — the Base
+  join(ROOT, "..", "bundles"),      // outside the coque — extras / integrator
+];
+
+// Build a package manager's install/uninstall command from a package's named
+// field. Adding a manager = adding a case here; data files stay clean.
+function commandsFor(pkg) {
+  if (pkg.winget) return {
+    install: `winget install --id ${pkg.winget} -e --accept-source-agreements --accept-package-agreements`,
+    uninstall: `winget uninstall --id ${pkg.winget} -e`,
+  };
+  if (pkg.npm) return {
+    install: `npm install -g ${pkg.npmFlags ? pkg.npmFlags + " " : ""}${pkg.npm}`,
+    uninstall: `npm uninstall -g ${pkg.npm}`,
+  };
+  if (pkg.run) return { install: pkg.run, uninstall: pkg.runUninstall || null };  // escape hatch: raw command
+  return { install: null, uninstall: null };
+}
+
+function loadBundles() {
+  const bundles = [];   // { name, emoji, description, priority, selectable }
+  const steps = [];     // flat packages, each tagged { bundle, name, install, uninstall, detect, requires, selfHost }
+  for (const root of BUNDLE_ROOTS) {
+    if (!existsSync(root)) continue;
+    for (const dir of readdirSync(root, { withFileTypes: true })) {
+      if (!dir.isDirectory()) continue;
+      const file = join(root, dir.name, "bundle.yaml");
+      if (!existsSync(file)) continue;
+      try {
+        const b = parseYaml(readFileSync(file, "utf8"));
+        const meta = {
+          name: b.bundle || dir.name,
+          emoji: b.emoji || "📦",
+          description: b.description || "",
+          priority: b.priority ?? 100,
+          selectable: b.selectable !== false,
+        };
+        bundles.push(meta);
+        for (const p of (b.packages || [])) {
+          const cmd = commandsFor(p);
+          steps.push({
+            bundle: meta.name, name: p.name, description: p.description || "",
+            install: cmd.install, uninstall: cmd.uninstall,
+            detect: p.detect || null, requires: p.requires || [], selfHost: !!p.selfHost,
+          });
+        }
+        log(`bundle loaded: ${meta.name} (${(b.packages || []).length} packages) from ${dir.name}`);
+      } catch (e) {
+        log(`bundle skipped (bad YAML): ${dir.name} — ${e.message}`);
+      }
     }
   }
-  return steps;
+  bundles.sort((a, b) => a.priority - b.priority);
+  return { bundles, steps };
 }
-const STEPS = loadRecipes();
+const { bundles: BUNDLES, steps: STEPS } = loadBundles();
 
 // winget exit codes that mean "nothing to do" — already installed / already
 // latest. Treated as success: the desired state is reached. (Codes are signed
@@ -127,7 +168,9 @@ wss.on("connection", (ws) => {
   // Draw the plan and STOP — nothing runs on its own. The user drives every
   // action (per-step install/uninstall, or the global buttons). A refuge acts
   // only when asked.
-  send(ws, { type: "plan", steps: STEPS.map((s, i) => ({ i, name: s.name, description: s.description, canUninstall: !!s.uninstall })) });
+  send(ws, { type: "plan", bundles: BUNDLES,
+    steps: STEPS.map((s, i) => ({ i, name: s.name, description: s.description, bundle: s.bundle, canUninstall: !!s.uninstall })) });
+  detectAll(ws).catch((e) => log(`detect error: ${e.stack || e}`));   // ground truth → pre-check the cards
 
   ws.on("message", (raw) => {
     let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
@@ -135,10 +178,10 @@ wss.on("connection", (ws) => {
       doStep(ws, msg.i, "install").catch((e) => log(`install error: ${e.stack || e}`));
     } else if (msg.type === "uninstall" && typeof msg.i === "number" && STEPS[msg.i]) {
       doStep(ws, msg.i, "uninstall").catch((e) => log(`uninstall error: ${e.stack || e}`));
-    } else if (msg.type === "install-all") {
-      runAll(ws, "install").catch((e) => log(`install-all error: ${e.stack || e}`));
-    } else if (msg.type === "uninstall-all") {
-      runAll(ws, "uninstall").catch((e) => log(`uninstall-all error: ${e.stack || e}`));
+    } else if (msg.type === "apply") {
+      // msg.want = array of package indices the user wants present. Apply the
+      // DIFF only: install wanted-but-absent, uninstall unwanted-but-present.
+      applyDiff(ws, msg.want || []).catch((e) => log(`apply error: ${e.stack || e}`));
     }
   });
   ws.on("close", () => { log("client disconnected"); scheduleShutdownIfIdle(); });
@@ -181,6 +224,41 @@ function runInPty(ws, idx, cmdline, { silent = false } = {}) {
   });
 }
 
+// Detect a package's PRESENCE (not via pty, not shown). Fast: ask PowerShell's
+// Get-Command for the binary on a freshly-rebuilt PATH — returns reliably,
+// silently. The binary is the first word of the package's `detect` string.
+// Resolves true/false. This is the ground truth the UI pre-checks against and
+// the diff compares to — never a cached flag that could lie.
+function detectPresent(step) {
+  return new Promise((resolve) => {
+    if (!step.detect) return resolve(false);
+    const bin = step.detect.trim().split(/\s+/)[0];
+    if (!isWindows) return execFile("/bin/sh", ["-c", `command -v '${bin}'`], (e) => resolve(!e));
+    const ps = `$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User'); if (Get-Command '${bin}' -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }`;
+    execFile("powershell.exe", ["-NoProfile", "-Command", ps], (e) => resolve(!e));
+  });
+}
+
+// Detect every package's state and send it so the panel pre-checks what's
+// already installed. The diff (apply) compares the user's wishes to THIS.
+async function detectAll(ws) {
+  const results = await Promise.all(STEPS.map(detectPresent));
+  results.forEach((present, i) => send(ws, { type: "state", i, present }));
+  send(ws, { type: "state-done" });
+  log(`detected: ${results.filter(Boolean).length}/${STEPS.length} present`);
+}
+
+// Serial lock: only ONE package manager runs at a time, ever. Two winget
+// processes on the same package fight over the temp file ("being used by
+// another process"). All actions — global Apply, a per-package apply, even a
+// stray double-click — chain through this queue, so they never overlap.
+let actionQueue = Promise.resolve();
+function serialize(fn) {
+  const run = actionQueue.then(fn, fn);   // run after whatever's ahead, success or fail
+  actionQueue = run.catch(() => {});       // never let one failure break the chain
+  return run;
+}
+
 // Run one step's `install` or `uninstall` command and show it. winget/npm are
 // idempotent — they handle "already installed / already absent" themselves and
 // report it via a benign exit code, so no separate probe is needed.
@@ -189,7 +267,10 @@ function runInPty(ws, idx, cmdline, { silent = false } = {}) {
 // (the file goes at next reboot; the live process keeps its in-memory copy).
 // So we just run it inline like everything else — and afterward tell the user
 // they can close the window, since relaunch won't work until node is back.
-async function doStep(ws, i, action) {
+function doStep(ws, i, action) {
+  return serialize(() => doStepNow(ws, i, action));   // never overlap with another action
+}
+async function doStepNow(ws, i, action) {
   const s = STEPS[i];
   const cmd = s[action];
   if (!cmd) return false;
@@ -210,15 +291,25 @@ async function doStep(ws, i, action) {
   }
 }
 
-// Global: run `action` over every step. Reverse for uninstall (dependents
-// before dependencies) and put selfHost (node) LAST so the panel stays alive
-// while the others are removed.
-async function runAll(ws, action) {
-  let order = action === "uninstall" ? [...STEPS.keys()].reverse() : [...STEPS.keys()];
-  if (action === "uninstall") order = order.sort((a, b) => (STEPS[a].selfHost ? 1 : 0) - (STEPS[b].selfHost ? 1 : 0));
-  log(`${action}-all: ${order.map((i) => STEPS[i].name).join(" → ")}`);
-  for (const i of order) await doStep(ws, i, action);
-  log(`${action}-all done`);
+// Apply the DIFF between what the user wants and what's actually on the machine.
+// `want` = package indices the user wants present. We RE-DETECT (ground truth),
+// then only act on differences: install wanted-but-absent, uninstall
+// unwanted-but-present. A small change → a small action; unchanged → nothing.
+// Uninstalls run first (reverse dep order, selfHost/node LAST), then installs.
+async function applyDiff(ws, want) {
+  const wanted = new Set(want);
+  const present = await Promise.all(STEPS.map(detectPresent));
+
+  const toInstall = [...STEPS.keys()].filter((i) => wanted.has(i) && !present[i]);
+  let toRemove = [...STEPS.keys()].filter((i) => !wanted.has(i) && present[i] && STEPS[i].uninstall);
+  toRemove.sort((a, b) => (STEPS[a].selfHost ? 1 : 0) - (STEPS[b].selfHost ? 1 : 0)); // node last
+
+  log(`apply diff: +[${toInstall.map((i) => STEPS[i].name).join(", ") || "—"}] -[${toRemove.map((i) => STEPS[i].name).join(", ") || "—"}]`);
+  if (!toInstall.length && !toRemove.length) { send(ws, { type: "done", nothing: true }); return; }
+
+  for (const i of toRemove) await doStep(ws, i, "uninstall");
+  for (const i of toInstall) await doStep(ws, i, "install");
+  log("apply done");
   send(ws, { type: "done" });
 }
 
