@@ -3,3 +3,5 @@ panel.log
 package-lock.json
 # Runtime install history (per machine/user) — never code, never committed.
 logs/
+# Local drafts — personal working notes, not part of the repo (leading _).
+_*.md

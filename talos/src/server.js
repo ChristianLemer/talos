@@ -100,13 +100,17 @@ function commandsFor(pkg) {
   if (pkg.winget) return {
     install: `winget install --id ${pkg.winget} -e --accept-source-agreements --accept-package-agreements`,
     uninstall: `winget uninstall --id ${pkg.winget} -e`,
+    upgrade: `winget upgrade --id ${pkg.winget} -e --accept-source-agreements --accept-package-agreements`,
   };
   if (pkg.npm) return {
     install: `npm install -g ${pkg.npmFlags ? pkg.npmFlags + " " : ""}${pkg.npm}`,
     uninstall: `npm uninstall -g ${pkg.npm}`,
+    // npm has no cheap "list everything outdated" we parse today, so npm upgrades
+    // are never TRIGGERED (see applyDiff) — but the command is here, future-ready.
+    upgrade: `npm install -g ${pkg.npmFlags ? pkg.npmFlags + " " : ""}${pkg.npm}@latest`,
   };
-  if (pkg.run) return { install: pkg.run, uninstall: pkg.runUninstall || null };  // escape hatch: raw command
-  return { install: null, uninstall: null };
+  if (pkg.run) return { install: pkg.run, uninstall: pkg.runUninstall || null, upgrade: null };  // escape hatch: raw command
+  return { install: null, uninstall: null, upgrade: null };
 }
 
 function loadBundles() {
@@ -132,7 +136,8 @@ function loadBundles() {
           const cmd = commandsFor(p);
           steps.push({
             bundle: meta.name, name: p.name, description: p.description || "",
-            install: cmd.install, uninstall: cmd.uninstall,
+            install: cmd.install, uninstall: cmd.uninstall, upgrade: cmd.upgrade,
+            winget: p.winget || null,   // the id winget reports in `winget upgrade` — how we match outdated rows
             detect: p.detect || null, requires: p.requires || [], selfHost: !!p.selfHost,
           });
         }
@@ -216,13 +221,16 @@ wss.on("connection", (ws) => {
   ws.on("message", (raw) => {
     let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
     if (msg.type === "install" && typeof msg.i === "number" && STEPS[msg.i]) {
-      doStep(ws, msg.i, "install").catch((e) => log(`install error: ${e.stack || e}`));
+      // A single-row action, like Apply, ends with `done` so the UI can unlock.
+      doStep(ws, msg.i, "install").catch((e) => log(`install error: ${e.stack || e}`)).finally(() => send(ws, { type: "done" }));
     } else if (msg.type === "uninstall" && typeof msg.i === "number" && STEPS[msg.i]) {
-      doStep(ws, msg.i, "uninstall").catch((e) => log(`uninstall error: ${e.stack || e}`));
+      doStep(ws, msg.i, "uninstall").catch((e) => log(`uninstall error: ${e.stack || e}`)).finally(() => send(ws, { type: "done" }));
     } else if (msg.type === "apply") {
-      // msg.want = array of package indices the user wants present. Apply the
-      // DIFF only: install wanted-but-absent, uninstall unwanted-but-present.
-      applyDiff(ws, msg.want || []).catch((e) => log(`apply error: ${e.stack || e}`));
+      // msg.want = the package indices the user wants present (the WHOLE desired
+      // state — needed so the diff is correct). msg.scope, if present, restricts
+      // which packages we ACT on (a per-bundle Apply passes just that bundle's
+      // indices) — so a scoped Apply never touches packages outside it.
+      applyDiff(ws, msg.want || [], msg.scope || null).catch((e) => log(`apply error: ${e.stack || e}`));
     } else if (msg.type === "get-log") {
       send(ws, { type: "log", consent: readConsent(), history: readHistory() });
     } else if (msg.type === "set-consent") {
@@ -305,6 +313,67 @@ function captureVersion(step) {
   });
 }
 
+// --- outdated detection: ONE `winget upgrade` for the whole machine ---------
+// winget knows the latest version of everything — so instead of probing each
+// package (winget show ×N, slow, 403-prone) we ask ONCE for the full list of
+// what has an update, with current→available. We parse the fixed-width table
+// by the HEADER's column offsets (Id / Version / Available), not by splitting
+// on spaces — names and versions contain spaces, offsets don't lie.
+// Returns a Map: winget-id (lowercased) → { current, available }.
+// Defensive throughout: any parse hiccup yields an empty map, never a throw —
+// a failed scan just means "nothing looks outdated", the safe direction.
+function parseWingetUpgrade(raw) {
+  const map = new Map();
+  try {
+    const lines = raw
+      .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "")      // strip ANSI
+      .replace(/[─-╿]/g, "")             // strip box-drawing / progress glyphs
+      .split(/\r?\n/)
+      .map((l) => l.replace(/\r/g, ""));           // drop stray carriage returns (spinner)
+    // The header row is the one naming the columns. winget localises these, but
+    // the English "Name  Id  Version  Available  Source" is what ships on the
+    // managed machines we target. Match on Id + Available, the two we slice by.
+    const h = lines.findIndex((l) => /\bId\b/.test(l) && /\bAvailable\b/.test(l));
+    if (h < 0) return map;
+    const header = lines[h];
+    const idPos = header.indexOf("Id");
+    const verPos = header.indexOf("Version");
+    const avPos = header.indexOf("Available");
+    const srcPos = header.indexOf("Source");
+    if (idPos < 0 || verPos < 0 || avPos < 0) return map;
+    for (const line of lines.slice(h + 1)) {
+      if (!line.trim()) break;                     // blank line = end of table
+      if (/^[-\s]+$/.test(line)) continue;         // the --- separator row
+      // A trailing summary like "12 upgrades available." has no column structure.
+      if (line.length < avPos) continue;
+      const id = line.slice(idPos, verPos).trim();
+      const current = line.slice(verPos, avPos).trim();
+      const available = line.slice(avPos, srcPos > avPos ? srcPos : undefined).trim();
+      if (!id || !available) continue;
+      map.set(id.toLowerCase(), { current, available });
+    }
+  } catch (e) {
+    log(`winget upgrade parse failed (treating as none outdated): ${e.message}`);
+  }
+  return map;
+}
+
+// Run the single scan. Not in a pty (no TTY → less spinner noise); PATH refreshed
+// like everywhere else. Behind the same benign-code tolerance. Never rejects.
+function scanOutdated() {
+  return new Promise((resolve) => {
+    if (!isWindows) return resolve(new Map());   // winget is Windows-only
+    const ps = `$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User'); winget upgrade --accept-source-agreements`;
+    execFile("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+      { maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+        if (err && !stdout) { log(`winget upgrade scan failed: ${err.message}`); return resolve(new Map()); }
+        const map = parseWingetUpgrade(stdout || "");
+        log(`winget upgrade: ${map.size} package(s) with an update available`);
+        resolve(map);
+      });
+  });
+}
+
 // Detect every package's state and send it so the panel pre-checks what's
 // already installed. The diff (apply) compares the user's wishes to THIS.
 async function detectAll(ws) {
@@ -342,14 +411,15 @@ async function doStepNow(ws, i, action) {
   if (!cmd) return false;
   busy++;                      // hold off shutdown while this step runs
   try {
-    send(ws, { type: "step", i, status: action === "uninstall" ? "uninstalling" : "installing" });
+    const runningStatus = action === "uninstall" ? "uninstalling" : action === "upgrade" ? "upgrading" : "installing";
+    send(ws, { type: "step", i, status: runningStatus });
     const code = await runInPty(ws, i, cmd);
     const ok = code === 0 || BENIGN_CODES.has(code);
     log(`step ${i} ${action} ${ok ? "OK" : "FAILED"} (exit ${code}): ${s.name}`);
     send(ws, { type: "step", i, status: ok ? (action === "uninstall" ? "absent" : "ok") : "fail" });
-    // Journal the outcome (version captured for installs). Location depends on
-    // consent; either way the Log tab can show it.
-    const version = ok && action === "install" ? await captureVersion(s) : null;
+    // Journal the outcome (version captured for installs/upgrades). Location
+    // depends on consent; either way the Log tab can show it.
+    const version = ok && action !== "uninstall" ? await captureVersion(s) : null;
     appendHistory({ at: new Date().toISOString(), package: s.name, bundle: s.bundle, action, ok, exit: code, version });
     if (ok && action === "uninstall" && s.selfHost) {
       send(ws, { type: "overlay", title: `${s.name} removed`,
@@ -362,23 +432,49 @@ async function doStepNow(ws, i, action) {
 }
 
 // Apply the DIFF between what the user wants and what's actually on the machine.
-// `want` = package indices the user wants present. We RE-DETECT (ground truth),
-// then only act on differences: install wanted-but-absent, uninstall
-// unwanted-but-present. A small change → a small action; unchanged → nothing.
-// Uninstalls run first (reverse dep order, selfHost/node LAST), then installs.
-async function applyDiff(ws, want) {
+// `want` = package indices the user wants present. We RE-DETECT presence (ground
+// truth) AND scan once for outdated packages, then converge in FOUR cases:
+//   wanted & absent            → install
+//   wanted & present & OUTDATED → upgrade   (new: one Apply keeps you current)
+//   wanted & present & current  → skip
+//   unwanted & present          → uninstall
+// A small change → a small action; already-correct → nothing.
+// Order: uninstalls first (reverse dep order, selfHost/node LAST), then installs,
+// then upgrades. Outdated detection is winget-only (npm has no cheap scan) — an
+// npm package present-but-old is left as-is, not silently claimed up-to-date.
+async function applyDiff(ws, want, scope) {
   const wanted = new Set(want);
-  const present = await Promise.all(STEPS.map(detectPresent));
+  // `scope` (optional): the only indices we may act on. A per-bundle Apply passes
+  // its bundle's packages; the global Apply passes nothing → every package is in
+  // scope. The diff is still computed against the FULL wanted set, so presence is
+  // judged correctly — we just don't ACT outside the scope.
+  const inScope = scope ? new Set(scope) : null;
+  const acts = (i) => !inScope || inScope.has(i);
+  const [present, outdated] = await Promise.all([
+    Promise.all(STEPS.map(detectPresent)),
+    scanOutdated(),
+  ]);
 
-  const toInstall = [...STEPS.keys()].filter((i) => wanted.has(i) && !present[i]);
-  let toRemove = [...STEPS.keys()].filter((i) => !wanted.has(i) && present[i] && STEPS[i].uninstall);
+  // A present, wanted, winget package whose id is in the outdated map is stale.
+  const isOutdated = (i) => {
+    const s = STEPS[i];
+    return !!(s.winget && s.upgrade) && outdated.has(s.winget.toLowerCase());
+  };
+
+  const toInstall = [...STEPS.keys()].filter((i) => acts(i) && wanted.has(i) && !present[i]);
+  const toUpgrade = [...STEPS.keys()].filter((i) => acts(i) && wanted.has(i) && present[i] && isOutdated(i));
+  let toRemove = [...STEPS.keys()].filter((i) => acts(i) && !wanted.has(i) && present[i] && STEPS[i].uninstall);
   toRemove.sort((a, b) => (STEPS[a].selfHost ? 1 : 0) - (STEPS[b].selfHost ? 1 : 0)); // node last
 
-  log(`apply diff: +[${toInstall.map((i) => STEPS[i].name).join(", ") || "—"}] -[${toRemove.map((i) => STEPS[i].name).join(", ") || "—"}]`);
-  if (!toInstall.length && !toRemove.length) { send(ws, { type: "done", nothing: true }); return; }
+  const verOf = (i) => { const o = outdated.get(STEPS[i].winget.toLowerCase()); return o ? `${o.current}→${o.available}` : "?"; };
+  log(`apply diff: +[${toInstall.map((i) => STEPS[i].name).join(", ") || "—"}]` +
+      ` ↑[${toUpgrade.map((i) => `${STEPS[i].name} ${verOf(i)}`).join(", ") || "—"}]` +
+      ` -[${toRemove.map((i) => STEPS[i].name).join(", ") || "—"}]`);
+  if (!toInstall.length && !toUpgrade.length && !toRemove.length) { send(ws, { type: "done", nothing: true }); return; }
 
   for (const i of toRemove) await doStep(ws, i, "uninstall");
   for (const i of toInstall) await doStep(ws, i, "install");
+  for (const i of toUpgrade) { send(ws, { type: "detail", i, detail: verOf(i) }); await doStep(ws, i, "upgrade"); }
   log("apply done");
   send(ws, { type: "done" });
 }

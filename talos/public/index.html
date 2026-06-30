@@ -14,12 +14,17 @@
       *::-webkit-scrollbar-thumb:hover { background:var(--dim); }
       /* Hero intro — a little welcoming, a little selling. */
       header { padding:26px 24px 22px; border-bottom:1px solid var(--line);
-               background:radial-gradient(120% 140% at 0% 0%, #24283b 0%, var(--bg) 60%); position:relative; }
+               background:radial-gradient(120% 140% at 0% 0%, #24283b 0%, var(--bg) 60%);
+               display:flex; align-items:flex-start; gap:24px; }
+      .hero-text { flex:1; min-width:0; }
+      /* Apply lives in the hero, to the right of the pitch — with its hint below. */
+      .hero-apply { flex:none; display:flex; flex-direction:column; align-items:flex-end; gap:6px; text-align:right; }
       h1 { font-size:22px; margin:0 0 6px; font-weight:700; letter-spacing:-0.2px; }
       h1 .accent { background:linear-gradient(90deg,#7aa2f7,#bb9af7); -webkit-background-clip:text; background-clip:text; color:transparent; }
       .tagline { font-size:14px; color:#a9b1d6; margin:0; max-width:62ch; line-height:1.5; }
       .tagline b { color:var(--fg); font-weight:600; }
-      #overall { position:absolute; top:14px; right:18px; font-size:12px; color:var(--dim); }
+      #globalhint { font-size:12px; color:var(--dim); max-width:28ch; line-height:1.4; }
+      #overall { font-size:12px; color:var(--dim); }
       #steps { padding:8px 12px; }
       /* Bundle accordion: header = selection card, body = package rows. */
       .bundle { border:1px solid var(--line); border-radius:10px; margin:8px 0; overflow:hidden; background:#1e2030; }
@@ -29,7 +34,6 @@
       .bundle-head.on { background:#232842; }
       .bundle-head .bchk { font-size:16px; color:#7aa2f7; width:1.1em; text-align:center; cursor:pointer; }
       .pchk { font-size:14px; color:#7aa2f7; width:1.1em; text-align:center; cursor:pointer; }
-      #globalhint { font-size:12px; color:var(--dim); margin-left:10px; }
       .bundle-head .ico { font-size:20px; line-height:1; }
       .bundle-head .ct { flex:1; display:flex; flex-direction:column; }
       .bundle-head .cn { font-weight:600; font-size:14px; }
@@ -48,10 +52,25 @@
       .waiting      { color:var(--dim); }
       .installing   { color:#e0af68; }
       .uninstalling { color:#e0af68; }
+      .upgrading    { color:#7dcfff; }
       .ok           { color:#9ece6a; }
+      /* Version delta shown next to an upgrade row, e.g. 2.54 → 2.55 */
+      .verdelta { font-family:"JetBrains Mono",monospace; font-size:11px; color:#7dcfff; margin-left:6px; }
       .absent       { color:var(--dim); }
       .fail         { color:#f7768e; font-weight:700; }
-      #globalbar { display:flex; gap:8px; padding:12px 12px 0; }
+      /* Apply buttons — one in the hero, one per bundle. Two visual states:
+         GHOST (default): dim outline, no fill — nothing useful to do right now.
+         LIVE (.live): filled blue, it WOULD act if pressed. Only useful buttons
+         light up, so the eye lands on what matters. `disabled` while a run is on. */
+      .applybtn { background:none; color:var(--dim); border:1px solid var(--line);
+                  padding:7px 14px; border-radius:7px; cursor:pointer; font-size:13px; font-weight:600;
+                  transition:background .15s, color .15s, border-color .15s, box-shadow .15s; }
+      .applybtn:hover { color:var(--fg); border-color:var(--dim); }
+      .applybtn.live { background:#3d59a1; color:var(--fg); border-color:#3d59a1; }
+      .applybtn.live:hover { filter:brightness(1.15); }
+      .applybtn:disabled { opacity:.5; cursor:default; filter:none; }
+      /* The smaller per-bundle Apply, sitting at the right of the bundle header. */
+      .bundle-head .applybtn { padding:4px 12px; font-size:12px; margin-left:6px; }
       .globalbtn { background:#3d59a1; color:var(--fg); border:0; padding:7px 14px; border-radius:7px; cursor:pointer; font-size:13px; font-weight:600; }
       .globalbtn:hover { filter:brightness(1.15); }
       /* Danger zone — uninstall lives far from install, dim, off to the right. */
@@ -66,6 +85,10 @@
                border-radius:6px; cursor:pointer; font-size:12px; opacity:.55; transition:opacity .12s; }
       details:hover .rerun { opacity:1; }
       .rerun:hover { color:var(--fg); border-color:var(--line); background:var(--line); }
+      /* Live: this row would actually do something now — show it without needing hover. */
+      .rerun.live { opacity:1; color:#7aa2f7; border-color:#3d59a1; }
+      .rerun.live:hover { color:var(--fg); background:#3d59a1; border-color:#3d59a1; }
+      .rerun:disabled { opacity:.35; cursor:default; background:none; }
       .panel { position:relative; border-top:1px solid var(--line); }
       .term-host { padding:6px 10px; }
       .copy { position:absolute; top:8px; right:12px; z-index:2; background:var(--line); color:var(--dim);
@@ -98,12 +121,16 @@
         header { padding:12px 16px 10px; }
         h1 { font-size:16px; margin:0 0 3px; }
         .tagline { font-size:12px; line-height:1.4; }
-        #globalbar { padding:8px 12px 0; }
         .bundle { margin:6px 0; }
         .bundle-head { padding:8px 12px; gap:9px; }
         .bundle-head .ico { font-size:17px; }
         .bundle-head .cn { font-size:13px; }
         .bundle-head .cd { font-size:11px; }
+      }
+      /* Narrow: stack the hero — pitch on top, Apply below it, left-aligned. */
+      @media (max-width: 560px) {
+        header { flex-direction:column; gap:12px; }
+        .hero-apply { align-items:flex-start; text-align:left; }
       }
       /* Very short: hide the tagline entirely — the title + button are enough. */
       @media (max-height: 560px) {
@@ -210,10 +237,16 @@
     </div></div>
 
     <header>
-      <h1><span class="accent">Your workspace</span>, ready in one click.</h1>
-      <p class="tagline">Everything you need to run <b>Claude Code</b> — installed, kept current, and shown
-        to you as it happens. No terminal know-how required: check what you want and press <b>Apply</b>.</p>
-      <span id="overall">connecting…</span>
+      <div class="hero-text">
+        <h1><span class="accent">Your workspace</span>, ready in one click.</h1>
+        <p class="tagline">Everything you need to run <b>Claude Code</b> — installed, kept current, and shown
+          to you as it happens. No terminal know-how required: check what you want and press <b>Apply</b>.</p>
+      </div>
+      <div class="hero-apply">
+        <button id="install-all" class="applybtn">Apply</button>
+        <span id="globalhint">Installs what you checked, updates what's outdated, removes what you unchecked.</span>
+        <span id="overall">connecting…</span>
+      </div>
     </header>
     <nav>
       <button class="tab active" data-view="setup">Setup</button>
@@ -221,10 +254,6 @@
     </nav>
 
     <div id="view-setup" class="view active">
-      <div id="globalbar">
-        <button id="install-all" class="globalbtn">Apply selection</button>
-        <span id="globalhint">Installs what you checked, removes what you unchecked.</span>
-      </div>
       <div id="steps"></div>
     </div>
 
@@ -301,8 +330,8 @@
         theme:{ background:"#1a1b26", foreground:"#c0caf5" },
       });
 
-      const GLYPH = { waiting:"·", installing:"⠹", uninstalling:"⠹", ok:"✓", absent:"·", fail:"✗" };
-      const LABEL = { waiting:"—", installing:"installing…", uninstalling:"removing…", ok:"present", absent:"removed", fail:"failed" };
+      const GLYPH = { waiting:"·", installing:"⠹", uninstalling:"⠹", upgrading:"⠹", ok:"✓", absent:"·", fail:"✗" };
+      const LABEL = { waiting:"—", installing:"installing…", uninstalling:"removing…", upgrading:"updating…", ok:"present", absent:"removed", fail:"failed" };
 
       // Selection lives at the PACKAGE level. `wanted` = the indices the user
       // wants present. The bundle checkbox is a SHORTCUT that checks/unchecks all
@@ -317,6 +346,7 @@
         if (on) wanted.add(i); else wanted.delete(i);
         const r = rows[i]; if (r) r.chk.textContent = on ? "☑" : "☐";
         refreshBundleChk(r && r.bundle);
+        refreshLiveness();   // selection changed → recompute which Applies are useful
       }
       // Bundle checkbox reflects its packages: all ☑, none ☐, some ◪.
       function refreshBundleChk(bundle) {
@@ -324,6 +354,52 @@
         const on = be.pkgs.filter((i) => wanted.has(i)).length;
         be.chk.textContent = on === 0 ? "☐" : on === be.pkgs.length ? "☑" : "◪";
         be.head.classList.toggle("on", on > 0);
+      }
+
+      // Would applying package `i` actually DO something? Known offline: an install
+      // (wanted & absent) or a removal (unwanted & present & removable). Upgrades
+      // are NOT visible until the server's winget scan runs, so a present-but-
+      // outdated package doesn't light a button at rest — it's caught once Apply
+      // runs. We accept that: liveness reflects what we can know without going online.
+      function isActionable(i) {
+        const r = rows[i]; if (!r) return false;
+        if (wanted.has(i) && !r.present) return true;              // would install
+        if (!wanted.has(i) && r.present && r.canUninstall) return true; // would remove
+        return false;
+      }
+      // Light up only the Apply buttons that would do something; leave the rest as
+      // ghost outlines. The eye lands on what matters. Runs after any change to
+      // selection or detected state.
+      let applyRunning = false;
+      function refreshLiveness() {
+        const ids = Object.keys(rows).map(Number);
+        // Per-row buttons: light the ones that would act; all stay clickable at
+        // hover for a manual re-run, but disabled while a run is on.
+        for (const i of ids) {
+          const r = rows[i];
+          r.apply.classList.toggle("live", isActionable(i) && !applyRunning);
+          r.apply.disabled = applyRunning;
+        }
+        // Bundle buttons: live if any of their packages would act.
+        for (const be of Object.values(bundleEls)) {
+          const live = be.pkgs.some(isActionable);
+          be.apply.classList.toggle("live", live && !applyRunning);
+          be.apply.disabled = applyRunning;
+        }
+        // Global button: live if anything anywhere would act.
+        const g = document.getElementById("install-all");
+        g.classList.toggle("live", ids.some(isActionable) && !applyRunning);
+        g.disabled = applyRunning;
+      }
+
+      // Apply, restricted to a set of package indices (a per-bundle Apply). We
+      // still send the FULL wanted set so the server judges presence correctly,
+      // plus a `scope` so it only ACTS on these — never touching other bundles.
+      function applyScoped(scopeIdx) {
+        if (applyRunning) return;
+        applyRunning = true; refreshLiveness();   // lock every Apply button during the run
+        overall.textContent = "applying…";
+        ws.send(JSON.stringify({ type:"apply", want:[...wanted], scope: scopeIdx }));
       }
 
       function render(bundles, steps) {
@@ -344,11 +420,18 @@
           const ct = document.createElement("span"); ct.className = "ct";
           ct.innerHTML = `<span class="cn">${b.name}</span><span class="cd">${b.description || ""}</span>`;
           const bst = document.createElement("span"); bst.className = "bstatus";
-          bsum.append(chk, ico, ct, bst);
+          const bapply = document.createElement("button");
+          bapply.className = "applybtn"; bapply.textContent = "Apply";
+          bapply.title = "Apply just this bundle";
+          bapply.onclick = (e) => {
+            e.preventDefault(); e.stopPropagation();   // act without folding the accordion
+            applyScoped(bundleEls[b.name].pkgs);
+          };
+          bsum.append(chk, ico, ct, bst, bapply);
           const body = document.createElement("div"); body.className = "bundle-body";
           bd.append(bsum, body);
           stepsEl.append(bd);
-          bundleEls[b.name] = { details: bd, head: bsum, status: bst, chk, pkgs: [], active: 0, failed: false };
+          bundleEls[b.name] = { details: bd, head: bsum, status: bst, chk, apply: bapply, pkgs: [], active: 0, failed: false };
         }
 
         for (const s of steps) {
@@ -365,12 +448,20 @@
           const name = document.createElement("span");
           name.className = "name";
           name.innerHTML = `${s.name}` + (s.description ? ` <span class="desc">— ${s.description}</span>` : "");
+          const delta = document.createElement("span");   // version delta on upgrade, e.g. 2.54 → 2.55
+          delta.className = "verdelta";
           const st = document.createElement("span");
           st.className = "statusLabel waiting"; st.textContent = "—";
           const apply = document.createElement("button");
           apply.className = "rerun"; apply.textContent = "apply"; apply.title = "Apply this one now";
-          apply.onclick = (e) => { e.preventDefault(); ws.send(JSON.stringify({ type: wanted.has(s.i) ? "install" : "uninstall", i:s.i })); };
-          sum.append(chk, badge, name, st, apply);
+          apply.onclick = (e) => {
+            e.preventDefault();
+            if (applyRunning) return;
+            applyRunning = true; refreshLiveness();
+            overall.textContent = "applying…";
+            ws.send(JSON.stringify({ type: wanted.has(s.i) ? "install" : "uninstall", i:s.i }));
+          };
+          sum.append(chk, badge, name, delta, st, apply);
           const panel = document.createElement("div");
           panel.className = "panel";
           const copy = document.createElement("button");
@@ -387,7 +478,7 @@
           panel.append(copy, host);
           d.append(sum, panel);
           body.append(d);
-          rows[s.i] = { details:d, chk, badge, statusLabel:st, host, term:null, log:"", bundle:s.bundle, canUninstall:s.canUninstall };
+          rows[s.i] = { details:d, chk, badge, statusLabel:st, delta, apply, host, term:null, log:"", bundle:s.bundle, canUninstall:s.canUninstall };
         }
       }
 
@@ -397,22 +488,31 @@
         return r.term;
       }
 
+      const RUNNING = new Set(["installing", "uninstalling", "upgrading"]);
       function setStatus(i, status) {
         const r = rows[i]; if (!r) return;
-        if (status === "installing" || status === "uninstalling") { r.log = ""; if (r.term) r.term.reset(); } // fresh run
+        if (RUNNING.has(status)) { r.log = ""; if (r.term) r.term.reset(); } // fresh run
         r.badge.className = "badge " + status; r.badge.textContent = GLYPH[status] || "·";
         r.statusLabel.className = "statusLabel " + status; r.statusLabel.textContent = LABEL[status] || status;
-        if (status === "installing" || status === "uninstalling" || status === "fail") r.details.open = true; // show activity / failures
+        // Track presence from the settled states, so liveness knows what's on the
+        // machine. (Running states are transient — leave presence as it was.)
+        if (status === "ok") r.present = true;
+        else if (status === "absent" || status === "waiting") r.present = false;
+        refreshLiveness();
+        if (RUNNING.has(status) || status === "fail") r.details.open = true; // show activity / failures
         if (status === "ok" || status === "absent") r.details.open = false;       // fold completed (frame stays)
+        // A finished/failed row has nothing more to add to its version delta;
+        // a fresh install/remove clears any stale one. (upgrade keeps it — set just before.)
+        if (r.delta && status !== "upgrading") r.delta.textContent = "";
         // Bundle-level: open while working, count active packages, auto-close
         // when the bundle's last package finishes (unless something failed).
         const be = bundleEls[r.bundle];
         if (be) {
-          if (status === "installing" || status === "uninstalling") { be.active++; be.details.open = true; }
+          if (RUNNING.has(status)) { be.active++; be.details.open = true; }
           if (status === "fail") { be.failed = true; be.details.open = true; }
           if (status === "ok" || status === "absent" || status === "fail") be.active = Math.max(0, be.active - 1);
           be.status.textContent = status === "installing" ? "installing…"
-            : status === "uninstalling" ? "removing…" : be.failed ? "failed" : "";
+            : status === "uninstalling" ? "removing…" : status === "upgrading" ? "updating…" : be.failed ? "failed" : "";
           be.status.className = "bstatus " + (be.failed ? "fail" : status);
           if (be.active === 0 && !be.failed) {        // all done, all good → fold to keep the page short
             be.details.open = false;
@@ -424,11 +524,9 @@
       const ws = new WebSocket(`ws://${location.host}`);
 
       // Apply = converge to what's wanted. Server diffs against the real machine
-      // and acts only on the difference (a small change → a small action).
-      document.getElementById("install-all").onclick = () => {
-        overall.textContent = "applying…";
-        ws.send(JSON.stringify({ type:"apply", want:[...wanted] }));
-      };
+      // and acts only on the difference (a small change → a small action). No
+      // scope → the whole selection is in play.
+      document.getElementById("install-all").onclick = () => applyScoped(undefined);
 
       // --- tabs ---
       document.querySelectorAll(".tab").forEach((tab) => {
@@ -479,13 +577,19 @@
             break;
           case "state-done": overall.textContent = "ready"; hideSplash(); break;
           case "step": setStatus(msg.i, msg.status); break;
+          case "detail":                                 // version delta for an upgrade, e.g. "2.54→2.55"
+            if (rows[msg.i] && rows[msg.i].delta) rows[msg.i].delta.textContent = (msg.detail || "").replace("→", " → ");
+            break;
           case "out": {
             const text = dec.decode(b64dec(msg.data));
             ensureTerm(msg.i).write(text);
             if (rows[msg.i]) rows[msg.i].log += text;   // keep raw for the copy button
             break;
           }
-          case "done": overall.textContent = msg.nothing ? "nothing to do" : "done"; break;
+          case "done":
+            overall.textContent = msg.nothing ? "nothing to do" : "done";
+            applyRunning = false; refreshLiveness();   // unlock; re-light what's still useful
+            break;
           case "overlay":
             document.getElementById("overlay-title").textContent = msg.title || "";
             document.getElementById("overlay-body").textContent = msg.body || "";
