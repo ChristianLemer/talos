@@ -2,7 +2,7 @@
 // No DOM, no server — just the rules. This replaces the ad-hoc /tmp scripts.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolvePosture, desiredState, actionFor, isLockedPosture } from "../public/decision.js";
+import { resolvePosture, postureDefault, isLockedPosture, toggleState, desiredState, isDeviation, actionFor } from "../public/decision.js";
 
 test("resolvePosture: pkg › bundle › mandatory", () => {
   assert.equal(resolvePosture("opt-in", "opt-out"), "opt-in");   // pkg wins
@@ -11,23 +11,49 @@ test("resolvePosture: pkg › bundle › mandatory", () => {
   assert.equal(resolvePosture("bogus", "nope"), "mandatory");    // invalid → default
 });
 
-test("desiredState: mandatory/forbidden ignore the override", () => {
-  assert.equal(desiredState("mandatory", "off"), "present");
-  assert.equal(desiredState("mandatory", "auto"), "present");
-  assert.equal(desiredState("forbidden", "on"), "absent");
-  assert.equal(desiredState("forbidden", "auto"), "absent");
+test("postureDefault: which side the toggle starts on", () => {
+  assert.equal(postureDefault("mandatory"), "in");
+  assert.equal(postureDefault("opt-out"), "in");
+  assert.equal(postureDefault("opt-in"), "out");
+  assert.equal(postureDefault("forbidden"), "out");
 });
 
-test("desiredState: opt-out present by default, removable", () => {
-  assert.equal(desiredState("opt-out", "auto"), "present");
-  assert.equal(desiredState("opt-out", "off"), "absent");
-  assert.equal(desiredState("opt-out", "on"), "present");
+test("isLockedPosture", () => {
+  assert.equal(isLockedPosture("mandatory"), true);
+  assert.equal(isLockedPosture("forbidden"), true);
+  assert.equal(isLockedPosture("opt-in"), false);
+  assert.equal(isLockedPosture("opt-out"), false);
 });
 
-test("desiredState: opt-in absent by default, addable", () => {
-  assert.equal(desiredState("opt-in", "auto"), "absent");
-  assert.equal(desiredState("opt-in", "on"), "present");
-  assert.equal(desiredState("opt-in", "off"), "absent");
+test("toggleState: locked postures ignore the user toggle", () => {
+  assert.equal(toggleState("mandatory", "out"), "in");   // can't flip a mandatory out
+  assert.equal(toggleState("forbidden", "in"), "out");   // can't flip a forbidden in
+});
+
+test("toggleState: free postures follow the user, else the default", () => {
+  assert.equal(toggleState("opt-out", null), "in");   // untouched → default in
+  assert.equal(toggleState("opt-out", "out"), "out"); // user flipped
+  assert.equal(toggleState("opt-in", null), "out");   // untouched → default out
+  assert.equal(toggleState("opt-in", "in"), "in");    // user flipped
+});
+
+test("desiredState: in→present, out→absent", () => {
+  assert.equal(desiredState("mandatory", null), "present");
+  assert.equal(desiredState("forbidden", null), "absent");
+  assert.equal(desiredState("opt-out", null), "present");
+  assert.equal(desiredState("opt-out", "out"), "absent");
+  assert.equal(desiredState("opt-in", null), "absent");
+  assert.equal(desiredState("opt-in", "in"), "present");
+});
+
+test("isDeviation: true only when the user moved off the default", () => {
+  assert.equal(isDeviation("opt-out", null), false);  // at default
+  assert.equal(isDeviation("opt-out", "in"), false);  // same as default
+  assert.equal(isDeviation("opt-out", "out"), true);  // moved
+  assert.equal(isDeviation("opt-in", null), false);
+  assert.equal(isDeviation("opt-in", "in"), true);    // moved
+  assert.equal(isDeviation("mandatory", "out"), false); // locked → never a deviation
+  assert.equal(isDeviation("forbidden", "in"), false);
 });
 
 test("actionFor: converge desired vs machine", () => {
@@ -39,15 +65,8 @@ test("actionFor: converge desired vs machine", () => {
   assert.equal(actionFor("absent", { present: false }), null); // already gone
 });
 
-test("model A: an opt-in left auto but PRESENT resolves to uninstall", () => {
-  const desired = desiredState("opt-in", "auto");            // → absent
+test("model A: an opt-in left untouched but PRESENT resolves to uninstall", () => {
+  const desired = desiredState("opt-in", null);   // → absent
   assert.equal(desired, "absent");
   assert.equal(actionFor(desired, { present: true, canUninstall: true }), "uninstall");
-});
-
-test("isLockedPosture", () => {
-  assert.equal(isLockedPosture("mandatory"), true);
-  assert.equal(isLockedPosture("forbidden"), true);
-  assert.equal(isLockedPosture("opt-in"), false);
-  assert.equal(isLockedPosture("opt-out"), false);
 });

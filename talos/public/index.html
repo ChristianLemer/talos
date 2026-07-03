@@ -32,21 +32,51 @@
                      list-style:none; }
       .bundle-head::-webkit-details-marker { display:none; }
       .bundle-head.on { background:#232842; }
-      /* Decision pill — click cycles auto → yes → no. The WORD carries the sense;
-         colour reinforces: auto=blue (follow the machine, not saved), yes=green
-         (I want it), no=red (I don't). yes/no are persisted; auto is absence. */
-      .pill { font-size:11px; font-weight:600; letter-spacing:.02em; cursor:pointer;
-              min-width:4.6em; text-align:center; padding:2px 9px; border-radius:999px;
-              border:1px solid var(--line); user-select:none; white-space:nowrap;
-              transition:background .12s,color .12s,border-color .12s; }
-      .pill.auto { color:#7aa2f7; border-color:#2f3a5c; background:rgba(122,162,247,.08); }
-      .pill.yes  { color:#9ece6a; border-color:#3d5a3d; background:rgba(158,206,106,.12); }
-      .pill.no   { color:#f7768e; border-color:#5a3d44; background:rgba(247,118,142,.12); }
-      /* Locked posture (mandatory/forbidden): the author decided, user can't change. */
-      .pill.lock { color:var(--dim); border-style:dashed; border-color:var(--line); background:none; }
-      .pill.locked { cursor:not-allowed; }
-      .pill:not(.locked):hover { filter:brightness(1.2); }
-      .bundle-head .pill { font-size:11px; }
+      /* Sliding switch — Guillaume's model. Binary user choice: knob RIGHT = in
+         (install), LEFT = out (skip). The track/knob colour goes VIVID when the
+         user moved off the author default (green=in, red=out), calm at default.
+         mixed (bundle panachage) = knob CENTRED, grey. locked = frozen + 🔒. */
+      .toggle { position:relative; display:inline-block; width:40px; height:20px;
+                border-radius:999px; background:var(--line); cursor:pointer;
+                transition:background .15s; flex:none; }
+      .toggle .knob { position:absolute; top:2px; width:16px; height:16px; border-radius:50%;
+                      background:#c0caf5; transition:left .15s, background .15s; }
+      .toggle.on-in  .knob { left:22px; }   /* right = in */
+      .toggle.on-out .knob { left:2px; }    /* left = out */
+      .toggle.mixed  .knob { left:12px; background:var(--dim); }   /* centre = mixed */
+      /* Base track: CALM by side (dark green/red), no shouting. */
+      .toggle.on-in  { background:#2c3a2c; }
+      .toggle.on-out { background:#3a2c30; }
+      .toggle.mixed  { background:repeating-linear-gradient(45deg,#23283a,#23283a 3px,#2a2e42 3px,#2a2e42 6px); }
+      /* THE colour rule — one rule, same in simple & advanced, package & bundle:
+         a switch goes VIVID only when a plain Apply would CHANGE the machine.
+         act-add = will install/update (green), act-remove = will remove (red).
+         Nothing to do → stays calm. No "wall of green". Green/red matched in
+         saturation+lightness so neither dominates (red toned to #ce697a). */
+      .toggle.act-add    { background:#9ece6a; }
+      .toggle.act-add    .knob { background:#16161e; }
+      .toggle.act-remove { background:#ce697a; }
+      .toggle.act-remove .knob { background:#16161e; }
+      /* default-side marker (ADVANCED only — a super-user cue): faint dot on the
+         default side of the track. */
+      body.advanced .toggle[data-default="in"]::after,
+      body.advanced .toggle[data-default="out"]::after { content:""; position:absolute; top:8px;
+                      width:4px; height:4px; border-radius:50%; background:var(--fg); opacity:.35; }
+      body.advanced .toggle[data-default="in"]::after  { right:6px; }
+      body.advanced .toggle[data-default="out"]::after { left:6px; }
+      /* locked: dimmed, no pointer, a tiny lock glyph after the switch */
+      .toggle.locked { cursor:not-allowed; opacity:.6; margin-right:16px; }
+      .toggle.locked::before { content:"🔒"; position:absolute; left:44px; top:2px; font-size:11px; }
+      .toggle:not(.locked):hover { filter:brightness(1.2); }
+
+      /* --- SIMPLE vs ADVANCED: only GRANULARITY differs, not the switch's meaning.
+         Simple = one switch per bundle. Advanced adds per-package toggles, per-
+         bundle & per-row Apply, and the default-side dot. The colour rule above is
+         identical in both. */
+      body:not(.advanced) .bundle-body .toggle { display:none; }   /* no per-package toggles */
+      body:not(.advanced) .bundle-head .applybtn,
+      body:not(.advanced) .rerun { display:none; }                 /* only the hero Apply */
+
       .bundle-head .ico { font-size:20px; line-height:1; }
       .bundle-head .ct { flex:1; display:flex; flex-direction:column; }
       .bundle-head .cn { font-weight:600; font-size:14px; }
@@ -55,7 +85,23 @@
       .bundle-body { padding:2px 10px 8px; border-top:1px solid var(--line); }
       .bstatus.installing, .bstatus.uninstalling { color:#e0af68; }
       .bstatus.fail { color:#f7768e; }
-      details { border:1px solid var(--line); border-radius:8px; margin:6px 0; overflow:hidden; }
+      details { border:1px solid var(--line); border-radius:8px; margin:6px 0; overflow:hidden;
+                border-left:4px solid transparent; border-right:4px solid transparent;
+                transition:border-color .15s, background .15s; }
+      /* Plan marking: a package the next Apply will change gets thick VIVID side
+         bars (left + right) instead of a heavy fill — it frames the row, doesn't
+         drown it. A whisper of tint keeps the row from looking orphaned. Green =
+         will be installed/updated, red = will be removed. Only when in the plan. */
+      details.plan-add    { border-left-color:#9ece6a; border-right-color:#9ece6a; background:rgba(158,206,106,.06); }
+      details.plan-remove { border-left-color:#f7768e; border-right-color:#f7768e; background:rgba(247,118,142,.06); }
+      /* Optional packages (opt-out/opt-in postures) are less vital than the
+         mandatory Base — dim them a touch so the eye ranks vital vs optional at a
+         glance. A row in the plan overrides this (opacity back to full below). */
+      details.posture-opt-out, details.posture-opt-in { opacity:.72; }
+      details.plan-add, details.plan-remove { opacity:1; }
+      /* A row whose desired state is "absent" (won't be installed) reads dimmer —
+         its name fades toward the muted tone. Wanted rows stay bright. */
+      details.row-out .name { color:var(--dim); }
       summary { padding:9px 12px; cursor:pointer; display:flex; gap:10px; align-items:center; list-style:none; font-size:14px; }
       summary::-webkit-details-marker { display:none; }
       .badge { font-family:"JetBrains Mono",monospace; width:1.2em; text-align:center; }
@@ -82,8 +128,21 @@
       .applybtn.live { background:#3d59a1; color:var(--fg); border-color:#3d59a1; }
       .applybtn.live:hover { filter:brightness(1.15); }
       .applybtn:disabled { opacity:.5; cursor:default; filter:none; }
+      /* Reset — secondary, quiet; sits left of Apply. Brightens only on hover.
+         Disabled (dim) when nothing has been moved off the author defaults. */
+      .hero-buttons { display:flex; gap:8px; align-items:center; }
+      .resetbtn { background:none; color:var(--dim); border:1px solid var(--line);
+                  padding:7px 12px; border-radius:7px; cursor:pointer; font-size:12px;
+                  transition:color .15s, border-color .15s; }
+      .resetbtn:hover { color:#e0af68; border-color:#e0af68; }
+      .resetbtn:disabled { opacity:.4; cursor:default; }
       /* The smaller per-bundle Apply, sitting at the right of the bundle header. */
       .bundle-head .applybtn { padding:4px 12px; font-size:12px; margin-left:6px; }
+      /* Hierarchy: the HERO Apply is the primary action — filled/inverted, most
+         visible. Per-bundle Apply is secondary: active (blue) but only OUTLINED,
+         so it never competes with the top button. */
+      .bundle-head .applybtn.live { background:none; color:#7aa2f7; border-color:#3d59a1; }
+      .bundle-head .applybtn.live:hover { background:#3d59a1; color:var(--fg); filter:none; }
       .globalbtn { background:#3d59a1; color:var(--fg); border:0; padding:7px 14px; border-radius:7px; cursor:pointer; font-size:13px; font-weight:600; }
       .globalbtn:hover { filter:brightness(1.15); }
       /* Danger zone — uninstall lives far from install, dim, off to the right. */
@@ -109,8 +168,10 @@
       .rerun.live.add:hover    { color:#16161e; background:#9ece6a; border-color:#9ece6a; }
       .rerun.live.remove { color:#f7768e; border-color:#5a3d44; }
       .rerun.live.remove:hover { color:#16161e; background:#f7768e; border-color:#f7768e; }
-      .rerun.avail { opacity:1; color:#7aa2f7; border-color:#2f3a5c; }
-      .rerun.avail:hover { color:var(--fg); background:#3d59a1; border-color:#3d59a1; }
+      /* avail = a manual escape hatch, NOT part of the plan → muted, not vivid.
+         Dim blue-grey; it only brightens on hover when you actually reach for it. */
+      .rerun.avail { opacity:.6; color:var(--dim); border-color:var(--line); }
+      .rerun.avail:hover { opacity:1; color:#7aa2f7; border-color:#3d59a1; }
       .rerun:disabled { opacity:.35; cursor:default; background:none; }
       .panel { position:relative; border-top:1px solid var(--line); }
       .term-host { padding:6px 10px; }
@@ -262,11 +323,14 @@
     <header>
       <div class="hero-text">
         <h1><span class="accent">Your workspace</span>, ready in one click.</h1>
-        <p class="tagline">Everything you need to run <b>Claude Code</b> — installed, kept current, and shown
+        <p class="tagline">Everything your <b>AI coding agent</b> needs — installed, kept current, and shown
           to you as it happens. No terminal know-how required: check what you want and press <b>Apply</b>.</p>
       </div>
       <div class="hero-apply">
-        <button id="install-all" class="applybtn">Apply</button>
+        <div class="hero-buttons">
+          <button id="reset-all" class="resetbtn" title="Reset every toggle to the author's default">Reset</button>
+          <button id="install-all" class="applybtn">Apply</button>
+        </div>
         <span id="globalhint">Installs what you checked, updates what's outdated, removes what you unchecked.</span>
         <span id="overall">connecting…</span>
       </div>
@@ -282,6 +346,11 @@
 
     <div id="view-log" class="view">
       <div id="settings">
+        <div class="set-row">
+          <div><div class="set-title">Advanced mode</div>
+            <div class="set-desc">Per-package control with in/out toggles, author postures, and per-bundle Apply. Off by default — the panel stays simple: one on/off switch per bundle.</div></div>
+          <label class="switch"><input type="checkbox" id="advanced-toggle"><span class="slider"></span></label>
+        </div>
         <div class="set-row">
           <div><div class="set-title">Share setup data for support</div>
             <div class="set-desc">When on, the install history is saved next to the tool (visible to your team if the disk is shared). When off, it stays private to this machine.</div></div>

@@ -5,3 +5,4 @@ package-lock.json
 logs/
 # Local drafts — personal working notes, not part of the repo (leading _).
 _*.md
+.playwright-mcp/

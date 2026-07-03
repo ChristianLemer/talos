@@ -1,6 +1,8 @@
 // app.js — the Talos panel UI. Pure decision logic lives in decision.js
 // (imported below), shared with the server so the rule can never drift.
-import { resolvePosture, desiredState as _desiredState, actionFor, isLockedPosture } from "./decision.js";
+import { desiredState as _desiredState, actionFor, isLockedPosture,
+         postureDefault as _postureDefault, toggleState as _toggleState,
+         isDeviation as _isDeviation } from "./decision.js";
 
 const stepsEl = document.getElementById("steps");
 const overall = document.getElementById("overall");
@@ -74,125 +76,149 @@ const LABEL = { waiting:"absent", installing:"installing…", uninstalling:"remo
 // (see desiredState). Apply converges the machine to the desired state —
 // model A, chezmoi-pure: an opt-in left auto but present WILL be removed.
 // Only "on"/"off" overrides are persisted; "auto" is absence.
-const PILLWORD = { auto:"auto", on:"opt-in", off:"opt-out", mandatory:"mandatory", forbidden:"forbidden" };
-// A locked posture shows its own word; else the override word.
-function pillFor(i) {
-  const p = rows[i] && rows[i].posture;
-  if (p === "mandatory" || p === "forbidden") return { word: p, cls: "lock", locked: true };
-  const d = ownDecision(i);
-  return { word: PILLWORD[d], cls: d === "on" ? "yes" : d === "off" ? "no" : "auto", locked: false };
-}
-function paintPill(el, word, cls, extra) {
-  el.textContent = word;
-  el.className = `pill ${cls}${extra ? " " + extra : ""}`;
-}
-const decision = {};             // package index i → "auto" | "on" | "off" (override; opt-* only)
-const bundleEls = {};            // bundle name → { …, decision, pkgs:[i], chk }
-// Cycle depends on posture: opt-in/opt-out cycle auto→on→off→auto;
-// mandatory/forbidden don't cycle (locked).
-const CYCLE3 = { auto:"on", on:"off", off:"auto" };
+const bundleEls = {};            // bundle name → { …, pkgs:[i], toggle, posture }
 const ICON_COPY = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
 const ICON_OK = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
-const CYCLE = { auto:"on", on:"off", off:"auto" };
 
-// --- persistence: only DECIDED (yellow) choices are saved; auto is not.
-// Saved by NAME (bundle::package), not index, so it survives bundles being
-// added/reordered. Sent to the server, which writes it next to consent.
+// USER CHOICE per package: decision[i] = "in" | "out" | undefined (untouched →
+// follow the posture default). A single binary toggle — Guillaume's model. The
+// posture decides where it STARTS and whether it's locked (see decision.js).
+const decision = {};
+
+// --- persistence: only USER-MOVED toggles are saved (untouched = absence).
+// Saved by NAME (bundle::package) so it survives bundles being added/reordered.
 let stepNames = {};              // i → "bundle::name" (stable key)
-let bundleNameOf = {};           // bundle name is its own key
 function persistSelection() {
-  const pkgs = {}; const bundlesSel = {};
+  const pkgs = {};
   for (const i of Object.keys(decision)) {
-    if (decision[i] && decision[i] !== "auto" && stepNames[i]) pkgs[stepNames[i]] = decision[i];
+    if ((decision[i] === "in" || decision[i] === "out") && stepNames[i]) pkgs[stepNames[i]] = decision[i];
   }
-  for (const [name, be] of Object.entries(bundleEls)) {
-    if (be.decision && be.decision !== "auto") bundlesSel[name] = be.decision;
-  }
-  ws.send(JSON.stringify({ type: "set-selection", selection: { pkgs, bundles: bundlesSel } }));
+  ws.send(JSON.stringify({ type: "set-selection", selection: { pkgs } }));
 }
 function applySavedSelection(sel) {
   if (!sel) return;
   const byName = {};
   for (const [i, key] of Object.entries(stepNames)) byName[key] = +i;
   for (const [key, state] of Object.entries(sel.pkgs || {})) {
-    if (byName[key] != null && (state === "on" || state === "off")) setDecision(byName[key], state, { silent: true });
-  }
-  for (const [name, state] of Object.entries(sel.bundles || {})) {
-    if (bundleEls[name] && (state === "on" || state === "off")) setBundleDecision(name, state, { silent: true });
+    if (byName[key] != null && (state === "in" || state === "out")) setToggle(byName[key], state, { silent: true });
   }
 }
 
-// Own override the user set on THAT row (opt-* only); default auto.
-function ownDecision(i) { return decision[i] || "auto"; }
+// A real sliding switch: a track with a knob that sits left (out), right (in),
+// or centre (mixed). State classes (on-in / on-out / mixed / locked / deviated)
+// are set by paintPkg/paintBundle; the CSS positions and colours the knob.
+function makeToggle() {
+  const el = document.createElement("span");
+  el.className = "toggle on-in";
+  el.innerHTML = '<span class="knob"></span>';
+  return el;
+}
+
 function isLocked(i) { return isLockedPosture(rows[i] && rows[i].posture); }
-// Effective override = own if set, else inherited from the bundle's pill.
-function effectiveDecision(i) {
-  const own = ownDecision(i);
-  if (own !== "auto") return own;
-  const r = rows[i]; const be = r && bundleEls[r.bundle];
-  return be ? (be.decision || "auto") : "auto";
-}
-// DESIRED state (present|absent) — delegates to the SHARED rule so the front and
-// the server resolve posture+override identically (no drift).
-function desiredState(i) {
-  return _desiredState(rows[i] && rows[i].posture, effectiveDecision(i));
-}
+function userToggle(i) { const d = decision[i]; return d === "in" || d === "out" ? d : null; }
+// Effective in/out for a package (posture default if untouched; locked wins).
+function toggleOf(i) { return _toggleState(rows[i] && rows[i].posture, userToggle(i)); }
+function desiredState(i) { return _desiredState(rows[i] && rows[i].posture, userToggle(i)); }
 
+// Colour rule (ONE rule, same in simple and advanced, package and bundle): a
+// switch goes VIVID only when a plain Apply would CHANGE the machine — green if
+// it would install/update, red if it would remove. An on switch that's already
+// installed stays calm (nothing to do). This mirrors the row plan-borders, and
+// avoids the "everything is green" wall. The default-side dot stays advanced-only.
+function actClass(i) {
+  const r = rows[i]; if (!r) return "";
+  const a = actionFor(desiredState(i), { present: r.present, outdated: r.outdated, canUninstall: r.canUninstall });
+  if (a === "install" || a === "upgrade") return " act-add";
+  if (a === "uninstall") return " act-remove";
+  return "";
+}
 function paintPkg(i) {
   const r = rows[i]; if (!r) return;
-  const pf = pillFor(i);
-  paintPill(r.chk, pf.word, pf.cls);
-  r.chk.classList.toggle("locked", pf.locked);
-  r.chk.style.cursor = pf.locked ? "not-allowed" : "pointer";
+  const posture = r.posture;
+  const on = toggleOf(i);                       // "in" | "out"
+  const locked = isLocked(i);
+  const deviated = _isDeviation(posture, userToggle(i));
+  const el = r.chk;
+  el.className = "toggle" + (on === "in" ? " on-in" : " on-out")
+    + (locked ? " locked" : "") + (deviated ? " deviated" : "") + actClass(i);
+  el.dataset.default = _postureDefault(posture);   // CSS marks the default side (advanced only)
+  el.style.cursor = locked ? "not-allowed" : "pointer";
+  el.title = locked
+    ? (posture === "mandatory" ? "Required by the author — always installed" : "Blocked by the author — never installed")
+    : `Toggle: in = install, out = skip (author default: ${_postureDefault(posture)})`;
+  // A row whose desired state is absent reads dimmer (not wanted).
+  r.details.classList.toggle("row-out", desiredState(i) === "absent");
 }
-function setDecision(i, state, opts = {}) {
-  if (isLocked(i)) return;                 // author's posture wins — no override
+function setToggle(i, state, opts = {}) {
+  if (isLocked(i)) return;                       // author's posture wins
   decision[i] = state;
   paintPkg(i);
+  const b = rows[i] && rows[i].bundle;           // repaint the parent bundle pill:
+  if (b) paintBundle(b);                          // its in/out/MIXED may have changed
   refreshLiveness();
   if (!opts.silent) persistSelection();
 }
-function cyclePkg(i) { if (!isLocked(i)) setDecision(i, CYCLE3[ownDecision(i)]); }
+// Clicking the toggle flips to the OTHER side (in ↔ out) from wherever it is now.
+function flipPkg(i) { if (!isLocked(i)) setToggle(i, toggleOf(i) === "in" ? "out" : "in"); }
 
-// A bundle is LOCKED (no cyclable pill) if it isn't selectable, or if none
-// of its packages can be overridden (all mandatory/forbidden) — then there's
-// nothing to decide at the bundle level.
+// A bundle is LOCKED if not selectable, or all its packages are locked.
 function bundleLocked(name) {
   const be = bundleEls[name]; if (!be) return true;
   if (!be.selectable) return true;
   return be.pkgs.length > 0 && be.pkgs.every((i) => isLocked(i));
 }
-// Bundle pill: cascades an override onto its CHANGEABLE packages (opt-*),
-// leaving mandatory/forbidden locked (the author's posture always wins).
-function setBundleDecision(name, state, opts = {}) {
+// The bundle toggle APPLIES a side to all its changeable packages at once (not an
+// inherited layer — it writes each package's own toggle). Locked packages keep
+// the author's choice.
+function setBundleToggle(name, state, opts = {}) {
   const be = bundleEls[name]; if (!be) return;
-  if (bundleLocked(name)) return;          // locked bundle → no override
-  be.decision = state;
-  paintPill(be.chk, PILLWORD[state], state === "on" ? "yes" : state === "off" ? "no" : "auto");
-  be.head.classList.toggle("on", state === "on");
-  be.pkgs.forEach(paintPkg);   // repaint: unlocked packages may now inherit
-  refreshLiveness();
+  if (bundleLocked(name)) return;
+  be.pkgs.forEach((i) => { if (!isLocked(i)) setToggle(i, state, { silent: true }); });
+  paintBundle(name);
   if (!opts.silent) persistSelection();
 }
-function cycleBundle(name) {
-  if (bundleLocked(name)) return;
-  const be = bundleEls[name]; if (!be) return;
-  setBundleDecision(name, CYCLE3[be.decision || "auto"]);
+// Clicking the bundle toggle: if every changeable package is already "in", flip
+// them all to "out"; otherwise pull them all "in". (Majority-in → out, else in.)
+function flipBundle(name) {
+  const be = bundleEls[name]; if (!be || bundleLocked(name)) return;
+  const free = be.pkgs.filter((i) => !isLocked(i));
+  const allIn = free.every((i) => toggleOf(i) === "in");
+  setBundleToggle(name, allIn ? "out" : "in");
 }
-// Paint a bundle's pill: locked bundles show a dashed grey "locked" pill and
-// don't cycle; else show their own override (auto by default).
-function refreshBundleChk(name) {
+// Paint the bundle's own toggle, reflecting its changeable packages in THREE
+// states: all in → on-in, all out → on-out, a MIX → "mixed" (greyed, neither
+// side lit) so the bundle toggle never lies about a panachage. deviated = any
+// package moved off its author default.
+function paintBundle(name) {
   const be = bundleEls[name]; if (!be) return;
+  const el = be.chk;
   if (bundleLocked(name)) {
-    paintPill(be.chk, "locked", "lock");
-    be.chk.classList.add("locked");
-    be.chk.style.cursor = "not-allowed";
-    be.chk.title = be.selectable ? "All packages here are fixed by the author" : "This bundle is always on";
+    el.className = "toggle locked " + (be.posture === "forbidden" ? "on-out" : "on-in");
+    el.dataset.default = _postureDefault(be.posture);
+    el.style.cursor = "not-allowed";
+    el.title = be.selectable ? "All packages here are fixed by the author" : "This bundle is always on";
     return;
   }
-  if ((be.decision || "auto") !== "auto") return;
-  paintPill(be.chk, PILLWORD.auto, "auto");
+  const free = be.pkgs.filter((i) => !isLocked(i));
+  const allIn = free.every((i) => toggleOf(i) === "in");
+  const allOut = free.every((i) => toggleOf(i) === "out");
+  // allIn && allOut is only true for an EMPTY free-list — treat as on-in (nothing
+  // to mix), so "mixed" strictly means a real panachage. (Unreachable while the
+  // lock guard above holds, but self-robust here regardless.)
+  const deviated = free.some((i) => _isDeviation(rows[i].posture, userToggle(i)));
+  const state = (allIn || allOut) ? (allOut && !allIn ? " on-out" : " on-in") : " mixed";
+  // Same colour rule as packages: vivid if any package would change the machine.
+  const adds = be.pkgs.some((i) => { const a = actClass(i); return a === " act-add"; });
+  const removes = be.pkgs.some((i) => actClass(i) === " act-remove");
+  const act = adds ? " act-add" : removes ? " act-remove" : "";
+  el.className = "toggle" + state + (deviated ? " deviated" : "") + act;
+  el.dataset.default = _postureDefault(be.posture);
+  el.style.cursor = "pointer";
+  el.title = state === " mixed"
+    ? "Mixed — some in, some out. Click to pull all in."
+    : "Toggle the whole bundle in / out";
 }
+function refreshBundleChk(name) { paintBundle(name); }
 
 // Would applying package `i` actually DO something, given its EFFECTIVE
 // decision? on & absent → install; on & present & outdated → upgrade;
@@ -236,12 +262,19 @@ function refreshLiveness() {
     r.apply.classList.toggle("avail", show && !inPlan);
     r.apply.textContent = act ? act.verb : "—";        // button IS the action; — if none possible
     r.apply.disabled = applyRunning || !act;
+    // Tint the WHOLE row when it's in the plan — the change is unmissable, not
+    // hidden in a small button. When in-plan, act.dir is the plan's direction.
+    r.details.classList.toggle("plan-add", inPlan && act && act.dir === "add");
+    r.details.classList.toggle("plan-remove", inPlan && act && act.dir === "remove");
+    paintPkg(i);   // switch colour follows the plan — refresh it as machine state lands
   }
   // Bundle buttons: live if any of their packages would act.
-  for (const be of Object.values(bundleEls)) {
+  for (const name of Object.keys(bundleEls)) {
+    const be = bundleEls[name];
     const live = be.pkgs.some(isActionable);
     be.apply.classList.toggle("live", live && !applyRunning);
     be.apply.disabled = applyRunning;
+    paintBundle(name);   // bundle switch colour follows the plan too
     // Preview the plan AT REST: a bundle with pending actions opens, a stable
     // one folds. Only when idle — during a run the execution logic (setStatus)
     // owns open/close, and we never fight the user's manual toggle mid-run.
@@ -251,6 +284,10 @@ function refreshLiveness() {
   const g = document.getElementById("install-all");
   g.classList.toggle("live", ids.some(isActionable) && !applyRunning);
   g.disabled = applyRunning;
+  // Reset is available only if the user has moved something off the defaults.
+  const deviated = ids.some((i) => _isDeviation(rows[i].posture, userToggle(i)));
+  const reset = document.getElementById("reset-all");
+  if (reset) reset.disabled = applyRunning || !deviated;
 }
 
 // Apply. We send the DECIDED packages only, split into `on` (want present)
@@ -277,12 +314,10 @@ function render(bundles, steps) {
     bd.className = "bundle";
     const bsum = document.createElement("summary");
     bsum.className = "bundle-head";
-    const chk = document.createElement("span");
-    chk.className = "pill auto"; chk.textContent = "auto";
-    chk.title = "Cycle this bundle: auto → opt-in → opt-out";
+    const chk = makeToggle();
     chk.onclick = (e) => {
-      e.preventDefault(); e.stopPropagation();    // cycle without folding
-      cycleBundle(b.name);
+      e.preventDefault(); e.stopPropagation();    // flip without folding
+      flipBundle(b.name);
     };
     const ico = document.createElement("span"); ico.className = "ico"; ico.textContent = b.emoji || "📦";
     const ct = document.createElement("span"); ct.className = "ct";
@@ -299,7 +334,7 @@ function render(bundles, steps) {
     const body = document.createElement("div"); body.className = "bundle-body";
     bd.append(bsum, body);
     stepsEl.append(bd);
-    bundleEls[b.name] = { details: bd, head: bsum, status: bst, chk, apply: bapply, pkgs: [], active: 0, failed: false, decision: "auto", selectable: b.selectable !== false };
+    bundleEls[b.name] = { details: bd, head: bsum, status: bst, chk, apply: bapply, pkgs: [], active: 0, failed: false, decision: "auto", selectable: b.selectable !== false, posture: b.posture || "mandatory" };
   }
 
   for (const s of steps) {
@@ -308,11 +343,10 @@ function render(bundles, steps) {
     if (be) be.pkgs.push(s.i);
     stepNames[s.i] = `${s.bundle}::${s.name}`;   // stable key for persistence
     const d = document.createElement("details");
+    d.classList.add("posture-" + (s.posture || "mandatory"));   // dim optional (opt-*) rows
     const sum = document.createElement("summary");
-    const chk = document.createElement("span");
-    chk.className = "pill auto"; chk.textContent = "auto";
-    chk.title = "Cycle: auto (follow the posture) → opt-in → opt-out";
-    chk.onclick = (e) => { e.preventDefault(); e.stopPropagation(); cyclePkg(s.i); };
+    const chk = makeToggle();
+    chk.onclick = (e) => { e.preventDefault(); e.stopPropagation(); flipPkg(s.i); };
     const badge = document.createElement("span");
     badge.className = "badge waiting"; badge.textContent = "·";
     const name = document.createElement("span");
@@ -402,6 +436,16 @@ const ws = new WebSocket(`ws://${location.host}`);
 // alone. Server acts only on the difference. No scope → all decided packages.
 document.getElementById("install-all").onclick = () => applyScoped(undefined);
 
+// Reset = drop every user toggle back to the author's defaults (clear deviations).
+function resetAll() {
+  for (const i of Object.keys(decision)) delete decision[i];
+  for (const i of Object.keys(rows).map(Number)) paintPkg(i);
+  for (const name of Object.keys(bundleEls)) paintBundle(name);
+  refreshLiveness();
+  persistSelection();
+}
+document.getElementById("reset-all").onclick = resetAll;
+
 // --- tabs ---
 document.querySelectorAll(".tab").forEach((tab) => {
   tab.onclick = () => {
@@ -412,6 +456,21 @@ document.querySelectorAll(".tab").forEach((tab) => {
     if (v === "log") ws.send(JSON.stringify({ type:"get-log" }));
   };
 });
+
+// --- advanced mode: a pure UI preference (per-package toggles, postures, per-
+// bundle Apply). Default OFF → simple: one on/off switch per bundle. Stored in
+// localStorage (browser-side, no server needed) so it sticks across sessions.
+const advToggle = document.getElementById("advanced-toggle");
+function applyAdvanced(on) {
+  document.body.classList.toggle("advanced", on);
+  advToggle.checked = on;
+}
+advToggle.onchange = (e) => {
+  const on = e.target.checked;
+  try { localStorage.setItem("talos.advanced", on ? "1" : "0"); } catch {}
+  applyAdvanced(on);
+};
+try { applyAdvanced(localStorage.getItem("talos.advanced") === "1"); } catch { applyAdvanced(false); }
 
 // --- consent dialog + settings ---
 const consentEl = document.getElementById("consent");

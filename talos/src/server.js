@@ -60,15 +60,17 @@ function readConsent() {
 }
 function writeConsent(c) { ensureDir(STATE_DIR); try { writeFileSync(CONSENT_FILE, JSON.stringify(c, null, 2)); } catch (e) { log(`consent write failed: ${e.message}`); } }
 
-// Selection: { pkgs: {"Bundle::Name":"on"|"off"}, bundles: {"Bundle":"on"|"off"} }.
-// Only manual decisions live here — auto is absence. Missing/corrupt → empty.
+// Selection: { pkgs: {"Bundle::Name":"in"|"out"} } — the user's moved toggles.
+// Only deviations from the author default live here (default = absence). The
+// bundle toggle writes package toggles, so nothing is stored at bundle level.
+// Missing/corrupt → empty.
 function readSelection() {
-  try { const s = JSON.parse(readFileSync(SELECTION_FILE, "utf8")); return { pkgs: s.pkgs || {}, bundles: s.bundles || {} }; }
-  catch { return { pkgs: {}, bundles: {} }; }
+  try { const s = JSON.parse(readFileSync(SELECTION_FILE, "utf8")); return { pkgs: s.pkgs || {} }; }
+  catch { return { pkgs: {} }; }
 }
 function writeSelection(sel) {
   ensureDir(STATE_DIR);
-  const clean = { pkgs: sel && sel.pkgs || {}, bundles: sel && sel.bundles || {} };
+  const clean = { pkgs: sel && sel.pkgs || {} };
   try { writeFileSync(SELECTION_FILE, JSON.stringify(clean, null, 2)); } catch (e) { log(`selection write failed: ${e.message}`); }
 }
 
@@ -117,9 +119,15 @@ const BUNDLE_ROOTS = [
 // field. Adding a manager = adding a case here; data files stay clean.
 function commandsFor(pkg) {
   if (pkg.winget) return {
-    install: `winget install --id ${pkg.winget} -e --accept-source-agreements --accept-package-agreements`,
-    uninstall: `winget uninstall --id ${pkg.winget} -e`,
-    upgrade: `winget upgrade --id ${pkg.winget} -e --accept-source-agreements --accept-package-agreements`,
+    // --source winget: pin to the winget source ONLY. All our packages are winget
+    // ids — we install nothing from msstore (Microsoft Store), so querying it is
+    // pure waste. Observed on the VM: msstore timed out (WinHttpSendRequest 12002),
+    // which made every command hang AND made winget demand "--source" to
+    // disambiguate. Pinning removes a network dependency we never needed — correct
+    // regardless of why msstore was slow.
+    install: `winget install --id ${pkg.winget} -e --source winget --accept-source-agreements --accept-package-agreements`,
+    uninstall: `winget uninstall --id ${pkg.winget} -e --source winget`,
+    upgrade: `winget upgrade --id ${pkg.winget} -e --source winget --accept-source-agreements --accept-package-agreements`,
   };
   if (pkg.npm) return {
     install: `npm install -g ${pkg.npmFlags ? pkg.npmFlags + " " : ""}${pkg.npm}`,
@@ -149,22 +157,23 @@ function loadBundles() {
           description: b.description || "",
           priority: b.priority ?? 100,
           selectable: b.selectable !== false,
+          // the bundle's DEFAULT posture — lets the front lean its "auto" pill
+          // (auto·in vs auto·out) like the packages'.
+          posture: ["mandatory", "opt-out", "opt-in", "forbidden"].includes(b.posture) ? b.posture : "mandatory",
         };
         bundles.push(meta);
+        // Posture is a BUNDLE-level policy — the author's intent for the whole
+        // category. It is NOT set per package: a bundle mixing opt-in and opt-out
+        // rows would make its own pill lie (want different, make a new bundle).
+        // Every package inherits its bundle's posture, uniformly.
         for (const p of (b.packages || [])) {
           const cmd = commandsFor(p);
-          // posture: the AUTHOR's policy for this package (chezmoi convention).
-          // mandatory | opt-out | opt-in | forbidden. A package's own posture wins;
-          // else it inherits the BUNDLE's posture (b.posture); else mandatory.
-          const VALID = ["mandatory", "opt-out", "opt-in", "forbidden"];
-          const bundleDefault = VALID.includes(b.posture) ? b.posture : "mandatory";
-          const posture = VALID.includes(p.posture) ? p.posture : bundleDefault;
           steps.push({
             bundle: meta.name, name: p.name, description: p.description || "",
             install: cmd.install, uninstall: cmd.uninstall, upgrade: cmd.upgrade,
             winget: p.winget || null,   // the id winget reports in `winget upgrade` — how we match outdated rows
             detect: p.detect || null, requires: p.requires || [], selfHost: !!p.selfHost,
-            posture,
+            posture: meta.posture,      // uniform: the bundle's posture
           });
         }
         log(`bundle loaded: ${meta.name} (${(b.packages || []).length} packages) from ${dir.name}`);
@@ -400,7 +409,11 @@ function parseWingetUpgrade(raw) {
 function scanOutdated() {
   return new Promise((resolve) => {
     if (!isWindows) return resolve(new Map());   // winget is Windows-only
-    const ps = `$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User'); winget upgrade --accept-source-agreements`;
+    // --source winget: skip msstore (we install nothing from it). It timed out
+    // (12002) on the VM and made this whole-machine scan hang — the main cause of
+    // the long wait before anything happened. Pinned, it only checks the source
+    // our packages actually come from.
+    const ps = `$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User'); winget upgrade --source winget --accept-source-agreements`;
     execFile("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
       { maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
         if (err && !stdout) { log(`winget upgrade scan failed: ${err.message}`); return resolve(new Map()); }

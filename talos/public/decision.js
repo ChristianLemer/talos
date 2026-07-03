@@ -19,18 +19,39 @@ export function resolvePosture(pkgPosture, bundlePosture) {
   return "mandatory";
 }
 
-// The DESIRED state (present|absent) of a package, resolving posture + the
-// user's effective override ("auto" | "on" | "off").
-//   mandatory → always present, forbidden → always absent (author wins).
-//   opt-out   → present unless the user says off.
-//   opt-in    → absent  unless the user says on.
-//   "auto"    → follow the posture's own default.
-export function desiredState(posture, override) {
-  if (posture === "mandatory") return "present";
-  if (posture === "forbidden") return "absent";
-  if (override === "on") return "present";
-  if (override === "off") return "absent";
-  return posture === "opt-out" ? "present" : "absent";   // auto → posture default
+// A posture is a two-level thing: WHERE its toggle starts (the author's default,
+// "in" | "out") and WHETHER the user may move it. Guillaume's model: the only
+// user choice is a binary in/out toggle; the posture just decides the default
+// side and whether it's locked.
+//   mandatory → default in,  locked   (always present)
+//   opt-out   → default in,  free      (present unless you flip out)
+//   opt-in    → default out, free      (absent unless you flip in)
+//   forbidden → default out, locked    (always absent)
+export function postureDefault(posture) {
+  return (posture === "mandatory" || posture === "opt-out") ? "in" : "out";
+}
+export function isLockedPosture(posture) {
+  return posture === "mandatory" || posture === "forbidden";
+}
+
+// The user's toggle for a package is "in" | "out" | null (untouched → follow the
+// default). Locked postures ignore the toggle entirely (author wins). This is the
+// effective in/out.
+export function toggleState(posture, userToggle) {
+  if (isLockedPosture(posture)) return postureDefault(posture);
+  return userToggle === "in" || userToggle === "out" ? userToggle : postureDefault(posture);
+}
+
+// The DESIRED state (present|absent), from posture + the user's toggle.
+export function desiredState(posture, userToggle) {
+  return toggleState(posture, userToggle) === "in" ? "present" : "absent";
+}
+
+// Has the user DEVIATED from the author's default? (drives the "vivid when moved,
+// neutral when at default" colouring). Locked → never a deviation.
+export function isDeviation(posture, userToggle) {
+  if (isLockedPosture(posture)) return false;
+  return toggleState(posture, userToggle) !== postureDefault(posture);
 }
 
 // Given a DESIRED state and the machine reality, the action a plain Apply would
@@ -44,10 +65,4 @@ export function actionFor(desired, { present, outdated, canUninstall }) {
   if (desired === "present" && present && outdated) return "upgrade";
   if (desired === "absent" && present && canUninstall) return "uninstall";
   return null;
-}
-
-// True when a package is locked by its posture — the author decided, the user
-// cannot override (no cyclable pill).
-export function isLockedPosture(posture) {
-  return posture === "mandatory" || posture === "forbidden";
 }

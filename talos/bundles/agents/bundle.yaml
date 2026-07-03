@@ -1,0 +1,21 @@
+# Agents — the AI client(s) that stand on the neutral Base. Shipped in the coque.
+# The engine names no specific agent in its code (hermeticity: the core knows no
+# client); the CHOICE of agent lives here, as data. Claude Code is opt-out (the
+# default agent, installed unless declined). Other agents — GitHub Copilot CLI,
+# etc. — drop in here the same way, as plain packages.
+
+bundle: Agents
+emoji: 🤖
+description: The AI agent that runs on top — pick yours.
+priority: 5
+selectable: true
+posture: opt-out       # Claude Code installed by default; decline or swap freely
+
+packages:
+  - name: Claude Code
+    description: Anthropic's official CLI agent — installed globally via npm
+    npm: "@anthropic-ai/claude-code"
+    npmFlags: "--allow-scripts=@anthropic-ai/claude-code"
+    detect: claude --version
+    requires:
+      - Node.js

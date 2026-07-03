@@ -9,39 +9,33 @@
 
 bundle: Base
 emoji: 🧠
-description: The vital core — what the AI strictly needs to run. Non-negotiable.
+description: The neutral substrate — the runtime and tools any AI agent needs.
 priority: 0
 selectable: false      # always on; the refuge guarantees the base, can't be unchecked
 posture: mandatory     # every package here is non-negotiable (bundle-level default)
 
-# The refuge, stripped to essentials: without any of these, Claude Code does not
-# run. Comfort/taste (editors, shell, notes) lives in its own selectable bundles.
+# The refuge, stripped to the NEUTRAL substrate: the runtime + tools an agent
+# stands on — no client named here. The engine knows no specific AI (hermeticity:
+# the core knows no client). The agent itself lives in the Agents bundle; comfort
+# (editors, shell, notes) in its own selectable bundles.
 packages:
   - name: Node.js
-    description: JavaScript runtime — required by Claude Code (and by this tool itself)
+    description: JavaScript runtime — required by this tool itself and by CLI agents
     winget: OpenJS.NodeJS
     detect: node --version
     selfHost: true       # the panel runs on it — uninstall handled specially
 
   - name: Git
-    description: Version control — required by Claude plugin marketplaces
+    description: Version control — required by agent plugin marketplaces
     winget: Git.Git
     detect: git --version
 
   - name: uv
-    description: Python package manager — lets the AI build and run programs for you
+    description: Python package manager — lets an agent build and run programs for you
     winget: astral-sh.uv
     detect: uv --version
 
   - name: jq
-    description: JSON CLI — required by some Claude plugin hooks
+    description: JSON CLI — required by some agent plugin hooks
     winget: jqlang.jq
     detect: jq --version
-
-  - name: Claude Code
-    description: The agent itself — installed globally via npm
-    npm: "@anthropic-ai/claude-code"
-    npmFlags: "--allow-scripts=@anthropic-ai/claude-code"
-    detect: claude --version
-    requires:
-      - Node.js
