@@ -364,6 +364,7 @@
       function isActionable(i) {
         const r = rows[i]; if (!r) return false;
         if (wanted.has(i) && !r.present) return true;              // would install
+        if (wanted.has(i) && r.present && r.outdated) return true; // would upgrade
         if (!wanted.has(i) && r.present && r.canUninstall) return true; // would remove
         return false;
       }
@@ -457,9 +458,13 @@
           apply.onclick = (e) => {
             e.preventDefault();
             if (applyRunning) return;
+            const r = rows[s.i];
+            // Pick the right action: upgrade a present-but-stale wanted package,
+            // install a wanted one, otherwise remove.
+            const type = wanted.has(s.i) ? (r && r.present && r.outdated ? "upgrade" : "install") : "uninstall";
             applyRunning = true; refreshLiveness();
             overall.textContent = "applying…";
-            ws.send(JSON.stringify({ type: wanted.has(s.i) ? "install" : "uninstall", i:s.i }));
+            ws.send(JSON.stringify({ type, i:s.i }));
           };
           sum.append(chk, badge, name, delta, st, apply);
           const panel = document.createElement("div");
@@ -496,8 +501,8 @@
         r.statusLabel.className = "statusLabel " + status; r.statusLabel.textContent = LABEL[status] || status;
         // Track presence from the settled states, so liveness knows what's on the
         // machine. (Running states are transient — leave presence as it was.)
-        if (status === "ok") r.present = true;
-        else if (status === "absent" || status === "waiting") r.present = false;
+        if (status === "ok") { r.present = true; r.outdated = false; }  // a settled 'ok' = current now
+        else if (status === "absent" || status === "waiting") { r.present = false; r.outdated = false; }
         refreshLiveness();
         if (RUNNING.has(status) || status === "fail") r.details.open = true; // show activity / failures
         if (status === "ok" || status === "absent") r.details.open = false;       // fold completed (frame stays)
@@ -576,6 +581,13 @@
             if (rows[msg.i]) { setWanted(msg.i, msg.present); setStatus(msg.i, msg.present ? "ok" : "waiting"); }
             break;
           case "state-done": overall.textContent = "ready"; hideSplash(); break;
+          case "outdated": {                             // a present package has a newer version
+            const r = rows[msg.i]; if (!r) break;
+            r.outdated = true;
+            if (r.delta) r.delta.textContent = `${msg.current} → ${msg.available}`;
+            refreshLiveness();                           // now this row's Apply is useful
+            break;
+          }
           case "step": setStatus(msg.i, msg.status); break;
           case "detail":                                 // version delta for an upgrade, e.g. "2.54→2.55"
             if (rows[msg.i] && rows[msg.i].delta) rows[msg.i].delta.textContent = (msg.detail || "").replace("→", " → ");

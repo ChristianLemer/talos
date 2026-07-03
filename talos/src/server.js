@@ -216,7 +216,11 @@ wss.on("connection", (ws) => {
   // only when asked.
   send(ws, { type: "plan", bundles: BUNDLES, consent: readConsent(),
     steps: STEPS.map((s, i) => ({ i, name: s.name, description: s.description, bundle: s.bundle, canUninstall: !!s.uninstall })) });
-  detectAll(ws).catch((e) => log(`detect error: ${e.stack || e}`));   // ground truth → pre-check the cards
+  // Ground truth → pre-check the cards (fast, offline), THEN scan for outdated
+  // (online, best-effort) so stale packages light their Apply buttons at rest.
+  detectAll(ws)
+    .then(() => reportOutdated(ws))
+    .catch((e) => log(`detect error: ${e.stack || e}`));
 
   ws.on("message", (raw) => {
     let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
@@ -225,6 +229,8 @@ wss.on("connection", (ws) => {
       doStep(ws, msg.i, "install").catch((e) => log(`install error: ${e.stack || e}`)).finally(() => send(ws, { type: "done" }));
     } else if (msg.type === "uninstall" && typeof msg.i === "number" && STEPS[msg.i]) {
       doStep(ws, msg.i, "uninstall").catch((e) => log(`uninstall error: ${e.stack || e}`)).finally(() => send(ws, { type: "done" }));
+    } else if (msg.type === "upgrade" && typeof msg.i === "number" && STEPS[msg.i]) {
+      doStep(ws, msg.i, "upgrade").catch((e) => log(`upgrade error: ${e.stack || e}`)).finally(() => send(ws, { type: "done" }));
     } else if (msg.type === "apply") {
       // msg.want = the package indices the user wants present (the WHOLE desired
       // state — needed so the diff is correct). msg.scope, if present, restricts
@@ -381,6 +387,27 @@ async function detectAll(ws) {
   results.forEach((present, i) => send(ws, { type: "state", i, present }));
   send(ws, { type: "state-done" });
   log(`detected: ${results.filter(Boolean).length}/${STEPS.length} present`);
+}
+
+// After presence (fast, offline) is reported, run the ONE online scan and tell
+// the panel which present packages are outdated, with their version delta — so
+// their Apply buttons light up at rest, not only after an Apply. Kept SEPARATE
+// from detectAll and run AFTER state-done, so the splash + panel never wait on
+// the network. A failed/empty scan (e.g. a 403 behind the firewall) simply
+// reports nothing — the panel behaves exactly as before, upgrade still caught
+// at Apply time.
+async function reportOutdated(ws) {
+  const outdated = await scanOutdated();
+  if (!outdated.size) return;
+  let shown = 0;
+  STEPS.forEach((s, i) => {
+    if (s.winget && s.upgrade && outdated.has(s.winget.toLowerCase())) {
+      const o = outdated.get(s.winget.toLowerCase());
+      send(ws, { type: "outdated", i, current: o.current, available: o.available });
+      shown++;
+    }
+  });
+  log(`outdated among our packages: ${shown}`);
 }
 
 // Serial lock: only ONE package manager runs at a time, ever. Two winget
