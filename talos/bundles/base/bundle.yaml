@@ -9,10 +9,13 @@
 
 bundle: Base
 emoji: 🧠
-description: Everything the AI needs to run and work — installed and shown live.
+description: The vital core — what the AI strictly needs to run. Non-negotiable.
 priority: 0
 selectable: false      # always on; the refuge guarantees the base, can't be unchecked
+posture: mandatory     # every package here is non-negotiable (bundle-level default)
 
+# The refuge, stripped to essentials: without any of these, Claude Code does not
+# run. Comfort/taste (editors, shell, notes) lives in its own selectable bundles.
 packages:
   - name: Node.js
     description: JavaScript runtime — required by Claude Code (and by this tool itself)
@@ -34,31 +37,6 @@ packages:
     description: JSON CLI — required by some Claude plugin hooks
     winget: jqlang.jq
     detect: jq --version
-
-  - name: Nushell
-    description: Structured shell — the family's automation language and surgical-config instrument
-    winget: Nushell.Nushell
-    detect: nu --version
-
-  - name: Visual Studio Code
-    description: Where you see and edit what the AI produces
-    winget: Microsoft.VisualStudioCode
-    detect: code --version
-
-  - name: Helix
-    description: Modal terminal editor
-    winget: Helix.Helix
-    detect: hx --version
-
-  - name: Starship
-    description: Cross-shell prompt
-    winget: Starship.Starship
-    detect: starship --version
-
-  - name: Obsidian
-    description: Local Markdown knowledge base
-    winget: Obsidian.Obsidian
-    detect: winget list --id Obsidian.Obsidian --exact   # GUI app, no CLI — detect/version via winget
 
   - name: Claude Code
     description: The agent itself — installed globally via npm

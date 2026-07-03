@@ -1,0 +1,15 @@
+# Notes — a local Markdown knowledge base. Shipped in the coque, selectable,
+# recommended (opt-out): installed by default, but you may decline.
+
+bundle: Notes
+emoji: 📓
+description: A local Markdown knowledge base.
+priority: 30
+selectable: true
+posture: opt-out
+
+packages:
+  - name: Obsidian
+    description: Local Markdown knowledge base
+    winget: Obsidian.Obsidian
+    detect: winget list --id Obsidian.Obsidian --exact   # GUI app, no CLI — detect/version via winget

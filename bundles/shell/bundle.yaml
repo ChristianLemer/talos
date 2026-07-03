@@ -1,0 +1,20 @@
+# Shell — the family's automation language and a nicer prompt. Shipped in the
+# coque, selectable, recommended (opt-out): installed by default, decline freely.
+
+bundle: Shell
+emoji: 🐚
+description: A structured shell and a cross-shell prompt for a comfortable terminal.
+priority: 20
+selectable: true
+posture: opt-out
+
+packages:
+  - name: Nushell
+    description: Structured shell — the family's automation language and surgical-config instrument
+    winget: Nushell.Nushell
+    detect: nu --version
+
+  - name: Starship
+    description: Cross-shell prompt
+    winget: Starship.Starship
+    detect: starship --version

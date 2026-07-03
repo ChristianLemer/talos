@@ -43,6 +43,9 @@ const USER = (os.userInfo().username || "user").replace(/[^\w.-]/g, "_");
 // personal is written into it.
 const STATE_DIR = join(process.env.LOCALAPPDATA || process.env.HOME || os.tmpdir(), "Talos");
 const CONSENT_FILE = join(STATE_DIR, "consent.json");
+// Persisted manual decisions (the yellow on/off). Keyed by name, not index, so
+// it survives bundles being added or reordered. auto is never stored.
+const SELECTION_FILE = join(STATE_DIR, "selection.json");
 // Shared/collective history sits NEXT TO the system (repo root), so the disk's
 // topology decides reach: personal disk → just you; collective disk → the team.
 const SHARED_LOG_DIR = join(ROOT, "..", "logs", HOST);
@@ -55,6 +58,18 @@ function readConsent() {
   try { return JSON.parse(readFileSync(CONSENT_FILE, "utf8")); } catch { return { decided: false, share: false }; }
 }
 function writeConsent(c) { ensureDir(STATE_DIR); try { writeFileSync(CONSENT_FILE, JSON.stringify(c, null, 2)); } catch (e) { log(`consent write failed: ${e.message}`); } }
+
+// Selection: { pkgs: {"Bundle::Name":"on"|"off"}, bundles: {"Bundle":"on"|"off"} }.
+// Only manual decisions live here — auto is absence. Missing/corrupt → empty.
+function readSelection() {
+  try { const s = JSON.parse(readFileSync(SELECTION_FILE, "utf8")); return { pkgs: s.pkgs || {}, bundles: s.bundles || {} }; }
+  catch { return { pkgs: {}, bundles: {} }; }
+}
+function writeSelection(sel) {
+  ensureDir(STATE_DIR);
+  const clean = { pkgs: sel && sel.pkgs || {}, bundles: sel && sel.bundles || {} };
+  try { writeFileSync(SELECTION_FILE, JSON.stringify(clean, null, 2)); } catch (e) { log(`selection write failed: ${e.message}`); }
+}
 
 // Append one history entry. Shared file if consented, else private to this
 // machine — the Log tab works either way; only the LOCATION (and thus who can
@@ -86,12 +101,15 @@ function log(msg) {
 log(`--- panel start (pid ${process.pid}, platform ${process.platform}) ---`);
 
 // --- bundles: pure data, no logic ------------------------------------------
-// Two scan roots: the Base inside the coque, then extras outside it. Each
-// subfolder with a bundle.yaml is a bundle. A broken YAML is skipped with a
-// logged message, not defended against (robust, not maternal).
+// Two scan roots. The coque holds ONLY the Base — the vital refuge that must
+// travel with the engine, indelible. Everything else (editors, shell, notes,
+// integrator bundles) lives OUTSIDE, as plain data the engine merely scans.
+// This keeps the engine hermetic: it carries the guaranteed core and no opinion
+// about the rest. Each subfolder with a bundle.yaml is a bundle; a broken YAML
+// is skipped with a logged message, not defended against (robust, not maternal).
 const BUNDLE_ROOTS = [
-  join(ROOT, "bundles"),            // coque — the Base
-  join(ROOT, "..", "bundles"),      // outside the coque — extras / integrator
+  join(ROOT, "bundles"),            // coque — the Base ONLY (the guaranteed refuge)
+  join(ROOT, "..", "bundles"),      // outside the coque — everything else / integrator
 ];
 
 // Build a package manager's install/uninstall command from a package's named
@@ -134,11 +152,18 @@ function loadBundles() {
         bundles.push(meta);
         for (const p of (b.packages || [])) {
           const cmd = commandsFor(p);
+          // posture: the AUTHOR's policy for this package (chezmoi convention).
+          // mandatory | opt-out | opt-in | forbidden. A package's own posture wins;
+          // else it inherits the BUNDLE's posture (b.posture); else mandatory.
+          const VALID = ["mandatory", "opt-out", "opt-in", "forbidden"];
+          const bundleDefault = VALID.includes(b.posture) ? b.posture : "mandatory";
+          const posture = VALID.includes(p.posture) ? p.posture : bundleDefault;
           steps.push({
             bundle: meta.name, name: p.name, description: p.description || "",
             install: cmd.install, uninstall: cmd.uninstall, upgrade: cmd.upgrade,
             winget: p.winget || null,   // the id winget reports in `winget upgrade` — how we match outdated rows
             detect: p.detect || null, requires: p.requires || [], selfHost: !!p.selfHost,
+            posture,
           });
         }
         log(`bundle loaded: ${meta.name} (${(b.packages || []).length} packages) from ${dir.name}`);
@@ -214,8 +239,8 @@ wss.on("connection", (ws) => {
   // Draw the plan and STOP — nothing runs on its own. The user drives every
   // action (per-step install/uninstall, or the global buttons). A refuge acts
   // only when asked.
-  send(ws, { type: "plan", bundles: BUNDLES, consent: readConsent(),
-    steps: STEPS.map((s, i) => ({ i, name: s.name, description: s.description, bundle: s.bundle, canUninstall: !!s.uninstall })) });
+  send(ws, { type: "plan", bundles: BUNDLES, consent: readConsent(), selection: readSelection(),
+    steps: STEPS.map((s, i) => ({ i, name: s.name, description: s.description, bundle: s.bundle, canUninstall: !!s.uninstall, posture: s.posture })) });
   // Ground truth → pre-check the cards (fast, offline), THEN scan for outdated
   // (online, best-effort) so stale packages light their Apply buttons at rest.
   detectAll(ws)
@@ -232,11 +257,12 @@ wss.on("connection", (ws) => {
     } else if (msg.type === "upgrade" && typeof msg.i === "number" && STEPS[msg.i]) {
       doStep(ws, msg.i, "upgrade").catch((e) => log(`upgrade error: ${e.stack || e}`)).finally(() => send(ws, { type: "done" }));
     } else if (msg.type === "apply") {
-      // msg.want = the package indices the user wants present (the WHOLE desired
-      // state — needed so the diff is correct). msg.scope, if present, restricts
-      // which packages we ACT on (a per-bundle Apply passes just that bundle's
-      // indices) — so a scoped Apply never touches packages outside it.
-      applyDiff(ws, msg.want || [], msg.scope || null).catch((e) => log(`apply error: ${e.stack || e}`));
+      // msg.on / msg.off = the DECIDED package indices (want-present / want-absent).
+      // Everything not listed is auto → never touched. msg.scope, if present,
+      // restricts which packages we ACT on (a per-bundle Apply).
+      applyDiff(ws, msg.on || [], msg.off || [], msg.scope || null).catch((e) => log(`apply error: ${e.stack || e}`));
+    } else if (msg.type === "set-selection") {
+      writeSelection(msg.selection);   // persist the yellow on/off decisions
     } else if (msg.type === "get-log") {
       send(ws, { type: "log", consent: readConsent(), history: readHistory() });
     } else if (msg.type === "set-consent") {
@@ -458,23 +484,25 @@ async function doStepNow(ws, i, action) {
   }
 }
 
-// Apply the DIFF between what the user wants and what's actually on the machine.
-// `want` = package indices the user wants present. We RE-DETECT presence (ground
-// truth) AND scan once for outdated packages, then converge in FOUR cases:
-//   wanted & absent            → install
-//   wanted & present & OUTDATED → upgrade   (new: one Apply keeps you current)
-//   wanted & present & current  → skip
-//   unwanted & present          → uninstall
-// A small change → a small action; already-correct → nothing.
+// Apply the tri-state DECISION against what's actually on the machine.
+// `on`  = indices the user wants PRESENT (yellow ☑).
+// `off` = indices the user wants ABSENT (yellow ☒).
+// Anything in NEITHER list is `auto` → NEVER touched (the safety of the model:
+// no decision, no action — we don't uninstall the world just because it wasn't
+// ticked). We RE-DETECT presence AND scan once for outdated, then converge:
+//   on  & absent             → install
+//   on  & present & OUTDATED → upgrade
+//   on  & present & current  → skip
+//   off & present            → uninstall
+//   off & absent, auto *     → nothing
 // Order: uninstalls first (reverse dep order, selfHost/node LAST), then installs,
-// then upgrades. Outdated detection is winget-only (npm has no cheap scan) — an
-// npm package present-but-old is left as-is, not silently claimed up-to-date.
-async function applyDiff(ws, want, scope) {
-  const wanted = new Set(want);
+// then upgrades. Outdated detection is winget-only (npm has no cheap scan).
+async function applyDiff(ws, on, off, scope) {
+  const wantOn = new Set(on);
+  const wantOff = new Set(off);
   // `scope` (optional): the only indices we may act on. A per-bundle Apply passes
   // its bundle's packages; the global Apply passes nothing → every package is in
-  // scope. The diff is still computed against the FULL wanted set, so presence is
-  // judged correctly — we just don't ACT outside the scope.
+  // scope. auto packages are never in on/off, so they're inert regardless.
   const inScope = scope ? new Set(scope) : null;
   const acts = (i) => !inScope || inScope.has(i);
   const [present, outdated] = await Promise.all([
@@ -482,15 +510,15 @@ async function applyDiff(ws, want, scope) {
     scanOutdated(),
   ]);
 
-  // A present, wanted, winget package whose id is in the outdated map is stale.
+  // A present, on, winget package whose id is in the outdated map is stale.
   const isOutdated = (i) => {
     const s = STEPS[i];
     return !!(s.winget && s.upgrade) && outdated.has(s.winget.toLowerCase());
   };
 
-  const toInstall = [...STEPS.keys()].filter((i) => acts(i) && wanted.has(i) && !present[i]);
-  const toUpgrade = [...STEPS.keys()].filter((i) => acts(i) && wanted.has(i) && present[i] && isOutdated(i));
-  let toRemove = [...STEPS.keys()].filter((i) => acts(i) && !wanted.has(i) && present[i] && STEPS[i].uninstall);
+  const toInstall = [...STEPS.keys()].filter((i) => acts(i) && wantOn.has(i) && !present[i]);
+  const toUpgrade = [...STEPS.keys()].filter((i) => acts(i) && wantOn.has(i) && present[i] && isOutdated(i));
+  let toRemove = [...STEPS.keys()].filter((i) => acts(i) && wantOff.has(i) && present[i] && STEPS[i].uninstall);
   toRemove.sort((a, b) => (STEPS[a].selfHost ? 1 : 0) - (STEPS[b].selfHost ? 1 : 0)); // node last
 
   const verOf = (i) => { const o = outdated.get(STEPS[i].winget.toLowerCase()); return o ? `${o.current}→${o.available}` : "?"; };

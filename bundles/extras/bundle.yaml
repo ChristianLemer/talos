@@ -9,18 +9,26 @@ description: Optional command-line tools for power users.
 priority: 50
 selectable: true
 
+# posture: mandatory (default if omitted) | opt-out | opt-in | forbidden
+#   mandatory — always present, the user cannot decline (locked pill)
+#   opt-out   — present by default, the user may remove it
+#   opt-in    — absent by default, the user may add it
+#   forbidden — always absent, actively removed, the user cannot enable (locked)
 packages:
   - name: ripgrep
     description: Blazingly fast search
     winget: BurntSushi.ripgrep.MSVC
     detect: rg --version
+    posture: opt-out       # recommended — installed unless you opt out
 
   - name: fd
     description: Fast, friendly alternative to find
     winget: sharkdp.fd
     detect: fd --version
+    posture: opt-in        # optional — installed only if you opt in
 
   - name: bat
     description: cat with syntax highlighting
     winget: sharkdp.bat
     detect: bat --version
+    posture: opt-in
