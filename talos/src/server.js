@@ -30,6 +30,7 @@ import os from "node:os";
 import { WebSocketServer } from "ws";
 import { parse as parseYaml } from "yaml";
 import pty from "node-pty";
+import { actionFor } from "../public/decision.js";   // the SHARED decision rule
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");        // talos/  (the machinery)
@@ -190,6 +191,10 @@ const XTERM = join(ROOT, "node_modules", "@xterm", "xterm");
 const ROUTES = {
   "/vendor/xterm.js": [join(XTERM, "lib", "xterm.js"), "text/javascript"],
   "/vendor/xterm.css": [join(XTERM, "css", "xterm.css"), "text/css"],
+  // The panel's own ES modules. app.js imports decision.js (the shared rule),
+  // so the browser fetches both. Same-origin, served locally — no CDN.
+  "/app.js": [join(ROOT, "public", "app.js"), "text/javascript"],
+  "/decision.js": [join(ROOT, "public", "decision.js"), "text/javascript"],
 };
 const server = http.createServer((req, res) => {
   if (req.url === "/" || req.url === "/index.html") {
@@ -510,15 +515,24 @@ async function applyDiff(ws, on, off, scope) {
     scanOutdated(),
   ]);
 
-  // A present, on, winget package whose id is in the outdated map is stale.
+  // A present, winget package whose id is in the outdated map is stale.
   const isOutdated = (i) => {
     const s = STEPS[i];
     return !!(s.winget && s.upgrade) && outdated.has(s.winget.toLowerCase());
   };
 
-  const toInstall = [...STEPS.keys()].filter((i) => acts(i) && wantOn.has(i) && !present[i]);
-  const toUpgrade = [...STEPS.keys()].filter((i) => acts(i) && wantOn.has(i) && present[i] && isOutdated(i));
-  let toRemove = [...STEPS.keys()].filter((i) => acts(i) && wantOff.has(i) && present[i] && STEPS[i].uninstall);
+  // Ask the SHARED rule (actionFor) what to do for each in-scope package, given
+  // its desired state (on→present, off→absent) and machine reality. Same function
+  // the front previews with — server and UI cannot drift.
+  const actionOf = (i) => {
+    if (!acts(i)) return null;
+    const desired = wantOn.has(i) ? "present" : wantOff.has(i) ? "absent" : null;
+    if (!desired) return null;   // auto (in neither list) → untouched
+    return actionFor(desired, { present: present[i], outdated: isOutdated(i), canUninstall: !!STEPS[i].uninstall });
+  };
+  const toInstall = [...STEPS.keys()].filter((i) => actionOf(i) === "install");
+  const toUpgrade = [...STEPS.keys()].filter((i) => actionOf(i) === "upgrade");
+  let toRemove = [...STEPS.keys()].filter((i) => actionOf(i) === "uninstall");
   toRemove.sort((a, b) => (STEPS[a].selfHost ? 1 : 0) - (STEPS[b].selfHost ? 1 : 0)); // node last
 
   const verOf = (i) => { const o = outdated.get(STEPS[i].winget.toLowerCase()); return o ? `${o.current}→${o.available}` : "?"; };
