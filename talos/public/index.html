@@ -1,11 +1,17 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" style="background:#1a1b26">
   <head>
     <meta charset="utf-8" />
-    <title>Set up your environment</title>
+    <title>Talos</title>
+    <link rel="icon" type="image/svg+xml" href="/talos.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="stylesheet" href="/vendor/xterm.css" />
     <style>
       :root { --bg:#1a1b26; --fg:#c0caf5; --line:#2a2e42; --dim:#565f89; }
+      /* App feel: no text selection or callout by default (like a native app);
+         the terminal re-enables selection so you can still copy output. */
+      html, body { -webkit-user-select:none; user-select:none; }
+      .xterm, .xterm * { -webkit-user-select:text; user-select:text; }
       body { margin:0; background:var(--bg); color:var(--fg); font-family:system-ui,sans-serif; }
       /* Thin theme-matched scrollbar for the whole page. */
       *::-webkit-scrollbar { width:10px; height:10px; }
@@ -365,6 +371,13 @@
       <div id="history"></div>
     </div>
 
+    <script>
+      // Native-app feel: suppress the browser right-click menu, except inside the
+      // terminal (where right-click paste is genuinely useful).
+      addEventListener("contextmenu", (e) => {
+        if (!e.target.closest(".xterm")) e.preventDefault();
+      });
+    </script>
     <script src="/vendor/xterm.js"></script>
     <script type="module" src="/app.js"></script>
   </body>

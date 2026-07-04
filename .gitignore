@@ -3,6 +3,9 @@ panel.log
 package-lock.json
 # Runtime install history (per machine/user) — never code, never committed.
 logs/
+# Compiled binaries (deno compile output) + its self-extraction dir.
+dist/
+talos.log
 # Local scratch — anything with a leading underscore (drafts, spikes, logo work).
 _*
 .playwright-mcp/

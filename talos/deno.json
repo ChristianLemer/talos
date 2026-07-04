@@ -1,0 +1,32 @@
+{
+  "name": "talos",
+  "version": "0.0.0",
+  "exports": "./src/server.ts",
+
+  "tasks": {
+    "dev": "deno run --unstable-ffi --allow-all src/server.ts",
+    "test": "deno test --allow-all",
+    "fmt": "deno fmt",
+    "lint": "deno lint",
+
+    "//build": "deno compile recipe — each flag = a bug we already solved (see _PLAN + memory talos-deno-single-exe). NO --self-extracting: the exe ships on a SHARED OneDrive launched by N machines, so the native lib must NOT extract beside the exe; server.ts reads the embedded lib bytes and writes them to a per-machine LOCAL dir (%LOCALAPPDATA%\\Talos) before dlopen (see memory talos-shared-exe-local-extraction). --no-terminal: GUI, no console (replaces Start.vbs). --allow-all: perms BAKED at compile (else silent NotCapable). --minimum-dependency-age 0: pty-ffi 0.40.0 too young for the guard (drop when it ages). Targets: mac-arm64 + win-x64 ONLY (mac-x64/linux deferred — see _PLAN).",
+    "build:mac": "deno compile --target aarch64-apple-darwin --allow-all --unstable-ffi --minimum-dependency-age 0 --exclude node_modules --include public --include native/libpty_arm64.dylib --output dist/talos-mac-arm64 src/server.ts",
+    "build:win": "deno compile --target x86_64-pc-windows-msvc --icon native/talos.ico --no-terminal --allow-all --unstable-ffi --minimum-dependency-age 0 --exclude node_modules --include public --include native/pty.dll --output dist/talos.exe src/server.ts",
+    "//build:win-debug": "SAME as build:win but WITHOUT --no-terminal → keeps a console so log() echoes live in PowerShell. Evidence-gathering build; not for distribution.",
+    "build:win-debug": "deno compile --target x86_64-pc-windows-msvc --allow-all --unstable-ffi --minimum-dependency-age 0 --exclude node_modules --include public --include native/pty.dll --output dist/talos-debug.exe src/server.ts"
+  },
+
+  "imports": {
+    "@sigma/pty-ffi": "jsr:@sigma/pty-ffi@0.40.0",
+    "@sigma/pty-ffi/noinit": "jsr:@sigma/pty-ffi@0.40.0/noinit"
+  },
+
+  "unstable": ["ffi"],
+
+  "fmt": {
+    "include": ["src/", "test/"]
+  },
+  "lint": {
+    "include": ["src/", "test/"]
+  }
+}

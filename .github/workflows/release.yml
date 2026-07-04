@@ -1,0 +1,84 @@
+# Release — on a tag `v*`, each OS runner natively compiles ITS target, smoke-tests
+# the binary (boots → HTTP 200, catches the invisible dlopen crash), and attaches
+# it to a GitHub Release. Pre-release is automatic when the tag contains a `-`
+# (v0.1.0-beta.1 → pre-release; v0.1.0 → latest). Targets: mac-arm64 + win-x64 only.
+#
+# The CI calls the SAME `deno task build:*` we run locally — no drift between the
+# binary you test on your machine and the one users download.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # needed to create the Release and upload assets
+
+defaults:
+  run:
+    working-directory: talos # the app lives in talos/ (repo root is the workspace)
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false # one OS failing shouldn't cancel the other's artifact
+      matrix:
+        include:
+          - os: macos-14 # Apple Silicon runner → matches aarch64-apple-darwin
+            task: build:mac
+            artifact: dist/talos-mac-arm64
+          - os: windows-latest # x64 runner → matches x86_64-pc-windows-msvc
+            task: build:win
+            artifact: dist/talos.exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Build (${{ matrix.task }})
+        run: deno task ${{ matrix.task }}
+
+      # Smoke-test on the runner's NATIVE OS: this is the only runtime check the
+      # CI can do (a Linux runner can't launch the .exe). It catches the
+      # `symbol not found` / dlopen failure that is invisible in --no-terminal mode.
+      - name: Smoke-test (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          ./${{ matrix.artifact }} &
+          PID=$!
+          sleep 5
+          code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:7682/ || echo "000")
+          kill $PID 2>/dev/null || true
+          echo "HTTP $code"
+          test "$code" = "200"
+
+      - name: Smoke-test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "${{ matrix.artifact }}" -PassThru
+          Start-Sleep -Seconds 5
+          try {
+            $r = Invoke-WebRequest -Uri "http://localhost:7682/" -UseBasicParsing -TimeoutSec 10
+            $code = $r.StatusCode
+          } catch {
+            $code = 0
+          }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Write-Host "HTTP $code"
+          if ($code -ne 200) { exit 1 }
+
+      - name: Upload artifact to the Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # A tag containing "-" (v0.1.0-beta.1) is flagged pre-release.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: talos/${{ matrix.artifact }}
+          fail_on_unmatched_files: true
