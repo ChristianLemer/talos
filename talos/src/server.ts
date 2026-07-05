@@ -9,6 +9,7 @@
 // applyDiff, outdated, log/consent) lands in later tranches — see _PLAN.
 
 import { instantiate, libName, Pty } from "@sigma/pty-ffi/noinit";
+import { loadBundles } from "./bundles.ts";
 
 const isWin = Deno.build.os === "windows";
 
@@ -103,6 +104,36 @@ const SHELL = isWin ? "powershell.exe" : "/bin/bash";
 const PUBLIC = `${
   (import.meta.dirname ?? ".").replace(/[/\\][^/\\]+$/, "")
 }/public`;
+
+// bundles/ — the integrator's CONTENT, deliberately NOT compiled into the exe
+// (unlike public/, which IS the engine). It lives on the REAL disk beside the
+// exe, so a team drops one generic talos.exe + their own bundles/ side by side
+// on the shared OneDrive and gets their installer — no recompile. This is the
+// hermeticity boundary made physical: the engine ships empty of content.
+//
+// Two worlds, two primitives, on purpose:
+//   compiled → the exe's own folder, via Deno.execPath() (the REAL path on disk;
+//              import.meta.dirname would point INTO the embedded virtual FS).
+//   dev      → the project's bundles/ at the REPO root: strip /src → talos/,
+//              then ../bundles (src/ sits in the nested talos/talos/ that Phase 3
+//              flattens away; matches server.js's join(ROOT, "..", "bundles")).
+// It's a fixed name, NOT a setting: convention over configuration closes the
+// "where are my bundles?" question instead of reopening it. A missing folder is
+// not an error here — an exe with no bundles beside it opens inert (T2 handles
+// the empty case; core = proposition only).
+const BUNDLES_DIR = Deno.build.standalone
+  ? `${Deno.execPath().replace(/[/\\][^/\\]+$/, "")}${
+    isWin ? "\\" : "/"
+  }bundles`
+  : `${(import.meta.dirname ?? ".").replace(/[/\\][^/\\]+$/, "")}/../bundles`;
+log(`bundles dir: ${BUNDLES_DIR}`);
+
+// Scan the bundles ONCE at startup — pure data, no pty/network, so it's safe to
+// do before the engine loads. The result is the `plan` the UI renders on connect
+// (bundles → accordion cards, steps → package rows). An empty scan (no bundles/
+// beside the exe) yields an empty accordion, not a crash.
+const { bundles: BUNDLES, steps: STEPS } = loadBundles(BUNDLES_DIR, log);
+log(`plan: ${BUNDLES.length} bundle(s), ${STEPS.length} package(s)`);
 
 // --- static assets: serve the real public/ tree ----------------------------
 // Vendored xterm lives in public/vendor/ (never a CDN — corporate firewall 403s it).
@@ -345,6 +376,24 @@ function startServer() {
           shutdownTimer = null;
         }
         log(`client connected (clients=${clients})`);
+        // Draw the plan and STOP — nothing runs on its own. The user drives every
+        // action. The UI renders bundles → accordion, steps → rows (each carries
+        // its index `i`, the id every later message keys off). selection/consent
+        // are neutral for now (persisted selection = T2b, consent = T4).
+        socket.send(JSON.stringify({
+          type: "plan",
+          bundles: BUNDLES,
+          steps: STEPS.map((s, i) => ({
+            i,
+            name: s.name,
+            description: s.description,
+            bundle: s.bundle,
+            canUninstall: !!s.uninstall,
+            posture: s.posture,
+          })),
+          selection: { pkgs: {} },
+          consent: { decided: true },
+        }));
         // If the engine is already up, tell the UI right away (hides the splash).
         if (ptyReady) socket.send(JSON.stringify({ type: "ready" }));
       };
