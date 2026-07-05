@@ -338,6 +338,10 @@ function applyScoped(scopeIdx) {
   applyRunning = true;
   refreshLiveness(); // lock every Apply button during the run
   overall.textContent = "applying…";
+  // The server re-scans presence before it replies with the plan — a silent gap.
+  // Dim #steps so the re-scan is VISIBLE and interaction is locked. Cleared on
+  // `apply-plan` (focus mode takes over) or `done` (nothing to do, no plan).
+  stepsEl.classList.add("steps-refreshing");
   // Focus mode engages on the server's `apply-plan` reply (it computes the plan),
   // not here — so we show the exact set of steps that will run.
   ws.send(JSON.stringify({ type: "apply", on, off, scope: scopeIdx }));
@@ -747,11 +751,13 @@ ws.onmessage = (ev) => {
       // The server's full plan, in execution order. Narrow the screen to exactly
       // these steps — all of them stay visible throughout, so the whole to-do
       // list shows and progress follows down it.
+      stepsEl.classList.remove("steps-refreshing"); // scan done, plan is here
       enterFocusMode((msg.plan || []).map((p) => p.i));
       break;
     case "done":
       overall.textContent = msg.nothing ? "nothing to do" : "done";
       applyRunning = false;
+      stepsEl.classList.remove("steps-refreshing"); // net: scan found nothing → no apply-plan
       exitFocusMode(); // everything reappears — failures already open, stand out
       refreshLiveness(); // unlock; re-light what's still useful
       break;
@@ -762,4 +768,7 @@ ws.onmessage = (ev) => {
       break;
   }
 };
-ws.onclose = () => overall.textContent = "disconnected";
+ws.onclose = () => {
+  overall.textContent = "disconnected";
+  stepsEl.classList.remove("steps-refreshing"); // don't leave the dim stuck on
+};

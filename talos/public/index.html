@@ -23,15 +23,36 @@
                background:radial-gradient(120% 140% at 0% 0%, #24283b 0%, var(--bg) 60%);
                display:flex; align-items:flex-start; gap:24px; }
       .hero-text { flex:1; min-width:0; }
-      /* Apply lives in the hero, to the right of the pitch — with its hint below. */
-      .hero-apply { flex:none; display:flex; flex-direction:column; align-items:flex-end; gap:6px; text-align:right; }
+      /* Apply is the action bar at the TOP of the Setup view (not the header): it
+         acts on the list below it. Sticky so it stays reachable while the bundle
+         list scrolls. Hint on the left, buttons + status on the right. */
+      .hero-apply { position:sticky; top:0; z-index:10; display:flex; align-items:center;
+                    gap:12px; padding:12px 12px 10px; background:var(--bg);
+                    border-bottom:1px solid var(--line); }
+      /* Left→right: hint fills the space, then status, then Reset, then Apply last. */
+      .hero-apply #globalhint { flex:1; order:0; text-align:left; max-width:none; }
+      .hero-apply #overall { order:1; }
+      .hero-apply .hero-buttons { order:2; }
       h1 { font-size:22px; margin:0 0 6px; font-weight:700; letter-spacing:-0.2px; }
       h1 .accent { background:linear-gradient(90deg,#7aa2f7,#bb9af7); -webkit-background-clip:text; background-clip:text; color:transparent; }
       .tagline { font-size:14px; color:#a9b1d6; margin:0; max-width:62ch; line-height:1.5; }
       .tagline b { color:var(--fg); font-weight:600; }
       #globalhint { font-size:12px; color:var(--dim); max-width:28ch; line-height:1.4; }
       #overall { font-size:12px; color:var(--dim); }
-      #steps { padding:8px 12px; }
+      #steps { padding:8px 12px; position:relative; }
+      /* Refresh overlay: shown while the server re-scans presence BEFORE the plan
+         arrives (the silent gap). Covers the whole modifiable zone — the region
+         that will change is unknown until the scan produces the plan. Sober: dim
+         + centred text, NOT the boot splash (which would read as a restart). */
+      .steps-refreshing::after {
+        content:""; position:absolute; inset:0; z-index:20;
+        background:rgba(26,27,38,.72); backdrop-filter:blur(1px); border-radius:10px;
+      }
+      .steps-refreshing::before {
+        content:"checking what's installed…"; position:absolute; inset:0; z-index:21;
+        display:flex; align-items:center; justify-content:center;
+        color:var(--fg); font-size:15px; letter-spacing:.3px;
+      }
       /* Bundle accordion: header = selection card, body = package rows. */
       .bundle { border:1px solid var(--line); border-radius:10px; margin:8px 0; overflow:hidden; background:#1e2030; }
       .bundle-head { padding:11px 14px; cursor:pointer; display:flex; gap:11px; align-items:center;
@@ -217,10 +238,11 @@
         .bundle-head .cn { font-size:13px; }
         .bundle-head .cd { font-size:11px; }
       }
-      /* Narrow: stack the hero — pitch on top, Apply below it, left-aligned. */
+      /* Narrow: the pitch header stacks; the action bar wraps hint under the row. */
       @media (max-width: 560px) {
         header { flex-direction:column; gap:12px; }
-        .hero-apply { align-items:flex-start; text-align:left; }
+        .hero-apply { flex-wrap:wrap; }
+        .hero-apply #globalhint { flex-basis:100%; order:3; }
       }
       /* Very short: hide the tagline entirely — the title + button are enough. */
       @media (max-height: 560px) {
@@ -351,6 +373,17 @@
         <p class="tagline">Everything your <b>AI coding agent</b> needs — installed, kept current, and shown
           to you as it happens. No terminal know-how required: check what you want and press <b>Apply</b>.</p>
       </div>
+    </header>
+    <nav>
+      <button class="tab active" data-view="setup">Setup</button>
+      <button class="tab" data-view="log">Log &amp; settings</button>
+    </nav>
+
+    <div id="view-setup" class="view active">
+      <!-- Apply lives WITH the list it acts on (not in the global header): the
+           refresh overlay + focus mode both live in #steps, so co-locating the
+           trigger with its feedback closes the "clicked from another tab, no
+           signal" gap by construction. -->
       <div class="hero-apply">
         <div class="hero-buttons">
           <button id="reset-all" class="resetbtn" title="Reset every toggle to the author's default">Reset</button>
@@ -359,13 +392,6 @@
         <span id="globalhint">Installs what you checked, updates what's outdated, removes what you unchecked.</span>
         <span id="overall">connecting…</span>
       </div>
-    </header>
-    <nav>
-      <button class="tab active" data-view="setup">Setup</button>
-      <button class="tab" data-view="log">Log &amp; settings</button>
-    </nav>
-
-    <div id="view-setup" class="view active">
       <div id="steps"></div>
     </div>
 
