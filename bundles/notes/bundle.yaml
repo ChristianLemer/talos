@@ -12,4 +12,7 @@ packages:
   - name: Obsidian
     description: Local Markdown knowledge base
     winget: Obsidian.Obsidian
-    detect: winget list --id Obsidian.Obsidian --exact --source winget   # GUI app, no CLI; pin source — it's a winget package, skip msstore
+    # NO detect: — Obsidian is a GUI app with no CLI binary on PATH. Presence is
+    # derived from the ROUTE (winget list --id), not a hand-written command. On
+    # Windows that's exact; on Mac (no winget) it reads as indeterminate, not
+    # absent. See detect.ts routeProbe.

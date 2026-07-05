@@ -84,6 +84,7 @@ const GLYPH = {
   ok: "✓",
   absent: "·",
   fail: "✗",
+  unknown: "?",
 };
 const LABEL = {
   waiting: "absent",
@@ -93,6 +94,9 @@ const LABEL = {
   ok: "present",
   absent: "removed",
   fail: "failed",
+  // indeterminate: no practicable route to constate presence on this machine
+  // (e.g. a winget-only package on Mac). NOT "absent" — we genuinely can't know.
+  unknown: "—",
 };
 
 // TWO LAYERS (chezmoi convention).
@@ -710,7 +714,18 @@ ws.onmessage = (ev) => {
     case "state": // ground truth from the machine
       // Detection feeds PRESENCE only (the badge/label), never the decision —
       // your yellow choices are yours. Blue auto rows just reflect the machine.
-      if (rows[msg.i]) setStatus(msg.i, msg.present ? "ok" : "waiting");
+      // present: true → present, false → absent, null → indeterminate (no route
+      // to constate here — don't claim absent).
+      if (rows[msg.i]) {
+        setStatus(
+          msg.i,
+          msg.present === true
+            ? "ok"
+            : msg.present === false
+            ? "waiting"
+            : "unknown",
+        );
+      }
       break;
     case "state-done":
       // The REAL wait is over: the machine has been probed, pills are painted.

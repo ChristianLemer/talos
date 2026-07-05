@@ -360,10 +360,13 @@ async function detectAll(ws: WebSocket) {
   };
   try {
     const results = await Promise.all(
-      STEPS.map((s) => detectPresent(s.detect, isWin)),
+      STEPS.map((s) => detectPresent(s, isWin)),
     );
+    // present is true / false / null(indeterminate — no route to constate here).
     results.forEach((present, i) => send({ type: "state", i, present }));
-    log(`detect: ${results.filter(Boolean).length}/${results.length} present`);
+    const yes = results.filter((p) => p === true).length;
+    const unknown = results.filter((p) => p === null).length;
+    log(`detect: ${yes}/${results.length} present, ${unknown} indeterminate`);
   } catch (e) {
     log(`detect error (continuing): ${(e as Error).message}`);
   } finally {
