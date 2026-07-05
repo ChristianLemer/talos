@@ -76,7 +76,8 @@ public class W {
   public static bool ForceForeground(IntPtr h){
     if(IsIconic(h)) ShowWindow(h, 9);
     IntPtr fg = GetForegroundWindow();
-    uint tFg = GetWindowThreadProcessId(fg, out uint _p);
+    uint p2 = 0;
+    uint tFg = GetWindowThreadProcessId(fg, out p2); // out-var declared first: Add-Type on PS 5.1 is C# 5, no inline out
     uint tMe = GetCurrentThreadId();
     bool attached = (tFg != tMe) && AttachThreadInput(tMe, tFg, true);
     BringWindowToTop(h);
