@@ -255,10 +255,10 @@
       .hist-row .h-pkg { flex:1; }
       .hist-row .h-ver { color:var(--dim); font-family:"JetBrains Mono",monospace; font-size:12px; }
       .hist-row .h-act.ok { color:#9ece6a; } .hist-row .h-act.fail { color:#f7768e; }
-      /* Consent dialog reuses the overlay box */
-      #consent { position:fixed; inset:0; z-index:60; display:none; align-items:center; justify-content:center;
+      /* Consent + reset-confirm dialogs reuse the overlay box */
+      #consent, #reset-confirm { position:fixed; inset:0; z-index:60; display:none; align-items:center; justify-content:center;
                  background:rgba(16,17,24,.94); backdrop-filter:blur(3px); padding:40px; }
-      #consent.show { display:flex; }
+      #consent.show, #reset-confirm.show { display:flex; }
       .consent-card { max-width:48ch; }
       .consent-card h2 { font-size:19px; margin:0 0 12px; }
       .consent-card p { color:#a9b1d6; font-size:14px; line-height:1.55; margin:0 0 10px; }
@@ -312,6 +312,17 @@
       <h2 id="overlay-title"></h2>
       <p id="overlay-body"></p>
     </div></div>
+    <!-- Reset confirmation — reset clears the user's choices (not the machine) -->
+    <div id="reset-confirm"><div class="overlay-card consent-card">
+      <h2>Reset every choice?</h2>
+      <p>This returns every toggle to the <b>standard configuration</b> the author set — your personal choices will be lost.</p>
+      <p class="muted">Nothing is installed or removed by this: it only clears your selections. Press <b>Apply</b> afterwards to act on the defaults.</p>
+      <div class="consent-actions">
+        <button id="reset-confirm-no" class="rerun">No — keep my settings</button>
+        <button id="reset-confirm-yes" class="globalbtn">Yes, reset to standard</button>
+      </div>
+    </div></div>
+
     <!-- First-boot consent dialog -->
     <div id="consent"><div class="overlay-card consent-card">
       <h2>Share setup data for support?</h2>

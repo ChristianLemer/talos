@@ -626,7 +626,18 @@ function resetAll() {
   refreshLiveness();
   persistSelection();
 }
-document.getElementById("reset-all").onclick = resetAll;
+// Reset is destructive to the user's choices (not to the machine), so confirm
+// first — a modal mirroring the consent dialog. The button only OPENS it; the
+// actual reset runs on explicit confirmation.
+const resetConfirmEl = document.getElementById("reset-confirm");
+document.getElementById("reset-all").onclick = () =>
+  resetConfirmEl.classList.add("show");
+document.getElementById("reset-confirm-no").onclick = () =>
+  resetConfirmEl.classList.remove("show");
+document.getElementById("reset-confirm-yes").onclick = () => {
+  resetConfirmEl.classList.remove("show");
+  resetAll();
+};
 
 // --- tabs ---
 document.querySelectorAll(".tab").forEach((tab) => {
