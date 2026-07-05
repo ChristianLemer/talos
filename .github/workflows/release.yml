@@ -16,10 +16,6 @@ on:
 permissions:
   contents: write # needed to create the Release and upload assets
 
-defaults:
-  run:
-    working-directory: talos # the app lives in talos/ (repo root is the workspace)
-
 jobs:
   build:
     strategy:
@@ -80,5 +76,5 @@ jobs:
         with:
           # A tag containing "-" (v0.1.0-beta.1) is flagged pre-release.
           prerelease: ${{ contains(github.ref_name, '-') }}
-          files: talos/${{ matrix.artifact }}
+          files: ${{ matrix.artifact }}
           fail_on_unmatched_files: true

@@ -126,9 +126,9 @@ const PUBLIC = `${
 // Two worlds, two primitives, on purpose:
 //   compiled → the exe's own folder, via Deno.execPath() (the REAL path on disk;
 //              import.meta.dirname would point INTO the embedded virtual FS).
-//   dev      → the project's bundles/ at the REPO root: strip /src → talos/,
-//              then ../bundles (src/ sits in the nested talos/talos/ that Phase 3
-//              flattens away; matches server.js's join(ROOT, "..", "bundles")).
+//   dev      → the project's bundles/ at the REPO root: strip /src off the
+//              dirname → the project root, then /bundles (src/ sits directly under
+//              the repo root since Phase 3 flattened the old nested talos/talos/).
 // It's a fixed name, NOT a setting: convention over configuration closes the
 // "where are my bundles?" question instead of reopening it. A missing folder is
 // not an error here — an exe with no bundles beside it opens inert (T2 handles
@@ -137,7 +137,7 @@ const BUNDLES_DIR = Deno.build.standalone
   ? `${Deno.execPath().replace(/[/\\][^/\\]+$/, "")}${
     isWin ? "\\" : "/"
   }bundles`
-  : `${(import.meta.dirname ?? ".").replace(/[/\\][^/\\]+$/, "")}/../bundles`;
+  : `${(import.meta.dirname ?? ".").replace(/[/\\][^/\\]+$/, "")}/bundles`;
 log(`bundles dir: ${BUNDLES_DIR}`);
 
 // Scan the bundles ONCE at startup — pure data, no pty/network, so it's safe to
