@@ -1,12 +1,6 @@
 // app.js — the Talos panel UI. Pure decision logic lives in decision.js
 // (imported below), shared with the server so the rule can never drift.
-import {
-  desiredState as _desiredState,
-  isDeviation as _isDeviation,
-  isLockedPosture,
-  postureDefault as _postureDefault,
-  toggleState as _toggleState,
-} from "./decision.js";
+import { postureDefault as _postureDefault } from "./decision.js";
 import * as M from "./model.js";
 const model = M.createModel();
 
@@ -120,32 +114,19 @@ const ICON_COPY =
 const ICON_OK =
   '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
 
-// USER CHOICE per package: decision[i] = "in" | "out" | undefined (untouched →
-// follow the posture default). A single binary toggle — Guillaume's model. The
-// posture decides where it STARTS and whether it's locked (see decision.js).
-const decision = {};
-
 // --- persistence: only USER-MOVED toggles are saved (untouched = absence).
 // Saved by NAME (bundle::package) so it survives bundles being added/reordered.
-let stepNames = {}; // i → "bundle::name" (stable key)
 function persistSelection() {
-  const pkgs = {};
-  for (const i of Object.keys(decision)) {
-    if ((decision[i] === "in" || decision[i] === "out") && stepNames[i]) {
-      pkgs[stepNames[i]] = decision[i];
-    }
-  }
-  ws.send(JSON.stringify({ type: "set-selection", selection: { pkgs } }));
+  ws.send(JSON.stringify({
+    type: "set-selection",
+    selection: { pkgs: M.persistablePkgs(model) },
+  }));
 }
 function applySavedSelection(sel) {
-  if (!sel) return;
-  const byName = {};
-  for (const [i, key] of Object.entries(stepNames)) byName[key] = +i;
-  for (const [key, state] of Object.entries(sel.pkgs || {})) {
-    if (byName[key] != null && (state === "in" || state === "out")) {
-      setToggle(byName[key], state, { silent: true });
-    }
-  }
+  M.applySavedSelection(model, sel);
+  for (const i of model.pkgs.keys()) paintPkg(i);
+  for (const name of Object.keys(bundleEls)) paintBundle(name);
+  refreshLiveness();
 }
 
 // A real sliding switch: a track with a knob that sits left (out), right (in),
@@ -156,21 +137,6 @@ function makeToggle() {
   el.className = "toggle on-in";
   el.innerHTML = '<span class="knob"></span>';
   return el;
-}
-
-function isLocked(i) {
-  return isLockedPosture(M.postureOf(model, i));
-}
-function userToggle(i) {
-  const d = decision[i];
-  return d === "in" || d === "out" ? d : null;
-}
-// Effective in/out for a package (posture default if untouched; locked wins).
-function toggleOf(i) {
-  return _toggleState(M.postureOf(model, i), userToggle(i));
-}
-function desiredState(i) {
-  return _desiredState(M.postureOf(model, i), userToggle(i));
 }
 
 // Colour rule (ONE rule, same in simple and advanced, package and bundle): a
@@ -188,9 +154,9 @@ function paintPkg(i) {
   const r = rows[i];
   if (!r) return;
   const posture = M.postureOf(model, i);
-  const on = toggleOf(i); // "in" | "out"
-  const locked = isLocked(i);
-  const deviated = _isDeviation(posture, userToggle(i));
+  const on = M.toggleOf(model, i); // "in" | "out"
+  const locked = M.isLocked(model, i);
+  const deviated = M.isDeviated(model, i);
   const el = r.chk;
   el.className = "toggle" + (on === "in" ? " on-in" : " on-out") +
     (locked ? " locked" : "") + (deviated ? " deviated" : "") + actClass(i);
@@ -204,11 +170,10 @@ function paintPkg(i) {
       _postureDefault(posture)
     })`;
   // A row whose desired state is absent reads dimmer (not wanted).
-  r.details.classList.toggle("row-out", desiredState(i) === "absent");
+  r.details.classList.toggle("row-out", M.desiredOf(model, i) === "absent");
 }
 function setToggle(i, state, opts = {}) {
-  if (isLocked(i)) return; // author's posture wins
-  decision[i] = state;
+  if (!M.setDecision(model, i, state)) return; // locked → refused
   paintPkg(i);
   const b = model.pkgs.get(i)?.bundle; // repaint the parent bundle pill:
   if (b) paintBundle(b); // its in/out/MIXED may have changed
@@ -217,7 +182,9 @@ function setToggle(i, state, opts = {}) {
 }
 // Clicking the toggle flips to the OTHER side (in ↔ out) from wherever it is now.
 function flipPkg(i) {
-  if (!isLocked(i)) setToggle(i, toggleOf(i) === "in" ? "out" : "in");
+  if (!M.isLocked(model, i)) {
+    setToggle(i, M.toggleOf(model, i) === "in" ? "out" : "in");
+  }
 }
 
 // A bundle is LOCKED if not selectable, or all its packages are locked.
@@ -225,7 +192,7 @@ function bundleLocked(name) {
   const be = bundleEls[name];
   if (!be) return true;
   if (!be.selectable) return true;
-  return be.pkgs.length > 0 && be.pkgs.every((i) => isLocked(i));
+  return be.pkgs.length > 0 && be.pkgs.every((i) => M.isLocked(model, i));
 }
 // The bundle toggle APPLIES a side to all its changeable packages at once (not an
 // inherited layer — it writes each package's own toggle). Locked packages keep
@@ -235,7 +202,7 @@ function setBundleToggle(name, state, opts = {}) {
   if (!be) return;
   if (bundleLocked(name)) return;
   be.pkgs.forEach((i) => {
-    if (!isLocked(i)) setToggle(i, state, { silent: true });
+    if (!M.isLocked(model, i)) setToggle(i, state, { silent: true });
   });
   paintBundle(name);
   if (!opts.silent) persistSelection();
@@ -245,8 +212,8 @@ function setBundleToggle(name, state, opts = {}) {
 function flipBundle(name) {
   const be = bundleEls[name];
   if (!be || bundleLocked(name)) return;
-  const free = be.pkgs.filter((i) => !isLocked(i));
-  const allIn = free.every((i) => toggleOf(i) === "in");
+  const free = be.pkgs.filter((i) => !M.isLocked(model, i));
+  const allIn = free.every((i) => M.toggleOf(model, i) === "in");
   setBundleToggle(name, allIn ? "out" : "in");
 }
 // Paint the bundle's own toggle, reflecting its changeable packages in THREE
@@ -267,15 +234,13 @@ function paintBundle(name) {
       : "This bundle is always on";
     return;
   }
-  const free = be.pkgs.filter((i) => !isLocked(i));
-  const allIn = free.every((i) => toggleOf(i) === "in");
-  const allOut = free.every((i) => toggleOf(i) === "out");
+  const free = be.pkgs.filter((i) => !M.isLocked(model, i));
+  const allIn = free.every((i) => M.toggleOf(model, i) === "in");
+  const allOut = free.every((i) => M.toggleOf(model, i) === "out");
   // allIn && allOut is only true for an EMPTY free-list — treat as on-in (nothing
   // to mix), so "mixed" strictly means a real panachage. (Unreachable while the
   // lock guard above holds, but self-robust here regardless.)
-  const deviated = free.some((i) =>
-    _isDeviation(M.postureOf(model, i), userToggle(i))
-  );
+  const deviated = free.some((i) => M.isDeviated(model, i));
   const state = (allIn || allOut)
     ? (allOut && !allIn ? " on-out" : " on-in")
     : " mixed";
@@ -361,9 +326,7 @@ function refreshLiveness() {
   g.classList.toggle("live", ids.some(isActionable) && !applyRunning);
   g.disabled = applyRunning;
   // Reset is available only if the user has moved something off the defaults.
-  const deviated = ids.some((i) =>
-    _isDeviation(M.postureOf(model, i), userToggle(i))
-  );
+  const deviated = [...model.pkgs.keys()].some((i) => M.isDeviated(model, i));
   const reset = document.getElementById("reset-all");
   if (reset) reset.disabled = applyRunning || !deviated;
 }
@@ -379,7 +342,7 @@ function applyScoped(scopeIdx) {
   // all — on = want present, off = want absent. The server converges.
   const on = [], off = [];
   for (const i of Object.keys(rows).map(Number)) {
-    if (desiredState(i) === "present") on.push(i);
+    if (M.desiredOf(model, i) === "present") on.push(i);
     else off.push(i);
   }
   applyRunning = true;
@@ -446,7 +409,6 @@ function render(bundles, steps) {
     const be = bundleEls[s.bundle];
     const body = be ? be.details.querySelector(".bundle-body") : stepsEl;
     if (be) be.pkgs.push(s.i);
-    stepNames[s.i] = `${s.bundle}::${s.name}`; // stable key for persistence
     const d = document.createElement("details");
     d.classList.add("posture-" + (s.posture || "mandatory")); // dim optional (opt-*) rows
     const sum = document.createElement("summary");
@@ -634,8 +596,8 @@ document.getElementById("install-all").onclick = () => applyScoped(undefined);
 
 // Reset = drop every user toggle back to the author's defaults (clear deviations).
 function resetAll() {
-  for (const i of Object.keys(decision)) delete decision[i];
-  for (const i of Object.keys(rows).map(Number)) paintPkg(i);
+  M.clearAllDecisions(model);
+  for (const i of model.pkgs.keys()) paintPkg(i);
   for (const name of Object.keys(bundleEls)) paintBundle(name);
   refreshLiveness();
   persistSelection();
