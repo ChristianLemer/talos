@@ -284,6 +284,11 @@
       .splash-inner { text-align:center; max-width:30ch; padding:24px; }
       .splash-logo { font-size:46px; margin-bottom:18px; animation:bob 1.6s ease-in-out infinite; }
       @keyframes bob { 0%,100%{ transform:translateY(0) } 50%{ transform:translateY(-8px) } }
+      /* Title placeholder (no centaur logo yet). Accent gradient like the hero h1. */
+      .splash-title { font-size:44px; font-weight:800; letter-spacing:-1px; line-height:1;
+        background:linear-gradient(90deg,#7aa2f7,#bb9af7); -webkit-background-clip:text;
+        background-clip:text; color:transparent; }
+      .splash-subtitle { font-size:15px; color:var(--dim); margin:8px 0 20px; letter-spacing:.3px; }
       .splash-quip { font-size:16px; color:#c0caf5; min-height:2.6em; line-height:1.4; transition:opacity .3s; }
       .splash-bar { margin-top:22px; height:3px; background:var(--line); border-radius:3px; overflow:hidden; }
       .splash-bar span { display:block; height:100%; width:40%; border-radius:3px;
@@ -294,27 +299,10 @@
   <body>
     <!-- Startup splash with rotating quips, shown while we check the machine -->
     <div id="splash"><div class="splash-inner">
-      <div class="splash-logo">
-        <!-- A centaur: human torso on a horse's body. Our signature — carbon + silicon, one body. -->
-        <svg viewBox="0 0 120 110" width="120" height="110" fill="none" stroke="url(#cg)" stroke-width="4"
-             stroke-linecap="round" stroke-linejoin="round">
-          <defs><linearGradient id="cg" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="#7aa2f7"/><stop offset="1" stop-color="#bb9af7"/>
-          </linearGradient></defs>
-          <!-- horse body -->
-          <path d="M40 66 Q40 50 58 50 L92 50 Q104 50 104 64 L104 80"/>
-          <!-- horse legs -->
-          <path d="M48 66 L46 96 M66 70 L64 98 M90 68 L92 96 M102 66 L104 94"/>
-          <!-- tail -->
-          <path d="M40 60 Q28 64 30 84"/>
-          <!-- human torso rising from the front -->
-          <path d="M58 50 Q56 34 62 26"/>
-          <!-- human head -->
-          <circle cx="64" cy="18" r="7"/>
-          <!-- drawn bow arm -->
-          <path d="M62 30 L80 24 M62 34 L80 24 M80 12 Q90 24 80 36"/>
-        </svg>
-      </div>
+      <!-- Title placeholder until we have a good centaur logo. "Talos preparing
+           the Centaur": the bronze guardian readies the mount (carbon+silicon). -->
+      <div class="splash-title">Talos</div>
+      <div class="splash-subtitle">preparing the Centaur</div>
       <div class="splash-quip" id="splash-quip"></div>
       <div class="splash-bar"><span></span></div>
     </div></div>
