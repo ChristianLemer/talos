@@ -11,6 +11,7 @@
 import { instantiate, libName, Pty } from "@sigma/pty-ffi/noinit";
 import { loadBundles } from "./bundles.ts";
 import { detectPresent } from "./detect.ts";
+import { hideConsoleIfHeadless } from "./win-console.ts";
 
 const isWin = Deno.build.os === "windows";
 
@@ -50,6 +51,11 @@ function log(msg: string) {
 log(
   `--- start: standalone=${Deno.build.standalone} os=${Deno.build.os} data=${DATA_DIR}`,
 );
+
+// FIRST, before ANY child process (self-heal, detection probes): on a headless
+// Windows GUI build, give ourselves a hidden console so children inherit it and
+// stop flashing their own windows. No-op on Mac; leaves a real console alone.
+hideConsoleIfHeadless(log);
 
 // FFI gotcha: Deno.dlopen loads a native lib from a REAL file on disk. `--include`
 // puts the lib in the binary's virtual FS — Deno.readFile CAN read it, but dlopen
