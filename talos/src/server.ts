@@ -185,7 +185,7 @@ async function serveStatic(pathname: string): Promise<Response> {
 // Waiting-window watcher cadence: poll the process tree every WAIT_TICK_MS; if the
 // pty falls silent longer than WAIT_SILENCE_MS with no window found, suspect a UAC
 // prompt (secure desktop → unenumerable). Tuned on the VM.
-const WAIT_TICK_MS = 3000;
+const WAIT_TICK_MS = 1200;
 const WAIT_SILENCE_MS = 10000;
 
 // winget exit codes that mean "nothing to do" — treat as success, not failure.
