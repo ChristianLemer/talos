@@ -72,14 +72,6 @@
       "jsr:@sigma/pty-ffi@0.40.0",
       "jsr:@std/assert@1.0.19",
       "jsr:@std/yaml@1.1.2"
-    ],
-    "packageJson": {
-      "dependencies": [
-        "npm:@xterm/xterm@^5.5.0",
-        "npm:node-pty@1",
-        "npm:ws@^8.18.0",
-        "npm:yaml@^2.6.0"
-      ]
-    }
+    ]
   }
 }
