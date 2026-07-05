@@ -1,12 +1,13 @@
-// server.ts — Talos engine on Deno (Phase 2 · T1: the skeleton that boots).
+// server.ts — Talos engine on Deno (Phase 2 · T3: it acts).
 //
 //   Deno.serve      → HTTP (real public/ tree) + WebSocket   (replaces node http + ws)
 //   @sigma/pty-ffi  → spawn commands in a real PTY, stream bytes  (replaces node-pty)
 //
 // Compiled with `deno compile --include public --include native/<lib>` → one exe.
-// This T1 serves the REAL UI and echoes a demo command through a PTY so we can
-// prove the socket end-to-end on Mac. The engine (bundles, detectRoutes,
-// applyDiff, outdated, log/consent) lands in later tranches — see _PLAN.
+// Serves the real UI, scans bundles into a plan, detects presence per route, and
+// now RUNS per-row actions (install/uninstall/upgrade) live through a PTY. Still
+// to land: the global Apply convergence (applyDiff), outdated scan, log/consent
+// — see _PLAN.
 
 import { instantiate, libName, Pty } from "@sigma/pty-ffi/noinit";
 import { loadBundles } from "./bundles.ts";
@@ -169,21 +170,40 @@ async function serveStatic(pathname: string): Promise<Response> {
   }
 }
 
-// Stream a command through a PTY into the WebSocket, base64 per chunk.
-async function runInPty(ws: WebSocket, cmdline: string) {
+// winget exit codes that mean "nothing to do" — treat as success, not failure.
+const BENIGN_CODES = new Set<number>([
+  -1978335189, // NO_APPLICABLE_UPGRADE   (already at latest)
+  -1978335212, // UPDATE_NOT_APPLICABLE   (already installed, no upgrade)
+]);
+
+// Stream a command through a PTY into the WebSocket, base64 per chunk, tagged by
+// step index `i` so the UI writes into that row's xterm. Returns the process's
+// REAL exit code (0 if the pty never reported one). On Windows we wrap the
+// command so PATH is refreshed from the registry first (a tool installed earlier
+// in THIS session isn't on the inherited PATH) and the WRAPPED command's exit
+// code is what we read (`exit $LASTEXITCODE`), not the shell's own.
+async function runInPty(
+  ws: WebSocket,
+  i: number,
+  cmdline: string,
+): Promise<number> {
   const pty = new Pty(SHELL);
   const nl = isWin ? "\r\n" : "\n";
-  pty.write(`${cmdline}; exit${nl}`);
+  const line = isWin
+    ? `$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User'); ${cmdline}; exit $LASTEXITCODE${nl}`
+    : `${cmdline}; exit${nl}`;
+  pty.write(line);
   const b64 = (u8: Uint8Array) => btoa(String.fromCharCode(...u8));
   while (true) {
     const { data, done } = pty.readBytes();
     if (done) break;
     if (data.byteLength) {
-      for (let i = 0; i < data.length; i += 8192) {
+      for (let j = 0; j < data.length; j += 8192) {
         ws.send(
           JSON.stringify({
             type: "out",
-            data: b64(data.subarray(i, i + 8192)),
+            i,
+            data: b64(data.subarray(j, j + 8192)),
           }),
         );
       }
@@ -191,7 +211,68 @@ async function runInPty(ws: WebSocket, cmdline: string) {
       await new Promise((r) => setTimeout(r, 10));
     }
   }
-  ws.send(JSON.stringify({ type: "done", code: 0 }));
+  return pty.exitCode ?? 0;
+}
+
+// Serial lock: only ONE package manager runs at a time, ever. Two winget
+// processes fight over a temp file. All actions chain through this queue so they
+// never overlap — a per-row button, a global Apply, even a stray double-click.
+let actionQueue: Promise<unknown> = Promise.resolve();
+function serialize<T>(fn: () => Promise<T>): Promise<T> {
+  const run = actionQueue.then(fn, fn);
+  actionQueue = run.catch(() => {}); // one failure never breaks the chain
+  return run;
+}
+
+// Run one step's install/uninstall/upgrade command and show it live. winget/npm
+// are idempotent (they handle "already there / already gone" via a benign exit
+// code), so no pre-probe. Emits `step` running → settled, streams output, and a
+// terminal `done` so the UI unlocks. Presence after the action is re-detected on
+// the next connect / Apply (detect, don't remember).
+async function doStep(
+  ws: WebSocket,
+  i: number,
+  action: "install" | "uninstall" | "upgrade",
+): Promise<boolean> {
+  const s = STEPS[i];
+  if (!s) return false;
+  const cmd = s[action];
+  if (!cmd) {
+    log(`step ${i} ${action}: no command for this route — skipping`);
+    return false;
+  }
+  busy++;
+  try {
+    const running = action === "uninstall"
+      ? "uninstalling"
+      : action === "upgrade"
+      ? "upgrading"
+      : "installing";
+    ws.send(JSON.stringify({ type: "step", i, status: running }));
+    const code = await runInPty(ws, i, cmd);
+    const ok = code === 0 || BENIGN_CODES.has(code);
+    log(
+      `step ${i} ${action} ${ok ? "OK" : "FAILED"} (exit ${code}): ${s.name}`,
+    );
+    ws.send(JSON.stringify({
+      type: "step",
+      i,
+      status: ok ? (action === "uninstall" ? "absent" : "ok") : "fail",
+    }));
+    // selfHost (node): the panel runs on it. winget removes it fine while it runs
+    // (file goes at reboot), but relaunch won't work until it's back — tell the user.
+    if (ok && action === "uninstall" && s.selfHost) {
+      ws.send(JSON.stringify({
+        type: "overlay",
+        title: `${s.name} removed`,
+        body:
+          "This panel runs on it, so it can't keep running. You can close this window — re-open the tool later to set things up again.",
+      }));
+    }
+    return ok;
+  } finally {
+    busy--;
+  }
 }
 
 // Open the panel as an APP window — a Chromium `--app` window is frameless: no
@@ -446,27 +527,26 @@ function startServer() {
       };
       socket.onmessage = (ev) => {
         const msg = JSON.parse(ev.data);
-        // T1 demo: a single non-destructive command proves the socket path.
-        // Real dispatch (bundles + applyDiff via decision.js) comes in T2/T3.
-        if (msg.type === "run" && typeof msg.action === "string") {
+        // Per-row action: install / uninstall / upgrade a single package. Each
+        // runs serialized (never two package managers at once) and ALWAYS ends
+        // with `done` so the UI unlocks — even on failure. Apply (the global
+        // convergence) lands next; this is the single-row gesture.
+        const ROW_ACTIONS = ["install", "uninstall", "upgrade"] as const;
+        type RowAction = typeof ROW_ACTIONS[number];
+        if (
+          ROW_ACTIONS.includes(msg.type) && typeof msg.i === "number" &&
+          STEPS[msg.i]
+        ) {
           if (!ptyReady) {
-            // Window opened before the engine finished loading — tell the UI,
-            // don't crash. (Rare: loading is fast; only a very eager click.)
+            // Clicked before the engine finished loading — tell the UI, don't
+            // crash. (Rare: loading is fast; only a very eager click.)
             socket.send(JSON.stringify({ type: "starting" }));
             return;
           }
-          const CMDS: Record<string, string> = isWin
-            ? { list: "winget list --source winget" }
-            : { list: "brew list" };
-          const cmd = CMDS[msg.action];
-          if (cmd) {
-            busy++;
-            runInPty(socket, cmd)
-              .catch((e) => log(`pty error: ${(e as Error).message}`))
-              .finally(() => {
-                busy = Math.max(0, busy - 1);
-              });
-          }
+          const action = msg.type as RowAction;
+          serialize(() => doStep(socket, msg.i, action))
+            .catch((e) => log(`${action} error: ${(e as Error).message}`))
+            .finally(() => socket.send(JSON.stringify({ type: "done" })));
         }
       };
       return response;
