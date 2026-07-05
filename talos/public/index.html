@@ -55,6 +55,15 @@
         background:linear-gradient(90deg,#7aa2f7,#bb9af7); -webkit-background-clip:text;
         background-clip:text; color:transparent; }
       .steps-refresh-msg { margin-top:12px; color:var(--dim); font-size:14px; letter-spacing:.3px; }
+      /* Waiting-window banner: an installer opened a window behind the panel and
+         may be waiting for the user. Soft amber (attention, not error), pulses so
+         it's noticed. Sits between the action bar and the list. */
+      #waitbar { margin:0 12px 8px; padding:10px 14px; border-radius:8px; font-size:13px;
+                 background:#2d2a1e; border:1px solid #5a4d2e; color:#e0af68;
+                 display:flex; align-items:center; gap:8px; animation:waitpulse 1.6s ease-in-out infinite; }
+      #waitbar[hidden] { display:none; }
+      #waitbar::before { content:"⏳"; font-size:15px; }
+      @keyframes waitpulse { 0%,100%{ opacity:1 } 50%{ opacity:.62 } }
       /* Reuse the splash's sliding bar (same slide keyframe) so the overlay reads
          as "working", not frozen — the point of the whole overlay on slow Windows. */
       .steps-refresh-inner .splash-bar { margin-top:18px; width:200px; margin-left:auto; margin-right:auto; }
@@ -397,6 +406,8 @@
         <span id="globalhint">Installs what you checked, updates what's outdated, removes what you unchecked.</span>
         <span id="overall">connecting…</span>
       </div>
+      <!-- Waiting-window banner: an installer opened a window behind the panel. -->
+      <div id="waitbar" hidden></div>
       <div id="steps">
         <!-- Refresh overlay: fixed child of #steps, shown via .steps-refreshing on
              the parent. render() appends bundles after it, so it survives. -->

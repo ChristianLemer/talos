@@ -526,6 +526,17 @@ function recomputeEmptyBundles() {
   }
 }
 
+// Waiting-window banner: shown while an installer waits behind the panel, cleared
+// when the step ends (or the socket drops). One live banner; latest message wins.
+const waitbar = document.getElementById("waitbar");
+function showWait(text) {
+  waitbar.textContent = text;
+  waitbar.hidden = false;
+}
+function hideWait() {
+  waitbar.hidden = true;
+}
+
 function setStatus(i, status) {
   const r = rows[i];
   if (!r) return;
@@ -766,9 +777,29 @@ ws.onmessage = (ev) => {
       document.getElementById("overlay-body").textContent = msg.body || "";
       document.getElementById("overlay").classList.add("show");
       break;
+    // An installer opened a window behind the panel while a step ran. Say so —
+    // the panel isn't frozen, it's waiting. wait-window: we found + surfaced the
+    // window. wait-silent: nothing found but the tool went quiet (likely a UAC
+    // prompt on the secure desktop). wait-clear: the step ended → drop the banner.
+    case "wait-window":
+      showWait(
+        msg.title
+          ? `“${msg.title}” is waiting for you — we brought it to the front.`
+          : "An installer window is waiting for you — we brought it to the front.",
+      );
+      break;
+    case "wait-silent":
+      showWait(
+        "This is taking a while — an installer may be waiting on another screen. Look for a permission prompt.",
+      );
+      break;
+    case "wait-clear":
+      hideWait();
+      break;
   }
 };
 ws.onclose = () => {
   overall.textContent = "disconnected";
   stepsEl.classList.remove("steps-refreshing"); // don't leave the dim stuck on
+  hideWait(); // don't leave the banner stuck on
 };

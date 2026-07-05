@@ -13,6 +13,7 @@ import { instantiate, libName, Pty } from "@sigma/pty-ffi/noinit";
 import { loadBundles } from "./bundles.ts";
 import { detectPresent } from "./detect.ts";
 import { hideConsoleIfHeadless } from "./win-console.ts";
+import { makeWatcher, powershellSpawner } from "./watch-window.ts";
 // The SHARED decision rule — the SAME file the browser fetches and previews with.
 // Server and UI call one actionFor, so they can never drift on what Apply does.
 import { actionFor } from "../public/decision.js";
@@ -181,6 +182,12 @@ async function serveStatic(pathname: string): Promise<Response> {
   }
 }
 
+// Waiting-window watcher cadence: poll the process tree every WAIT_TICK_MS; if the
+// pty falls silent longer than WAIT_SILENCE_MS with no window found, suspect a UAC
+// prompt (secure desktop → unenumerable). Tuned on the VM.
+const WAIT_TICK_MS = 3000;
+const WAIT_SILENCE_MS = 10000;
+
 // winget exit codes that mean "nothing to do" — treat as success, not failure.
 const BENIGN_CODES = new Set<number>([
   -1978335189, // NO_APPLICABLE_UPGRADE   (already at latest)
@@ -214,24 +221,52 @@ async function runInPty(
     : ["-c", script];
   const pty = new Pty(SHELL, { args });
   const b64 = (u8: Uint8Array) => btoa(String.fromCharCode(...u8));
-  while (true) {
-    const { data, done } = pty.readBytes();
-    if (done) break;
-    if (data.byteLength) {
-      for (let j = 0; j < data.length; j += 8192) {
-        ws.send(
-          JSON.stringify({
-            type: "out",
-            i,
-            data: b64(data.subarray(j, j + 8192)),
-          }),
-        );
+
+  // Watch for a wizard/consent window popping BEHIND the panel while this step
+  // runs (Windows only; inert elsewhere). lastActivity is bumped on every byte;
+  // a long silence with no window found → likely UAC (wait-silent). The scan
+  // roots at Deno.pid (Talos) — the pty's own pid isn't exposed by the lib.
+  let lastActivity = Date.now();
+  const watcher = makeWatcher({
+    i,
+    isWin,
+    silenceMs: WAIT_SILENCE_MS,
+    spawner: powershellSpawner,
+    emit: (m) => {
+      try {
+        ws.send(JSON.stringify(m));
+      } catch { /* socket closing */ }
+    },
+    now: () => Date.now(),
+  });
+  const watchTimer = isWin
+    ? setInterval(() => watcher.runTick(Deno.pid, lastActivity), WAIT_TICK_MS)
+    : null;
+
+  try {
+    while (true) {
+      const { data, done } = pty.readBytes();
+      if (done) break;
+      if (data.byteLength) {
+        lastActivity = Date.now(); // the tool is talking → not silently waiting
+        for (let j = 0; j < data.length; j += 8192) {
+          ws.send(
+            JSON.stringify({
+              type: "out",
+              i,
+              data: b64(data.subarray(j, j + 8192)),
+            }),
+          );
+        }
+      } else {
+        await new Promise((r) => setTimeout(r, 10));
       }
-    } else {
-      await new Promise((r) => setTimeout(r, 10));
     }
+    return pty.exitCode ?? 0;
+  } finally {
+    if (watchTimer !== null) clearInterval(watchTimer);
+    watcher.stop(); // always clears the UI banner (like state-done in finally)
   }
-  return pty.exitCode ?? 0;
 }
 
 // Serial lock: only ONE package manager runs at a time, ever. Two winget
