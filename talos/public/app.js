@@ -108,7 +108,8 @@ const LABEL = {
 // (see desiredState). Apply converges the machine to the desired state —
 // model A, chezmoi-pure: an opt-in left auto but present WILL be removed.
 // Only "on"/"off" overrides are persisted; "auto" is absence.
-const bundleEls = {}; // bundle name → { …, pkgs:[i], toggle, posture }
+const bundleEls = {}; // bundle name → DOM refs + ephemeral run counters
+// (data — pkgIds/posture/selectable — lives in model.bundles).
 const ICON_COPY =
   '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
 const ICON_OK =
@@ -189,19 +190,16 @@ function flipPkg(i) {
 
 // A bundle is LOCKED if not selectable, or all its packages are locked.
 function bundleLocked(name) {
-  const be = bundleEls[name];
-  if (!be) return true;
-  if (!be.selectable) return true;
-  return be.pkgs.length > 0 && be.pkgs.every((i) => M.isLocked(model, i));
+  return M.bundleLocked(model, name);
 }
 // The bundle toggle APPLIES a side to all its changeable packages at once (not an
 // inherited layer — it writes each package's own toggle). Locked packages keep
 // the author's choice.
 function setBundleToggle(name, state, opts = {}) {
-  const be = bundleEls[name];
-  if (!be) return;
   if (bundleLocked(name)) return;
-  be.pkgs.forEach((i) => {
+  const bm = model.bundles.get(name);
+  if (!bm) return;
+  bm.pkgIds.forEach((i) => {
     if (!M.isLocked(model, i)) setToggle(i, state, { silent: true });
   });
   paintBundle(name);
@@ -210,9 +208,9 @@ function setBundleToggle(name, state, opts = {}) {
 // Clicking the bundle toggle: if every changeable package is already "in", flip
 // them all to "out"; otherwise pull them all "in". (Majority-in → out, else in.)
 function flipBundle(name) {
-  const be = bundleEls[name];
-  if (!be || bundleLocked(name)) return;
-  const free = be.pkgs.filter((i) => !M.isLocked(model, i));
+  if (bundleLocked(name)) return;
+  const bm = model.bundles.get(name);
+  const free = bm.pkgIds.filter((i) => !M.isLocked(model, i));
   const allIn = free.every((i) => M.toggleOf(model, i) === "in");
   setBundleToggle(name, allIn ? "out" : "in");
 }
@@ -222,39 +220,31 @@ function flipBundle(name) {
 // package moved off its author default.
 function paintBundle(name) {
   const be = bundleEls[name];
-  if (!be) return;
+  const bm = model.bundles.get(name);
+  if (!be || !bm) return;
   const el = be.chk;
   if (bundleLocked(name)) {
     el.className = "toggle locked " +
-      (be.posture === "forbidden" ? "on-out" : "on-in");
-    el.dataset.default = _postureDefault(be.posture);
+      (bm.posture === "forbidden" ? "on-out" : "on-in");
+    el.dataset.default = _postureDefault(bm.posture);
     el.style.cursor = "not-allowed";
-    el.title = be.selectable
+    el.title = bm.selectable
       ? "All packages here are fixed by the author"
       : "This bundle is always on";
     return;
   }
-  const free = be.pkgs.filter((i) => !M.isLocked(model, i));
-  const allIn = free.every((i) => M.toggleOf(model, i) === "in");
-  const allOut = free.every((i) => M.toggleOf(model, i) === "out");
-  // allIn && allOut is only true for an EMPTY free-list — treat as on-in (nothing
-  // to mix), so "mixed" strictly means a real panachage. (Unreachable while the
-  // lock guard above holds, but self-robust here regardless.)
-  const deviated = free.some((i) => M.isDeviated(model, i));
-  const state = (allIn || allOut)
-    ? (allOut && !allIn ? " on-out" : " on-in")
-    : " mixed";
-  // Same colour rule as packages: vivid if any package would change the machine.
-  const adds = be.pkgs.some((i) => {
-    const a = actClass(i);
-    return a === " act-add";
-  });
-  const removes = be.pkgs.some((i) => actClass(i) === " act-remove");
-  const act = adds ? " act-add" : removes ? " act-remove" : "";
-  el.className = "toggle" + state + (deviated ? " deviated" : "") + act;
-  el.dataset.default = _postureDefault(be.posture);
+  const state = M.bundleToggleState(model, name); // "on-in" | "on-out" | "mixed"
+  const deviated = bm.pkgIds.some((i) => M.isDeviated(model, i));
+  const actDir = M.bundleAct(model, name); // "add" | "remove" | ""
+  const act = actDir === "add"
+    ? " act-add"
+    : actDir === "remove"
+    ? " act-remove"
+    : "";
+  el.className = "toggle " + state + (deviated ? " deviated" : "") + act;
+  el.dataset.default = _postureDefault(bm.posture);
   el.style.cursor = "pointer";
-  el.title = state === " mixed"
+  el.title = state === "mixed"
     ? "Mixed — some in, some out. Click to pull all in."
     : "Toggle the whole bundle in / out";
 }
@@ -312,7 +302,7 @@ function refreshLiveness() {
   // Bundle buttons: live if any of their packages would act.
   for (const name of Object.keys(bundleEls)) {
     const be = bundleEls[name];
-    const live = be.pkgs.some(isActionable);
+    const live = M.bundleAnyActionable(model, name);
     be.apply.classList.toggle("live", live && !applyRunning);
     be.apply.disabled = applyRunning;
     paintBundle(name); // bundle switch colour follows the plan too
@@ -383,7 +373,7 @@ function render(bundles, steps) {
     bapply.onclick = (e) => {
       e.preventDefault();
       e.stopPropagation(); // act without folding the accordion
-      applyScoped(bundleEls[b.name].pkgs);
+      applyScoped(model.bundles.get(b.name)?.pkgIds);
     };
     bsum.append(chk, ico, ct, bst, bapply);
     const body = document.createElement("div");
@@ -396,19 +386,14 @@ function render(bundles, steps) {
       status: bst,
       chk,
       apply: bapply,
-      pkgs: [],
-      active: 0,
-      failed: false,
-      decision: "auto",
-      selectable: b.selectable !== false,
-      posture: b.posture || "mandatory",
+      active: 0, // ephemeral: packages running in this bundle this Apply (animation counter, not domain state, reset each run)
+      failed: false, // ephemeral: a package here failed this run (drives the bundle status badge; not persisted)
     };
   }
 
   for (const s of steps) {
     const be = bundleEls[s.bundle];
     const body = be ? be.details.querySelector(".bundle-body") : stepsEl;
-    if (be) be.pkgs.push(s.i);
     const d = document.createElement("details");
     d.classList.add("posture-" + (s.posture || "mandatory")); // dim optional (opt-*) rows
     const sum = document.createElement("summary");
@@ -529,7 +514,8 @@ function recomputeEmptyBundles() {
   if (!document.body.classList.contains("applying")) return;
   for (const name of Object.keys(bundleEls)) {
     const be = bundleEls[name];
-    const anyShown = be.pkgs.some((i) =>
+    const pkgIds = model.bundles.get(name)?.pkgIds || [];
+    const anyShown = pkgIds.some((i) =>
       rows[i]?.details.classList.contains("focus-show")
     );
     be.details.classList.toggle("focus-empty", !anyShown);

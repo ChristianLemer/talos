@@ -154,6 +154,8 @@ export function bundleLocked(model, name) {
 }
 // Three-state toggle for a bundle: all in → "on-in", all out → "on-out",
 // a real mix → "mixed". Empty free-list → "on-in" (nothing to mix).
+// Returns tokens WITHOUT a leading space; the view adds the space when it
+// concatenates the className (so don't reintroduce a " mixed" comparison).
 export function bundleToggleState(model, name) {
   const be = model.bundles.get(name);
   if (!be) return "on-in";
