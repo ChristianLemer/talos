@@ -55,6 +55,9 @@
         background:linear-gradient(90deg,#7aa2f7,#bb9af7); -webkit-background-clip:text;
         background-clip:text; color:transparent; }
       .steps-refresh-msg { margin-top:12px; color:var(--dim); font-size:14px; letter-spacing:.3px; }
+      /* Reuse the splash's sliding bar (same slide keyframe) so the overlay reads
+         as "working", not frozen — the point of the whole overlay on slow Windows. */
+      .steps-refresh-inner .splash-bar { margin-top:18px; width:200px; margin-left:auto; margin-right:auto; }
       /* Bundle accordion: header = selection card, body = package rows. */
       .bundle { border:1px solid var(--line); border-radius:10px; margin:8px 0; overflow:hidden; background:#1e2030; }
       .bundle-head { padding:11px 14px; cursor:pointer; display:flex; gap:11px; align-items:center;
@@ -401,6 +404,7 @@
           <div class="steps-refresh-inner">
             <div class="steps-refresh-title">Talos</div>
             <div class="steps-refresh-msg">checking what's installed…</div>
+            <div class="splash-bar"><span></span></div>
           </div>
         </div>
       </div>
