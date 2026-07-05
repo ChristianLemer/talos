@@ -325,6 +325,16 @@ async function applyDiff(
 
   const present = await Promise.all(STEPS.map((s) => detectPresent(s, isWin)));
 
+  // Push the fresh scan back to the screen BEFORE we act. Without this the pills
+  // still show the CONNECT scan, so the plan could act on a reality the user never
+  // saw (e.g. a tool they removed by hand since opening). Not a diff, no dialog —
+  // just re-align: the pills correct themselves, then focus mode shows the plan.
+  present.forEach((p, i) => {
+    try {
+      ws.send(JSON.stringify({ type: "state", i, present: p }));
+    } catch { /* socket closing */ }
+  });
+
   // Per package: desired (on→present, off→absent, neither→auto=untouched) vs
   // machine reality → the action. present:null (indeterminate) is treated as
   // "not known present" i.e. false, the safe direction for install.
