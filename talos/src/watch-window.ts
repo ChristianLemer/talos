@@ -63,6 +63,27 @@ public class W {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [StructLayout(LayoutKind.Sequential)] public struct FLASHWINFO { public uint cbSize; public IntPtr hwnd; public uint dwFlags; public uint uCount; public uint dwTimeout; }
   [DllImport("user32.dll")] public static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  // Bypass the foreground-lock: SetForegroundWindow is refused when the caller
+  // doesn't own the foreground. Attaching our input thread to the current
+  // foreground window's thread lifts the lock for the call, then we detach.
+  // SW_RESTORE(9) un-minimizes if the wizard came up iconic.
+  public static bool ForceForeground(IntPtr h){
+    if(IsIconic(h)) ShowWindow(h, 9);
+    IntPtr fg = GetForegroundWindow();
+    uint tFg = GetWindowThreadProcessId(fg, out uint _p);
+    uint tMe = GetCurrentThreadId();
+    bool attached = (tFg != tMe) && AttachThreadInput(tMe, tFg, true);
+    BringWindowToTop(h);
+    bool ok = SetForegroundWindow(h);
+    if(attached) AttachThreadInput(tMe, tFg, false);
+    return ok;
+  }
 }
 "@
 # process tree rooted at Talos, plus a pid->name map for the browser exclusion
@@ -87,7 +108,7 @@ $cb={ param($h,$p)
   $title=$sb.ToString()
   $fi=New-Object W+FLASHWINFO; $fi.cbSize=[uint32][System.Runtime.InteropServices.Marshal]::SizeOf($fi); $fi.hwnd=$h; $fi.dwFlags=3; $fi.uCount=5; $fi.dwTimeout=0
   [W]::FlashWindowEx([ref]$fi)|Out-Null
-  $pushed=[W]::SetForegroundWindow($h)
+  $pushed=[W]::ForceForeground($h)
   $script:result=@{found=$true;title=$title;pushed=[bool]$pushed}
   return $false
 }
