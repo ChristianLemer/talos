@@ -11,3 +11,8 @@ _*
 .playwright-mcp/
 # macOS cruft
 .DS_Store
+
+# Field notes — describe corporate estates, never committed.
+docs/
+# Rust build artefacts (this era predates Rust; needed so jj can snapshot).
+/target
