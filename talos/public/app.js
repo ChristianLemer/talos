@@ -1,13 +1,14 @@
 // app.js — the Talos panel UI. Pure decision logic lives in decision.js
 // (imported below), shared with the server so the rule can never drift.
 import {
-  actionFor,
   desiredState as _desiredState,
   isDeviation as _isDeviation,
   isLockedPosture,
   postureDefault as _postureDefault,
   toggleState as _toggleState,
 } from "./decision.js";
+import * as M from "./model.js";
+const model = M.createModel();
 
 const stepsEl = document.getElementById("steps");
 const overall = document.getElementById("overall");
@@ -158,7 +159,7 @@ function makeToggle() {
 }
 
 function isLocked(i) {
-  return isLockedPosture(rows[i] && rows[i].posture);
+  return isLockedPosture(M.postureOf(model, i));
 }
 function userToggle(i) {
   const d = decision[i];
@@ -166,10 +167,10 @@ function userToggle(i) {
 }
 // Effective in/out for a package (posture default if untouched; locked wins).
 function toggleOf(i) {
-  return _toggleState(rows[i] && rows[i].posture, userToggle(i));
+  return _toggleState(M.postureOf(model, i), userToggle(i));
 }
 function desiredState(i) {
-  return _desiredState(rows[i] && rows[i].posture, userToggle(i));
+  return _desiredState(M.postureOf(model, i), userToggle(i));
 }
 
 // Colour rule (ONE rule, same in simple and advanced, package and bundle): a
@@ -178,13 +179,7 @@ function desiredState(i) {
 // installed stays calm (nothing to do). This mirrors the row plan-borders, and
 // avoids the "everything is green" wall. The default-side dot stays advanced-only.
 function actClass(i) {
-  const r = rows[i];
-  if (!r) return "";
-  const a = actionFor(desiredState(i), {
-    present: r.present,
-    outdated: r.outdated,
-    canUninstall: r.canUninstall,
-  });
+  const a = M.actionOf(model, i);
   if (a === "install" || a === "upgrade") return " act-add";
   if (a === "uninstall") return " act-remove";
   return "";
@@ -192,7 +187,7 @@ function actClass(i) {
 function paintPkg(i) {
   const r = rows[i];
   if (!r) return;
-  const posture = r.posture;
+  const posture = M.postureOf(model, i);
   const on = toggleOf(i); // "in" | "out"
   const locked = isLocked(i);
   const deviated = _isDeviation(posture, userToggle(i));
@@ -215,7 +210,7 @@ function setToggle(i, state, opts = {}) {
   if (isLocked(i)) return; // author's posture wins
   decision[i] = state;
   paintPkg(i);
-  const b = rows[i] && rows[i].bundle; // repaint the parent bundle pill:
+  const b = model.pkgs.get(i)?.bundle; // repaint the parent bundle pill:
   if (b) paintBundle(b); // its in/out/MIXED may have changed
   refreshLiveness();
   if (!opts.silent) persistSelection();
@@ -279,7 +274,7 @@ function paintBundle(name) {
   // to mix), so "mixed" strictly means a real panachage. (Unreachable while the
   // lock guard above holds, but self-robust here regardless.)
   const deviated = free.some((i) =>
-    _isDeviation(rows[i].posture, userToggle(i))
+    _isDeviation(M.postureOf(model, i), userToggle(i))
   );
   const state = (allIn || allOut)
     ? (allOut && !allIn ? " on-out" : " on-in")
@@ -310,30 +305,14 @@ function refreshBundleChk(name) {
 // (the useful move, not a pointless remove). null only when present and
 // un-uninstallable. This is the row's immediate manual actuator.
 function buttonAction(i) {
-  const r = rows[i];
-  if (!r) return null;
-  if (r.present && r.outdated) {
-    return { verb: "update", dir: "add", type: "upgrade" };
-  }
-  if (r.present) {
-    return r.canUninstall
-      ? { verb: "uninstall", dir: "remove", type: "uninstall" }
-      : null;
-  }
-  return { verb: "install", dir: "add", type: "install" };
+  return M.buttonAction(model, i);
 }
 // Would a plain Apply act here? Delegates to the SHARED rule (actionFor) — the
 // exact same call the server makes — so the button's green/red preview always
 // matches what Apply will really do. Lights the button; the label above still
 // shows the manual invert action regardless.
 function isActionable(i) {
-  const r = rows[i];
-  if (!r) return false;
-  return actionFor(desiredState(i), {
-    present: r.present,
-    outdated: r.outdated,
-    canUninstall: r.canUninstall,
-  }) != null;
+  return M.isActionable(model, i);
 }
 // Light up only the Apply buttons that would do something; leave the rest as
 // ghost outlines. The eye lands on what matters. Runs after any change to
@@ -383,7 +362,7 @@ function refreshLiveness() {
   g.disabled = applyRunning;
   // Reset is available only if the user has moved something off the defaults.
   const deviated = ids.some((i) =>
-    _isDeviation(rows[i].posture, userToggle(i))
+    _isDeviation(M.postureOf(model, i), userToggle(i))
   );
   const reset = document.getElementById("reset-all");
   if (reset) reset.disabled = applyRunning || !deviated;
@@ -412,6 +391,7 @@ function applyScoped(scopeIdx) {
 }
 
 function render(bundles, steps) {
+  M.loadPlan(model, bundles, steps);
   for (const b of bundles) {
     const bd = document.createElement("details");
     bd.className = "bundle";
@@ -514,7 +494,10 @@ function render(bundles, steps) {
       // Copy the log VERBATIM — only ANSI colour codes stripped (they're not
       // information, just noise in a paste). Everything else stays: the copy is
       // for debugging/sharing, so fidelity to what actually ran is the point.
-      const text = (rows[s.i].log || "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+      const text = (model.pkgs.get(s.i)?.log || "").replace(
+        /\x1b\[[0-9;?]*[A-Za-z]/g,
+        "",
+      );
       navigator.clipboard.writeText(text).then(() => {
         copy.innerHTML = ICON_OK;
         setTimeout(() => copy.innerHTML = ICON_COPY, 1200);
@@ -534,10 +517,6 @@ function render(bundles, steps) {
       apply,
       host,
       term: null,
-      log: "",
-      bundle: s.bundle,
-      canUninstall: s.canUninstall,
-      posture: s.posture || "mandatory",
     };
     paintPkg(s.i); // initial pill: locked word for mandatory/forbidden, else auto
   }
@@ -599,7 +578,7 @@ function setStatus(i, status) {
   const r = rows[i];
   if (!r) return;
   if (RUNNING.has(status)) {
-    r.log = "";
+    M.resetLog(model, i);
     if (r.term) r.term.reset();
   } // fresh run
   r.badge.className = "badge " + status;
@@ -608,14 +587,7 @@ function setStatus(i, status) {
   r.statusLabel.textContent = LABEL[status] || status;
   // Track presence from the settled states, so liveness knows what's on the
   // machine. (Running states are transient — leave presence as it was.)
-  if (status === "ok") {
-    r.present = true;
-    r.outdated = false;
-  } // a settled 'ok' = current now
-  else if (status === "absent" || status === "waiting") {
-    r.present = false;
-    r.outdated = false;
-  }
+  M.setStatusData(model, i, status);
   refreshLiveness();
   if (RUNNING.has(status) || status === "fail") r.details.open = true; // show activity / failures
   if (status === "ok" || status === "absent") r.details.open = false; // fold completed (frame stays)
@@ -624,7 +596,7 @@ function setStatus(i, status) {
   if (r.delta && status !== "upgrading") r.delta.textContent = "";
   // Bundle-level: open while working, count active packages, auto-close
   // when the bundle's last package finishes (unless something failed).
-  const be = bundleEls[r.bundle];
+  const be = bundleEls[model.pkgs.get(i)?.bundle];
   if (be) {
     if (RUNNING.has(status)) {
       be.active++;
@@ -801,7 +773,7 @@ ws.onmessage = (ev) => {
     case "outdated": { // a present package has a newer version
       const r = rows[msg.i];
       if (!r) break;
-      r.outdated = true;
+      M.setOutdated(model, msg.i, true);
       if (r.delta) r.delta.textContent = `${msg.current} → ${msg.available}`;
       refreshLiveness(); // now this row's Apply is useful
       break;
@@ -817,7 +789,7 @@ ws.onmessage = (ev) => {
     case "out": {
       const text = dec.decode(b64dec(msg.data));
       ensureTerm(msg.i).write(text);
-      if (rows[msg.i]) rows[msg.i].log += text; // keep raw for the copy button
+      M.appendLog(model, msg.i, text); // keep raw for the copy button
       break;
     }
     case "apply-plan":
