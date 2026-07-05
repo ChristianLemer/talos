@@ -406,7 +406,8 @@ function applyScoped(scopeIdx) {
   applyRunning = true;
   refreshLiveness(); // lock every Apply button during the run
   overall.textContent = "applying…";
-  enterFocusMode(); // narrow the screen to what's being worked on
+  // Focus mode engages on the server's `apply-plan` reply (it computes the plan),
+  // not here — so we show the exact set of steps that will run.
   ws.send(JSON.stringify({ type: "apply", on, off, scope: scopeIdx }));
 }
 
@@ -556,15 +557,18 @@ function ensureTerm(i) {
 const RUNNING = new Set(["installing", "uninstalling", "upgrading"]);
 
 // --- Apply focus mode --------------------------------------------------------
-// During an Apply the screen narrows to what's being worked on: everything is
-// hidden (body.applying), each row reveals itself only while running, a success
-// hides again, a failure stays visible. On done, everything reappears (and the
-// failures are already open). Purely visual — driven by the `step` messages the
-// server already sends, so no extra protocol.
-function enterFocusMode() {
+// During an Apply the screen narrows to THE PLAN: every step that WILL run stays
+// visible the whole time (so you see the full to-do list and follow progress down
+// it), while everything NOT in the plan is hidden. Successes stay visible but
+// fold; failures stay visible AND open. On done, everything reappears — the
+// failures already open, standing out. The plan comes from the server's
+// `apply-plan` message (it's the server that computes install/uninstall).
+function enterFocusMode(planIndices) {
   document.body.classList.add("applying");
+  const inPlan = new Set(planIndices);
   for (const i of Object.keys(rows).map(Number)) {
-    rows[i].details.classList.remove("focus-show");
+    // focus-show = this row is part of the plan → stays visible throughout.
+    rows[i].details.classList.toggle("focus-show", inPlan.has(i));
   }
   recomputeEmptyBundles();
 }
@@ -578,12 +582,6 @@ function exitFocusMode() {
   for (const name of Object.keys(bundleEls)) {
     bundleEls[name].details.classList.remove("focus-empty");
   }
-}
-// A row is shown in focus mode while it's running OR if it failed (stays up).
-function setFocusVisible(i, visible) {
-  if (!rows[i]) return;
-  rows[i].details.classList.toggle("focus-show", visible);
-  recomputeEmptyBundles();
 }
 // Hide a bundle card whose every row is currently focus-hidden (no empty shells).
 function recomputeEmptyBundles() {
@@ -621,11 +619,6 @@ function setStatus(i, status) {
   refreshLiveness();
   if (RUNNING.has(status) || status === "fail") r.details.open = true; // show activity / failures
   if (status === "ok" || status === "absent") r.details.open = false; // fold completed (frame stays)
-  // Focus mode: reveal while running or on failure; hide once it succeeds.
-  if (document.body.classList.contains("applying")) {
-    if (RUNNING.has(status) || status === "fail") setFocusVisible(i, true);
-    else if (status === "ok" || status === "absent") setFocusVisible(i, false);
-  }
   // A finished/failed row has nothing more to add to its version delta;
   // a fresh install/remove clears any stale one. (upgrade keeps it — set just before.)
   if (r.delta && status !== "upgrading") r.delta.textContent = "";
@@ -827,6 +820,12 @@ ws.onmessage = (ev) => {
       if (rows[msg.i]) rows[msg.i].log += text; // keep raw for the copy button
       break;
     }
+    case "apply-plan":
+      // The server's full plan, in execution order. Narrow the screen to exactly
+      // these steps — all of them stay visible throughout, so the whole to-do
+      // list shows and progress follows down it.
+      enterFocusMode((msg.plan || []).map((p) => p.i));
+      break;
     case "done":
       overall.textContent = msg.nothing ? "nothing to do" : "done";
       applyRunning = false;

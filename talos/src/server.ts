@@ -348,6 +348,16 @@ async function applyDiff(
     ws.send(JSON.stringify({ type: "done", nothing: true }));
     return;
   }
+  // Tell the UI the WHOLE plan up front, in execution order, so it can show every
+  // step that WILL run (not just the one currently running) and follow progress
+  // down the list. Order matches the loops below: removes first, then installs.
+  ws.send(JSON.stringify({
+    type: "apply-plan",
+    plan: [
+      ...toRemove.map((i) => ({ i, action: "uninstall" })),
+      ...toInstall.map((i) => ({ i, action: "install" })),
+    ],
+  }));
   for (const i of toRemove) await doStep(ws, i, "uninstall");
   for (const i of toInstall) await doStep(ws, i, "install");
   log("apply done");
