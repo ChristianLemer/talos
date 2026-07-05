@@ -10,6 +10,7 @@
 
 import { instantiate, libName, Pty } from "@sigma/pty-ffi/noinit";
 import { loadBundles } from "./bundles.ts";
+import { detectPresent } from "./detect.ts";
 
 const isWin = Deno.build.os === "windows";
 
@@ -339,6 +340,31 @@ function broadcast(obj: unknown) {
   }
 }
 
+// Probe every package's presence and stream one `state` per result, then
+// `state-done`. Probes run in PARALLEL (Promise.all) — 13 independent reads,
+// no reason to serialize. A helper for a single socket (the connecting client);
+// on failure of one probe, detectPresent already resolves to "absent", so the
+// scan as a whole never rejects. state-done ALWAYS fires (finally) so the UI's
+// splash never hangs on a stuck probe.
+async function detectAll(ws: WebSocket) {
+  const send = (obj: unknown) => {
+    try {
+      ws.send(JSON.stringify(obj));
+    } catch { /* socket closing */ }
+  };
+  try {
+    const results = await Promise.all(
+      STEPS.map((s) => detectPresent(s.detect, isWin)),
+    );
+    results.forEach((present, i) => send({ type: "state", i, present }));
+    log(`detect: ${results.filter(Boolean).length}/${results.length} present`);
+  } catch (e) {
+    log(`detect error (continuing): ${(e as Error).message}`);
+  } finally {
+    send({ type: "state-done" });
+  }
+}
+
 function scheduleShutdownIfIdle() {
   if (shutdownTimer !== null) clearTimeout(shutdownTimer);
   shutdownTimer = setTimeout(() => {
@@ -379,7 +405,7 @@ function startServer() {
         // Draw the plan and STOP — nothing runs on its own. The user drives every
         // action. The UI renders bundles → accordion, steps → rows (each carries
         // its index `i`, the id every later message keys off). selection/consent
-        // are neutral for now (persisted selection = T2b, consent = T4).
+        // are neutral for now (persisted selection = T3, consent = T4).
         socket.send(JSON.stringify({
           type: "plan",
           bundles: BUNDLES,
@@ -394,6 +420,12 @@ function startServer() {
           selection: { pkgs: {} },
           consent: { decided: true },
         }));
+        // Ground truth → pre-check the cards. "Detect, don't remember": ask the
+        // machine what's present RIGHT NOW (never a journal). Each result is a
+        // `state` message; `state-done` closes the scan (and hides the splash —
+        // THIS is the first real wait the splash covers). Detection feeds PRESENCE
+        // only, never the decision. Best-effort: a probe that throws is "absent".
+        detectAll(socket);
         // If the engine is already up, tell the UI right away (hides the splash).
         if (ptyReady) socket.send(JSON.stringify({ type: "ready" }));
       };

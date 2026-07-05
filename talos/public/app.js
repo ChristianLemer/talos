@@ -713,13 +713,17 @@ ws.onmessage = (ev) => {
       if (rows[msg.i]) setStatus(msg.i, msg.present ? "ok" : "waiting");
       break;
     case "state-done":
+      // The REAL wait is over: the machine has been probed, pills are painted.
+      // THIS is what the splash now covers (not the ~12ms pty load) — so the
+      // "checking what's already on board…" quip finally tells the truth.
       overall.textContent = "ready";
       hideSplash();
       break;
     case "ready":
-      overall.textContent = "ready";
-      hideSplash();
-      break; // engine up (T1: pty loaded)
+      // Engine (pty) up — needed to RUN a command. No longer hides the splash:
+      // detection (state-done) is the meaningful gate now. Kept as status only.
+      if (overall.textContent === "starting…") overall.textContent = "ready";
+      break;
     case "starting":
       overall.textContent = "starting…";
       break; // clicked before engine ready
