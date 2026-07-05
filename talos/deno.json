@@ -30,7 +30,7 @@
 
   "fmt": {
     "include": ["src/", "test/"],
-    "exclude": ["src/server.js"]
+    "exclude": ["src/server.js", "public/"]
   },
   "lint": {
     "include": ["src/", "test/"],
