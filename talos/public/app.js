@@ -406,6 +406,7 @@ function applyScoped(scopeIdx) {
   applyRunning = true;
   refreshLiveness(); // lock every Apply button during the run
   overall.textContent = "applying…";
+  enterFocusMode(); // narrow the screen to what's being worked on
   ws.send(JSON.stringify({ type: "apply", on, off, scope: scopeIdx }));
 }
 
@@ -553,6 +554,49 @@ function ensureTerm(i) {
 }
 
 const RUNNING = new Set(["installing", "uninstalling", "upgrading"]);
+
+// --- Apply focus mode --------------------------------------------------------
+// During an Apply the screen narrows to what's being worked on: everything is
+// hidden (body.applying), each row reveals itself only while running, a success
+// hides again, a failure stays visible. On done, everything reappears (and the
+// failures are already open). Purely visual — driven by the `step` messages the
+// server already sends, so no extra protocol.
+function enterFocusMode() {
+  document.body.classList.add("applying");
+  for (const i of Object.keys(rows).map(Number)) {
+    rows[i].details.classList.remove("focus-show");
+  }
+  recomputeEmptyBundles();
+}
+function exitFocusMode() {
+  document.body.classList.remove("applying");
+  // Reveal everything again; leave the per-row open/fold state as setStatus left
+  // it (failures open, successes folded) — the failures thus stand out on return.
+  for (const i of Object.keys(rows).map(Number)) {
+    rows[i].details.classList.remove("focus-show");
+  }
+  for (const name of Object.keys(bundleEls)) {
+    bundleEls[name].details.classList.remove("focus-empty");
+  }
+}
+// A row is shown in focus mode while it's running OR if it failed (stays up).
+function setFocusVisible(i, visible) {
+  if (!rows[i]) return;
+  rows[i].details.classList.toggle("focus-show", visible);
+  recomputeEmptyBundles();
+}
+// Hide a bundle card whose every row is currently focus-hidden (no empty shells).
+function recomputeEmptyBundles() {
+  if (!document.body.classList.contains("applying")) return;
+  for (const name of Object.keys(bundleEls)) {
+    const be = bundleEls[name];
+    const anyShown = be.pkgs.some((i) =>
+      rows[i]?.details.classList.contains("focus-show")
+    );
+    be.details.classList.toggle("focus-empty", !anyShown);
+  }
+}
+
 function setStatus(i, status) {
   const r = rows[i];
   if (!r) return;
@@ -577,6 +621,11 @@ function setStatus(i, status) {
   refreshLiveness();
   if (RUNNING.has(status) || status === "fail") r.details.open = true; // show activity / failures
   if (status === "ok" || status === "absent") r.details.open = false; // fold completed (frame stays)
+  // Focus mode: reveal while running or on failure; hide once it succeeds.
+  if (document.body.classList.contains("applying")) {
+    if (RUNNING.has(status) || status === "fail") setFocusVisible(i, true);
+    else if (status === "ok" || status === "absent") setFocusVisible(i, false);
+  }
   // A finished/failed row has nothing more to add to its version delta;
   // a fresh install/remove clears any stale one. (upgrade keeps it — set just before.)
   if (r.delta && status !== "upgrading") r.delta.textContent = "";
@@ -781,6 +830,7 @@ ws.onmessage = (ev) => {
     case "done":
       overall.textContent = msg.nothing ? "nothing to do" : "done";
       applyRunning = false;
+      exitFocusMode(); // everything reappears — failures already open, stand out
       refreshLiveness(); // unlock; re-light what's still useful
       break;
     case "overlay":
