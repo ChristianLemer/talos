@@ -707,6 +707,9 @@ ws.onmessage = (ev) => {
       // The REAL wait is over: the machine has been probed, pills are painted.
       // THIS is what the splash now covers (not the ~12ms pty load) — so the
       // "checking what's already on board…" quip finally tells the truth.
+      // Stamp WHEN the scan completed — the model stays clock-free, so the view
+      // sets this. Foundation for a future "reuse if fresh (<TTL)" optimisation.
+      model.detectedAt = Date.now();
       overall.textContent = "ready";
       hideSplash();
       break;
