@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(deno fmt *)",
+      "Bash(deno lint *)",
+      "Bash(deno check *)",
+      "Bash(deno task dev)",
+      "Bash(deno task test)",
+      "Bash(deno task build:mac)",
+      "Bash(deno task build:win)",
+      "Bash(deno task build:win-debug)",
+      "Bash(jj log *)",
+      "Bash(jj status)",
+      "Bash(jj status *)",
+      "Bash(jj diff *)",
+      "Bash(jj file list *)"
+    ]
+  }
+}
