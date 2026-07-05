@@ -276,6 +276,12 @@
       .dlgbtn-sec { background:none; color:var(--fg); border:1px solid var(--line);
                     padding:7px 14px; border-radius:7px; font-size:13px; cursor:pointer; }
       .dlgbtn-sec:hover { border-color:var(--dim); background:var(--line); }
+      /* Destructive secondary: signalled in soft red (act-remove tone), but NOT
+         the emphasised/default button — the safe choice is primary. Convention:
+         a confirmation dialog protects, so Enter/emphasis goes to the safe side. */
+      .dlgbtn-danger { background:none; color:#ce697a; border:1px solid #5a3d44;
+                       padding:7px 14px; border-radius:7px; font-size:13px; cursor:pointer; }
+      .dlgbtn-danger:hover { color:#16161e; background:#ce697a; border-color:#ce697a; }
       /* Startup splash */
       #splash { position:fixed; inset:0; z-index:80; display:flex; align-items:center; justify-content:center;
                 background:radial-gradient(130% 130% at 50% 30%, #24283b 0%, #16161e 70%);
@@ -318,8 +324,10 @@
       <p>This returns every toggle to the <b>standard configuration</b> the author set — your personal choices will be lost.</p>
       <p class="muted">Nothing is installed or removed by this: it only clears your selections. Press <b>Apply</b> afterwards to act on the defaults.</p>
       <div class="consent-actions">
-        <button id="reset-confirm-no" class="dlgbtn-sec">No — keep my settings</button>
-        <button id="reset-confirm-yes" class="globalbtn">Yes, reset to standard</button>
+        <!-- Safe choice is PRIMARY (blue, emphasised, right/default position);
+             the destructive reset is secondary + soft red. -->
+        <button id="reset-confirm-yes" class="dlgbtn-danger">Yes, reset to standard</button>
+        <button id="reset-confirm-no" class="globalbtn">No — keep my settings</button>
       </div>
     </div></div>
 
