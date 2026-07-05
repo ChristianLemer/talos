@@ -13,6 +13,9 @@ import { instantiate, libName, Pty } from "@sigma/pty-ffi/noinit";
 import { loadBundles } from "./bundles.ts";
 import { detectPresent } from "./detect.ts";
 import { hideConsoleIfHeadless } from "./win-console.ts";
+// The SHARED decision rule — the SAME file the browser fetches and previews with.
+// Server and UI call one actionFor, so they can never drift on what Apply does.
+import { actionFor } from "../public/decision.js";
 
 const isWin = Deno.build.os === "windows";
 
@@ -273,6 +276,73 @@ async function doStep(
   } finally {
     busy--;
   }
+}
+
+// Apply the tri-state DECISION against what's actually on the machine.
+//   on  = indices the user wants PRESENT (yellow ☑).
+//   off = indices the user wants ABSENT (yellow ☒).
+// The UI sends a desired state for EVERY package (Model A): on = want present,
+// off = want absent. We RE-DETECT presence now (detect, don't remember) and ask
+// the SHARED actionFor what to do per package — the same rule the front previewed
+// with, so server and UI cannot drift. `scope` (optional) restricts which indices
+// may act (a per-bundle Apply passes its packages; a global Apply passes none →
+// everything in scope).
+//
+// NOTE (T3b): outdated is fixed false for now — the winget-upgrade scan isn't
+// ported yet, so Apply installs+uninstalls but never UPGRADES (a present, wanted
+// package is left as-is). Same place npm was. The scan is its own tranche.
+//
+// Order: uninstalls first (selfHost/node LAST so the panel keeps running as long
+// as possible), then installs. Runs INSIDE serialize() at the call site, so the
+// whole convergence holds the single package-manager lock end to end.
+async function applyDiff(
+  ws: WebSocket,
+  on: number[],
+  off: number[],
+  scope: number[] | null,
+) {
+  const wantOn = new Set(on);
+  const wantOff = new Set(off);
+  const inScope = scope ? new Set(scope) : null;
+  const acts = (i: number) => !inScope || inScope.has(i);
+
+  const present = await Promise.all(STEPS.map((s) => detectPresent(s, isWin)));
+
+  // Per package: desired (on→present, off→absent, neither→auto=untouched) vs
+  // machine reality → the action. present:null (indeterminate) is treated as
+  // "not known present" i.e. false, the safe direction for install.
+  const actionOf = (i: number): string | null => {
+    if (!acts(i)) return null;
+    const desired = wantOn.has(i)
+      ? "present"
+      : wantOff.has(i)
+      ? "absent"
+      : null;
+    if (!desired) return null; // auto → never touched
+    return actionFor(desired, {
+      present: present[i] === true,
+      outdated: false, // T3b: no upgrade scan yet
+      canUninstall: !!STEPS[i].uninstall,
+    });
+  };
+
+  const idx = [...STEPS.keys()];
+  const toInstall = idx.filter((i) => actionOf(i) === "install");
+  const toRemove = idx.filter((i) => actionOf(i) === "uninstall")
+    .sort((a, b) => (STEPS[a].selfHost ? 1 : 0) - (STEPS[b].selfHost ? 1 : 0));
+
+  log(
+    `apply diff: +[${toInstall.map((i) => STEPS[i].name).join(", ") || "—"}]` +
+      ` -[${toRemove.map((i) => STEPS[i].name).join(", ") || "—"}]`,
+  );
+  if (!toInstall.length && !toRemove.length) {
+    ws.send(JSON.stringify({ type: "done", nothing: true }));
+    return;
+  }
+  for (const i of toRemove) await doStep(ws, i, "uninstall");
+  for (const i of toInstall) await doStep(ws, i, "install");
+  log("apply done");
+  ws.send(JSON.stringify({ type: "done" }));
 }
 
 // Open the panel as an APP window — a Chromium `--app` window is frameless: no
@@ -547,6 +617,21 @@ function startServer() {
           serialize(() => doStep(socket, msg.i, action))
             .catch((e) => log(`${action} error: ${(e as Error).message}`))
             .finally(() => socket.send(JSON.stringify({ type: "done" })));
+        } else if (msg.type === "apply") {
+          if (!ptyReady) {
+            socket.send(JSON.stringify({ type: "starting" }));
+            return;
+          }
+          // The global (or per-bundle) convergence. on/off = the UI's desired
+          // states; scope (optional) limits which indices may act. Serialized so
+          // the whole run holds the package-manager lock end to end. applyDiff
+          // emits its own terminal `done` (or done+nothing).
+          serialize(() =>
+            applyDiff(socket, msg.on ?? [], msg.off ?? [], msg.scope ?? null)
+          ).catch((e) => {
+            log(`apply error: ${(e as Error).message}`);
+            socket.send(JSON.stringify({ type: "done" }));
+          });
         }
       };
       return response;
