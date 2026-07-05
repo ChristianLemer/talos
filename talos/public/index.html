@@ -263,7 +263,13 @@
       .consent-card h2 { font-size:19px; margin:0 0 12px; }
       .consent-card p { color:#a9b1d6; font-size:14px; line-height:1.55; margin:0 0 10px; }
       .consent-card p.muted { color:var(--dim); font-size:13px; }
-      .consent-actions { display:flex; gap:10px; margin-top:18px; }
+      .consent-actions { display:flex; gap:10px; margin-top:18px; justify-content:center; }
+      /* Secondary (cancel/decline) button for MODAL dialogs. NOT .rerun — that's
+         the per-row Apply button, hidden in simple mode (body:not(.advanced)),
+         which would swallow a dialog's cancel button and leave only one option. */
+      .dlgbtn-sec { background:none; color:var(--fg); border:1px solid var(--line);
+                    padding:7px 14px; border-radius:7px; font-size:13px; cursor:pointer; }
+      .dlgbtn-sec:hover { border-color:var(--dim); background:var(--line); }
       /* Startup splash */
       #splash { position:fixed; inset:0; z-index:80; display:flex; align-items:center; justify-content:center;
                 background:radial-gradient(130% 130% at 50% 30%, #24283b 0%, #16161e 70%);
@@ -318,7 +324,7 @@
       <p>This returns every toggle to the <b>standard configuration</b> the author set — your personal choices will be lost.</p>
       <p class="muted">Nothing is installed or removed by this: it only clears your selections. Press <b>Apply</b> afterwards to act on the defaults.</p>
       <div class="consent-actions">
-        <button id="reset-confirm-no" class="rerun">No — keep my settings</button>
+        <button id="reset-confirm-no" class="dlgbtn-sec">No — keep my settings</button>
         <button id="reset-confirm-yes" class="globalbtn">Yes, reset to standard</button>
       </div>
     </div></div>
@@ -333,7 +339,7 @@
         this any time in the <b>Log</b> tab, and delete what was collected.</p>
       <div class="consent-actions">
         <button id="consent-yes" class="globalbtn">Yes, share for support</button>
-        <button id="consent-no" class="rerun">Keep it private</button>
+        <button id="consent-no" class="dlgbtn-sec">Keep it private</button>
       </div>
     </div></div>
 
