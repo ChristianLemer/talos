@@ -190,12 +190,21 @@ async function runInPty(
   i: number,
   cmdline: string,
 ): Promise<number> {
-  const pty = new Pty(SHELL);
-  const nl = isWin ? "\r\n" : "\n";
-  const line = isWin
-    ? `$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User'); ${cmdline}; exit $LASTEXITCODE${nl}`
-    : `${cmdline}; exit${nl}`;
-  pty.write(line);
+  // Pass the command as an ARGUMENT (-Command / -c), NOT by writing it into an
+  // interactive shell. A script given as an argument is NOT echoed — so the
+  // xterm shows ONLY the tool's own output, never our PATH-refresh preamble or
+  // the `exit` wrapper. We remove our noise at the SOURCE (don't emit it), we do
+  // NOT filter the tool's output — that stays verbatim, always.
+  // Windows: the PATH refresh + `exit $LASTEXITCODE` live inside the -Command
+  // script (invisible), so a tool installed earlier this session is found and we
+  // still read the WRAPPED command's exit code, not PowerShell's own.
+  const script = isWin
+    ? `$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User'); ${cmdline}; exit $LASTEXITCODE`
+    : cmdline;
+  const args = isWin
+    ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script]
+    : ["-c", script];
+  const pty = new Pty(SHELL, { args });
   const b64 = (u8: Uint8Array) => btoa(String.fromCharCode(...u8));
   while (true) {
     const { data, done } = pty.readBytes();

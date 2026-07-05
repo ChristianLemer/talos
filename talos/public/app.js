@@ -509,7 +509,10 @@ function render(bundles, steps) {
     copy.title = "Copy this step's output";
     copy.onclick = (e) => {
       e.preventDefault();
-      const text = (rows[s.i].log || "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ""); // strip ANSI
+      // Copy the log VERBATIM — only ANSI colour codes stripped (they're not
+      // information, just noise in a paste). Everything else stays: the copy is
+      // for debugging/sharing, so fidelity to what actually ran is the point.
+      const text = (rows[s.i].log || "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
       navigator.clipboard.writeText(text).then(() => {
         copy.innerHTML = ICON_OK;
         setTimeout(() => copy.innerHTML = ICON_COPY, 1200);
