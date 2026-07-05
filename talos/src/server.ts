@@ -166,7 +166,15 @@ async function serveStatic(pathname: string): Promise<Response> {
   try {
     const bytes = await Deno.readFile(`${PUBLIC}${rel}`);
     return new Response(bytes, {
-      headers: { "content-type": TYPES[ext] ?? "application/octet-stream" },
+      headers: {
+        "content-type": TYPES[ext] ?? "application/octet-stream",
+        // no-store: the panel is served over localhost by an exe that changes on
+        // every build. Edge's --app window uses the default profile (persistent
+        // disk cache), so without this it serves a STALE index.html/app.js from a
+        // previous run — the exe updates but the UI doesn't. Nothing to gain from
+        // caching a local asset; kill the whole bug class.
+        "cache-control": "no-store",
+      },
     });
   } catch {
     return new Response("not found: " + rel, { status: 404 });
