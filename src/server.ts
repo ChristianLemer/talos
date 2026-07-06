@@ -10,9 +10,17 @@
 // — see _PLAN.
 
 import { instantiate, libName, Pty } from "@sigma/pty-ffi/noinit";
-import { loadBundles } from "./bundles.ts";
+import { loadBundles, type Step } from "./bundles.ts";
 import { detectPresent } from "./detect.ts";
 import { outdatedFor, scanOutdated } from "./outdated.ts";
+import {
+  appendHistory,
+  clearHistory,
+  type ConsentStore,
+  readConsent,
+  readHistory,
+  writeConsent,
+} from "./consent.ts";
 import { hideConsoleIfHeadless } from "./win-console.ts";
 import { makeWatcher, powershellSpawner } from "./watch-window.ts";
 // The SHARED decision rule — the SAME file the browser fetches and previews with.
@@ -148,6 +156,20 @@ log(`bundles dir: ${BUNDLES_DIR}`);
 const { bundles: BUNDLES, steps: STEPS } = loadBundles(BUNDLES_DIR, log);
 log(`plan: ${BUNDLES.length} bundle(s), ${STEPS.length} package(s)`);
 
+// The consent + install-journal store. Local history always lands in DATA_DIR
+// (per machine); a consented copy also lands beside the exe, namespaced by host
+// + user, so a team can see who set up what. exeDir = the folder BUNDLES_DIR sits
+// in (strip the trailing "bundles"). host/user name the shared log; best-effort
+// env reads with plain fallbacks (the shared copy is a bonus, never load-bearing).
+const CONSENT: ConsentStore = {
+  localDir: DATA_DIR,
+  exeDir: BUNDLES_DIR.replace(/[/\\][^/\\]+$/, ""),
+  host: (isWin ? Deno.env.get("COMPUTERNAME") : Deno.env.get("HOSTNAME")) ??
+    Deno.hostname?.() ?? "host",
+  user: (isWin ? Deno.env.get("USERNAME") : Deno.env.get("USER")) ?? "user",
+  isWin,
+};
+
 // --- static assets: serve the real public/ tree ----------------------------
 // Vendored xterm lives in public/vendor/ (never a CDN — corporate firewall 403s it).
 // app.js + decision.js are the panel's own ES modules; decision.js is the SHARED
@@ -280,6 +302,32 @@ function serialize<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+// Best-effort version capture for the journal: run the step's detect command
+// (e.g. `git --version`) and pull the first version-like token from its output.
+// No detect command, non-zero exit, or any error → "" (the journal just omits a
+// version). Silent + never throws — a version string is a nicety, not load-bearing.
+async function captureVersion(s: Step): Promise<string> {
+  if (!s.detect) return "";
+  try {
+    // Run the detect command capturing stdout (the silent presenceProbe only
+    // keeps the exit code — here we want the output to pull a version from it).
+    const { code, stdout } = await new Deno.Command(
+      isWin ? "powershell.exe" : "/bin/sh",
+      {
+        args: isWin ? ["-NoProfile", "-Command", s.detect] : ["-c", s.detect],
+        stdout: "piped",
+        stderr: "null",
+        stdin: "null",
+      },
+    ).output();
+    if (code !== 0) return "";
+    const m = new TextDecoder().decode(stdout).match(/\d+\.\d+(?:\.\d+)?/);
+    return m ? m[0] : ""; // 2.55 / 1.104.1 …
+  } catch {
+    return "";
+  }
+}
+
 // Run one step's install/uninstall/upgrade command and show it live. winget/npm
 // are idempotent (they handle "already there / already gone" via a benign exit
 // code), so no pre-probe. Emits `step` running → settled, streams output, and a
@@ -315,6 +363,19 @@ async function doStep(
       i,
       status: ok ? (action === "uninstall" ? "absent" : "ok") : "fail",
     }));
+    // Journal the outcome (local always; shared copy iff consented). Version is
+    // best-effort — captured from the detect command after a successful
+    // install/upgrade, blank otherwise. Never let a journal failure sink a step.
+    const version = (ok && action !== "uninstall")
+      ? await captureVersion(s)
+      : "";
+    appendHistory(CONSENT, {
+      at: new Date().toISOString(),
+      package: s.name,
+      version,
+      action,
+      ok,
+    });
     return ok;
   } finally {
     busy--;
@@ -651,8 +712,9 @@ function startServer() {
         log(`client connected (clients=${clients})`);
         // Draw the plan and STOP — nothing runs on its own. The user drives every
         // action. The UI renders bundles → accordion, steps → rows (each carries
-        // its index `i`, the id every later message keys off). selection/consent
-        // are neutral for now (persisted selection = T3, consent = T4).
+        // its index `i`, the id every later message keys off). Consent is REAL:
+        // read from the machine-local store — undecided on first boot makes the UI
+        // pop the share dialog. (Persisted selection = T3, still neutral.)
         socket.send(JSON.stringify({
           type: "plan",
           bundles: BUNDLES,
@@ -665,7 +727,7 @@ function startServer() {
             posture: s.posture,
           })),
           selection: { pkgs: {} },
-          consent: { decided: true },
+          consent: readConsent(CONSENT),
         }));
         // Ground truth → pre-check the cards. "Detect, don't remember": ask the
         // machine what's present RIGHT NOW (never a journal). Each result is a
@@ -719,6 +781,28 @@ function startServer() {
             log(`apply error: ${(e as Error).message}`);
             socket.send(JSON.stringify({ type: "done" }));
           });
+        } else if (msg.type === "set-consent") {
+          // Record the share choice (marks consent decided). No reply needed —
+          // the UI already closed its dialog / flipped its toggle optimistically.
+          writeConsent(CONSENT, msg.share === true);
+          log(`consent set: share=${msg.share === true}`);
+        } else if (msg.type === "get-log") {
+          // The Log tab asks for the current consent + local history.
+          socket.send(JSON.stringify({
+            type: "log",
+            consent: readConsent(CONSENT),
+            history: readHistory(CONSENT),
+          }));
+        } else if (msg.type === "clear-log") {
+          // Clear the LOCAL journal only (the shared team copy is left intact),
+          // then send the now-empty log back so the tab refreshes.
+          clearHistory(CONSENT);
+          log("local history cleared");
+          socket.send(JSON.stringify({
+            type: "log",
+            consent: readConsent(CONSENT),
+            history: readHistory(CONSENT),
+          }));
         }
       };
       return response;
