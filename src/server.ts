@@ -12,6 +12,7 @@
 import { instantiate, libName, Pty } from "@sigma/pty-ffi/noinit";
 import { loadBundles } from "./bundles.ts";
 import { detectPresent } from "./detect.ts";
+import { outdatedFor, scanOutdated } from "./outdated.ts";
 import { hideConsoleIfHeadless } from "./win-console.ts";
 import { makeWatcher, powershellSpawner } from "./watch-window.ts";
 // The SHARED decision rule — the SAME file the browser fetches and previews with.
@@ -340,9 +341,10 @@ async function doStep(
 // may act (a per-bundle Apply passes its packages; a global Apply passes none →
 // everything in scope).
 //
-// NOTE (T3b): outdated is fixed false for now — the winget-upgrade scan isn't
-// ported yet, so Apply installs+uninstalls but never UPGRADES (a present, wanted
-// package is left as-is). Same place npm was. The scan is its own tranche.
+// T3b: Apply re-runs the machine-wide `winget upgrade` scan alongside the
+// presence re-scan (repaint-at-apply: re-constate reality before acting, don't
+// trust the CONNECT scan) and feeds the fresh `outdated` flag into actionFor, so
+// a present-but-stale wanted package now UPGRADES instead of being left as-is.
 //
 // Order: uninstalls first (selfHost/node LAST so the panel keeps running as long
 // as possible), then installs. Runs INSIDE serialize() at the call site, so the
@@ -358,7 +360,10 @@ async function applyDiff(
   const inScope = scope ? new Set(scope) : null;
   const acts = (i: number) => !inScope || inScope.has(i);
 
-  const present = await Promise.all(STEPS.map((s) => detectPresent(s, isWin)));
+  const [present, scan] = await Promise.all([
+    Promise.all(STEPS.map((s) => detectPresent(s, isWin))),
+    scanOutdated(isWin),
+  ]);
 
   // Push the fresh scan back to the screen BEFORE we act. Without this the pills
   // still show the CONNECT scan, so the plan could act on a reality the user never
@@ -367,6 +372,10 @@ async function applyDiff(
   present.forEach((p, i) => {
     try {
       ws.send(JSON.stringify({ type: "state", i, present: p }));
+      if (p === true) {
+        const od = outdatedFor(STEPS[i].wingetId, scan);
+        if (od) ws.send(JSON.stringify({ type: "outdated", i, ...od }));
+      }
     } catch { /* socket closing */ }
   });
 
@@ -383,35 +392,39 @@ async function applyDiff(
     if (!desired) return null; // auto → never touched
     return actionFor(desired, {
       present: present[i] === true,
-      outdated: false, // T3b: no upgrade scan yet
+      outdated: outdatedFor(STEPS[i].wingetId, scan) !== null,
       canUninstall: !!STEPS[i].uninstall,
     });
   };
 
   const idx = [...STEPS.keys()];
   const toInstall = idx.filter((i) => actionOf(i) === "install");
+  const toUpgrade = idx.filter((i) => actionOf(i) === "upgrade");
   const toRemove = idx.filter((i) => actionOf(i) === "uninstall")
     .sort((a, b) => (STEPS[a].selfHost ? 1 : 0) - (STEPS[b].selfHost ? 1 : 0));
 
   log(
     `apply diff: +[${toInstall.map((i) => STEPS[i].name).join(", ") || "—"}]` +
+      ` ↑[${toUpgrade.map((i) => STEPS[i].name).join(", ") || "—"}]` +
       ` -[${toRemove.map((i) => STEPS[i].name).join(", ") || "—"}]`,
   );
-  if (!toInstall.length && !toRemove.length) {
+  if (!toInstall.length && !toUpgrade.length && !toRemove.length) {
     ws.send(JSON.stringify({ type: "done", nothing: true }));
     return;
   }
   // Tell the UI the WHOLE plan up front, in execution order, so it can show every
   // step that WILL run (not just the one currently running) and follow progress
-  // down the list. Order matches the loops below: removes first, then installs.
+  // down the list. Order matches the loops below: removes, upgrades, then installs.
   ws.send(JSON.stringify({
     type: "apply-plan",
     plan: [
       ...toRemove.map((i) => ({ i, action: "uninstall" })),
+      ...toUpgrade.map((i) => ({ i, action: "upgrade" })),
       ...toInstall.map((i) => ({ i, action: "install" })),
     ],
   }));
   for (const i of toRemove) await doStep(ws, i, "uninstall");
+  for (const i of toUpgrade) await doStep(ws, i, "upgrade");
   for (const i of toInstall) await doStep(ws, i, "install");
   log("apply done");
   ws.send(JSON.stringify({ type: "done" }));
@@ -582,14 +595,29 @@ async function detectAll(ws: WebSocket) {
     } catch { /* socket closing */ }
   };
   try {
-    const results = await Promise.all(
-      STEPS.map((s) => detectPresent(s, isWin)),
-    );
+    // Presence and the outdated scan run in PARALLEL — one machine-wide
+    // `winget upgrade` alongside the N presence probes. The scan is best-effort
+    // (scanOutdated never rejects → empty map on any hiccup), so it can only add
+    // "outdated" lights, never block or break the presence pass.
+    const [results, scan] = await Promise.all([
+      Promise.all(STEPS.map((s) => detectPresent(s, isWin))),
+      scanOutdated(isWin),
+    ]);
     // present is true / false / null(indeterminate — no route to constate here).
-    results.forEach((present, i) => send({ type: "state", i, present }));
+    results.forEach((present, i) => {
+      send({ type: "state", i, present });
+      // A stale-but-present package lights its Apply button + shows cur→avail.
+      if (present === true) {
+        const od = outdatedFor(STEPS[i].wingetId, scan);
+        if (od) send({ type: "outdated", i, ...od });
+      }
+    });
     const yes = results.filter((p) => p === true).length;
     const unknown = results.filter((p) => p === null).length;
-    log(`detect: ${yes}/${results.length} present, ${unknown} indeterminate`);
+    log(
+      `detect: ${yes}/${results.length} present, ${unknown} indeterminate, ` +
+        `${scan.size} outdated`,
+    );
   } catch (e) {
     log(`detect error (continuing): ${(e as Error).message}`);
   } finally {
