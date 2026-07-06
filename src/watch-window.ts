@@ -175,7 +175,16 @@ export function makeWatcher(o: WatcherOpts): Watcher {
           const title = scan.title ?? "";
           if (title !== lastTitle) {
             lastTitle = title;
-            o.emit({ type: "wait-window", i: o.i, title });
+            // pushed = did the raise-to-front actually succeed? The taskbar
+            // flash always fires, but SetForegroundWindow can be refused by the
+            // foreground-lock — carry the truth so the banner doesn't claim a
+            // raise that didn't happen.
+            o.emit({
+              type: "wait-window",
+              i: o.i,
+              title,
+              pushed: scan.pushed === true,
+            });
           }
           return;
         }

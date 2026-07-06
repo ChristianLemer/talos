@@ -778,16 +778,21 @@ ws.onmessage = (ev) => {
       document.getElementById("overlay").classList.add("show");
       break;
     // An installer opened a window behind the panel while a step ran. Say so —
-    // the panel isn't frozen, it's waiting. wait-window: we found + surfaced the
-    // window. wait-silent: nothing found but the tool went quiet (likely a UAC
-    // prompt on the secure desktop). wait-clear: the step ended → drop the banner.
-    case "wait-window":
+    // the panel isn't frozen, it's waiting. wait-window: we found the window and
+    // flashed its taskbar button (always) + TRIED to raise it (msg.pushed says if
+    // that worked — the foreground-lock often refuses it). State a fact + a
+    // pointer, never claim a raise that may not have happened. wait-silent:
+    // nothing found but the tool went quiet (likely a UAC prompt on the secure
+    // desktop). wait-clear: the step ended → drop the banner.
+    case "wait-window": {
+      const who = msg.title ? `“${msg.title}”` : "An installer window";
       showWait(
-        msg.title
-          ? `“${msg.title}” is waiting for you — we brought it to the front.`
-          : "An installer window is waiting for you — we brought it to the front.",
+        msg.pushed
+          ? `${who} is waiting for you — we’ve brought it to the front.`
+          : `${who} is waiting for you, behind this window — it’s flashing in your taskbar.`,
       );
       break;
+    }
     case "wait-silent":
       showWait(
         "This is taking a while — an installer may be waiting on another screen. Look for a permission prompt.",

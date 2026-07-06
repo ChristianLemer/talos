@@ -55,10 +55,24 @@ Deno.test("makeWatcher: off Windows is a no-op (never spawns, never emits)", asy
   assertEquals(h.emitted.length, 0);
 });
 
-Deno.test("makeWatcher: foreign window found → one wait-window", async () => {
-  const h = harness({ queue: ['{"found":true,"title":"Setup","pushed":true}'] });
+Deno.test("makeWatcher: foreign window found → one wait-window carrying pushed", async () => {
+  const h = harness({
+    queue: ['{"found":true,"title":"Setup","pushed":true}'],
+  });
   await h.w.runTick(123, 1000);
-  assertEquals(h.emitted, [{ type: "wait-window", i: 2, title: "Setup" }]);
+  assertEquals(h.emitted, [
+    { type: "wait-window", i: 2, title: "Setup", pushed: true },
+  ]);
+});
+
+Deno.test("makeWatcher: raise failed → pushed:false carried (banner stays honest)", async () => {
+  const h = harness({
+    queue: ['{"found":true,"title":"Git Setup","pushed":false}'],
+  });
+  await h.w.runTick(123, 1000);
+  assertEquals(h.emitted, [
+    { type: "wait-window", i: 2, title: "Git Setup", pushed: false },
+  ]);
 });
 
 Deno.test("makeWatcher: same window across ticks → deduped (signalled once)", async () => {
@@ -70,7 +84,9 @@ Deno.test("makeWatcher: same window across ticks → deduped (signalled once)", 
   });
   await h.w.runTick(123, 1000);
   await h.w.runTick(123, 1000);
-  assertEquals(h.emitted, [{ type: "wait-window", i: 2, title: "Setup" }]);
+  assertEquals(h.emitted, [
+    { type: "wait-window", i: 2, title: "Setup", pushed: false },
+  ]);
 });
 
 Deno.test("makeWatcher: a different window → re-signalled", async () => {
@@ -83,8 +99,8 @@ Deno.test("makeWatcher: a different window → re-signalled", async () => {
   await h.w.runTick(123, 1000);
   await h.w.runTick(123, 1000);
   assertEquals(h.emitted, [
-    { type: "wait-window", i: 2, title: "Setup" },
-    { type: "wait-window", i: 2, title: "License" },
+    { type: "wait-window", i: 2, title: "Setup", pushed: false },
+    { type: "wait-window", i: 2, title: "License", pushed: false },
   ]);
 });
 
