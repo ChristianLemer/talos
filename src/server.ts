@@ -315,16 +315,6 @@ async function doStep(
       i,
       status: ok ? (action === "uninstall" ? "absent" : "ok") : "fail",
     }));
-    // selfHost (node): the panel runs on it. winget removes it fine while it runs
-    // (file goes at reboot), but relaunch won't work until it's back — tell the user.
-    if (ok && action === "uninstall" && s.selfHost) {
-      ws.send(JSON.stringify({
-        type: "overlay",
-        title: `${s.name} removed`,
-        body:
-          "This panel runs on it, so it can't keep running. You can close this window — re-open the tool later to set things up again.",
-      }));
-    }
     return ok;
   } finally {
     busy--;
@@ -346,9 +336,10 @@ async function doStep(
 // trust the CONNECT scan) and feeds the fresh `outdated` flag into actionFor, so
 // a present-but-stale wanted package now UPGRADES instead of being left as-is.
 //
-// Order: uninstalls first (selfHost/node LAST so the panel keeps running as long
-// as possible), then installs. Runs INSIDE serialize() at the call site, so the
-// whole convergence holds the single package-manager lock end to end.
+// Order: steps run in INDEX order, which is VISUAL order (steps sorted by bundle
+// priority in loadBundles) — the plan follows the screen top-to-bottom. Runs
+// INSIDE serialize() at the call site, so the whole convergence holds the single
+// package-manager lock end to end.
 async function applyDiff(
   ws: WebSocket,
   on: number[],
@@ -397,35 +388,31 @@ async function applyDiff(
     });
   };
 
-  const idx = [...STEPS.keys()];
-  const toInstall = idx.filter((i) => actionOf(i) === "install");
-  const toUpgrade = idx.filter((i) => actionOf(i) === "upgrade");
-  const toRemove = idx.filter((i) => actionOf(i) === "uninstall")
-    .sort((a, b) => (STEPS[a].selfHost ? 1 : 0) - (STEPS[b].selfHost ? 1 : 0));
+  // Walk the steps IN INDEX ORDER — which is now VISUAL order (steps sorted by
+  // bundle priority in loadBundles). The plan reads top-to-bottom exactly as the
+  // user sees it on screen, instead of jumping around by action type. Each step
+  // carries whatever action it needs (install / upgrade / uninstall) in place.
+  // No node/selfHost exception: the Deno exe is self-contained, nothing we act on
+  // hosts the panel, so any package can act in any order.
+  type Act = "install" | "uninstall" | "upgrade";
+  const plan = [...STEPS.keys()]
+    .map((i) => ({ i, action: actionOf(i) as Act | null }))
+    .filter((p): p is { i: number; action: Act } => p.action !== null);
 
   log(
-    `apply diff: +[${toInstall.map((i) => STEPS[i].name).join(", ") || "—"}]` +
-      ` ↑[${toUpgrade.map((i) => STEPS[i].name).join(", ") || "—"}]` +
-      ` -[${toRemove.map((i) => STEPS[i].name).join(", ") || "—"}]`,
+    `apply diff: ${
+      plan.map((p) => `${p.action[0]}:${STEPS[p.i].name}`).join(", ") || "—"
+    }`,
   );
-  if (!toInstall.length && !toUpgrade.length && !toRemove.length) {
+  if (!plan.length) {
     ws.send(JSON.stringify({ type: "done", nothing: true }));
     return;
   }
-  // Tell the UI the WHOLE plan up front, in execution order, so it can show every
-  // step that WILL run (not just the one currently running) and follow progress
-  // down the list. Order matches the loops below: removes, upgrades, then installs.
-  ws.send(JSON.stringify({
-    type: "apply-plan",
-    plan: [
-      ...toRemove.map((i) => ({ i, action: "uninstall" })),
-      ...toUpgrade.map((i) => ({ i, action: "upgrade" })),
-      ...toInstall.map((i) => ({ i, action: "install" })),
-    ],
-  }));
-  for (const i of toRemove) await doStep(ws, i, "uninstall");
-  for (const i of toUpgrade) await doStep(ws, i, "upgrade");
-  for (const i of toInstall) await doStep(ws, i, "install");
+  // Tell the UI the WHOLE plan up front, in execution order (= screen order), so
+  // it can show every step that WILL run and follow progress straight down the
+  // list.
+  ws.send(JSON.stringify({ type: "apply-plan", plan }));
+  for (const p of plan) await doStep(ws, p.i, p.action);
   log("apply done");
   ws.send(JSON.stringify({ type: "done" }));
 }

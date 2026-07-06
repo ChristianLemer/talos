@@ -41,7 +41,6 @@ export interface Step extends Commands {
   wingetId: string | null; // the id winget reports in `winget upgrade` — matches outdated rows
   detect: string | null;
   requires: string[];
-  selfHost: boolean;
   posture: Posture;
 }
 
@@ -60,7 +59,6 @@ interface RawPkg {
   runUninstall?: string;
   detect?: string;
   requires?: string[];
-  selfHost?: boolean;
 }
 
 interface RawBundle {
@@ -203,7 +201,6 @@ export function loadBundles(
           wingetId: p.winget || null,
           detect: p.detect || null,
           requires: p.requires ?? [],
-          selfHost: !!p.selfHost,
           posture: meta.posture,
         });
       }
@@ -217,5 +214,14 @@ export function loadBundles(
     }
   }
   bundles.sort((a, b) => a.priority - b.priority);
+  // steps[i] IS the visual order: sort by the owning bundle's priority so the
+  // model's canonical order matches the screen (view no longer re-derives it),
+  // and Apply can just walk indices top-to-bottom. Array.sort is STABLE, so a
+  // bundle's packages keep the author's order. priority lives in the MODEL, not
+  // only the render loop.
+  const priorityOf = new Map(bundles.map((b) => [b.name, b.priority]));
+  steps.sort((a, b) =>
+    (priorityOf.get(a.bundle) ?? 100) - (priorityOf.get(b.bundle) ?? 100)
+  );
   return { bundles, steps };
 }

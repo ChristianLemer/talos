@@ -61,3 +61,32 @@ Deno.test("loadBundles: missing dir opens inert (empty plan, no throw)", () => {
   assertEquals(plan.bundles, []);
   assertEquals(plan.steps, []);
 });
+
+// steps[i] IS the visual order: sorted by their bundle's priority, and stable
+// within a bundle (author's package order kept). The view no longer re-derives
+// order — priority is authoritative in the MODEL. We lay the folders out so the
+// filesystem-read order (dir name) DISAGREES with priority, to prove the sort.
+Deno.test("loadBundles: steps come out in bundle-priority order (stable within a bundle)", () => {
+  const root = Deno.makeTempDirSync();
+  const write = (dir: string, yaml: string) => {
+    Deno.mkdirSync(`${root}/${dir}`);
+    Deno.writeTextFileSync(`${root}/${dir}/bundle.yaml`, yaml);
+  };
+  // dir "a-*" reads first but has the HIGHER priority → must end up LAST.
+  write(
+    "a-late",
+    "bundle: Late\npriority: 50\npackages:\n  - name: L1\n  - name: L2\n",
+  );
+  write(
+    "z-early",
+    "bundle: Early\npriority: 0\npackages:\n  - name: E1\n  - name: E2\n",
+  );
+
+  const { steps } = loadBundles(root);
+  assertEquals(
+    steps.map((s) => s.name),
+    ["E1", "E2", "L1", "L2"], // Early (0) before Late (50); package order kept
+  );
+
+  Deno.removeSync(root, { recursive: true });
+});

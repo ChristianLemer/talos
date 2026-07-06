@@ -11,8 +11,10 @@ bundle: Base
 emoji: 🧠
 description: The neutral substrate — the runtime and tools any AI agent needs.
 priority: 0
-selectable: false      # always on; the refuge guarantees the base, can't be unchecked
-posture: mandatory     # every package here is non-negotiable (bundle-level default)
+# UNLOCKED (overrides INTENTION.md "the refuge guarantees the base"): the Base
+# card is selectable and its packages default on but can be unchecked. The
+# substrate is the recommended default, no longer forced.
+posture: opt-out       # bundle-level default: present unless the user flips out
 
 # The refuge, stripped to the NEUTRAL substrate: the runtime + tools an agent
 # stands on — no client named here. The engine knows no specific AI (hermeticity:
@@ -23,7 +25,6 @@ packages:
     description: JavaScript runtime — required by this tool itself and by CLI agents
     winget: OpenJS.NodeJS
     detect: node --version
-    selfHost: true       # the panel runs on it — uninstall handled specially
 
   - name: Git
     description: Version control — required by agent plugin marketplaces

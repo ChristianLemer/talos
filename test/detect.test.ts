@@ -17,7 +17,6 @@ function step(partial: Partial<Step>): Step {
     wingetId: partial.wingetId ?? null,
     detect: partial.detect ?? null,
     requires: [],
-    selfHost: false,
     posture: "opt-in",
   };
 }
