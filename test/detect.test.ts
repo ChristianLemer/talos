@@ -1,7 +1,12 @@
 // Tests for presence-probe BUILDING (pure) — both natures. The IO (detectPresent)
 // is exercised live on Mac below.
 import { assertEquals } from "@std/assert";
-import { detectPresent, presenceProbe, routeProbe } from "../src/detect.ts";
+import {
+  detectPresent,
+  detectPresentDetailed,
+  presenceProbe,
+  routeProbe,
+} from "../src/detect.ts";
 import type { Step } from "../src/bundles.ts";
 
 // Minimal Step factory — only the fields detection reads.
@@ -16,7 +21,7 @@ function step(partial: Partial<Step>): Step {
     route: partial.route ?? null,
     wingetId: partial.wingetId ?? null,
     detect: partial.detect ?? null,
-    requires: [],
+    requires: partial.requires ?? [],
     posture: "opt-in",
   };
 }
@@ -85,4 +90,27 @@ Deno.test("detectPresent: winget-only package on Mac → null (indeterminate)", 
     false,
   );
   assertEquals(p, null);
+});
+
+Deno.test("detectPresent: unmet requires → null + reason", async () => {
+  // A step requiring a bogus binary that cannot be on PATH.
+  const s = step({
+    name: "Chiron",
+    route: "claude-plugin",
+    requires: ["definitely-not-a-real-binary-xyzzy"],
+  });
+  const r = await detectPresentDetailed(s, false);
+  assertEquals(r.present, null);
+  assertEquals(
+    r.reason,
+    "requires definitely-not-a-real-binary-xyzzy (absent)",
+  );
+});
+
+Deno.test("detectPresentDetailed: met requires falls through to the route probe", async () => {
+  // `sh` exists on Mac; with no route probe practicable, present stays null but
+  // WITHOUT a requires reason (the requirement was satisfied).
+  const s = step({ name: "X", route: "claude-plugin", requires: ["sh"] });
+  const r = await detectPresentDetailed(s, false);
+  assertEquals(r.reason, undefined);
 });
