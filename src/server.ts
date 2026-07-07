@@ -25,7 +25,8 @@ import { hideConsoleIfHeadless } from "./win-console.ts";
 import { makeWatcher, powershellSpawner } from "./watch-window.ts";
 // The SHARED decision rule — the SAME file the browser fetches and previews with.
 // Server and UI call one actionFor, so they can never drift on what Apply does.
-import { actionFor } from "../public/decision.js";
+import { actionFor, desiredState } from "../public/decision.js";
+import { type DepNode, requiresReason, topoSort } from "./deps.ts";
 
 const isWin = Deno.build.os === "windows";
 
@@ -169,6 +170,18 @@ const CONSENT: ConsentStore = {
   user: (isWin ? Deno.env.get("USERNAME") : Deno.env.get("USER")) ?? "user",
   isWin,
 };
+
+// Build the deps.ts view of the plan: each step as a DepNode carrying whether it
+// WILL be present after the Apply. `willBePresent[i]` is index-aligned and the
+// caller decides how to compute it (present now OR desired-present). Kept here so
+// both the connect scan and applyDiff share one shape.
+function depNodes(willBePresent: boolean[]): DepNode[] {
+  return STEPS.map((s, i) => ({
+    name: s.name,
+    requires: s.requires,
+    willBePresent: willBePresent[i],
+  }));
+}
 
 // --- static assets: serve the real public/ tree ----------------------------
 // Vendored xterm lives in public/vendor/ (never a CDN — corporate firewall 403s it).
@@ -417,20 +430,21 @@ async function applyDiff(
     scanOutdated(isWin),
   ]);
 
+  // Future state per package for THIS Apply: present now OR the user wants it on
+  // (wantOn), and never if they want it off (wantOff). Feeds requires resolution.
+  const willBePresent = STEPS.map((_s, i) =>
+    !wantOff.has(i) && (presences[i].present === true || wantOn.has(i))
+  );
+  const nodes = depNodes(willBePresent);
+
   // Push the fresh scan back to the screen BEFORE we act. Without this the pills
   // still show the CONNECT scan, so the plan could act on a reality the user never
   // saw (e.g. a tool they removed by hand since opening). Not a diff, no dialog —
   // just re-align: the pills correct themselves, then focus mode shows the plan.
   presences.forEach((r, i) => {
     try {
-      ws.send(
-        JSON.stringify({
-          type: "state",
-          i,
-          present: r.present,
-          reason: r.reason,
-        }),
-      );
+      const reason = requiresReason(nodes[i], nodes) ?? r.reason;
+      ws.send(JSON.stringify({ type: "state", i, present: r.present, reason }));
       if (r.present === true) {
         const od = outdatedFor(STEPS[i].wingetId, scan);
         if (od) ws.send(JSON.stringify({ type: "outdated", i, ...od }));
@@ -463,9 +477,13 @@ async function applyDiff(
   // No node/selfHost exception: the Deno exe is self-contained, nothing we act on
   // hosts the panel, so any package can act in any order.
   type Act = "install" | "uninstall" | "upgrade";
-  const plan = [...STEPS.keys()]
+  const visualPlan = [...STEPS.keys()]
     .map((i) => ({ i, action: actionOf(i) as Act | null }))
     .filter((p): p is { i: number; action: Act } => p.action !== null);
+  // Order by dependency: a required package installs BEFORE its dependents.
+  // Visual (bundle-priority) order breaks ties between independents, so the plan
+  // still reads top-to-bottom wherever `requires` doesn't force otherwise.
+  const plan = topoSort(visualPlan, nodes);
 
   log(
     `apply diff: ${
@@ -658,9 +676,19 @@ async function detectAll(ws: WebSocket) {
       Promise.all(STEPS.map((s) => detectPresentDetailed(s, isWin))),
       scanOutdated(isWin),
     ]);
-    // present is true / false / null(indeterminate); reason explains a null.
+    // Future state per package: present now OR desired-present at rest (posture
+    // default — no user toggle yet at connect). Feeds requires resolution so a
+    // dependent isn't wrongly flagged for a package that WILL be installed.
+    const willBePresent = STEPS.map((s, i) =>
+      results[i].present === true ||
+      desiredState(s.posture, null) === "present"
+    );
+    const nodes = depNodes(willBePresent);
+    // present is true / false / null(indeterminate); reason explains an unmet
+    // dependency (future state), else detection's own reason.
     results.forEach((r, i) => {
-      send({ type: "state", i, present: r.present, reason: r.reason });
+      const reason = requiresReason(nodes[i], nodes) ?? r.reason;
+      send({ type: "state", i, present: r.present, reason });
       // A stale-but-present package lights its Apply button + shows cur→avail.
       if (r.present === true) {
         const od = outdatedFor(STEPS[i].wingetId, scan);
