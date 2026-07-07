@@ -3,7 +3,6 @@
 import { assertEquals } from "@std/assert";
 import {
   detectPresent,
-  detectPresentDetailed,
   listProbe,
   presenceProbe,
   routeProbe,
@@ -93,28 +92,9 @@ Deno.test("detectPresent: winget-only package on Mac → null (indeterminate)", 
   assertEquals(p, null);
 });
 
-Deno.test("detectPresent: unmet requires → null + reason", async () => {
-  // A step requiring a bogus binary that cannot be on PATH.
-  const s = step({
-    name: "Chiron",
-    route: "claude-plugin",
-    requires: ["definitely-not-a-real-binary-xyzzy"],
-  });
-  const r = await detectPresentDetailed(s, false);
-  assertEquals(r.present, null);
-  assertEquals(
-    r.reason,
-    "requires definitely-not-a-real-binary-xyzzy (absent)",
-  );
-});
-
-Deno.test("detectPresentDetailed: met requires falls through to the route probe", async () => {
-  // `sh` exists on Mac; with no route probe practicable, present stays null but
-  // WITHOUT a requires reason (the requirement was satisfied).
-  const s = step({ name: "X", route: "claude-plugin", requires: ["sh"] });
-  const r = await detectPresentDetailed(s, false);
-  assertEquals(r.reason, undefined);
-});
+// NOTE: `requires` is NO LONGER a detect-time PATH guard — it's a package-level
+// FUTURE-STATE dependency resolved globally in deps.ts (see test/deps.test.ts).
+// detectPresentDetailed is pure per-step presence + a tool-absent reason only.
 
 Deno.test("listProbe: claude-plugin → claude plugin list --json", () => {
   const p = listProbe(step({ route: "claude-plugin" }), false);

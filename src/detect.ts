@@ -121,38 +121,17 @@ async function runProbe(probe: Probe): Promise<boolean> {
   }
 }
 
-// Is every `requires:` command on PATH here? Returns the first missing one, or
-// null if all satisfied. Uses the same first-token binary check as presenceProbe.
-async function firstMissingRequire(
-  requires: string[],
-  isWin: boolean,
-): Promise<string | null> {
-  for (const bin of requires) {
-    const probe = presenceProbe(bin, isWin);
-    if (!probe) continue;
-    if (!(await runProbe(probe))) return bin;
-  }
-  return null;
-}
-
 // Presence of a package on this machine, WITH an optional reason when it's
-// indeterminate (e.g. a missing prerequisite the UI should surface).
-//   - unmet requires → null + reason, BEFORE any probe (can't constate without
-//     the tool).
+// indeterminate. `requires` is NOT handled here — it's a package-level FUTURE-STATE
+// dependency resolved globally in deps.ts, not a present-tense per-step check.
 //   - has a `detect` binary (non content-detected routes) → PATH probe.
-//   - route probe → true|false|null. (Content-detected routes claude-plugin/skill
-//     are wired in Task 4; today they fall through to routeProbe → null.)
+//   - content-detected routes (claude-plugin/skill) → parse the tool's list.
+//   - exit-code routes (winget) → route probe.
 // Never throws: a spawn failure resolves to "absent"/indeterminate, the safe way.
 export async function detectPresentDetailed(
   step: Step,
   isWin: boolean,
 ): Promise<Presence> {
-  if (step.requires.length) {
-    const missing = await firstMissingRequire(step.requires, isWin);
-    if (missing) {
-      return { present: null, reason: `requires ${missing} (absent)` };
-    }
-  }
   if (step.detect && step.route !== "claude-plugin" && step.route !== "skill") {
     const probe = presenceProbe(step.detect, isWin);
     if (!probe) return { present: false };
