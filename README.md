@@ -26,8 +26,9 @@ ship beside it.
 ### 1 — Declare your content
 
 A bundle is a **folder** with a `bundle.yaml`. It lists packages as *needs*
-satisfied by a named route (`winget`, `brew`, `cargo`, `npm`, or a raw `run`).
-Copy an existing one and edit:
+satisfied by a named route (`winget`, `brew`, `cargo`, `npm`, a raw `run`, a
+Claude Code `claude-plugin`, or a cross-agent `skill`). Copy an existing one and
+edit:
 
 ```yaml
 bundle: Editors
@@ -42,7 +43,24 @@ packages:
     description: Where you see and edit what the AI produces
     winget: Microsoft.VisualStudioCode   # the route (id winget knows)
     detect: code --version               # how to tell it's already present
+
+  # A Claude Code plugin (hooks/agents/commands/MCP):
+  - name: Chiron
+    claude-plugin: chiron@tekton              # <plugin>@<marketplace>
+    marketplace: github:ChristianLemer/tekton # registered before install
+    detect: chiron                            # name `claude plugin list` reports
+    requires: claude                          # not offered if `claude` is absent
+
+  # A cross-agent skill (SKILL.md, via npx skills):
+  - name: uv/ruff/ty skills
+    skill: astral-sh/claude-code-plugins      # source for `npx skills add`
+    detect: astral                            # name `npx skills list` reports
+    requires: npx
 ```
+
+For `claude-plugin` and `skill`, `detect:` is the name the tool lists the item
+under (not a PATH binary), and `requires:` names a command that must be on PATH —
+if it's missing, the row shows *"requires … (absent)"* instead of acting.
 
 **Posture** — the author's policy per bundle: `mandatory` (always on, locked),
 `opt-out` (on by default, user may decline), `opt-in` (off by default, user may
