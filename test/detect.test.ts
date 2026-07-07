@@ -4,6 +4,7 @@ import { assertEquals } from "@std/assert";
 import {
   detectPresent,
   detectPresentDetailed,
+  listProbe,
   presenceProbe,
   routeProbe,
 } from "../src/detect.ts";
@@ -113,4 +114,20 @@ Deno.test("detectPresentDetailed: met requires falls through to the route probe"
   const s = step({ name: "X", route: "claude-plugin", requires: ["sh"] });
   const r = await detectPresentDetailed(s, false);
   assertEquals(r.reason, undefined);
+});
+
+Deno.test("listProbe: claude-plugin → claude plugin list --json", () => {
+  const p = listProbe(step({ route: "claude-plugin" }), false);
+  assertEquals(p?.cmd, "claude");
+  assertEquals(p?.args, ["plugin", "list", "--json"]);
+});
+
+Deno.test("listProbe: skill → npx skills list -g", () => {
+  const p = listProbe(step({ route: "skill" }), false);
+  assertEquals(p?.cmd, "npx");
+  assertEquals(p?.args, ["skills", "list", "-g"]);
+});
+
+Deno.test("listProbe: other routes → null", () => {
+  assertEquals(listProbe(step({ route: "winget" }), false), null);
 });

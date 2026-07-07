@@ -22,6 +22,7 @@
 // (win-console.ts) these child spawns no longer flash a window.
 
 import type { Step } from "./bundles.ts";
+import { pluginPresent, skillPresent } from "./agent-content.ts";
 
 export interface Probe {
   cmd: string;
@@ -77,6 +78,35 @@ export function routeProbe(step: Step, isWin: boolean): Probe | null {
   return null; // brew/cargo/npm/run route detection not implemented yet
 }
 
+// The LIST command for a content-detected route (claude-plugin / skill). Pure;
+// returns null for routes detected by exit code. Detection reads this command's
+// STDOUT (not its exit code — `claude plugin list` exits 0 either way), so it's
+// kept separate from Probe/runProbe.
+export function listProbe(step: Step, _isWin: boolean): Probe | null {
+  if (step.route === "claude-plugin") {
+    return { cmd: "claude", args: ["plugin", "list", "--json"] };
+  }
+  if (step.route === "skill") {
+    return { cmd: "npx", args: ["skills", "list", "-g"] };
+  }
+  return null;
+}
+
+// Run a list command and return its stdout ("" on any failure → indeterminate).
+async function runList(probe: Probe): Promise<string> {
+  try {
+    const { stdout } = await new Deno.Command(probe.cmd, {
+      args: probe.args,
+      stdout: "piped",
+      stderr: "null",
+      stdin: "null",
+    }).output();
+    return new TextDecoder().decode(stdout);
+  } catch {
+    return "";
+  }
+}
+
 async function runProbe(probe: Probe): Promise<boolean> {
   try {
     const { code } = await new Deno.Command(probe.cmd, {
@@ -128,6 +158,18 @@ export async function detectPresentDetailed(
     if (!probe) return { present: false };
     return { present: await runProbe(probe) };
   }
+  // Content-detected routes: parse the tool's list output (exit code is useless).
+  const list = listProbe(step, isWin);
+  if (list) {
+    const out = await runList(list);
+    if (!out) return { present: null }; // tool absent/failed → indeterminate
+    const detect = step.detect ?? "";
+    const present = step.route === "claude-plugin"
+      ? pluginPresent(detect, out)
+      : skillPresent(detect, out);
+    return { present };
+  }
+  // Exit-code routes (winget today).
   const probe = routeProbe(step, isWin);
   if (!probe) return { present: null };
   return { present: await runProbe(probe) };
