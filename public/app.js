@@ -716,6 +716,11 @@ ws.onmessage = (ev) => {
             ? "waiting"
             : "unknown",
         );
+        // Indeterminate WITH a reason (e.g. a missing prerequisite) → show why,
+        // in place of the bare "—", so the row isn't a silent mystery.
+        if (msg.present === null && msg.reason) {
+          rows[msg.i].statusLabel.textContent = msg.reason;
+        }
       }
       break;
     case "state-done":

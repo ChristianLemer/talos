@@ -11,7 +11,7 @@
 
 import { instantiate, libName, Pty } from "@sigma/pty-ffi/noinit";
 import { loadBundles, type Step } from "./bundles.ts";
-import { detectPresent } from "./detect.ts";
+import { detectPresentDetailed } from "./detect.ts";
 import { outdatedFor, scanOutdated } from "./outdated.ts";
 import {
   appendHistory,
@@ -412,8 +412,8 @@ async function applyDiff(
   const inScope = scope ? new Set(scope) : null;
   const acts = (i: number) => !inScope || inScope.has(i);
 
-  const [present, scan] = await Promise.all([
-    Promise.all(STEPS.map((s) => detectPresent(s, isWin))),
+  const [presences, scan] = await Promise.all([
+    Promise.all(STEPS.map((s) => detectPresentDetailed(s, isWin))),
     scanOutdated(isWin),
   ]);
 
@@ -421,10 +421,17 @@ async function applyDiff(
   // still show the CONNECT scan, so the plan could act on a reality the user never
   // saw (e.g. a tool they removed by hand since opening). Not a diff, no dialog —
   // just re-align: the pills correct themselves, then focus mode shows the plan.
-  present.forEach((p, i) => {
+  presences.forEach((r, i) => {
     try {
-      ws.send(JSON.stringify({ type: "state", i, present: p }));
-      if (p === true) {
+      ws.send(
+        JSON.stringify({
+          type: "state",
+          i,
+          present: r.present,
+          reason: r.reason,
+        }),
+      );
+      if (r.present === true) {
         const od = outdatedFor(STEPS[i].wingetId, scan);
         if (od) ws.send(JSON.stringify({ type: "outdated", i, ...od }));
       }
@@ -443,7 +450,7 @@ async function applyDiff(
       : null;
     if (!desired) return null; // auto → never touched
     return actionFor(desired, {
-      present: present[i] === true,
+      present: presences[i].present === true,
       outdated: outdatedFor(STEPS[i].wingetId, scan) !== null,
       canUninstall: !!STEPS[i].uninstall,
     });
@@ -648,20 +655,20 @@ async function detectAll(ws: WebSocket) {
     // (scanOutdated never rejects → empty map on any hiccup), so it can only add
     // "outdated" lights, never block or break the presence pass.
     const [results, scan] = await Promise.all([
-      Promise.all(STEPS.map((s) => detectPresent(s, isWin))),
+      Promise.all(STEPS.map((s) => detectPresentDetailed(s, isWin))),
       scanOutdated(isWin),
     ]);
-    // present is true / false / null(indeterminate — no route to constate here).
-    results.forEach((present, i) => {
-      send({ type: "state", i, present });
+    // present is true / false / null(indeterminate); reason explains a null.
+    results.forEach((r, i) => {
+      send({ type: "state", i, present: r.present, reason: r.reason });
       // A stale-but-present package lights its Apply button + shows cur→avail.
-      if (present === true) {
+      if (r.present === true) {
         const od = outdatedFor(STEPS[i].wingetId, scan);
         if (od) send({ type: "outdated", i, ...od });
       }
     });
-    const yes = results.filter((p) => p === true).length;
-    const unknown = results.filter((p) => p === null).length;
+    const yes = results.filter((r) => r.present === true).length;
+    const unknown = results.filter((r) => r.present === null).length;
     log(
       `detect: ${yes}/${results.length} present, ${unknown} indeterminate, ` +
         `${scan.size} outdated`,
