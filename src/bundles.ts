@@ -57,6 +57,10 @@ interface RawPkg {
   npmFlags?: string;
   run?: string;
   runUninstall?: string;
+  "claude-plugin"?: string; // <plugin>@<marketplace>
+  marketplace?: string; // source for `claude plugin marketplace add`
+  skill?: string; // source for `npx skills add`
+  skillName?: string; // list-name if it differs from `name`
   detect?: string;
   requires?: string[];
 }
@@ -133,6 +137,33 @@ export function commandsFor(
       install: pkg.run,
       uninstall: pkg.runUninstall ?? null,
       upgrade: null,
+    };
+  }
+  if (pkg["claude-plugin"]) {
+    // A Claude Code plugin (hooks/agents/commands/MCP). marketplace add chained
+    // before install (idempotent); && so a failed add aborts the install.
+    // Omitted when no marketplace declared (plugin from an already-known one).
+    const id = pkg["claude-plugin"];
+    const add = pkg.marketplace
+      ? `claude plugin marketplace add ${pkg.marketplace} && `
+      : "";
+    return {
+      route: "claude-plugin",
+      install: `${add}claude plugin install ${id} --scope user`,
+      uninstall: `claude plugin uninstall ${id}`,
+      upgrade: `claude plugin update ${id}`,
+    };
+  }
+  if (pkg.skill) {
+    // A cross-agent skill (SKILL.md) via npx skills. list-name may differ from
+    // the display name, hence skillName for uninstall/upgrade targeting.
+    const src = pkg.skill;
+    const name = pkg.skillName ?? pkg.name;
+    return {
+      route: "skill",
+      install: `npx skills add ${src} -g -y`,
+      uninstall: `npx skills remove ${name} -y`,
+      upgrade: `npx skills update ${name} -y`,
     };
   }
   return { route: null, install: null, uninstall: null, upgrade: null };

@@ -46,6 +46,46 @@ Deno.test("commandsFor: run escape hatch, no upgrade", () => {
   assertEquals(c.upgrade, null);
 });
 
+Deno.test("commandsFor: claude-plugin route (with marketplace)", () => {
+  const c = commandsFor({
+    name: "Chiron",
+    "claude-plugin": "chiron@tekton",
+    marketplace: "github:ChristianLemer/tekton",
+  });
+  assertEquals(c.route, "claude-plugin");
+  assertEquals(
+    c.install,
+    "claude plugin marketplace add github:ChristianLemer/tekton && claude plugin install chiron@tekton --scope user",
+  );
+  assertEquals(c.uninstall, "claude plugin uninstall chiron@tekton");
+  assertEquals(c.upgrade, "claude plugin update chiron@tekton");
+});
+
+Deno.test("commandsFor: claude-plugin without marketplace omits the add", () => {
+  const c = commandsFor({ name: "X", "claude-plugin": "x@mkt" });
+  assertEquals(c.install, "claude plugin install x@mkt --scope user");
+});
+
+Deno.test("commandsFor: skill route via npx skills", () => {
+  const c = commandsFor({
+    name: "astral",
+    skill: "astral-sh/claude-code-plugins",
+  });
+  assertEquals(c.route, "skill");
+  assertEquals(c.install, "npx skills add astral-sh/claude-code-plugins -g -y");
+  assertEquals(c.uninstall, "npx skills remove astral -y");
+  assertEquals(c.upgrade, "npx skills update astral -y");
+});
+
+Deno.test("commandsFor: skill uses skillName when list-name differs", () => {
+  const c = commandsFor({
+    name: "Astral Python",
+    skill: "astral-sh/x",
+    skillName: "astral",
+  });
+  assertEquals(c.uninstall, "npx skills remove astral -y");
+});
+
 Deno.test("commandsFor: no route → all null (a need with no way to satisfy it)", () => {
   const c = commandsFor({ name: "orphan" });
   assertEquals(c, {
