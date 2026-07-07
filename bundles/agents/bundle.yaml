@@ -18,4 +18,5 @@ packages:
     npmFlags: "--allow-scripts=@anthropic-ai/claude-code"
     detect: claude --version
     requires:
-      - node      # the COMMAND on PATH (not the display name "Node.js")
+      - Node.js   # a PACKAGE name (matches Base's `name: Node.js`), resolved
+                  # against the plan — satisfied if Node.js is present OR wanted
