@@ -9,7 +9,7 @@ emoji: 🤖
 description: The AI agent that runs on top — pick yours.
 priority: 5
 selectable: true
-posture: opt-out       # Claude Code installed by default; decline or swap freely
+posture: opt-out # Claude Code installed by default; decline or swap freely
 
 packages:
   - name: Claude Code
@@ -18,5 +18,5 @@ packages:
     npmFlags: "--allow-scripts=@anthropic-ai/claude-code"
     detect: claude --version
     requires:
-      - Node.js   # a PACKAGE name (matches Base's `name: Node.js`), resolved
-                  # against the plan — satisfied if Node.js is present OR wanted
+      - Node.js # a PACKAGE name (matches Base's `name: Node.js`), resolved
+# against the plan — satisfied if Node.js is present OR wanted

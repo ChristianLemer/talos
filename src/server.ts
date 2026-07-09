@@ -10,7 +10,7 @@
 // — see _PLAN.
 
 import { instantiate, libName, Pty } from "@sigma/pty-ffi/noinit";
-import { loadBundles, type Step } from "./bundles.ts";
+import { loadBundles, loadProfiles, type Step } from "./bundles.ts";
 import { detectPresentDetailed } from "./detect.ts";
 import { outdatedFor, scanOutdated } from "./outdated.ts";
 import {
@@ -129,7 +129,7 @@ const PUBLIC = `${
 
 // bundles/ — the integrator's CONTENT, deliberately NOT compiled into the exe
 // (unlike public/, which IS the engine). It lives on the REAL disk beside the
-// exe, so a team drops one generic talos.exe + their own bundles/ side by side
+// exe, so a team drops one generic Talos.exe + their own bundles/ side by side
 // on the shared OneDrive and gets their installer — no recompile. This is the
 // hermeticity boundary made physical: the engine ships empty of content.
 //
@@ -156,6 +156,10 @@ log(`bundles dir: ${BUNDLES_DIR}`);
 // beside the exe) yields an empty accordion, not a crash.
 const { bundles: BUNDLES, steps: STEPS } = loadBundles(BUNDLES_DIR, log);
 log(`plan: ${BUNDLES.length} bundle(s), ${STEPS.length} package(s)`);
+// Profiles — named additive package selections (profiles.yaml beside the bundles).
+// Pure data sent to the UI; the on/full/hollow logic lives in decision.js. Empty
+// list if there's no profiles.yaml (the panel just shows no profile bar).
+const PROFILES = loadProfiles(BUNDLES_DIR, log);
 
 // The consent + install-journal store. Local history always lands in DATA_DIR
 // (per machine); a consented copy also lands beside the exe, namespaced by host
@@ -371,6 +375,20 @@ async function doStep(
     log(
       `step ${i} ${action} ${ok ? "OK" : "FAILED"} (exit ${code}): ${s.name}`,
     );
+    // Show the exit code in the row terminal — a "failed" with a specific winget
+    // code (e.g. "already installed, no upgrade") is diagnosable at a glance, and
+    // tells us which benign codes to add.
+    try {
+      const enc = new TextEncoder();
+      const line = `\r\n\x1b[2m[${action}] exit ${code} → ${
+        ok ? "ok" : "failed"
+      }\x1b[0m\r\n`;
+      ws.send(JSON.stringify({
+        type: "out",
+        i,
+        data: btoa(String.fromCharCode(...enc.encode(line))),
+      }));
+    } catch { /* socket closing */ }
     ws.send(JSON.stringify({
       type: "step",
       i,
@@ -441,10 +459,25 @@ async function applyDiff(
   // still show the CONNECT scan, so the plan could act on a reality the user never
   // saw (e.g. a tool they removed by hand since opening). Not a diff, no dialog —
   // just re-align: the pills correct themselves, then focus mode shows the plan.
+  const sendWs = (obj: unknown) => {
+    try {
+      ws.send(JSON.stringify(obj));
+    } catch { /* socket closing */ }
+  };
   presences.forEach((r, i) => {
     try {
       const reason = requiresReason(nodes[i], nodes) ?? r.reason;
-      ws.send(JSON.stringify({ type: "state", i, present: r.present, reason }));
+      ws.send(
+        JSON.stringify({
+          type: "state",
+          i,
+          present: r.present,
+          reason,
+          version: r.version,
+          external: r.external,
+        }),
+      );
+      sendDiag(sendWs, i, r.diag); // show the probe result in the row terminal
       if (r.present === true) {
         const od = outdatedFor(STEPS[i].wingetId, scan);
         if (od) ws.send(JSON.stringify({ type: "outdated", i, ...od }));
@@ -655,6 +688,27 @@ function broadcast(obj: unknown) {
   }
 }
 
+// Surface a detection/check probe's result in the ROW terminal — the command it
+// ran, its exit code, and its output. Sent as an `out` message (same channel as
+// a live install), so the user can SEE why a package reads present/absent instead
+// of trusting a silent pill. One dimmed header line, then the raw output.
+function sendDiag(
+  send: (obj: unknown) => void,
+  i: number,
+  diag: { cmdline: string; code: number; output: string } | undefined,
+) {
+  if (!diag) return;
+  const enc = new TextEncoder();
+  const b64 = (s: string) => btoa(String.fromCharCode(...enc.encode(s)));
+  const verdict = diag.code === 0 ? "present" : "absent";
+  const header =
+    `\x1b[2m$ ${diag.cmdline}\r\n[check] exit ${diag.code} → ${verdict}\x1b[0m\r\n`;
+  const body = diag.output.trim()
+    ? diag.output.replace(/\r?\n/g, "\r\n").replace(/\r\n$/, "") + "\r\n"
+    : "";
+  send({ type: "out", i, data: b64(header + body) });
+}
+
 // Probe every package's presence and stream one `state` per result, then
 // `state-done`. Probes run in PARALLEL (Promise.all) — 13 independent reads,
 // no reason to serialize. A helper for a single socket (the connecting client);
@@ -688,7 +742,15 @@ async function detectAll(ws: WebSocket) {
     // dependency (future state), else detection's own reason.
     results.forEach((r, i) => {
       const reason = requiresReason(nodes[i], nodes) ?? r.reason;
-      send({ type: "state", i, present: r.present, reason });
+      send({
+        type: "state",
+        i,
+        present: r.present,
+        reason,
+        version: r.version,
+        external: r.external,
+      });
+      sendDiag(send, i, r.diag); // show the probe's command+exit+output in the row
       // A stale-but-present package lights its Apply button + shows cur→avail.
       if (r.present === true) {
         const od = outdatedFor(STEPS[i].wingetId, scan);
@@ -762,6 +824,7 @@ function startServer() {
             posture: s.posture,
           })),
           selection: { pkgs: {} },
+          profiles: PROFILES,
           consent: readConsent(CONSENT),
         }));
         // Ground truth → pre-check the cards. "Detect, don't remember": ask the
@@ -816,6 +879,12 @@ function startServer() {
             log(`apply error: ${(e as Error).message}`);
             socket.send(JSON.stringify({ type: "done" }));
           });
+        } else if (msg.type === "rescan") {
+          // Refresh: re-constate the machine on demand (after a manual install, a
+          // crash, an external change). Same scan as connect — presence is asked
+          // live, never remembered. Touches only detection, not the user's
+          // selection (that's what Reset is for).
+          detectAll(socket);
         } else if (msg.type === "set-consent") {
           // Record the share choice (marks consent decided). No reply needed —
           // the UI already closed its dialog / flipped its toggle optimistically.

@@ -1,7 +1,8 @@
-# Methodology — Chiron, the tekton corpus's methodological companion. Opt-in:
-# the heart of the family's way of working, added on top of the agent. Kept in
-# its own bundle (not with the flagship Plugins) because it's the core method,
-# not a tool — one phrase to the user: "the methodology".
+# Methodology — Chiron, the tekton corpus's methodological companion. Opt-out:
+# the heart of the family's way of working, installed by default on top of the
+# agent (decline if you don't want it). Kept in its own bundle (not with the
+# flagship Plugins) because it's the core method, not a tool — one phrase to the
+# user: "the methodology".
 #
 # NOTE — the tekton marketplace is a DIRECTORY on the shared drive, not a GitHub
 # repo. The path below is site-specific: an integrator points `marketplace:` at
@@ -13,7 +14,7 @@ emoji: 🧠
 description: Chiron — the methodological companion (tekton corpus).
 priority: 6
 selectable: true
-posture: opt-in
+posture: opt-out
 
 packages:
   - name: Chiron

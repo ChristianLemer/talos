@@ -72,8 +72,8 @@ ones you don't want — `base/` is the neutral substrate, the rest are examples.
 With [Deno](https://deno.land):
 
 ```
-deno task build:win     # → dist/talos.exe        + dist/bundles/
-deno task build:mac     # → dist/talos-mac-arm64  + dist/bundles/
+deno task build:win     # → dist/Talos.exe  + dist/bundles/
+deno task build:mac     # → dist/Talos      + dist/bundles/
 ```
 
 Each task produces the whole kit under `dist/`: the exe **and** a fresh copy of

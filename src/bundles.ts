@@ -27,6 +27,16 @@ export interface BundleMeta {
   posture: Posture; // the bundle's DEFAULT posture, inherited by every package
 }
 
+// A profile — a named, additive package selection (see profiles.yaml). `packages`
+// lists package NAMES (the same key selection.json uses). Pure data; the on/full/
+// hollow state and the additive pull live in decision.js.
+export interface Profile {
+  name: string;
+  emoji: string;
+  description: string;
+  packages: string[];
+}
+
 export interface Commands {
   install: string | null;
   uninstall: string | null;
@@ -40,6 +50,16 @@ export interface Step extends Commands {
   route: string | null; // which named route satisfies this package (winget/brew/…)
   wingetId: string | null; // the id winget reports in `winget upgrade` — matches outdated rows
   detect: string | null;
+  // run-route detection: a DRY-RUN command run verbatim, exit 0 = converged/present.
+  // Distinct from `detect` (which probes a binary on PATH by its first token) — a
+  // config-atom shares its apply-logic with this check, so detection can't drift.
+  check: string | null;
+  // Optional REGEX refining how the version is pulled from detect/route output.
+  // Absent → the per-route default extraction is used. Present → capture group 1
+  // (or the whole match) IS the version. Added only when the default gets it
+  // wrong — the displayed version is the diagnostic that reveals which package
+  // needs one. Pure JS regex, no shell, no dependency.
+  versionRegex: string | null;
   requires: string[];
   posture: Posture;
 }
@@ -62,6 +82,8 @@ interface RawPkg {
   skill?: string; // source for `npx skills add`
   skillName?: string; // list-name if it differs from `name`
   detect?: string;
+  check?: string; // run-route: a dry-run command; exit 0 = converged/present
+  "version-regex"?: string; // optional regex refining version extraction from output
   requires?: string[];
 }
 
@@ -222,18 +244,27 @@ export function loadBundles(
       // Posture is a BUNDLE-level policy — the author's intent for the whole
       // category, inherited uniformly by every package (a bundle mixing opt-in
       // and opt-out rows would make its own pill lie: want different → new bundle).
+      // `{dir}` in any command expands to the bundle's own folder (absolute), so
+      // a config-atom can call a script it ships (e.g. `nu "{dir}/patch.nu" apply`)
+      // instead of inlining nu with quotes that don't survive the Windows
+      // powershell → nu command line. Quoted at the call site in the YAML.
+      const bundleDir = `${root}/${dir.name}`;
+      const sub = (s: string | null) =>
+        s === null ? null : s.replaceAll("{dir}", bundleDir);
       for (const p of (b.packages ?? [])) {
         const cmd = commandsFor(p);
         steps.push({
           bundle: meta.name,
           name: p.name,
           description: p.description || "",
-          install: cmd.install,
-          uninstall: cmd.uninstall,
-          upgrade: cmd.upgrade,
+          install: sub(cmd.install),
+          uninstall: sub(cmd.uninstall),
+          upgrade: sub(cmd.upgrade),
           route: cmd.route,
           wingetId: p.winget || null,
           detect: p.detect || null,
+          check: sub(p.check || null),
+          versionRegex: p["version-regex"] || null,
           requires: p.requires ?? [],
           posture: meta.posture,
         });
@@ -258,4 +289,47 @@ export function loadBundles(
     (priorityOf.get(a.bundle) ?? 100) - (priorityOf.get(b.bundle) ?? 100)
   );
   return { bundles, steps };
+}
+
+// Raw profile as read from profiles.yaml (loose, like RawPkg).
+interface RawProfile {
+  profile?: string;
+  emoji?: string;
+  description?: string;
+  packages?: string[];
+}
+
+// Scan the single profiles.yaml at the root of the bundles dir into a list of
+// profiles. Missing file or bad YAML → empty list (profiles are optional; the
+// panel just shows none). A profile with no name is skipped. Package names are
+// NOT validated against the plan here — an unknown name simply pulls nothing,
+// which is harmless and keeps this loader pure/decoupled from the step list.
+export function loadProfiles(
+  root: string,
+  log: (msg: string) => void = () => {},
+): Profile[] {
+  let raw: string;
+  try {
+    raw = Deno.readTextFileSync(`${root}/profiles.yaml`);
+  } catch {
+    return []; // no profiles.yaml → no profiles, opens fine
+  }
+  try {
+    const parsed = parseYaml(raw) as { profiles?: RawProfile[] };
+    const out: Profile[] = [];
+    for (const p of (parsed.profiles ?? [])) {
+      if (!p.profile) continue; // a profile needs a name
+      out.push({
+        name: p.profile,
+        emoji: p.emoji || "🎯",
+        description: p.description || "",
+        packages: p.packages ?? [],
+      });
+    }
+    log(`profiles loaded: ${out.length}`);
+    return out;
+  } catch (e) {
+    log(`profiles skipped (bad YAML): ${(e as Error).message}`);
+    return [];
+  }
 }

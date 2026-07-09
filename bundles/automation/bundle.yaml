@@ -1,0 +1,41 @@
+# Automation — what lets your AI script, run programs, and automate work. Each
+# tool travels WITH its AI manual (the Claude plugin that teaches the agent to
+# use it), because tool + manual are one capability, not two line-items. Shipped
+# in the coque, recommended (opt-out): the AI can automate out of the box.
+#
+# A plugin row `requires: [Claude Code]` — it stays indeterminate until the agent
+# is present or wanted (resolved against the plan, see deps.ts), and topoSort
+# installs the tool and the agent before the plugin that needs them.
+
+bundle: Automation
+emoji: ⚙️
+description: What lets your AI script, run programs, and automate work.
+priority: 15
+selectable: true
+posture: opt-out # recommended — the AI can automate unless you opt out
+
+# Nushell itself lives in Foundation (the language of config-atoms); here we add
+# only its AI manual, plus Python tooling. The tools your AI reaches for to build.
+packages:
+  - name: nushell-dev
+    description: AI manual for Nushell — linting, scaffolding, docs
+    claude-plugin: nushell-dev@nushell-marketplace
+    marketplace: danielbodnar/nushell-dev
+    detect: nushell-dev
+    requires:
+      - Nushell
+      - Claude Code
+
+  - name: uv
+    description: Python package manager — lets an agent build and run programs for you
+    winget: astral-sh.uv
+    detect: uv --version
+
+  - name: astral
+    description: AI manual for Python — uv, ruff, ty (formatting, linting, typing)
+    claude-plugin: astral@astral-sh
+    marketplace: astral-sh/claude-code-plugins
+    detect: astral
+    requires:
+      - uv
+      - Claude Code

@@ -15,7 +15,7 @@ selectable: true
 #   forbidden — always absent, actively removed, user cannot enable (locked)
 # All packages in the bundle share it. Want a different policy? Make another
 # bundle — a bundle mixing postures would make its own pill lie.
-posture: opt-in          # optional tools — installed only if you opt in
+posture: opt-in # optional tools — installed only if you opt in
 
 packages:
   - name: ripgrep

@@ -24,10 +24,10 @@ jobs:
         include:
           - os: macos-14 # Apple Silicon runner → matches aarch64-apple-darwin
             task: build:mac
-            artifact: dist/talos-mac-arm64
+            artifact: dist/Talos
           - os: windows-latest # x64 runner → matches x86_64-pc-windows-msvc
             task: build:win
-            artifact: dist/talos.exe
+            artifact: dist/Talos.exe
 
     runs-on: ${{ matrix.os }}
 

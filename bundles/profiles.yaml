@@ -1,0 +1,77 @@
+# Profiles — named, additive package selections (gus's "distributions", but at
+# package granularity). A profile is a BUTTON: applying it pulls its packages
+# "in" as a group. It is purely ADDITIVE — it never forces anything "out", and a
+# manual "out" always wins over a profile's pull (that is what turns a profile
+# "hollow"). Profiles compose: several may be active at once, their pulls union.
+#
+# NOTE this file is a single YAML at the ROOT of bundles/ — the bundle scanner
+# only reads DIRECTORIES containing a bundle.yaml, so this file sits among the
+# bundles without being mistaken for one. Profiles reference packages by their
+# `name` (the same key selection.json uses).
+#
+# A profile carries NO machine state: which profiles are ACTIVE is intention
+# (persisted like the toggles), a profile's on/full/hollow look is DERIVED live
+# from the toggles. Pair with the Reset gesture (back to posture defaults) to get
+# a clean "start from this profile" experience.
+
+profiles:
+  - profile: Essential
+    emoji: 🌱
+    description: The minimum — an AI agent you can talk to, and a place to read it.
+    packages:
+      - Node.js
+      - Nushell
+      - Claude Code
+      - Visual Studio Code
+
+  - profile: Daily driver
+    emoji: 🚀
+    description: Everyday work — agent, methodology, editors, notes.
+    packages:
+      - Node.js
+      - Git
+      - Nushell
+      - Claude Code
+      - Chiron
+      - Visual Studio Code
+      - MarkText
+      - Obsidian
+      - Starship
+
+  - profile: Power user
+    emoji: ⚡
+    description: Adds Python tooling, fast CLI tools, and a terminal file workflow.
+    packages:
+      - Node.js
+      - Git
+      - Nushell
+      - Claude Code
+      - Chiron
+      - Visual Studio Code
+      - uv
+      - astral
+      - Starship
+      - ripgrep
+      - fd
+      - bat
+
+  - profile: Developer
+    emoji: 🛠️
+    description: The full kit — version control, terminal editing, all the tooling.
+    packages:
+      - Node.js
+      - Git
+      - Nushell
+      - Claude Code
+      - Chiron
+      - Visual Studio Code
+      - uv
+      - astral
+      - nushell-dev
+      - jj
+      - jj skills
+      - Helix
+      - Starship
+      - ripgrep
+      - fd
+      - bat

@@ -140,6 +140,12 @@
          glance. A row in the plan overrides this (opacity back to full below). */
       details.posture-opt-out, details.posture-opt-in { opacity:.72; }
       details.plan-add, details.plan-remove { opacity:1; }
+      /* While the machine scan runs, the panel is VISIBLE but not yet actionable:
+         toggles/buttons are inert and slightly dimmed. Each row lights up as its
+         probe answers (setStatus clears its own row), so the panel fills in live
+         instead of flashing wrong states. No overlay — the structure shows. */
+      #steps.scanning { pointer-events:none; }
+      #steps.scanning .toggle, #steps.scanning .applybtn { opacity:.5; }
       /* A row whose desired state is "absent" (won't be installed) reads dimmer —
          its name fades toward the muted tone. Wanted rows stay bright. */
       details.row-out .name { color:var(--dim); }
@@ -149,6 +155,10 @@
       .name { flex:1; }
       .desc { color:var(--dim); font-size:12px; }
       .statusLabel { font-family:"JetBrains Mono",monospace; font-size:12px; }
+      /* Installed outside winget — present, but winget can't manage it. Amber
+         hint, not an error: it's a fact about provenance, not a problem. */
+      .statusLabel.external { color:#e0af68; }
+      .checking     { color:var(--dim); }
       .waiting      { color:var(--dim); }
       .installing   { color:#e0af68; }
       .uninstalling { color:#e0af68; }
@@ -177,6 +187,29 @@
                   transition:color .15s, border-color .15s; }
       .resetbtn:hover { color:#e0af68; border-color:#e0af68; }
       .resetbtn:disabled { opacity:.4; cursor:default; }
+      /* Profile bar — one-click additive selections. A chip has three states:
+         off (quiet outline), full (filled accent = you're exactly on it),
+         hollow (accent outline = active but you've diverged). Clicking an off/
+         hollow chip fills it; clicking a full chip removes the profile. */
+      #profiles { display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+                  padding:2px 12px 12px; }
+      #profiles .plabel { color:var(--dim); font-size:12px; margin-right:2px; }
+      .profile-chip { display:inline-flex; align-items:center; gap:6px;
+                      background:none; color:var(--dim); border:1px solid var(--line);
+                      padding:6px 12px; border-radius:999px; cursor:pointer;
+                      font-size:12px; font-weight:600;
+                      transition:color .15s, border-color .15s, background .15s; }
+      .profile-chip:hover { color:var(--fg); border-color:var(--dim); }
+      .profile-chip .pemoji { font-size:13px; }
+      /* hollow: active but diverged — accent outline, not filled */
+      .profile-chip.hollow { color:#7aa2f7; border-color:#3d59a1; }
+      /* full: you are exactly on this profile — filled accent */
+      .profile-chip.full { background:#3d59a1; color:var(--fg); border-color:#3d59a1; }
+      .profile-chip.full:hover { filter:brightness(1.15); }
+      .profile-chip:disabled { opacity:.5; cursor:default; filter:none; }
+      /* Profile-membership emojis shown next to a package name — a quiet hint of
+         which profiles include this package. */
+      .pkg-profiles { font-size:11px; opacity:.75; margin-left:2px; letter-spacing:1px; }
       /* The smaller per-bundle Apply, sitting at the right of the bundle header. */
       .bundle-head .applybtn { padding:4px 12px; font-size:12px; margin-left:6px; }
       /* Hierarchy: the HERO Apply is the primary action — filled/inverted, most
@@ -400,6 +433,7 @@
            signal" gap by construction. -->
       <div class="hero-apply">
         <div class="hero-buttons">
+          <button id="refresh-all" class="resetbtn" title="Re-scan the machine — re-check what's installed right now (your choices are kept)">Refresh</button>
           <button id="reset-all" class="resetbtn" title="Reset every toggle to the author's default">Reset</button>
           <button id="install-all" class="applybtn">Apply</button>
         </div>
@@ -408,6 +442,9 @@
       </div>
       <!-- Waiting-window banner: an installer opened a window behind the panel. -->
       <div id="waitbar" hidden></div>
+      <!-- Profile bar: one-click additive selections. Populated by app.js from the
+           plan's `profiles`; hidden entirely when there are none. -->
+      <div id="profiles" hidden></div>
       <div id="steps">
         <!-- Refresh overlay: fixed child of #steps, shown via .steps-refreshing on
              the parent. render() appends bundles after it, so it survives. -->

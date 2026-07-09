@@ -1,0 +1,44 @@
+# Terminal — a comfortable prompt for the terminal you and your AI share. Shipped
+# in the coque, recommended (opt-out): installed by default, decline freely.
+#
+# Starship ships WITH its config, as two atoms: the binary (present/absent, via
+# winget) and the config. The config atom is a STREAM PATCH — the family's model
+# for all config-atoms:
+#
+#   the patch is a pure record→record transform (upserts ONLY our keys)
+#   apply  =  open file | patch | save      (run:  — writes)
+#   check  =  (open file) == (open file | patch)   (check: — dry-run, in memory)
+#
+# Why this shape: `upsert` touches only our keys, so a user's own edits pass
+# straight through — no-clobber for free, no sentinel, no version stamp. And the
+# check IS the apply replayed in memory without saving, so detection can never
+# drift from application. "Outdated" = "replaying would change something" = check
+# exits non-zero → the row reads absent → Apply reconverges. No 4th state, no
+# state db, no chezmoi. Written in `nu` (Foundation guarantees it) — structured
+# TOML in/out, not text munging. requires: [Starship] so topoSort applies it after.
+
+bundle: Terminal
+emoji: 🐚
+description: A cross-shell prompt for a comfortable terminal.
+priority: 20
+selectable: true
+posture: opt-out
+
+packages:
+  - name: Starship
+    description: Cross-shell prompt
+    winget: Starship.Starship
+    detect: starship --version
+
+  - name: Starship config
+    description: A sensible Starship prompt config the family ships
+    # The patch lives in starship.nu (shipped beside this manifest) so its quotes
+    # never touch the powershell → nu command line. {dir} expands to this bundle's
+    # folder. apply = open|patch|save; check = dry-run (exit 0 converged, 1 drifted).
+    run: nu "{dir}/starship.nu" apply
+    check: nu "{dir}/starship.nu" check
+    # No uninstall: a leftover config is inert, and removing it could destroy the
+    # user's own edits (same no-clobber stance as apply). Resetting is a separate
+    # deliberate act, not a side effect of removing the binary.
+    requires:
+      - Starship

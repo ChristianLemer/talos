@@ -54,6 +54,40 @@ export function isDeviation(posture, userToggle) {
   return toggleState(posture, userToggle) !== postureDefault(posture);
 }
 
+// --- Profiles: named, additive package sets ---------------------------------
+//
+// A profile is a bundle-independent SELECTION: a named list of package keys the
+// user applies as a group (like gus's distributions, but at package granularity
+// and purely additive). Applying a profile pulls its packages "in"; a manual
+// "out" always wins over that pull. A profile carries NO machine state — which
+// profiles are ACTIVE is intention (persisted like the toggles, legitimate under
+// detect-don't-remember), but a profile's VISUAL state is DERIVED live from the
+// toggles. Three states:
+//   off    → not active (user hasn't applied it)
+//   full   → active AND every one of its packages is effectively "in"
+//   hollow → active BUT the user has manually pulled at least one package "out"
+export const PROFILE_STATES = ["off", "full", "hollow"];
+
+// The effective user toggle for a package, accounting for active profiles. A
+// manual toggle always wins (the user's explicit in/out). Otherwise, if any
+// active profile lists the package, it is pulled "in". Otherwise untouched
+// (null → the package follows its posture default). This is what lets a profile
+// be ADDITIVE (it only ever pulls in, never forces out) while a manual "out"
+// still overrides it — the exact rule that makes a profile go "hollow".
+export function effectiveToggle(userToggle, inActiveProfile) {
+  if (userToggle === "in" || userToggle === "out") return userToggle;
+  return inActiveProfile ? "in" : null;
+}
+
+// A profile's derived state. `active` = is it in the active set; `isIn(pkgKey)`
+// = is that package effectively "in" right now (caller composes posture + toggle
+// + profiles). Pure: same inputs, same output.
+export function profileState(profile, active, isIn) {
+  if (!active) return "off";
+  const pkgs = profile.packages ?? [];
+  return pkgs.every((key) => isIn(key)) ? "full" : "hollow";
+}
+
 // Given a DESIRED state and the machine reality, the action a plain Apply would
 // take — or null if nothing to do. THIS is the rule the server executes and the
 // front previews; they must agree, so they call the same function.

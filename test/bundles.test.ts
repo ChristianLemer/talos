@@ -1,7 +1,7 @@
 // Tests for the bundle loader — the NAMED ROUTE TABLE and the empty-scan case.
 // Pure, no pty/network. Run: deno task test  (from talos/)
 import { assertEquals } from "@std/assert";
-import { commandsFor, loadBundles } from "../src/bundles.ts";
+import { commandsFor, loadBundles, loadProfiles } from "../src/bundles.ts";
 
 Deno.test("commandsFor: winget route", () => {
   const c = commandsFor({ name: "Git", winget: "Git.Git" });
@@ -140,5 +140,37 @@ Deno.test("loadBundles: steps come out in bundle-priority order (stable within a
     ["E1", "E2", "L1", "L2"], // Early (0) before Late (50); package order kept
   );
 
+  Deno.removeSync(root, { recursive: true });
+});
+
+Deno.test("loadProfiles: no profiles.yaml → empty list (opens fine)", () => {
+  assertEquals(loadProfiles("/nonexistent/path/bundles"), []);
+});
+
+Deno.test("loadProfiles: parses profiles, defaults emoji, skips nameless", () => {
+  const root = Deno.makeTempDirSync();
+  Deno.writeTextFileSync(
+    `${root}/profiles.yaml`,
+    [
+      "profiles:",
+      "  - profile: Daily",
+      "    description: everyday",
+      "    packages: [Nushell, Claude Code]",
+      "  - emoji: 👻", // no name → skipped
+      "    packages: [X]",
+    ].join("\n"),
+  );
+  const profs = loadProfiles(root);
+  assertEquals(profs.length, 1);
+  assertEquals(profs[0].name, "Daily");
+  assertEquals(profs[0].emoji, "🎯"); // defaulted
+  assertEquals(profs[0].packages, ["Nushell", "Claude Code"]);
+  Deno.removeSync(root, { recursive: true });
+});
+
+Deno.test("loadProfiles: bad YAML → empty list (no throw)", () => {
+  const root = Deno.makeTempDirSync();
+  Deno.writeTextFileSync(`${root}/profiles.yaml`, "profiles:\n  - : : bad");
+  assertEquals(loadProfiles(root), []);
   Deno.removeSync(root, { recursive: true });
 });

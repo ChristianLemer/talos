@@ -96,7 +96,7 @@ $tree.Add($root) | Out-Null
 $changed=$true
 while($changed){ $changed=$false; foreach($p in $all){ if($tree.Contains([uint32]$p.ParentProcessId) -and -not $tree.Contains([uint32]$p.ProcessId)){ $tree.Add([uint32]$p.ProcessId)|Out-Null; $changed=$true } } }
 $self=$PID
-$skip='msedge.exe','chrome.exe','talos.exe' # our own UI + the engine, never "foreign"
+$skip='msedge.exe','chrome.exe','Talos.exe' # our own UI + the engine, never "foreign"
 $result=@{found=$false}
 $cb={ param($h,$p)
   if(-not [W]::IsWindowVisible($h)){ return $true }

@@ -1,12 +1,14 @@
 import { assertEquals } from "@std/assert";
 import {
   actionOf,
+  applyProfile,
   applySavedSelection,
   bundleAct,
   bundleAnyActionable,
   bundleLocked,
   bundleToggleState,
   buttonAction,
+  canReset,
   clearAllDecisions,
   createModel,
   desiredOf,
@@ -15,10 +17,35 @@ import {
   isLocked,
   loadPlan,
   persistablePkgs,
+  profilesForPkg,
+  profileStateOf,
+  removeProfile,
   setDecision,
   setStatusData,
   toggleOf,
 } from "../public/model.js";
+
+// A plan WITH profiles: reuses the opt-in rg/bat fixture, adds two profiles.
+function seedWithProfiles() {
+  const m = createModel();
+  loadPlan(
+    m,
+    [
+      { name: "Base", posture: "mandatory", selectable: false },
+      { name: "Extras", posture: "opt-in", selectable: true },
+    ],
+    [
+      { i: 0, name: "Node", bundle: "Base", posture: "mandatory" },
+      { i: 1, name: "rg", bundle: "Extras", posture: "opt-in" },
+      { i: 2, name: "bat", bundle: "Extras", posture: "opt-in" },
+    ],
+    [
+      { name: "Search", emoji: "🔎", packages: ["rg"] },
+      { name: "All tools", emoji: "🧰", packages: ["rg", "bat"] },
+    ],
+  );
+  return m;
+}
 
 // A small fixture plan: one mandatory pkg, one opt-in, one opt-out, in 2 bundles.
 function seed() {
@@ -144,4 +171,74 @@ Deno.test("bundleToggleState: all-locked bundle defaults to on-in", () => {
   const m = seed();
   // Base holds only the mandatory Node (locked) → no free packages.
   assertEquals(bundleToggleState(m, "Base"), "on-in");
+});
+
+// --- profiles: additive pull, hollow on manual out, clean removal ------------
+Deno.test("applyProfile: pulls its packages in (additive, no decision written)", () => {
+  const m = seedWithProfiles();
+  assertEquals(toggleOf(m, 1), "out"); // rg opt-in, default out
+  applyProfile(m, "Search");
+  assertEquals(toggleOf(m, 1), "in"); // pulled in by the profile
+  assertEquals(desiredOf(m, 1), "present");
+  assertEquals(m.decision.size, 0); // no manual decision written — purely additive
+  assertEquals(profileStateOf(m, "Search"), "full");
+});
+
+Deno.test("profileStateOf: off when not active", () => {
+  const m = seedWithProfiles();
+  assertEquals(profileStateOf(m, "Search"), "off");
+  assertEquals(profileStateOf(m, "All tools"), "off");
+});
+
+Deno.test("profileStateOf: hollow when a manual out overrides the pull", () => {
+  const m = seedWithProfiles();
+  applyProfile(m, "All tools"); // pulls rg + bat in
+  assertEquals(profileStateOf(m, "All tools"), "full");
+  setDecision(m, 2, "out"); // user pulls bat back out
+  assertEquals(toggleOf(m, 2), "out"); // manual out wins over the profile
+  assertEquals(profileStateOf(m, "All tools"), "hollow");
+});
+
+Deno.test("removeProfile: pull vanishes, but a shared package survives", () => {
+  const m = seedWithProfiles();
+  applyProfile(m, "Search"); // rg
+  applyProfile(m, "All tools"); // rg + bat
+  assertEquals(toggleOf(m, 1), "in"); // rg pulled by both
+  removeProfile(m, "All tools");
+  assertEquals(toggleOf(m, 1), "in"); // rg survives — still pulled by Search
+  assertEquals(toggleOf(m, 2), "out"); // bat drops — only All tools wanted it
+  assertEquals(profileStateOf(m, "Search"), "full");
+});
+
+Deno.test("canReset: false at rest, true after a manual move or a profile", () => {
+  const m = seedWithProfiles();
+  assertEquals(canReset(m), false); // pristine
+  setDecision(m, 1, "in");
+  assertEquals(canReset(m), true); // moved a package
+  clearAllDecisions(m);
+  assertEquals(canReset(m), false);
+  applyProfile(m, "Search");
+  assertEquals(canReset(m), true); // active profile alone is enough
+});
+
+Deno.test("profilesForPkg: lists the profiles a package belongs to", () => {
+  const m = seedWithProfiles();
+  // rg is in both Search and All tools; bat only in All tools; Node in neither.
+  assertEquals(profilesForPkg(m, 1).map((p) => p.name), [
+    "Search",
+    "All tools",
+  ]);
+  assertEquals(profilesForPkg(m, 2).map((p) => p.name), ["All tools"]);
+  assertEquals(profilesForPkg(m, 0), []);
+});
+
+Deno.test("clearAllDecisions also drops active profiles (true reset)", () => {
+  const m = seedWithProfiles();
+  applyProfile(m, "All tools");
+  setDecision(m, 1, "out");
+  clearAllDecisions(m);
+  assertEquals(m.activeProfiles.size, 0);
+  assertEquals(m.decision.size, 0);
+  assertEquals(toggleOf(m, 1), "out"); // back to opt-in default
+  assertEquals(profileStateOf(m, "All tools"), "off");
 });

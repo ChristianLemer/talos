@@ -1,25 +1,27 @@
-# The Base bundle — shipped inside the coque, always present.
-# A bundle is a folder: this manifest + an optional config/ for files packages
-# deposit or patch. The engine renders one card per bundle from the metadata
-# below; it hardcodes nothing.
+# Foundation — the invisible plumbing every agent and tool stands on. Shipped in
+# the coque. No delivery story for a human: node/git/jq/nu just have to be there.
+# The NEUTRAL substrate — no client named here (hermeticity: the engine knows no
+# specific AI). The agent itself lives in the Agents bundle; the capabilities you
+# give it (Automation, Development) in their own bundles; comfort in theirs.
+#
+# Nushell is here as the LANGUAGE OF RECIPES: config-atoms (a bundle's `run:`
+# steps that patch a config file) are written in `nu` — structured, idempotent,
+# cross-platform, one language for all patching. RED LINE (hermeticity): the
+# engine (Deno) NEVER calls `nu` itself — only bundle CONTENT does. Foundation
+# merely guarantees the tool that content asks for is present, so an opt-out
+# config-atom actually applies on a default machine.
 #
 # YAML by indentation (never {} inline). Package managers are named fields
 # (winget:, npm:) — winget is winget, known; we don't abstract into opaque
 # command strings. requires: lists dependencies (installed first).
 
-bundle: Base
-emoji: 🧠
-description: The neutral substrate — the runtime and tools any AI agent needs.
+bundle: Foundation
+emoji: 🧱
+description: The plumbing everything stands on — runtime, version control, JSON.
 priority: 0
-# UNLOCKED (overrides INTENTION.md "the refuge guarantees the base"): the Base
-# card is selectable and its packages default on but can be unchecked. The
-# substrate is the recommended default, no longer forced.
-posture: opt-out       # bundle-level default: present unless the user flips out
+selectable: true
+posture: opt-out # the recommended default; present unless you flip out
 
-# The refuge, stripped to the NEUTRAL substrate: the runtime + tools an agent
-# stands on — no client named here. The engine knows no specific AI (hermeticity:
-# the core knows no client). The agent itself lives in the Agents bundle; comfort
-# (editors, shell, notes) in its own selectable bundles.
 packages:
   - name: Node.js
     description: JavaScript runtime — required by this tool itself and by CLI agents
@@ -31,17 +33,12 @@ packages:
     winget: Git.Git
     detect: git --version
 
-  - name: jj
-    description: Jujutsu — a Git-compatible VCS the family uses day to day
-    winget: jj-vcs.jj
-    detect: jj --version
-
-  - name: uv
-    description: Python package manager — lets an agent build and run programs for you
-    winget: astral-sh.uv
-    detect: uv --version
-
   - name: jq
     description: JSON CLI — required by some agent plugin hooks
     winget: jqlang.jq
     detect: jq --version
+
+  - name: Nushell
+    description: Structured shell — the language Talos config-atoms are written in
+    winget: Nushell.Nushell
+    detect: nu --version

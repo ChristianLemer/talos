@@ -5,9 +5,11 @@ import assert from "node:assert/strict";
 import {
   actionFor,
   desiredState,
+  effectiveToggle,
   isDeviation,
   isLockedPosture,
   postureDefault,
+  profileState,
   resolvePosture,
   toggleState,
 } from "../public/decision.js";
@@ -80,6 +82,33 @@ test("actionFor: converge desired vs machine", () => {
     null,
   ); // can't remove
   assert.equal(actionFor("absent", { present: false }), null); // already gone
+});
+
+test("effectiveToggle: manual toggle always wins over a profile pull", () => {
+  assert.equal(effectiveToggle("out", true), "out"); // manual out beats profile → hollow
+  assert.equal(effectiveToggle("in", false), "in"); // manual in stands
+  assert.equal(effectiveToggle(null, true), "in"); // profile pulls it in
+  assert.equal(effectiveToggle(null, false), null); // untouched → follow posture
+});
+
+test("profileState: off when not active", () => {
+  const p = { packages: ["a", "b"] };
+  assert.equal(profileState(p, false, () => true), "off");
+});
+
+test("profileState: full when active and all packages are in", () => {
+  const p = { packages: ["a", "b"] };
+  assert.equal(profileState(p, true, () => true), "full");
+});
+
+test("profileState: hollow when active but a package was pulled out", () => {
+  const p = { packages: ["a", "b"] };
+  const isIn = (k) => k !== "b"; // b manually out
+  assert.equal(profileState(p, true, isIn), "hollow");
+});
+
+test("profileState: empty package list is trivially full when active", () => {
+  assert.equal(profileState({ packages: [] }, true, () => false), "full");
 });
 
 test("model A: an opt-in left untouched but PRESENT resolves to uninstall", () => {

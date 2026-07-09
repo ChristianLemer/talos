@@ -5,8 +5,10 @@
 import {
   actionFor,
   desiredState,
+  effectiveToggle,
   isDeviation,
   isLockedPosture,
+  profileState,
   toggleState,
 } from "./decision.js";
 
@@ -15,14 +17,26 @@ export function createModel() {
     pkgs: new Map(), // i -> PkgRecord
     bundles: new Map(), // name -> BundleRecord
     decision: new Map(), // i -> "in" | "out"  (absence = auto)
+    profiles: new Map(), // name -> ProfileRecord {name, emoji, description, packages}
+    activeProfiles: new Set(), // names of profiles the user has applied
     detectedAt: null, // ms of the last full presence scan (future TTL home)
   };
 }
 
-// Build the model from the server `plan` message (bundles + flat steps).
-export function loadPlan(model, bundles, steps) {
+// Build the model from the server `plan` message (bundles + flat steps + profiles).
+export function loadPlan(model, bundles, steps, profiles = []) {
   model.pkgs.clear();
   model.bundles.clear();
+  model.profiles.clear();
+  model.activeProfiles.clear();
+  for (const p of profiles) {
+    model.profiles.set(p.name, {
+      name: p.name,
+      emoji: p.emoji || "🎯",
+      description: p.description || "",
+      packages: p.packages ?? [],
+    });
+  }
   for (const b of bundles) {
     model.bundles.set(b.name, {
       name: b.name,
@@ -56,9 +70,27 @@ export function loadPlan(model, bundles, steps) {
 export function postureOf(model, i) {
   return model.pkgs.get(i)?.posture ?? "mandatory";
 }
-export function userToggle(model, i) {
+// The RAW manual toggle: only what the user set by hand ("in"/"out"/null).
+export function manualToggle(model, i) {
   const d = model.decision.get(i);
   return d === "in" || d === "out" ? d : null;
+}
+// Is this package pulled "in" by any ACTIVE profile? Profiles reference packages
+// by name; a package is pulled if an active profile lists its name.
+export function inActiveProfile(model, i) {
+  const p = model.pkgs.get(i);
+  if (!p || model.activeProfiles.size === 0) return false;
+  for (const name of model.activeProfiles) {
+    const prof = model.profiles.get(name);
+    if (prof && prof.packages.includes(p.name)) return true;
+  }
+  return false;
+}
+// The EFFECTIVE toggle used everywhere downstream: a manual toggle wins; else an
+// active profile pulls it "in"; else null (follow posture). This is what makes a
+// profile additive yet overridable — the rule lives in decision.effectiveToggle.
+export function userToggle(model, i) {
+  return effectiveToggle(manualToggle(model, i), inActiveProfile(model, i));
 }
 export function isLocked(model, i) {
   return isLockedPosture(postureOf(model, i));
@@ -110,8 +142,11 @@ export function setDecision(model, i, state) {
   else model.decision.delete(i); // anything else clears to auto
   return true;
 }
+// Reset: back to posture defaults — clears BOTH manual toggles AND active
+// profiles (profiles are additive intention; a true reset drops them too).
 export function clearAllDecisions(model) {
   model.decision.clear();
+  model.activeProfiles.clear();
 }
 export function setPresence(model, i, present) {
   const p = model.pkgs.get(i);
@@ -182,6 +217,59 @@ export function bundleAct(model, name) {
     if (a === "uninstall") removes = true;
   }
   return removes ? "remove" : "";
+}
+
+// --- profiles ---------------------------------------------------------------
+// Apply a profile: mark it active (it then pulls its packages "in" via
+// userToggle). Additive — it never writes decisions and never forces anything
+// out, so a manual "out" still wins (that turns the profile hollow).
+export function applyProfile(model, name) {
+  if (model.profiles.has(name)) model.activeProfiles.add(name);
+}
+// Remove a profile from the active set: its pull vanishes, but a package it
+// shared with another active profile or a manual "in" survives (userToggle
+// recomputes from what remains). This is the clean per-profile removal that
+// spares the user from redoing everything by hand.
+export function removeProfile(model, name) {
+  model.activeProfiles.delete(name);
+}
+export function isProfileActive(model, name) {
+  return model.activeProfiles.has(name);
+}
+// Would a Reset do anything? True if the user moved a package off its author
+// default OR has an active profile — both are cleared by clearAllDecisions. The
+// domain answer to "is Reset meaningful right now?", kept out of the view.
+export function canReset(model) {
+  if (model.activeProfiles.size > 0) return true;
+  for (const i of model.pkgs.keys()) if (isDeviated(model, i)) return true;
+  return false;
+}
+// Which profiles list this package? Returns [{name, emoji}] — used to show, next
+// to a package, the emojis of the profiles it belongs to. Order follows the
+// profile declaration order (Map preserves insertion).
+export function profilesForPkg(model, i) {
+  const p = model.pkgs.get(i);
+  if (!p) return [];
+  const out = [];
+  for (const prof of model.profiles.values()) {
+    if (prof.packages.includes(p.name)) {
+      out.push({ name: prof.name, emoji: prof.emoji });
+    }
+  }
+  return out;
+}
+// off | full | hollow — derived live from the toggles (never stored). full when
+// every package of an active profile is effectively "in"; hollow when active but
+// the user pulled one out; off when not active. Delegates to decision.profileState.
+export function profileStateOf(model, name) {
+  const prof = model.profiles.get(name);
+  if (!prof) return "off";
+  const byName = new Map();
+  for (const [i, p] of model.pkgs) byName.set(p.name, i);
+  return profileState(prof, model.activeProfiles.has(name), (pkgName) => {
+    const i = byName.get(pkgName);
+    return i != null && toggleOf(model, i) === "in";
+  });
 }
 
 // --- persistence (by stable key, survives reordering) -----------------------

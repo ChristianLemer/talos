@@ -6,18 +6,13 @@ emoji: ✏️
 description: Where you see and edit what the AI produces.
 priority: 10
 selectable: true
-posture: opt-out       # recommended — installed unless you opt out
+posture: opt-out # recommended — installed unless you opt out
 
 packages:
   - name: Visual Studio Code
     description: Where you see and edit what the AI produces
     winget: Microsoft.VisualStudioCode
     detect: code --version
-
-  - name: Helix
-    description: Modal terminal editor
-    winget: Helix.Helix
-    detect: hx --version
 
   - name: MarkText
     description: Distraction-free Markdown editor — specs, briefs, notes

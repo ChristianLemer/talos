@@ -72,6 +72,7 @@ const newTerm = () =>
   });
 
 const GLYPH = {
+  checking: "⠹",
   waiting: "·",
   installing: "⠹",
   uninstalling: "⠹",
@@ -82,6 +83,10 @@ const GLYPH = {
   unknown: "?",
 };
 const LABEL = {
+  // Pre-scan: we haven't constated this row yet. A distinct state from "waiting"
+  // (settled-absent) so we never flash "absent" before the probe answers — the
+  // whole panel showing "absent" then correcting looked broken/alarming.
+  checking: "checking…",
   waiting: "absent",
   installing: "installing…",
   uninstalling: "removing…",
@@ -125,9 +130,65 @@ function persistSelection() {
 }
 function applySavedSelection(sel) {
   M.applySavedSelection(model, sel);
+  repaintAll();
+}
+// Repaint EVERYTHING — used after a change that can move many rows at once (a
+// profile applied/removed, a restored selection). Package switches, bundle pills,
+// profile chips, then the global liveness/plan preview.
+function repaintAll() {
   for (const i of model.pkgs.keys()) paintPkg(i);
   for (const name of Object.keys(bundleEls)) paintBundle(name);
+  paintProfiles();
   refreshLiveness();
+}
+
+// --- profiles: a bar of one-click additive selections -----------------------
+const profileEls = {}; // name → chip element
+function renderProfiles(profiles) {
+  const bar = document.getElementById("profiles");
+  bar.innerHTML = "";
+  for (const k of Object.keys(profileEls)) delete profileEls[k];
+  if (!profiles.length) {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+  const label = document.createElement("span");
+  label.className = "plabel";
+  label.textContent = "Profiles:";
+  bar.append(label);
+  for (const p of profiles) {
+    const chip = document.createElement("button");
+    chip.className = "profile-chip";
+    chip.innerHTML = `<span class="pemoji">${p.emoji || "🎯"}</span>${p.name}`;
+    chip.title = p.description || "";
+    chip.onclick = () => applyProfileClick(p.name);
+    bar.append(chip);
+    profileEls[p.name] = chip;
+  }
+  paintProfiles();
+}
+// Paint each chip from its derived state: off / full / hollow. Chips are inert
+// while scanning (the plan is incomplete) or a run is on — same freeze as the
+// action buttons.
+function paintProfiles() {
+  const busy = applyRunning || scanning;
+  for (const [name, chip] of Object.entries(profileEls)) {
+    const st = M.profileStateOf(model, name); // "off" | "full" | "hollow"
+    chip.classList.toggle("full", st === "full");
+    chip.classList.toggle("hollow", st === "hollow");
+    chip.disabled = busy;
+  }
+}
+// Click rule (additive, per the model): clicking a profile ALWAYS applies it —
+// it pulls its packages in and fills the chip. It never "turns off" a profile;
+// you lose a profile only by DESELECTING one of its packages (that turns the
+// chip hollow). This matches the user's mental model: a profile is a preset you
+// apply, not a light you toggle. (Reset clears all active profiles at once.)
+function applyProfileClick(name) {
+  M.applyProfile(model, name);
+  repaintAll();
+  persistSelection();
 }
 
 // A real sliding switch: a track with a knob that sits left (out), right (in),
@@ -178,6 +239,7 @@ function setToggle(i, state, opts = {}) {
   paintPkg(i);
   const b = model.pkgs.get(i)?.bundle; // repaint the parent bundle pill:
   if (b) paintBundle(b); // its in/out/MIXED may have changed
+  paintProfiles(); // a manual toggle can make a profile go hollow (or full again)
   refreshLiveness();
   if (!opts.silent) persistSelection();
 }
@@ -273,7 +335,13 @@ function isActionable(i) {
 // ghost outlines. The eye lands on what matters. Runs after any change to
 // selection or detected state.
 let applyRunning = false;
+// True from render until `state-done`: the machine scan is still running, so the
+// plan is INCOMPLETE — acting now would treat un-probed rows as absent and act on
+// a reality the user never saw. Freeze every action (general, bundle, row) until
+// the scan settles, exactly like applyRunning freezes them during a run.
+let scanning = false;
 function refreshLiveness() {
+  const busy = applyRunning || scanning; // no action while running OR still scanning
   const ids = Object.keys(rows).map(Number);
   // Per-row buttons: light the ones that would act; all stay clickable at
   // hover for a manual re-run, but disabled while a run is on.
@@ -281,7 +349,7 @@ function refreshLiveness() {
     const r = rows[i];
     const act = buttonAction(i); // always the invert action (label)
     const inPlan = isActionable(i); // would a plain Apply act here?
-    const show = !!act && !applyRunning;
+    const show = !!act && !busy;
     // Colour follows the PLAN: directional green/red only if Apply will act
     // now; otherwise blue (available manual escape hatch, no pending change).
     r.apply.classList.toggle("live", show && inPlan);
@@ -289,7 +357,7 @@ function refreshLiveness() {
     r.apply.classList.toggle("remove", show && inPlan && act.dir === "remove");
     r.apply.classList.toggle("avail", show && !inPlan);
     r.apply.textContent = act ? act.verb : "—"; // button IS the action; — if none possible
-    r.apply.disabled = applyRunning || !act;
+    r.apply.disabled = busy || !act;
     // Tint the WHOLE row when it's in the plan — the change is unmissable, not
     // hidden in a small button. When in-plan, act.dir is the plan's direction.
     r.details.classList.toggle("plan-add", inPlan && act && act.dir === "add");
@@ -303,22 +371,25 @@ function refreshLiveness() {
   for (const name of Object.keys(bundleEls)) {
     const be = bundleEls[name];
     const live = M.bundleAnyActionable(model, name);
-    be.apply.classList.toggle("live", live && !applyRunning);
-    be.apply.disabled = applyRunning;
+    be.apply.classList.toggle("live", live && !busy);
+    be.apply.disabled = busy;
     paintBundle(name); // bundle switch colour follows the plan too
     // Preview the plan AT REST: a bundle with pending actions opens, a stable
     // one folds. Only when idle — during a run the execution logic (setStatus)
     // owns open/close, and we never fight the user's manual toggle mid-run.
-    if (!applyRunning) be.details.open = live;
+    if (!busy) be.details.open = live;
   }
   // Global button: live if anything anywhere would act.
   const g = document.getElementById("install-all");
-  g.classList.toggle("live", ids.some(isActionable) && !applyRunning);
-  g.disabled = applyRunning;
-  // Reset is available only if the user has moved something off the defaults.
-  const deviated = [...model.pkgs.keys()].some((i) => M.isDeviated(model, i));
+  g.classList.toggle("live", ids.some(isActionable) && !busy);
+  g.disabled = busy;
+  // Reset is available only when it would do something (model.canReset decides:
+  // a moved package or an active profile). The view just reflects that verdict.
   const reset = document.getElementById("reset-all");
-  if (reset) reset.disabled = applyRunning || !deviated;
+  if (reset) reset.disabled = busy || !M.canReset(model);
+  // Refresh is available whenever we're idle — it only re-reads the machine.
+  const refresh = document.getElementById("refresh-all");
+  if (refresh) refresh.disabled = busy;
 }
 
 // Apply. We send the DECIDED packages only, split into `on` (want present)
@@ -347,8 +418,14 @@ function applyScoped(scopeIdx) {
   ws.send(JSON.stringify({ type: "apply", on, off, scope: scopeIdx }));
 }
 
-function render(bundles, steps) {
-  M.loadPlan(model, bundles, steps);
+function render(bundles, steps, profiles = []) {
+  M.loadPlan(model, bundles, steps, profiles);
+  // The scan starts now and won't settle until `state-done`. Freeze actions and
+  // dim the panel until then: rows show "checking…", nothing is clickable, and
+  // each lights up as its probe answers — no acting on an incomplete plan.
+  scanning = true;
+  stepsEl.classList.add("scanning");
+  renderProfiles(profiles);
   for (const b of bundles) {
     const bd = document.createElement("details");
     bd.className = "bundle";
@@ -408,17 +485,23 @@ function render(bundles, steps) {
       flipPkg(s.i);
     };
     const badge = document.createElement("span");
-    badge.className = "badge waiting";
-    badge.textContent = "·";
+    badge.className = "badge checking";
+    badge.textContent = "⠹"; // pre-scan spinner, not a verdict yet
     const name = document.createElement("span");
     name.className = "name";
-    name.innerHTML = `${s.name}` +
+    const inProfiles = M.profilesForPkg(model, s.i);
+    const profTags = inProfiles.length
+      ? ` <span class="pkg-profiles" title="In profiles: ${
+        inProfiles.map((p) => p.name).join(", ")
+      }">${inProfiles.map((p) => p.emoji).join("")}</span>`
+      : "";
+    name.innerHTML = `${s.name}` + profTags +
       (s.description ? ` <span class="desc">— ${s.description}</span>` : "");
     const delta = document.createElement("span"); // version delta on upgrade, e.g. 2.54 → 2.55
     delta.className = "verdelta";
     const st = document.createElement("span");
-    st.className = "statusLabel waiting";
-    st.textContent = "absent";
+    st.className = "statusLabel checking";
+    st.textContent = "checking…"; // until its probe answers — never pre-say "absent"
     const apply = document.createElement("button");
     apply.className = "rerun";
     apply.textContent = "apply";
@@ -473,6 +556,9 @@ function render(bundles, steps) {
   }
   // Now that every bundle knows its packages, paint bundle pills (locked or auto).
   for (const name of Object.keys(bundleEls)) refreshBundleChk(name);
+  // Freeze all actions immediately: the scan (scanning=true) hasn't settled, so
+  // no button should be live until state-done proves the plan complete.
+  refreshLiveness();
 }
 
 function ensureTerm(i) {
@@ -485,6 +571,24 @@ function ensureTerm(i) {
 }
 
 const RUNNING = new Set(["installing", "uninstalling", "upgrading"]);
+
+// Braille spinner: the static "⠹" looked frozen. A single global ticker cycles
+// the canonical braille frames on every badge currently in an active state
+// (checking / installing / uninstalling / upgrading), so working rows visibly
+// animate. One interval for the whole panel — cheap, and only touches spinning
+// badges. The badge's status CLASS (set by setStatus) is the source of truth.
+const SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPIN_STATES = ["checking", "installing", "uninstalling", "upgrading"];
+let spinFrame = 0;
+setInterval(() => {
+  spinFrame = (spinFrame + 1) % SPIN_FRAMES.length;
+  const f = SPIN_FRAMES[spinFrame];
+  for (const r of Object.values(rows)) {
+    if (SPIN_STATES.some((s) => r.badge.classList.contains(s))) {
+      r.badge.textContent = f;
+    }
+  }
+}, 90);
 
 // --- Apply focus mode --------------------------------------------------------
 // During an Apply the screen narrows to THE PLAN: every step that WILL run stays
@@ -557,8 +661,10 @@ function setStatus(i, status) {
   // A finished/failed row has nothing more to add to its version delta;
   // a fresh install/remove clears any stale one. (upgrade keeps it — set just before.)
   if (r.delta && status !== "upgrading") r.delta.textContent = "";
-  // Bundle-level: open while working, count active packages, auto-close
-  // when the bundle's last package finishes (unless something failed).
+  // Bundle-level: open while working; STAY open between packages. Packages run
+  // SERIALLY (one manager at a time), so `active` dips to 0 between each — folding
+  // on active===0 mid-run made the card flap shut/open per package. Folding of a
+  // finished bundle now happens ONCE, at the end of the whole Apply (see `done`).
   const be = bundleEls[model.pkgs.get(i)?.bundle];
   if (be) {
     if (RUNNING.has(status)) {
@@ -582,10 +688,6 @@ function setStatus(i, status) {
       ? "failed"
       : "";
     be.status.className = "bstatus " + (be.failed ? "fail" : status);
-    if (be.active === 0 && !be.failed) { // all done, all good → fold to keep the page short
-      be.details.open = false;
-      be.status.textContent = "";
-    }
   }
 }
 
@@ -595,12 +697,11 @@ const ws = new WebSocket(`ws://${location.host}`);
 // alone. Server acts only on the difference. No scope → all decided packages.
 document.getElementById("install-all").onclick = () => applyScoped(undefined);
 
-// Reset = drop every user toggle back to the author's defaults (clear deviations).
+// Reset = drop every user toggle AND active profile back to the author's
+// defaults (clearAllDecisions clears both). repaintAll refreshes chips too.
 function resetAll() {
   M.clearAllDecisions(model);
-  for (const i of model.pkgs.keys()) paintPkg(i);
-  for (const name of Object.keys(bundleEls)) paintBundle(name);
-  refreshLiveness();
+  repaintAll();
   persistSelection();
 }
 // Reset is destructive to the user's choices (not to the machine), so confirm
@@ -614,6 +715,21 @@ document.getElementById("reset-confirm-no").onclick = () =>
 document.getElementById("reset-confirm-yes").onclick = () => {
   resetConfirmEl.classList.remove("show");
   resetAll();
+};
+
+// Refresh: re-scan the machine on demand. Freezes + dims the panel like the
+// initial scan (scanning=true), sets every row back to "checking…", and asks the
+// server to re-detect. Touches ONLY detection — the user's selection is untouched
+// (unlike Reset). state/state-done repaint and unfreeze as the probes answer.
+document.getElementById("refresh-all").onclick = () => {
+  if (applyRunning || scanning) return; // don't stack a scan on a run or a scan
+  scanning = true;
+  stepsEl.classList.add("scanning");
+  for (const i of Object.keys(rows).map(Number)) setStatus(i, "checking");
+  refreshLiveness();
+  paintProfiles();
+  overall.textContent = "checking…";
+  ws.send(JSON.stringify({ type: "rescan" }));
 };
 
 // --- tabs ---
@@ -695,7 +811,7 @@ ws.onmessage = (ev) => {
   const msg = JSON.parse(ev.data);
   switch (msg.type) {
     case "plan":
-      render(msg.bundles || [], msg.steps);
+      render(msg.bundles || [], msg.steps, msg.profiles || []);
       applySavedSelection(msg.selection); // restore persisted decisions (yellow)
       if (msg.consent && !msg.consent.decided) consentEl.classList.add("show"); // first boot
       break;
@@ -721,6 +837,20 @@ ws.onmessage = (ev) => {
         if (msg.present === null && msg.reason) {
           rows[msg.i].statusLabel.textContent = msg.reason;
         }
+        // Present WITH a version → the version REPLACES the word "present" (it
+        // already proves presence; "present · 0.19.1" would be redundant). The
+        // green "ok" colour stays (set by setStatus) so presence reads at a
+        // glance. Without a version (plugins, config-atoms) the word "present"
+        // stays — it's then the only presence signal.
+        if (msg.present === true && msg.version) {
+          rows[msg.i].statusLabel.textContent = msg.version;
+        }
+        // Installed OUTSIDE winget → append the provenance flag (winget can't
+        // upgrade/uninstall it). Present stays present; this just says HOW.
+        if (msg.present === true && msg.external) {
+          rows[msg.i].statusLabel.textContent += " · external";
+          rows[msg.i].statusLabel.classList.add("external");
+        }
       }
       break;
     case "state-done":
@@ -730,6 +860,12 @@ ws.onmessage = (ev) => {
       // Stamp WHEN the scan completed — the model stays clock-free, so the view
       // sets this. Foundation for a future "reuse if fresh (<TTL)" optimisation.
       model.detectedAt = Date.now();
+      // Scan settled: the plan is now complete and trustworthy. Unfreeze actions
+      // and un-dim — the general/bundle/row buttons come alive via refreshLiveness.
+      scanning = false;
+      stepsEl.classList.remove("scanning");
+      refreshLiveness();
+      paintProfiles();
       overall.textContent = "ready";
       hideSplash();
       break;
@@ -775,6 +911,15 @@ ws.onmessage = (ev) => {
       applyRunning = false;
       stepsEl.classList.remove("steps-refreshing"); // net: scan found nothing → no apply-plan
       exitFocusMode(); // everything reappears — failures already open, stand out
+      // Fold bundles that finished cleanly — ONCE, now the whole run is over (not
+      // between packages). A failed bundle stays open so its error is visible.
+      for (const be of Object.values(bundleEls)) {
+        be.active = 0;
+        if (!be.failed) {
+          be.details.open = false;
+          be.status.textContent = "";
+        }
+      }
       refreshLiveness(); // unlock; re-light what's still useful
       break;
     case "overlay":
