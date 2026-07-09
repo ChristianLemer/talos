@@ -144,8 +144,11 @@ export function commandsFor(
     // before install (idempotent); && so a failed add aborts the install.
     // Omitted when no marketplace declared (plugin from an already-known one).
     const id = pkg["claude-plugin"];
+    // Quote the source: a marketplace can be a local directory path with spaces
+    // (e.g. the tekton folder on OneDrive), which would otherwise split into
+    // several shell args. A github owner/repo is unaffected by the quotes.
     const add = pkg.marketplace
-      ? `claude plugin marketplace add ${pkg.marketplace} && `
+      ? `claude plugin marketplace add "${pkg.marketplace}" && `
       : "";
     return {
       route: "claude-plugin",

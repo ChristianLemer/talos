@@ -46,7 +46,7 @@ Deno.test("commandsFor: run escape hatch, no upgrade", () => {
   assertEquals(c.upgrade, null);
 });
 
-Deno.test("commandsFor: claude-plugin route (with marketplace)", () => {
+Deno.test("commandsFor: claude-plugin route (with marketplace, quoted source)", () => {
   const c = commandsFor({
     name: "Chiron",
     "claude-plugin": "chiron@tekton",
@@ -55,10 +55,22 @@ Deno.test("commandsFor: claude-plugin route (with marketplace)", () => {
   assertEquals(c.route, "claude-plugin");
   assertEquals(
     c.install,
-    "claude plugin marketplace add github:ChristianLemer/tekton && claude plugin install chiron@tekton --scope user",
+    'claude plugin marketplace add "github:ChristianLemer/tekton" && claude plugin install chiron@tekton --scope user',
   );
   assertEquals(c.uninstall, "claude plugin uninstall chiron@tekton");
   assertEquals(c.upgrade, "claude plugin update chiron@tekton");
+});
+
+Deno.test("commandsFor: claude-plugin marketplace with spaces stays one quoted arg", () => {
+  const c = commandsFor({
+    name: "Chiron",
+    "claude-plugin": "chiron@tekton",
+    marketplace: "<vault>/<zone>/Tekton",
+  });
+  assertEquals(
+    c.install,
+    'claude plugin marketplace add "<vault>/<zone>/Tekton" && claude plugin install chiron@tekton --scope user',
+  );
 });
 
 Deno.test("commandsFor: claude-plugin without marketplace omits the add", () => {

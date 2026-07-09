@@ -1,0 +1,27 @@
+# Methodology — Chiron, the tekton corpus's methodological companion. Opt-in:
+# the heart of the family's way of working, added on top of the agent. Kept in
+# its own bundle (not with the flagship Plugins) because it's the core method,
+# not a tool — one phrase to the user: "the methodology".
+#
+# NOTE — the tekton marketplace is a DIRECTORY on the shared drive, not a GitHub
+# repo. The path below is site-specific: an integrator points `marketplace:` at
+# wherever their Tekton folder lives. `claude plugin marketplace add <path>`
+# accepts a local path. Adjust this per deployment.
+
+bundle: Methodology
+emoji: 🧠
+description: Chiron — the methodological companion (tekton corpus).
+priority: 6
+selectable: true
+posture: opt-in
+
+packages:
+  - name: Chiron
+    description: The wise centaur — methodological companion of the tekton corpus
+    claude-plugin: chiron@tekton
+    # Site-specific: the Tekton marketplace folder on a shared drive. Adjust
+    # per deployment (a local path, not a github repo).
+    marketplace: "<vault>/<zone>/Tekton"
+    detect: chiron
+    requires:
+      - Claude Code

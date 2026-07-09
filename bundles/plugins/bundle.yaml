@@ -1,0 +1,36 @@
+# Plugins — Claude Code plugins the family curates. Opt-in: added on top of the
+# agent, each from its marketplace. All require Claude Code (the agent that
+# hosts them) — a plugin row stays indeterminate until Claude Code is present
+# or wanted (resolved against the plan, see deps.ts).
+
+bundle: Plugins
+emoji: 🧩
+description: Curated Claude Code plugins — installed on top of the agent.
+priority: 7
+selectable: true
+posture: opt-in          # added on top of the agent, if you want them
+
+packages:
+  - name: astral
+    description: Python skills — uv, ruff, ty (formatting, linting, typing)
+    claude-plugin: astral@astral-sh
+    marketplace: astral-sh/claude-code-plugins
+    detect: astral
+    requires:
+      - Claude Code
+
+  - name: jj
+    description: Jujutsu VCS guide — pairs with the jj binary
+    claude-plugin: jj@claude-plugin-jj
+    marketplace: kawaz/claude-plugin-jj
+    detect: jj
+    requires:
+      - Claude Code
+
+  - name: nushell-dev
+    description: Nushell dev plugin — linting, scaffolding, docs
+    claude-plugin: nushell-dev@nushell-marketplace
+    marketplace: danielbodnar/nushell-dev
+    detect: nushell-dev
+    requires:
+      - Claude Code

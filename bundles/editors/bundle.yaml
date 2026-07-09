@@ -18,3 +18,9 @@ packages:
     description: Modal terminal editor
     winget: Helix.Helix
     detect: hx --version
+
+  - name: MarkText
+    description: Distraction-free Markdown editor — specs, briefs, notes
+    winget: MarkText.MarkText
+    # NO detect: — GUI app, no CLI binary on PATH. Presence via the winget
+    # route (like Obsidian). Indeterminate off Windows, not absent.

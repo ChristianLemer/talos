@@ -31,6 +31,11 @@ packages:
     winget: Git.Git
     detect: git --version
 
+  - name: jj
+    description: Jujutsu — a Git-compatible VCS the family uses day to day
+    winget: jj-vcs.jj
+    detect: jj --version
+
   - name: uv
     description: Python package manager — lets an agent build and run programs for you
     winget: astral-sh.uv

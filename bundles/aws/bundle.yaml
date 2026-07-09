@@ -1,0 +1,16 @@
+# AWS — cloud tooling. Opt-in: only for machines that talk to AWS (e.g. the
+# family's Bedrock-backed agents). Kept OUT of Base on purpose — the neutral
+# substrate names no client; AWS is a specific need, added by those who have it.
+
+bundle: AWS
+emoji: ☁️
+description: AWS command-line tooling — for machines that use AWS (e.g. Bedrock).
+priority: 40
+selectable: true
+posture: opt-in          # only if you actually use AWS
+
+packages:
+  - name: AWS CLI
+    description: Command-line access to AWS — credentials, SSO, Bedrock auth
+    winget: Amazon.AWSCLI
+    detect: aws --version
