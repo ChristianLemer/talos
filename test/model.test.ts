@@ -17,6 +17,7 @@ import {
   isLocked,
   loadPlan,
   persistablePkgs,
+  profileProgress,
   profilesForPkg,
   profileStateOf,
   removeProfile,
@@ -230,6 +231,27 @@ Deno.test("profilesForPkg: lists the profiles a package belongs to", () => {
   ]);
   assertEquals(profilesForPkg(m, 2).map((p) => p.name), ["All tools"]);
   assertEquals(profilesForPkg(m, 0), []);
+});
+
+Deno.test("profileProgress: counts present packages over total (machine truth)", () => {
+  const m = seedWithProfiles();
+  // nothing present yet
+  assertEquals(profileProgress(m, "All tools"), { present: 0, total: 2 });
+  setStatusData(m, 1, "ok"); // rg present
+  assertEquals(profileProgress(m, "All tools"), { present: 1, total: 2 });
+  setStatusData(m, 2, "ok"); // bat present
+  assertEquals(profileProgress(m, "All tools"), { present: 2, total: 2 });
+});
+
+Deno.test("profileProgress: unknown profile → 0/0", () => {
+  const m = seedWithProfiles();
+  assertEquals(profileProgress(m, "Nope"), { present: 0, total: 0 });
+});
+
+Deno.test("profileProgress: reflects presence, not intent", () => {
+  const m = seedWithProfiles();
+  applyProfile(m, "All tools"); // intent: full — but nothing installed
+  assertEquals(profileProgress(m, "All tools"), { present: 0, total: 2 });
 });
 
 Deno.test("clearAllDecisions also drops active profiles (true reset)", () => {

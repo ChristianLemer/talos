@@ -14,9 +14,13 @@
 # from the toggles. Pair with the Reset gesture (back to posture defaults) to get
 # a clean "start from this profile" experience.
 
+columns: 2
+
 profiles:
-  - profile: Essential
+  - profile: Essential AI
     emoji: 🌱
+    usage: Talk to an AI agent and read its work in a proper editor.
+    highlights: [Claude Code, VS Code]
     description: The minimum — an AI agent you can talk to, and a place to read it.
     packages:
       - Node.js
@@ -26,6 +30,8 @@ profiles:
 
   - profile: Daily driver
     emoji: 🚀
+    usage: Get everyday work done — agent, methodology, editors, notes.
+    highlights: [Claude Code, Obsidian, MarkText]
     description: Everyday work — agent, methodology, editors, notes.
     packages:
       - Node.js
@@ -40,6 +46,8 @@ profiles:
 
   - profile: Power user
     emoji: ⚡
+    usage: Script and search fast — Python tooling and speedy CLI tools.
+    highlights: [uv, ripgrep, Starship]
     description: Adds Python tooling, fast CLI tools, and a terminal file workflow.
     packages:
       - Node.js
@@ -57,6 +65,8 @@ profiles:
 
   - profile: Developer
     emoji: 🛠️
+    usage: Ship code end to end — version control, terminal editing, full tooling.
+    highlights: [jj, Helix, ripgrep]
     description: The full kit — version control, terminal editing, all the tooling.
     packages:
       - Node.js

@@ -159,7 +159,10 @@ log(`plan: ${BUNDLES.length} bundle(s), ${STEPS.length} package(s)`);
 // Profiles — named additive package selections (profiles.yaml beside the bundles).
 // Pure data sent to the UI; the on/full/hollow logic lives in decision.js. Empty
 // list if there's no profiles.yaml (the panel just shows no profile bar).
-const PROFILES = loadProfiles(BUNDLES_DIR, log);
+const { columns: PROFILE_COLUMNS, profiles: PROFILES } = loadProfiles(
+  BUNDLES_DIR,
+  log,
+);
 
 // The consent + install-journal store. Local history always lands in DATA_DIR
 // (per machine); a consented copy also lands beside the exe, namespaced by host
@@ -825,6 +828,7 @@ function startServer() {
           })),
           selection: { pkgs: {} },
           profiles: PROFILES,
+          profileColumns: PROFILE_COLUMNS,
           consent: readConsent(CONSENT),
         }));
         // Ground truth → pre-check the cards. "Detect, don't remember": ask the

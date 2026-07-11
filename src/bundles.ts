@@ -33,6 +33,8 @@ export interface BundleMeta {
 export interface Profile {
   name: string;
   emoji: string;
+  usage: string; // a "what you do with it" sentence (falls back to description)
+  highlights: string[]; // 2-3 salient package names to advertise the profile
   description: string;
   packages: string[];
 }
@@ -295,41 +297,53 @@ export function loadBundles(
 interface RawProfile {
   profile?: string;
   emoji?: string;
+  usage?: string;
+  highlights?: string[];
   description?: string;
   packages?: string[];
 }
 
-// Scan the single profiles.yaml at the root of the bundles dir into a list of
-// profiles. Missing file or bad YAML → empty list (profiles are optional; the
-// panel just shows none). A profile with no name is skipped. Package names are
-// NOT validated against the plan here — an unknown name simply pulls nothing,
-// which is harmless and keeps this loader pure/decoupled from the step list.
+// Scan the single profiles.yaml at the root of the bundles dir into the panel's
+// data: a `columns` count (grid width, default 2) and a list of profiles. Missing
+// file or bad YAML → { columns: 2, profiles: [] } (profiles are optional; the
+// panel just shows none). A profile with no name is skipped. `usage` falls back
+// to `description` so the card always has a sentence; `highlights` defaults to
+// []. Package names are NOT validated against the plan here — an unknown name
+// simply pulls nothing, which is harmless and keeps this loader pure/decoupled
+// from the step list.
 export function loadProfiles(
   root: string,
   log: (msg: string) => void = () => {},
-): Profile[] {
+): { columns: number; profiles: Profile[] } {
   let raw: string;
   try {
     raw = Deno.readTextFileSync(`${root}/profiles.yaml`);
   } catch {
-    return []; // no profiles.yaml → no profiles, opens fine
+    return { columns: 2, profiles: [] }; // no profiles.yaml → opens fine
   }
   try {
-    const parsed = parseYaml(raw) as { profiles?: RawProfile[] };
+    const parsed = parseYaml(raw) as {
+      columns?: number;
+      profiles?: RawProfile[];
+    };
+    const columns = parsed.columns ?? 2;
     const out: Profile[] = [];
     for (const p of (parsed.profiles ?? [])) {
       if (!p.profile) continue; // a profile needs a name
+      const description = p.description || "";
       out.push({
         name: p.profile,
         emoji: p.emoji || "🎯",
-        description: p.description || "",
+        usage: p.usage || description,
+        highlights: p.highlights ?? [],
+        description,
         packages: p.packages ?? [],
       });
     }
     log(`profiles loaded: ${out.length}`);
-    return out;
+    return { columns, profiles: out };
   } catch (e) {
     log(`profiles skipped (bad YAML): ${(e as Error).message}`);
-    return [];
+    return { columns: 2, profiles: [] };
   }
 }

@@ -34,6 +34,8 @@ export function loadPlan(model, bundles, steps, profiles = []) {
       name: p.name,
       emoji: p.emoji || "🎯",
       description: p.description || "",
+      usage: p.usage || p.description || "",
+      highlights: p.highlights ?? [],
       packages: p.packages ?? [],
     });
   }
@@ -270,6 +272,22 @@ export function profileStateOf(model, name) {
     const i = byName.get(pkgName);
     return i != null && toggleOf(model, i) === "in";
   });
+}
+
+// Present-count for a profile — MACHINE TRUTH, live-derived (not intent). Of the
+// profile's packages, how many are present on the machine right now. Distinct
+// from profileStateOf (off/full/hollow = intention). A profile can be "full"
+// (intended) yet 0/N present (nothing installed yet) — both are correct.
+export function profileProgress(model, name) {
+  const prof = model.profiles.get(name);
+  if (!prof) return { present: 0, total: 0 };
+  const byName = new Map();
+  for (const p of model.pkgs.values()) byName.set(p.name, p);
+  let present = 0;
+  for (const pkgName of prof.packages) {
+    if (byName.get(pkgName)?.present === true) present++;
+  }
+  return { present, total: prof.packages.length };
 }
 
 // --- persistence (by stable key, survives reordering) -----------------------

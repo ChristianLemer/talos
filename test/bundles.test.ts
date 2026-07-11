@@ -144,7 +144,7 @@ Deno.test("loadBundles: steps come out in bundle-priority order (stable within a
 });
 
 Deno.test("loadProfiles: no profiles.yaml → empty list (opens fine)", () => {
-  assertEquals(loadProfiles("/nonexistent/path/bundles"), []);
+  assertEquals(loadProfiles("/nonexistent/path/bundles").profiles, []);
 });
 
 Deno.test("loadProfiles: parses profiles, defaults emoji, skips nameless", () => {
@@ -160,17 +160,63 @@ Deno.test("loadProfiles: parses profiles, defaults emoji, skips nameless", () =>
       "    packages: [X]",
     ].join("\n"),
   );
-  const profs = loadProfiles(root);
-  assertEquals(profs.length, 1);
-  assertEquals(profs[0].name, "Daily");
-  assertEquals(profs[0].emoji, "🎯"); // defaulted
-  assertEquals(profs[0].packages, ["Nushell", "Claude Code"]);
+  const { profiles } = loadProfiles(root);
+  assertEquals(profiles.length, 1);
+  assertEquals(profiles[0].name, "Daily");
+  assertEquals(profiles[0].emoji, "🎯"); // defaulted
+  assertEquals(profiles[0].packages, ["Nushell", "Claude Code"]);
   Deno.removeSync(root, { recursive: true });
 });
 
 Deno.test("loadProfiles: bad YAML → empty list (no throw)", () => {
   const root = Deno.makeTempDirSync();
   Deno.writeTextFileSync(`${root}/profiles.yaml`, "profiles:\n  - : : bad");
-  assertEquals(loadProfiles(root), []);
+  assertEquals(loadProfiles(root).profiles, []);
   Deno.removeSync(root, { recursive: true });
+});
+
+Deno.test("loadProfiles: parses usage, highlights, and root columns", () => {
+  const root = Deno.makeTempDirSync();
+  Deno.writeTextFileSync(
+    `${root}/profiles.yaml`,
+    [
+      "columns: 3",
+      "profiles:",
+      "  - profile: Dev",
+      "    emoji: 🛠️",
+      "    usage: Build things",
+      "    highlights: [jj, Helix]",
+      "    packages: [jj, Helix]",
+    ].join("\n"),
+  );
+  const { columns, profiles } = loadProfiles(root);
+  assertEquals(columns, 3);
+  assertEquals(profiles[0].usage, "Build things");
+  assertEquals(profiles[0].highlights, ["jj", "Helix"]);
+  Deno.removeSync(root, { recursive: true });
+});
+
+Deno.test("loadProfiles: usage falls back to description, columns defaults to 2", () => {
+  const root = Deno.makeTempDirSync();
+  Deno.writeTextFileSync(
+    `${root}/profiles.yaml`,
+    [
+      "profiles:",
+      "  - profile: Legacy",
+      "    description: Old kit",
+      "    packages: [X]",
+    ]
+      .join("\n"),
+  );
+  const { columns, profiles } = loadProfiles(root);
+  assertEquals(columns, 2);
+  assertEquals(profiles[0].usage, "Old kit");
+  assertEquals(profiles[0].highlights, []);
+  Deno.removeSync(root, { recursive: true });
+});
+
+Deno.test("loadProfiles: no file → columns 2, empty profiles", () => {
+  const { columns, profiles } = loadProfiles("/nonexistent/path/bundles");
+  assertEquals(columns, 2);
+  assertEquals(profiles, []);
 });
