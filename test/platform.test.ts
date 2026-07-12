@@ -1,9 +1,30 @@
 // Tests for the Platform substrate — the single source of `os` and how to run a
 // command string on this OS. Pure; no IO. Run: deno task test
 import { assertEquals } from "@std/assert";
-import { currentOs, type Os } from "../src/platform.ts";
+import { currentOs, type Os, shellProbe } from "../src/platform.ts";
 
 Deno.test("currentOs: returns one of the three known values", () => {
   const os: Os = currentOs();
   assertEquals(["windows", "darwin", "linux"].includes(os), true);
+});
+
+Deno.test("shellProbe: POSIX wraps the command in /bin/sh -c", () => {
+  const p = shellProbe("darwin", "brew list jq");
+  assertEquals(p.cmd, "/bin/sh");
+  assertEquals(p.args, ["-c", "brew list jq"]);
+});
+
+Deno.test("shellProbe: linux is POSIX too", () => {
+  const p = shellProbe("linux", "brew list jq");
+  assertEquals(p.cmd, "/bin/sh");
+});
+
+Deno.test("shellProbe: Windows wraps in powershell with the 127 guard", () => {
+  const p = shellProbe("windows", "winget list --id Git.Git");
+  assertEquals(p.cmd, "powershell.exe");
+  assertEquals(p.args[0], "-NoProfile");
+  assertEquals(p.args[1], "-Command");
+  assertEquals(p.args[2].includes("GetEnvironmentVariable('Path','Machine')"), true);
+  assertEquals(p.args[2].includes("$ErrorActionPreference='Stop'"), true);
+  assertEquals(p.args[2].includes("try { winget list --id Git.Git; exit $LASTEXITCODE } catch { exit 127 }"), true);
 });
