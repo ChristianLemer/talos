@@ -187,26 +187,40 @@
                   transition:color .15s, border-color .15s; }
       .resetbtn:hover { color:#e0af68; border-color:#e0af68; }
       .resetbtn:disabled { opacity:.4; cursor:default; }
-      /* Profile bar — one-click additive selections. A chip has three states:
-         off (quiet outline), full (filled accent = you're exactly on it),
-         hollow (accent outline = active but you've diverged). Clicking an off/
-         hollow chip fills it; clicking a full chip removes the profile. */
-      #profiles { display:flex; flex-wrap:wrap; gap:8px; align-items:center;
-                  padding:2px 12px 12px; }
-      #profiles .plabel { color:var(--dim); font-size:12px; margin-right:2px; }
-      .profile-chip { display:inline-flex; align-items:center; gap:6px;
-                      background:none; color:var(--dim); border:1px solid var(--line);
-                      padding:6px 12px; border-radius:999px; cursor:pointer;
-                      font-size:12px; font-weight:600;
-                      transition:color .15s, border-color .15s, background .15s; }
-      .profile-chip:hover { color:var(--fg); border-color:var(--dim); }
-      .profile-chip .pemoji { font-size:13px; }
-      /* hollow: active but diverged — accent outline, not filled */
-      .profile-chip.hollow { color:#7aa2f7; border-color:#3d59a1; }
-      /* full: you are exactly on this profile — filled accent */
-      .profile-chip.full { background:#3d59a1; color:var(--fg); border-color:#3d59a1; }
-      .profile-chip.full:hover { filter:brightness(1.15); }
-      .profile-chip:disabled { opacity:.5; cursor:default; filter:none; }
+      /* Profiles panel — a responsive grid of usage cards. --cols is the config
+         max (set inline by app.js); minmax collapses to 1 column when narrow so
+         cards never get cramped. */
+      #profiles {
+        display: grid;
+        gap: 12px;
+        padding: 2px 12px 12px;
+        grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr));
+      }
+      @media (max-width: 640px) { #profiles { grid-template-columns: 1fr; } }
+      .profile-card {
+        display: flex; flex-direction: column; gap: 4px;
+        text-align: left; background: none; color: var(--fg);
+        border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+        cursor: pointer; font: inherit;
+        transition: color .15s, border-color .15s, background .15s;
+      }
+      .profile-card:hover { border-color: var(--dim); }
+      .profile-card .pc-head { display: flex; align-items: center; gap: 8px; }
+      .profile-card .pc-emoji { font-size: 16px; }
+      .profile-card .pc-title { font-weight: 600; font-size: 14px; flex: 1; }
+      .profile-card .pc-count { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--dim); }
+      .profile-card .pc-usage { color: var(--fg); font-size: 12px; opacity: .85; }
+      .profile-card .pc-highlights { color: var(--dim); font-size: 11px; }
+      /* hollow: active but the user pulled a member out — accent outline */
+      .profile-card.hollow { border-color: #3d59a1; }
+      .profile-card.hollow .pc-count { color: #7aa2f7; }
+      /* full: selection is exactly this profile — filled accent */
+      .profile-card.full { background: #3d59a1; border-color: #3d59a1; }
+      .profile-card.full .pc-usage,
+      .profile-card.full .pc-highlights,
+      .profile-card.full .pc-count { color: var(--fg); opacity: .9; }
+      .profile-card.full:hover { filter: brightness(1.15); }
+      .profile-card:disabled { opacity: .5; cursor: default; filter: none; }
       /* Profile-membership emojis shown next to a package name — a quiet hint of
          which profiles include this package. */
       .pkg-profiles { font-size:11px; opacity:.75; margin-left:2px; letter-spacing:1px; }

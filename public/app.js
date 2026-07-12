@@ -143,8 +143,8 @@ function repaintAll() {
 }
 
 // --- profiles: a bar of one-click additive selections -----------------------
-const profileEls = {}; // name → chip element
-function renderProfiles(profiles) {
+const profileEls = {}; // name → card element
+function renderProfiles(profiles, columns = 2) {
   const bar = document.getElementById("profiles");
   bar.innerHTML = "";
   for (const k of Object.keys(profileEls)) delete profileEls[k];
@@ -153,31 +153,37 @@ function renderProfiles(profiles) {
     return;
   }
   bar.hidden = false;
-  const label = document.createElement("span");
-  label.className = "plabel";
-  label.textContent = "Profiles:";
-  bar.append(label);
+  bar.style.setProperty("--cols", String(columns));
   for (const p of profiles) {
-    const chip = document.createElement("button");
-    chip.className = "profile-chip";
-    chip.innerHTML = `<span class="pemoji">${p.emoji || "🎯"}</span>${p.name}`;
-    chip.title = p.description || "";
-    chip.onclick = () => applyProfileClick(p.name);
-    bar.append(chip);
-    profileEls[p.name] = chip;
+    const card = document.createElement("button");
+    card.className = "profile-card";
+    const hl = (p.highlights && p.highlights.length)
+      ? p.highlights.join(" · ")
+      : (p.packages ?? []).slice(0, 3).join(" · ");
+    card.innerHTML =
+      `<span class="pc-head"><span class="pc-emoji">${p.emoji || "🎯"}</span>` +
+      `<span class="pc-title">${p.name}</span>` +
+      `<span class="pc-count"></span></span>` +
+      `<span class="pc-usage">${p.usage || p.description || ""}</span>` +
+      `<span class="pc-highlights">${hl}</span>`;
+    card.onclick = () => applyProfileClick(p.name);
+    bar.append(card);
+    profileEls[p.name] = card;
   }
   paintProfiles();
 }
-// Paint each chip from its derived state: off / full / hollow. Chips are inert
-// while scanning (the plan is incomplete) or a run is on — same freeze as the
-// action buttons.
+// Paint each card: state class (off/full/hollow = INTENT) + present-count
+// (MACHINE TRUTH). Cards are inert while scanning or a run is on.
 function paintProfiles() {
   const busy = applyRunning || scanning;
-  for (const [name, chip] of Object.entries(profileEls)) {
+  for (const [name, card] of Object.entries(profileEls)) {
     const st = M.profileStateOf(model, name); // "off" | "full" | "hollow"
-    chip.classList.toggle("full", st === "full");
-    chip.classList.toggle("hollow", st === "hollow");
-    chip.disabled = busy;
+    card.classList.toggle("full", st === "full");
+    card.classList.toggle("hollow", st === "hollow");
+    card.disabled = busy;
+    const { present, total } = M.profileProgress(model, name);
+    const countEl = card.querySelector(".pc-count");
+    if (countEl) countEl.textContent = total ? `${present}/${total}` : "";
   }
 }
 // Click rule (additive, per the model): clicking a profile ALWAYS applies it —
@@ -418,14 +424,14 @@ function applyScoped(scopeIdx) {
   ws.send(JSON.stringify({ type: "apply", on, off, scope: scopeIdx }));
 }
 
-function render(bundles, steps, profiles = []) {
+function render(bundles, steps, profiles = [], columns = 2) {
   M.loadPlan(model, bundles, steps, profiles);
   // The scan starts now and won't settle until `state-done`. Freeze actions and
   // dim the panel until then: rows show "checking…", nothing is clickable, and
   // each lights up as its probe answers — no acting on an incomplete plan.
   scanning = true;
   stepsEl.classList.add("scanning");
-  renderProfiles(profiles);
+  renderProfiles(profiles, columns);
   for (const b of bundles) {
     const bd = document.createElement("details");
     bd.className = "bundle";
@@ -811,7 +817,12 @@ ws.onmessage = (ev) => {
   const msg = JSON.parse(ev.data);
   switch (msg.type) {
     case "plan":
-      render(msg.bundles || [], msg.steps, msg.profiles || []);
+      render(
+        msg.bundles || [],
+        msg.steps,
+        msg.profiles || [],
+        msg.profileColumns,
+      );
       applySavedSelection(msg.selection); // restore persisted decisions (yellow)
       if (msg.consent && !msg.consent.decided) consentEl.classList.add("show"); // first boot
       break;
