@@ -2,6 +2,7 @@
 // Pure, no pty/network. Run: deno task test  (from talos/)
 import { assertEquals } from "@std/assert";
 import { commandsFor, loadBundles, loadProfiles } from "../src/bundles.ts";
+import { outdatedFor } from "../src/outdated.ts";
 
 Deno.test("commandsFor: winget route on windows", () => {
   const c = commandsFor({ name: "Git", winget: "Git.Git" }, "windows");
@@ -167,6 +168,19 @@ Deno.test("loadBundles: winget+brew package resolves to brew on darwin", () => {
   assertEquals(rg?.route, "brew");
   assertEquals(rg?.systemId, "ripgrep");
   assertEquals(rg?.install, "brew install ripgrep");
+});
+
+Deno.test("outdated bridge: darwin systemId matches a brew-keyed scan (regression: was wingetId)", () => {
+  const { steps } = loadBundles("bundles", "darwin", () => {});
+  const obs = steps.find((s) => s.name === "Obsidian");
+  // brew scan is keyed by the bare brew id:
+  const scan = new Map([["obsidian", {
+    current: "1.5.0",
+    available: "1.6.0",
+  }]]);
+  // the correct id to look up is systemId (brew id on Mac), NOT any winget id:
+  assertEquals(obs?.systemId, "obsidian");
+  assertEquals(outdatedFor(obs?.systemId ?? null, scan)?.available, "1.6.0");
 });
 
 Deno.test("loadProfiles: no profiles.yaml → empty list (opens fine)", () => {

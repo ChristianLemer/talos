@@ -93,3 +93,16 @@ Deno.test("outdatedFor: id absent from scan → null (up to date)", () => {
   const map = parseWingetUpgrade(fixture);
   assertEquals(outdatedFor("Not.Listed", map), null);
 });
+
+Deno.test("outdatedFor: matches on the ACTIVE manager id (brew key ≠ winget id)", () => {
+  // On Mac the scan is keyed by the brew short name; a package's systemId is its
+  // brew id, NOT its winget id. Passing the winget id would never match.
+  const scan = new Map([["obsidian", {
+    current: "1.5.0",
+    available: "1.6.0",
+  }]]);
+  // systemId is what the caller must pass — the brew id on this bench:
+  assertEquals(outdatedFor("obsidian", scan)?.available, "1.6.0");
+  // the winget id would miss:
+  assertEquals(outdatedFor("Obsidian.Obsidian", scan), null);
+});

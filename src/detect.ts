@@ -23,13 +23,10 @@
 
 import type { Step } from "./bundles.ts";
 import { pluginPresent, skillPresent } from "./agent-content.ts";
-import { type Os, shellProbe } from "./platform.ts";
+import { type Os, type Probe, shellProbe } from "./platform.ts";
 import { MANAGERS, nativeManager } from "./managers.ts";
 
-export interface Probe {
-  cmd: string;
-  args: string[];
-}
+export type { Probe }; // re-export for existing importers of detect.ts
 
 // Presence plus an optional human reason (why it's indeterminate). detectPresent
 // stays the boolean|null API everyone uses; detectPresentDetailed adds the reason

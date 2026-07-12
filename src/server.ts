@@ -483,7 +483,7 @@ async function applyDiff(
       );
       sendDiag(sendWs, i, r.diag); // show the probe result in the row terminal
       if (r.present === true) {
-        const od = outdatedFor(STEPS[i].wingetId, scan);
+        const od = outdatedFor(STEPS[i].systemId, scan);
         if (od) ws.send(JSON.stringify({ type: "outdated", i, ...od }));
       }
     } catch { /* socket closing */ }
@@ -502,7 +502,7 @@ async function applyDiff(
     if (!desired) return null; // auto → never touched
     return actionFor(desired, {
       present: presences[i].present === true,
-      outdated: outdatedFor(STEPS[i].wingetId, scan) !== null,
+      outdated: outdatedFor(STEPS[i].systemId, scan) !== null,
       canUninstall: !!STEPS[i].uninstall,
     });
   };
@@ -757,7 +757,7 @@ async function detectAll(ws: WebSocket) {
       sendDiag(send, i, r.diag); // show the probe's command+exit+output in the row
       // A stale-but-present package lights its Apply button + shows cur→avail.
       if (r.present === true) {
-        const od = outdatedFor(STEPS[i].wingetId, scan);
+        const od = outdatedFor(STEPS[i].systemId, scan);
         if (od) send({ type: "outdated", i, ...od });
       }
     });

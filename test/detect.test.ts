@@ -22,7 +22,6 @@ function step(partial: Partial<Step>): Step {
     uninstall: null,
     upgrade: null,
     route: partial.route ?? null,
-    wingetId: partial.wingetId ?? null,
     systemId: partial.systemId ?? null,
     detect: partial.detect ?? null,
     check: partial.check ?? null,
@@ -93,7 +92,7 @@ Deno.test("detectPresent: check exit 0 → present, non-zero → absent", async 
 
 // --- nature 2: ask the system-manager route (GUI apps, no CLI binary) ---
 Deno.test("systemProbe: winget id on windows → winget list probe", () => {
-  const s = step({ route: "winget", wingetId: "Git.Git", systemId: "Git.Git" });
+  const s = step({ route: "winget", systemId: "Git.Git" });
   const p = systemProbe(s, "windows");
   assertEquals(p?.cmd, "powershell.exe");
   assertEquals(p?.args[2].includes("winget list --id Git.Git"), true);
@@ -107,7 +106,7 @@ Deno.test("systemProbe: brew id on darwin → brew list probe", () => {
 });
 
 Deno.test("systemProbe: winget package on darwin → null (indeterminate, never guessed)", () => {
-  const s = step({ route: "winget", wingetId: "Git.Git", systemId: "Git.Git" });
+  const s = step({ route: "winget", systemId: "Git.Git" });
   assertEquals(systemProbe(s, "darwin"), null);
 });
 
@@ -155,7 +154,6 @@ Deno.test("detectPresent: winget-only package on Mac → null (indeterminate)", 
   const p = await detectPresent(
     step({
       route: "winget",
-      wingetId: "Obsidian.Obsidian",
       systemId: "Obsidian.Obsidian",
     }),
     "darwin",
@@ -192,7 +190,6 @@ Deno.test("versionFrom: winget route grabs the token after the id", () => {
     versionFrom(
       step({
         route: "winget",
-        wingetId: "MarkText.MarkText",
         systemId: "MarkText.MarkText",
       }),
       out,
@@ -225,7 +222,6 @@ Deno.test("versionFrom: winget route but --version output → falls back to toke
     versionFrom(
       step({
         route: "winget",
-        wingetId: "Helix.Helix",
         systemId: "Helix.Helix",
       }),
       "helix 25.07.1 (a05c151b)",
@@ -236,7 +232,7 @@ Deno.test("versionFrom: winget route but --version output → falls back to toke
 
 Deno.test("versionFrom: unknown / empty → empty string (never guesses)", () => {
   assertEquals(
-    versionFrom(step({ route: "winget", wingetId: "X.Y" }), "no match here"),
+    versionFrom(step({ route: "winget", systemId: "X.Y" }), "no match here"),
     "",
   );
   assertEquals(versionFrom(step({ route: "run" }), "nothing numeric"), "");

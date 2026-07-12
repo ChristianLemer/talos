@@ -52,7 +52,6 @@ export interface Step extends Commands {
   name: string;
   description: string;
   route: string | null; // which named route satisfies this package (winget/brew/…)
-  wingetId: string | null; // the winget id (winget-specific detect paths read it)
   systemId: string | null; // the ACTIVE system-manager id (winget on Win, brew on Mac) — keys the outdated scan
   detect: string | null;
   // run-route detection: a DRY-RUN command run verbatim, exit 0 = converged/present.
@@ -265,7 +264,6 @@ export function loadBundles(
           uninstall: sub(cmd.uninstall),
           upgrade: sub(cmd.upgrade),
           route: cmd.route,
-          wingetId: p.winget || null,
           systemId,
           detect: p.detect || null,
           check: sub(p.check || null),
