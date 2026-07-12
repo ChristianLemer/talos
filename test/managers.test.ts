@@ -1,7 +1,20 @@
 // Tests for the SystemManager strategy — winget & brew as one route, two
 // platform incarnations. Pure command-building + output parsing. Run: deno task test
 import { assertEquals } from "@std/assert";
-import { nativeManager, WINGET } from "../src/managers.ts";
+import {
+  BREW,
+  nativeManager,
+  parseWingetUpgrade,
+  WINGET,
+} from "../src/managers.ts";
+
+const brewOutdated = await Deno.readTextFile(
+  new URL("./fixtures/brew-outdated.json", import.meta.url),
+);
+
+const wingetUpgrade = await Deno.readTextFile(
+  new URL("./fixtures/winget-upgrade.txt", import.meta.url),
+);
 
 Deno.test("WINGET: install/uninstall/upgrade command spelling", () => {
   assertEquals(
@@ -11,6 +24,13 @@ Deno.test("WINGET: install/uninstall/upgrade command spelling", () => {
   assertEquals(
     WINGET.uninstall("Git.Git"),
     "winget uninstall --id Git.Git -e --source winget",
+  );
+});
+
+Deno.test("WINGET.upgrade command spelling", () => {
+  assertEquals(
+    WINGET.upgrade("Git.Git"),
+    "winget upgrade --id Git.Git -e --source winget --accept-source-agreements --accept-package-agreements",
   );
 });
 
@@ -30,11 +50,11 @@ Deno.test("nativeManager: windows → winget", () => {
   assertEquals(nativeManager("windows")?.route, "winget");
 });
 
-import { BREW } from "../src/managers.ts";
-
-const brewOutdated = await Deno.readTextFile(
-  new URL("./fixtures/brew-outdated.json", import.meta.url),
-);
+Deno.test("parseWingetUpgrade: real fixture → one entry per outdated row, keyed lowercased id", () => {
+  const map = parseWingetUpgrade(wingetUpgrade);
+  assertEquals(map.size, 3);
+  assertEquals(map.has("git.git"), true);
+});
 
 Deno.test("BREW: install/uninstall/upgrade (brew resolves cask vs formula itself)", () => {
   assertEquals(BREW.install("ripgrep"), "brew install ripgrep");
