@@ -53,7 +53,63 @@ export const WINGET: SystemManager = {
   parseOutdated: (output) => parseWingetUpgrade(output),
 };
 
-export const MANAGERS: SystemManager[] = [WINGET];
+export const BREW: SystemManager = {
+  route: "brew",
+  os: ["darwin", "linux"],
+  idField: "brew",
+  install: (id) => `brew install ${id}`,
+  uninstall: (id) => `brew uninstall ${id}`,
+  upgrade: (id) => `brew upgrade ${id}`,
+  // `brew list --versions X` gives the version for a FORMULA but is EMPTY for a
+  // cask; the `|| ... --cask` fallback covers casks. Uniform: exit 0 + "<id> <ver>"
+  // when present (either kind), exit 1 + "" when absent. brew resolves cask-vs-
+  // formula itself, so Talos never stores that distinction.
+  presenceCommand: (id) =>
+    `brew list --versions ${id} || brew list --cask --versions ${id}`,
+  parseVersion: (id, output) => {
+    for (const line of output.split(/\r?\n/)) {
+      const cols = line.trim().split(/\s+/);
+      if (cols[0]?.toLowerCase() === id.toLowerCase() && cols[1]) {
+        return cols[1];
+      }
+    }
+    return "";
+  },
+  outdatedScanCommand: () => `brew outdated --json=v2`,
+  parseOutdated: (output) => {
+    const map = new Map<string, Outdated>();
+    try {
+      const j = JSON.parse(output) as {
+        formulae?: Array<
+          {
+            name: string;
+            installed_versions?: string[];
+            current_version?: string;
+          }
+        >;
+        casks?: Array<
+          {
+            name: string;
+            installed_versions?: string[];
+            current_version?: string;
+          }
+        >;
+      };
+      for (const item of [...(j.formulae ?? []), ...(j.casks ?? [])]) {
+        const current = item.installed_versions?.[0] ?? "";
+        const available = item.current_version ?? "";
+        if (item.name && available) {
+          map.set(item.name.toLowerCase(), { current, available });
+        }
+      }
+    } catch {
+      // swallow — empty map is the safe "nothing outdated" direction
+    }
+    return map;
+  },
+};
+
+export const MANAGERS: SystemManager[] = [WINGET, BREW];
 
 // The native system manager for this OS — the data-driven selector. null when no
 // system manager reigns here.
@@ -74,7 +130,9 @@ export function parseWingetUpgrade(raw: string): Map<string, Outdated> {
       .replace(/[─-╿█]/g, "")
       .split(/\r?\n/)
       .map((l) => l.replace(/\r/g, ""));
-    const h = lines.findIndex((l) => /\bId\b/.test(l) && /\bAvailable\b/.test(l));
+    const h = lines.findIndex((l) =>
+      /\bId\b/.test(l) && /\bAvailable\b/.test(l)
+    );
     if (h < 0) return map;
     const header = lines[h];
     const idPos = header.indexOf("Id");
@@ -88,7 +146,8 @@ export function parseWingetUpgrade(raw: string): Map<string, Outdated> {
       if (line.length < avPos) continue;
       const id = line.slice(idPos, verPos).trim();
       const current = line.slice(verPos, avPos).trim();
-      const available = line.slice(avPos, srcPos > avPos ? srcPos : undefined).trim();
+      const available = line.slice(avPos, srcPos > avPos ? srcPos : undefined)
+        .trim();
       if (!id || !available) continue;
       map.set(id.toLowerCase(), { current, available });
     }

@@ -1,0 +1,20 @@
+{
+  "formulae": [
+    {
+      "name": "nushell",
+      "installed_versions": ["0.99.0"],
+      "current_version": "0.100.0",
+      "pinned": false,
+      "pinned_version": null
+    }
+  ],
+  "casks": [
+    {
+      "name": "visual-studio-code",
+      "installed_versions": ["1.126.0"],
+      "current_version": "1.127.0",
+      "pinned": false,
+      "pinned_version": null
+    }
+  ]
+}
