@@ -187,9 +187,9 @@ function paintProfiles() {
   }
 }
 // Click rule (additive, per the model): clicking a profile ALWAYS applies it —
-// it pulls its packages in and fills the chip. It never "turns off" a profile;
+// it pulls its packages in and fills the card. It never "turns off" a profile;
 // you lose a profile only by DESELECTING one of its packages (that turns the
-// chip hollow). This matches the user's mental model: a profile is a preset you
+// card hollow). This matches the user's mental model: a profile is a preset you
 // apply, not a light you toggle. (Reset clears all active profiles at once.)
 function applyProfileClick(name) {
   M.applyProfile(model, name);
