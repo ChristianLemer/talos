@@ -154,6 +154,13 @@ Deno.test("loadBundles: steps come out in bundle-priority order (stable within a
   Deno.removeSync(root, { recursive: true });
 });
 
+Deno.test("loadBundles: systemId is the winget id on windows (exists today)", () => {
+  const { steps } = loadBundles("bundles", "windows", () => {});
+  const rg = steps.find((s) => s.name === "ripgrep");
+  assertEquals(rg?.route, "winget");
+  assertEquals(rg?.systemId, "BurntSushi.ripgrep.MSVC");
+});
+
 Deno.test("loadProfiles: no profiles.yaml → empty list (opens fine)", () => {
   assertEquals(loadProfiles("/nonexistent/path/bundles").profiles, []);
 });

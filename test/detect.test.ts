@@ -23,6 +23,7 @@ function step(partial: Partial<Step>): Step {
     upgrade: null,
     route: partial.route ?? null,
     wingetId: partial.wingetId ?? null,
+    systemId: partial.systemId ?? null,
     detect: partial.detect ?? null,
     check: partial.check ?? null,
     versionRegex: partial.versionRegex ?? null,

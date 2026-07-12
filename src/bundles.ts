@@ -14,7 +14,7 @@
 // 2026-07-04). Still MONO-ROUTE for now: a package declares at most one today.
 
 import { parse as parseYaml } from "@std/yaml";
-import { nativeManager } from "./managers.ts";
+import { MANAGERS, nativeManager } from "./managers.ts";
 import type { Os } from "./platform.ts";
 
 export type Posture = "mandatory" | "opt-out" | "opt-in" | "forbidden";
@@ -52,7 +52,8 @@ export interface Step extends Commands {
   name: string;
   description: string;
   route: string | null; // which named route satisfies this package (winget/brew/…)
-  wingetId: string | null; // the id winget reports in `winget upgrade` — matches outdated rows
+  wingetId: string | null; // the winget id (winget-specific detect paths read it)
+  systemId: string | null; // the ACTIVE system-manager id (winget on Win, brew on Mac) — keys the outdated scan
   detect: string | null;
   // run-route detection: a DRY-RUN command run verbatim, exit 0 = converged/present.
   // Distinct from `detect` (which probes a binary on PATH by its first token) — a
@@ -251,6 +252,11 @@ export function loadBundles(
         s === null ? null : s.replaceAll("{dir}", bundleDir);
       for (const p of (b.packages ?? [])) {
         const cmd = commandsFor(p, os);
+        // the id of whichever system manager won for this os — null for a non-system
+        // route, or when the package declares no id for this os's native manager.
+        const mgr = MANAGERS.find((m) => m.route === cmd.route);
+        const winnerId = mgr && (mgr.idField === "winget" ? p.winget : p.brew);
+        const systemId = winnerId || null;
         steps.push({
           bundle: meta.name,
           name: p.name,
@@ -260,6 +266,7 @@ export function loadBundles(
           upgrade: sub(cmd.upgrade),
           route: cmd.route,
           wingetId: p.winget || null,
+          systemId,
           detect: p.detect || null,
           check: sub(p.check || null),
           versionRegex: p["version-regex"] || null,

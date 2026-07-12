@@ -27,8 +27,10 @@ import { makeWatcher, powershellSpawner } from "./watch-window.ts";
 // Server and UI call one actionFor, so they can never drift on what Apply does.
 import { actionFor, desiredState } from "../public/decision.js";
 import { type DepNode, requiresReason, topoSort } from "./deps.ts";
+import { currentOs } from "./platform.ts";
 
-const isWin = Deno.build.os === "windows";
+const os = currentOs();
+const isWin = os === "windows"; // TEMP: removed in a later unit as call sites migrate
 
 // Per-machine LOCAL data dir — where we extract the native lib, the log, and
 // (later) consent. NEVER on the shared OneDrive next to the exe: the exe is
@@ -154,7 +156,7 @@ log(`bundles dir: ${BUNDLES_DIR}`);
 // do before the engine loads. The result is the `plan` the UI renders on connect
 // (bundles → accordion cards, steps → package rows). An empty scan (no bundles/
 // beside the exe) yields an empty accordion, not a crash.
-const { bundles: BUNDLES, steps: STEPS } = loadBundles(BUNDLES_DIR, log);
+const { bundles: BUNDLES, steps: STEPS } = loadBundles(BUNDLES_DIR, os, log);
 log(`plan: ${BUNDLES.length} bundle(s), ${STEPS.length} package(s)`);
 // Profiles — named additive package selections (profiles.yaml beside the bundles).
 // Pure data sent to the UI; the on/full/hollow logic lives in decision.js. Empty
