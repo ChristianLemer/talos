@@ -14,6 +14,8 @@
 // 2026-07-04). Still MONO-ROUTE for now: a package declares at most one today.
 
 import { parse as parseYaml } from "@std/yaml";
+import { nativeManager } from "./managers.ts";
+import type { Os } from "./platform.ts";
 
 export type Posture = "mandatory" | "opt-out" | "opt-in" | "forbidden";
 const POSTURES: Posture[] = ["mandatory", "opt-out", "opt-in", "forbidden"];
@@ -109,30 +111,23 @@ interface RawBundle {
 // back through the same route that owns the package.
 export function commandsFor(
   pkg: RawPkg,
+  os: Os,
 ): { route: string | null } & Commands {
-  if (pkg.winget) {
-    // --source winget: pin to the winget source ONLY (never msstore — we install
-    // nothing from it, and it timed out on the VM, hanging every command). See
-    // server.js note. -e = exact id match.
-    return {
-      route: "winget",
-      install:
-        `winget install --id ${pkg.winget} -e --source winget --accept-source-agreements --accept-package-agreements`,
-      uninstall: `winget uninstall --id ${pkg.winget} -e --source winget`,
-      upgrade:
-        `winget upgrade --id ${pkg.winget} -e --source winget --accept-source-agreements --accept-package-agreements`,
-    };
-  }
-  if (pkg.brew) {
-    // brew handles cask vs formula itself; --quiet trims chatter. brew is the
-    // Mac/Linux counterpart of winget — the route that lets Talos run for real
-    // on this dev machine.
-    return {
-      route: "brew",
-      install: `brew install ${pkg.brew}`,
-      uninstall: `brew uninstall ${pkg.brew}`,
-      upgrade: `brew upgrade ${pkg.brew}`,
-    };
+  // FAMILY 1 — system manager, arbitrated by OS. If the package declares an id
+  // for the manager native to THIS os (pkg.winget on Windows, pkg.brew on
+  // darwin/linux), use it; the non-native system id is ignored (winget on a Mac
+  // is unusable). One active system route per machine.
+  const mgr = nativeManager(os);
+  if (mgr) {
+    const id = mgr.idField === "winget" ? pkg.winget : pkg.brew;
+    if (id) {
+      return {
+        route: mgr.route,
+        install: mgr.install(id),
+        uninstall: mgr.uninstall(id),
+        upgrade: mgr.upgrade(id),
+      };
+    }
   }
   if (pkg.cargo) {
     // cargo: cross-platform, no uninstall-by-upgrade — reinstall IS the upgrade.
@@ -211,6 +206,7 @@ export interface Plan {
 // bundles beside it opens inert, it does not crash (core = proposition only).
 export function loadBundles(
   root: string,
+  os: Os,
   log: (msg: string) => void = () => {},
 ): Plan {
   const bundles: BundleMeta[] = [];
@@ -254,7 +250,7 @@ export function loadBundles(
       const sub = (s: string | null) =>
         s === null ? null : s.replaceAll("{dir}", bundleDir);
       for (const p of (b.packages ?? [])) {
-        const cmd = commandsFor(p);
+        const cmd = commandsFor(p, os);
         steps.push({
           bundle: meta.name,
           name: p.name,

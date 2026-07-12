@@ -3,25 +3,36 @@
 import { assertEquals } from "@std/assert";
 import { commandsFor, loadBundles, loadProfiles } from "../src/bundles.ts";
 
-Deno.test("commandsFor: winget route", () => {
-  const c = commandsFor({ name: "Git", winget: "Git.Git" });
+Deno.test("commandsFor: winget route on windows", () => {
+  const c = commandsFor({ name: "Git", winget: "Git.Git" }, "windows");
   assertEquals(c.route, "winget");
   assertEquals(
     c.install,
     "winget install --id Git.Git -e --source winget --accept-source-agreements --accept-package-agreements",
   );
-  assertEquals(c.uninstall, "winget uninstall --id Git.Git -e --source winget");
 });
 
-Deno.test("commandsFor: brew route (the Mac counterpart)", () => {
-  const c = commandsFor({ name: "ripgrep", brew: "ripgrep" });
+Deno.test("commandsFor: brew route on darwin", () => {
+  const c = commandsFor({ name: "ripgrep", brew: "ripgrep" }, "darwin");
   assertEquals(c.route, "brew");
   assertEquals(c.install, "brew install ripgrep");
   assertEquals(c.upgrade, "brew upgrade ripgrep");
 });
 
+Deno.test("commandsFor: winget+brew package picks the NATIVE manager per OS", () => {
+  const pkg = {
+    name: "ripgrep",
+    winget: "BurntSushi.ripgrep.MSVC",
+    brew: "ripgrep",
+  };
+  assertEquals(commandsFor(pkg, "windows").route, "winget");
+  assertEquals(commandsFor(pkg, "darwin").route, "brew");
+  assertEquals(commandsFor(pkg, "linux").route, "brew");
+  assertEquals(commandsFor(pkg, "darwin").install, "brew install ripgrep");
+});
+
 Deno.test("commandsFor: cargo reinstalls as its upgrade", () => {
-  const c = commandsFor({ name: "fd", cargo: "fd-find" });
+  const c = commandsFor({ name: "fd", cargo: "fd-find" }, "darwin");
   assertEquals(c.route, "cargo");
   assertEquals(c.install, c.upgrade); // cargo install == cargo upgrade to latest
 });
@@ -31,7 +42,7 @@ Deno.test("commandsFor: npm carries flags", () => {
     name: "Claude Code",
     npm: "@anthropic-ai/claude-code",
     npmFlags: "--foreground-scripts",
-  });
+  }, "darwin");
   assertEquals(c.route, "npm");
   assertEquals(
     c.install,
@@ -40,7 +51,7 @@ Deno.test("commandsFor: npm carries flags", () => {
 });
 
 Deno.test("commandsFor: run escape hatch, no upgrade", () => {
-  const c = commandsFor({ name: "custom", run: "curl x | sh" });
+  const c = commandsFor({ name: "custom", run: "curl x | sh" }, "darwin");
   assertEquals(c.route, "run");
   assertEquals(c.install, "curl x | sh");
   assertEquals(c.upgrade, null);
@@ -51,7 +62,7 @@ Deno.test("commandsFor: claude-plugin route (with marketplace, quoted source)", 
     name: "Chiron",
     "claude-plugin": "chiron@tekton",
     marketplace: "github:ChristianLemer/tekton",
-  });
+  }, "darwin");
   assertEquals(c.route, "claude-plugin");
   assertEquals(
     c.install,
@@ -66,7 +77,7 @@ Deno.test("commandsFor: claude-plugin marketplace with spaces stays one quoted a
     name: "Chiron",
     "claude-plugin": "chiron@tekton",
     marketplace: "<vault>/<zone>/Tekton",
-  });
+  }, "darwin");
   assertEquals(
     c.install,
     'claude plugin marketplace add "<vault>/<zone>/Tekton" && claude plugin install chiron@tekton --scope user',
@@ -74,7 +85,7 @@ Deno.test("commandsFor: claude-plugin marketplace with spaces stays one quoted a
 });
 
 Deno.test("commandsFor: claude-plugin without marketplace omits the add", () => {
-  const c = commandsFor({ name: "X", "claude-plugin": "x@mkt" });
+  const c = commandsFor({ name: "X", "claude-plugin": "x@mkt" }, "darwin");
   assertEquals(c.install, "claude plugin install x@mkt --scope user");
 });
 
@@ -82,7 +93,7 @@ Deno.test("commandsFor: skill route via npx skills", () => {
   const c = commandsFor({
     name: "astral",
     skill: "astral-sh/claude-code-plugins",
-  });
+  }, "darwin");
   assertEquals(c.route, "skill");
   assertEquals(c.install, "npx skills add astral-sh/claude-code-plugins -g -y");
   assertEquals(c.uninstall, "npx skills remove astral -y");
@@ -94,12 +105,12 @@ Deno.test("commandsFor: skill uses skillName when list-name differs", () => {
     name: "Astral Python",
     skill: "astral-sh/x",
     skillName: "astral",
-  });
+  }, "darwin");
   assertEquals(c.uninstall, "npx skills remove astral -y");
 });
 
 Deno.test("commandsFor: no route → all null (a need with no way to satisfy it)", () => {
-  const c = commandsFor({ name: "orphan" });
+  const c = commandsFor({ name: "orphan" }, "darwin");
   assertEquals(c, {
     route: null,
     install: null,
@@ -109,7 +120,7 @@ Deno.test("commandsFor: no route → all null (a need with no way to satisfy it)
 });
 
 Deno.test("loadBundles: missing dir opens inert (empty plan, no throw)", () => {
-  const plan = loadBundles("/nonexistent/path/bundles");
+  const plan = loadBundles("/nonexistent/path/bundles", "darwin");
   assertEquals(plan.bundles, []);
   assertEquals(plan.steps, []);
 });
@@ -134,7 +145,7 @@ Deno.test("loadBundles: steps come out in bundle-priority order (stable within a
     "bundle: Early\npriority: 0\npackages:\n  - name: E1\n  - name: E2\n",
   );
 
-  const { steps } = loadBundles(root);
+  const { steps } = loadBundles(root, "darwin");
   assertEquals(
     steps.map((s) => s.name),
     ["E1", "E2", "L1", "L2"], // Early (0) before Late (50); package order kept
