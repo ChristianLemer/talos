@@ -7,7 +7,7 @@ import {
   detectPresentDetailed,
   listProbe,
   presenceProbe,
-  routeProbe,
+  systemProbe,
   versionFrom,
 } from "../src/detect.ts";
 import type { Step } from "../src/bundles.ts";
@@ -34,39 +34,32 @@ function step(partial: Partial<Step>): Step {
 
 // --- nature 1: RUN the author's detect command (presence + version) ---
 Deno.test("presenceProbe: POSIX runs the full detect command", () => {
-  assertEquals(presenceProbe("node --version", false), {
-    cmd: "/bin/sh",
-    args: ["-c", "node --version"],
-  });
+  const p = presenceProbe("node --version", "darwin");
+  assertEquals(p?.cmd, "/bin/sh");
+  assertEquals(p?.args, ["-c", "node --version"]);
 });
 
-Deno.test("presenceProbe: Windows refreshes PATH then runs the command", () => {
-  const p = presenceProbe("git --version", true);
+Deno.test("presenceProbe: Windows wraps with the 127 guard", () => {
+  const p = presenceProbe("node --version", "windows");
   assertEquals(p?.cmd, "powershell.exe");
-  const s = p?.args[2] ?? "";
-  assertEquals(s.includes("GetEnvironmentVariable('Path','Machine')"), true);
-  assertEquals(s.includes("git --version"), true);
-  // A missing command must fail loud (127), not inherit a stale $LASTEXITCODE=0
-  // (the rg/fd/bat false-positive). The try/catch is the guard.
-  assertEquals(s.includes("exit $LASTEXITCODE"), true);
-  assertEquals(s.includes("catch { exit 127 }"), true);
+  assertEquals(p?.args[2].includes("catch { exit 127 }"), true);
 });
 
 Deno.test("presenceProbe: no detect → null", () => {
-  assertEquals(presenceProbe(null, false), null);
-  assertEquals(presenceProbe("   ", true), null);
+  assertEquals(presenceProbe(null, "darwin"), null);
+  assertEquals(presenceProbe("   ", "windows"), null);
 });
 
 // --- nature 1b: run the CHECK command verbatim (run-route config-atoms) ---
 Deno.test("checkProbe: POSIX runs the command verbatim under /bin/sh", () => {
-  assertEquals(checkProbe("nu -c 'exit 0'", false), {
+  assertEquals(checkProbe("nu -c 'exit 0'", "darwin"), {
     cmd: "/bin/sh",
     args: ["-c", "nu -c 'exit 0'"],
   });
 });
 
 Deno.test("checkProbe: Windows refreshes PATH and forwards $LASTEXITCODE", () => {
-  const p = checkProbe("nu -c 'exit 0'", true);
+  const p = checkProbe("nu -c 'exit 0'", "windows");
   assertEquals(p?.cmd, "powershell.exe");
   const s = p?.args[2] ?? "";
   assertEquals(s.includes("GetEnvironmentVariable('Path','Machine')"), true);
@@ -76,81 +69,82 @@ Deno.test("checkProbe: Windows refreshes PATH and forwards $LASTEXITCODE", () =>
 });
 
 Deno.test("checkProbe: no check → null", () => {
-  assertEquals(checkProbe(null, false), null);
-  assertEquals(checkProbe("   ", true), null);
+  assertEquals(checkProbe(null, "darwin"), null);
+  assertEquals(checkProbe("   ", "windows"), null);
 });
 
 // A `check` command is the definitive per-atom signal: exit 0 = present.
 Deno.test("detectPresent: check exit 0 → present, non-zero → absent", async () => {
   assertEquals(
-    await detectPresent(step({ route: "run", check: "sh -c 'exit 0'" }), false),
+    await detectPresent(
+      step({ route: "run", check: "sh -c 'exit 0'" }),
+      "darwin",
+    ),
     true,
   );
   assertEquals(
-    await detectPresent(step({ route: "run", check: "sh -c 'exit 1'" }), false),
+    await detectPresent(
+      step({ route: "run", check: "sh -c 'exit 1'" }),
+      "darwin",
+    ),
     false,
   );
 });
 
-// --- nature 2: ask the route (GUI apps, no CLI binary) ---
-Deno.test("routeProbe: winget route on Windows → winget list --id", () => {
-  const p = routeProbe(
-    step({ route: "winget", wingetId: "Obsidian.Obsidian" }),
-    true,
-  );
+// --- nature 2: ask the system-manager route (GUI apps, no CLI binary) ---
+Deno.test("systemProbe: winget id on windows → winget list probe", () => {
+  const s = step({ route: "winget", wingetId: "Git.Git", systemId: "Git.Git" });
+  const p = systemProbe(s, "windows");
   assertEquals(p?.cmd, "powershell.exe");
-  const s = p?.args[2] ?? "";
-  assertEquals(s.includes("winget list --id Obsidian.Obsidian --exact"), true);
-  assertEquals(s.includes("exit $LASTEXITCODE"), true);
-  // The output must reach us (it carries the version) — no `| Out-Null`.
-  assertEquals(s.includes("Out-Null"), false);
+  assertEquals(p?.args[2].includes("winget list --id Git.Git"), true);
 });
 
-Deno.test("routeProbe: winget route on Mac → null (no winget → indeterminate)", () => {
-  assertEquals(
-    routeProbe(step({ route: "winget", wingetId: "Obsidian.Obsidian" }), false),
-    null,
-  );
+Deno.test("systemProbe: brew id on darwin → brew list probe", () => {
+  const s = step({ route: "brew", systemId: "ripgrep" });
+  const p = systemProbe(s, "darwin");
+  assertEquals(p?.cmd, "/bin/sh");
+  assertEquals(p?.args[1].includes("brew list --versions ripgrep"), true);
 });
 
-Deno.test("routeProbe: unimplemented routes → null (don't guess)", () => {
-  assertEquals(routeProbe(step({ route: "brew" }), false), null);
-  assertEquals(routeProbe(step({ route: "npm" }), false), null);
+Deno.test("systemProbe: winget package on darwin → null (indeterminate, never guessed)", () => {
+  const s = step({ route: "winget", wingetId: "Git.Git", systemId: "Git.Git" });
+  assertEquals(systemProbe(s, "darwin"), null);
 });
 
 // --- live IO on Mac: the three outcomes ---
 Deno.test("detectPresent: binary present / absent (Mac)", async () => {
   assertEquals(
-    await detectPresent(step({ detect: "sh --version" }), false),
+    await detectPresent(step({ detect: "sh --version" }), "darwin"),
     true,
   );
   assertEquals(
-    await detectPresent(step({ detect: "nonexistent-binary-xyzzy" }), false),
+    await detectPresent(step({ detect: "nonexistent-binary-xyzzy" }), "darwin"),
     false,
   );
 });
 
-// Two-source combine: a package with a `detect` binary AND a winget route, where
-// the binary is ABSENT and winget is unreachable (Mac) → absent, and crucially
-// NOT flagged external (external requires the binary to actually respond). This
-// is the regression for the "present · external" ghost on an uninstalled tool.
-Deno.test("detectPresentDetailed: binary absent + winget route (Mac) → absent, not external", async () => {
+// Two-source combine: a package with a `detect` binary AND a system route, where
+// the binary is ABSENT and the manager can't list it → absent, and crucially NOT
+// flagged external (external requires the binary to actually respond). This is the
+// regression for the "present · external" ghost on an uninstalled tool. Uses the
+// brew route so the native manager on this Mac bench IS practicable.
+Deno.test("detectPresentDetailed: binary absent + system route (Mac) → absent, not external", async () => {
   const r = await detectPresentDetailed(
     step({
       detect: "nonexistent-binary-xyzzy --version",
-      route: "winget",
-      wingetId: "Some.Pkg",
+      route: "brew",
+      systemId: "nonexistent-formula-xyzzy",
     }),
-    false,
+    "darwin",
   );
   assertEquals(r.present, false);
   assertEquals(r.external, undefined); // never external when the binary didn't respond
 });
 
-Deno.test("detectPresentDetailed: binary present, no winget route → present, not external", async () => {
+Deno.test("detectPresentDetailed: binary present, no system route → present, not external", async () => {
   const r = await detectPresentDetailed(
     step({ detect: "sh --version", route: null }),
-    false,
+    "darwin",
   );
   assertEquals(r.present, true);
   assertEquals(!!r.external, false);
@@ -159,8 +153,12 @@ Deno.test("detectPresentDetailed: binary present, no winget route → present, n
 Deno.test("detectPresent: winget-only package on Mac → null (indeterminate)", async () => {
   // No detect binary, winget route, not on Windows → can't constate → null.
   const p = await detectPresent(
-    step({ route: "winget", wingetId: "Obsidian.Obsidian" }),
-    false,
+    step({
+      route: "winget",
+      wingetId: "Obsidian.Obsidian",
+      systemId: "Obsidian.Obsidian",
+    }),
+    "darwin",
   );
   assertEquals(p, null);
 });
@@ -170,19 +168,19 @@ Deno.test("detectPresent: winget-only package on Mac → null (indeterminate)", 
 // detectPresentDetailed is pure per-step presence + a tool-absent reason only.
 
 Deno.test("listProbe: claude-plugin → claude plugin list --json", () => {
-  const p = listProbe(step({ route: "claude-plugin" }), false);
+  const p = listProbe(step({ route: "claude-plugin" }), "darwin");
   assertEquals(p?.cmd, "claude");
   assertEquals(p?.args, ["plugin", "list", "--json"]);
 });
 
 Deno.test("listProbe: skill → npx skills list -g", () => {
-  const p = listProbe(step({ route: "skill" }), false);
+  const p = listProbe(step({ route: "skill" }), "darwin");
   assertEquals(p?.cmd, "npx");
   assertEquals(p?.args, ["skills", "list", "-g"]);
 });
 
 Deno.test("listProbe: other routes → null", () => {
-  assertEquals(listProbe(step({ route: "winget" }), false), null);
+  assertEquals(listProbe(step({ route: "winget" }), "darwin"), null);
 });
 
 // versionFrom: pull the installed version the probe output already reveals.
@@ -191,7 +189,14 @@ Deno.test("versionFrom: winget route grabs the token after the id", () => {
     "----------------------------------\n" +
     "marktext MarkText.MarkText 0.19.1\n";
   assertEquals(
-    versionFrom(step({ route: "winget", wingetId: "MarkText.MarkText" }), out),
+    versionFrom(
+      step({
+        route: "winget",
+        wingetId: "MarkText.MarkText",
+        systemId: "MarkText.MarkText",
+      }),
+      out,
+    ),
     "0.19.1",
   );
 });
@@ -218,7 +223,11 @@ Deno.test("versionFrom: winget route but --version output → falls back to toke
   // up, match the generic token. (Regression: it returned "" before.)
   assertEquals(
     versionFrom(
-      step({ route: "winget", wingetId: "Helix.Helix" }),
+      step({
+        route: "winget",
+        wingetId: "Helix.Helix",
+        systemId: "Helix.Helix",
+      }),
       "helix 25.07.1 (a05c151b)",
     ),
     "25.07.1",

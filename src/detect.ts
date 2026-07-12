@@ -23,6 +23,8 @@
 
 import type { Step } from "./bundles.ts";
 import { pluginPresent, skillPresent } from "./agent-content.ts";
+import { type Os, shellProbe } from "./platform.ts";
+import { MANAGERS, nativeManager } from "./managers.ts";
 
 export interface Probe {
   cmd: string;
@@ -43,12 +45,6 @@ export interface Presence {
   external?: boolean;
 }
 
-// PATH refresh for Windows: a winget install writes the registry but does NOT
-// propagate PATH to already-running processes (the panel inherited a stale PATH),
-// so a freshly-installed tool would read as absent without this.
-const WIN_PATH_REFRESH =
-  "$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User');";
-
 // --- nature 1: is a BINARY present? RUN the author's detect command ---------
 // Build the presence probe by RUNNING the full `detect` command as written
 // (e.g. "node --version"): exit 0 = present, and its output carries the VERSION
@@ -56,23 +52,15 @@ const WIN_PATH_REFRESH =
 // both signals from one call instead of throwing the version away. A missing
 // binary makes the command fail (non-zero / not found) → absent, the safe way.
 // (Detect is only ever a "<bin> --version"-style command for binary routes;
-// GUI apps with no CLI use the winget route probe, not this — see routeProbe.)
+// GUI apps with no CLI use the system route probe, not this — see systemProbe.)
+// Delegates the shell-wrapping (+ Windows 127 guard) to Platform.shellProbe.
 export function presenceProbe(
   detectCmd: string | null,
-  isWin: boolean,
+  os: Os,
 ): Probe | null {
   const cmd = (detectCmd ?? "").trim();
   if (!cmd) return null;
-  if (!isWin) {
-    return { cmd: "/bin/sh", args: ["-c", cmd] };
-  }
-  // CRITICAL: a MISSING command raises CommandNotFoundException, which does NOT
-  // set $LASTEXITCODE — so "cmd; exit $LASTEXITCODE" would exit 0 (the prior
-  // value) and read an absent tool as PRESENT (the rg/fd/bat false-positive).
-  // Wrap in try/catch with Stop so a not-found (or any failure) → exit 127.
-  const ps =
-    `${WIN_PATH_REFRESH} $ErrorActionPreference='Stop'; try { ${cmd}; exit $LASTEXITCODE } catch { exit 127 }`;
-  return { cmd: "powershell.exe", args: ["-NoProfile", "-Command", ps] };
+  return shellProbe(os, cmd);
 }
 
 // --- nature 1b: run a package's own CHECK command (dry-run) -----------------
@@ -82,42 +70,28 @@ export function presenceProbe(
 // apply-logic (it inspects only the managed block), so detection can't drift from
 // application, and a user's own edits around the block never read as "present".
 // Run in the platform shell exactly like install, so `nu`/tools resolve the same.
-export function checkProbe(check: string | null, isWin: boolean): Probe | null {
+export function checkProbe(check: string | null, os: Os): Probe | null {
   const cmd = (check ?? "").trim();
   if (!cmd) return null;
-  if (!isWin) return { cmd: "/bin/sh", args: ["-c", cmd] };
-  // Same guard as presenceProbe: a missing command must fail loud (127), not
-  // inherit a stale $LASTEXITCODE=0 and read as "converged/present".
-  const ps =
-    `${WIN_PATH_REFRESH} $ErrorActionPreference='Stop'; try { ${cmd}; exit $LASTEXITCODE } catch { exit 127 }`;
-  return { cmd: "powershell.exe", args: ["-NoProfile", "-Command", ps] };
+  return shellProbe(os, cmd);
 }
 
-// --- nature 2: ask the ROUTE (for packages with no CLI binary) --------------
-// Build the "is this installed?" probe for a package's declared route, on THIS
-// os. Returns null when no route is practicable here (→ indeterminate). Today
-// only the winget route is implemented (Windows-focus); brew/cargo/npm route
-// detection lands with their platforms (Mac test bench) — until then those fall
-// through to null rather than guessing.
-export function routeProbe(step: Step, isWin: boolean): Probe | null {
-  if (step.route === "winget" && step.wingetId) {
-    if (!isWin) return null; // no winget off Windows → can't determine here
-    // `winget list --id X --exact` exits 0 iff installed. --source winget skips
-    // msstore (timed out on the VM); --accept-source-agreements avoids a prompt.
-    // NO `| Out-Null`: we now READ the output (it carries the Version column), so
-    // the table must reach us — only the exit code decides presence.
-    const ps =
-      `${WIN_PATH_REFRESH} $ErrorActionPreference='Stop'; try { winget list --id ${step.wingetId} --exact --source winget --accept-source-agreements; exit $LASTEXITCODE } catch { exit 127 }`;
-    return { cmd: "powershell.exe", args: ["-NoProfile", "-Command", ps] };
-  }
-  return null; // brew/cargo/npm/run route detection not implemented yet
+// --- nature 2: ask the SYSTEM-MANAGER route (packages with no CLI binary) ----
+// Build the presence probe for a package's system-manager route, on THIS os.
+// Delegates to the native SystemManager's presenceCommand via Platform. Returns
+// null when the package's route is not the manager native here (→ indeterminate,
+// never a guessed "absent"). Replaces the old winget-only routeProbe.
+export function systemProbe(step: Step, os: Os): Probe | null {
+  const mgr = nativeManager(os);
+  if (!mgr || step.route !== mgr.route || !step.systemId) return null;
+  return shellProbe(os, mgr.presenceCommand(step.systemId));
 }
 
 // The LIST command for a content-detected route (claude-plugin / skill). Pure;
 // returns null for routes detected by exit code. Detection reads this command's
 // STDOUT (not its exit code — `claude plugin list` exits 0 either way), so it's
 // kept separate from Probe/runProbe.
-export function listProbe(step: Step, _isWin: boolean): Probe | null {
+export function listProbe(step: Step, _os: Os): Probe | null {
   if (step.route === "claude-plugin") {
     return { cmd: "claude", args: ["plugin", "list", "--json"] };
   }
@@ -142,11 +116,7 @@ async function runList(probe: Probe): Promise<string> {
   }
 }
 
-async function runProbe(probe: Probe): Promise<boolean> {
-  return (await runProbeDetailed(probe)).ok;
-}
-
-// Like runProbe but CAPTURES the exit code and output, for surfacing a probe's
+// CAPTURES the exit code and output, for surfacing a probe's
 // result in the row terminal (diagnosis). Merges stdout+stderr into one string.
 // A spawn failure (e.g. the tool not found) → ok:false, code:-1, output:message.
 export interface ProbeResult {
@@ -198,17 +168,14 @@ export function versionFrom(step: Step, output: string): string {
     }
     return "";
   }
-  // Winget table: the token after the id (when the output IS a winget list). A
-  // package can be route=winget yet detected via `detect` (e.g. Helix has both) —
-  // then the output is "helix 25.07.1", not a winget table, so the id column isn't
+  // System-manager table/line: delegate to whichever manager could own this route.
+  // A package can be route=winget yet detected via `detect` (e.g. Helix has both) —
+  // then the output is "helix 25.07.1", not a manager table, so the id column isn't
   // found. Don't give up: fall through to the generic token match below.
-  if (step.route === "winget" && step.wingetId) {
-    const id = step.wingetId.toLowerCase();
-    for (const line of clean.split(/\r?\n/)) {
-      const cols = line.trim().split(/\s{1,}/);
-      const at = cols.findIndex((c) => c.toLowerCase() === id);
-      if (at >= 0 && cols[at + 1]) return cols[at + 1];
-    }
+  const mgr = MANAGERS.find((m) => m.route === step.route);
+  if (mgr && step.systemId) {
+    const v = mgr.parseVersion(step.systemId, clean);
+    if (v) return v;
   }
   // Generic: first version-like token in the output (e.g. a `--version` line).
   // No leading \b — a "v" prefix (node's "v26.4.0") shares a word boundary with
@@ -222,16 +189,16 @@ export function versionFrom(step: Step, output: string): string {
 // dependency resolved globally in deps.ts, not a present-tense per-step check.
 //   - has a `detect` binary (non content-detected routes) → PATH probe.
 //   - content-detected routes (claude-plugin/skill) → parse the tool's list.
-//   - exit-code routes (winget) → route probe.
+//   - exit-code routes (system managers: winget/brew) → system probe.
 // Never throws: a spawn failure resolves to "absent"/indeterminate, the safe way.
 export async function detectPresentDetailed(
   step: Step,
-  isWin: boolean,
+  os: Os,
 ): Promise<Presence> {
   // A `check` command (run-route config-atoms) is the definitive per-atom signal:
   // run it verbatim, exit 0 = converged/present. Takes priority over `detect`.
   if (step.check) {
-    const probe = checkProbe(step.check, isWin);
+    const probe = checkProbe(step.check, os);
     if (probe) {
       const d = await runProbeDetailed(probe);
       return { present: d.ok, diag: d };
@@ -239,39 +206,38 @@ export async function detectPresentDetailed(
   }
   if (step.detect && step.route !== "claude-plugin" && step.route !== "skill") {
     // Detection and version are TWO INDEPENDENT questions — probe both sources,
-    // then combine. Coupling them (winget only if the binary responded) wrongly
-    // called a winget-installed-but-not-on-PATH package "absent", and let a stale
-    // "external" survive. So: ask the binary, ask winget, then decide.
-    const binProbe = presenceProbe(step.detect, isWin);
+    // then combine. Coupling them (the manager only if the binary responded)
+    // wrongly called a manager-installed-but-not-on-PATH package "absent", and let
+    // a stale "external" survive. So: ask the binary, ask the manager, then decide.
+    const binProbe = presenceProbe(step.detect, os);
     const bin = binProbe ? await runProbeDetailed(binProbe) : null;
     const binOk = !!bin?.ok;
 
-    const wp = routeProbe(step, isWin); // null when no winget route practicable here
-    const wd = wp ? await runProbeDetailed(wp) : null;
-    const wingetOk = !!wd?.ok;
+    const sp = systemProbe(step, os); // null when no native manager route here
+    const sd = sp ? await runProbeDetailed(sp) : null;
+    const systemOk = !!sd?.ok;
 
     // present = either source finds it. diag prefers the binary (source-agnostic,
-    // what the user runs); falls back to winget's output when there's no binary.
-    const present = binOk || wingetOk;
-    const diag = bin ?? wd ?? undefined;
+    // what the user runs); falls back to the manager's output when there's no binary.
+    const present = binOk || systemOk;
+    const diag = bin ?? sd ?? undefined;
     if (!present) return { present: false, diag };
 
-    // version: winget's clean table column when winget MANAGES it; else the
-    // binary's own output. external = the binary works but winget doesn't know it
-    // (installed outside winget → winget can't upgrade/uninstall). Not a new
-    // presence state — present stays true, this flags HOW.
-    if (wingetOk) {
-      return { present: true, diag, version: versionFrom(step, wd!.output) };
+    // version from the manager when it manages the package; else the binary.
+    // external = binary works but the native manager doesn't list it (installed
+    // outside it → can't upgrade/uninstall). present stays true; flags HOW.
+    if (systemOk) {
+      return { present: true, diag, version: versionFrom(step, sd!.output) };
     }
     return {
       present: true,
       diag,
       version: bin ? versionFrom(step, bin.output) : "",
-      external: !!wp, // there IS a winget route, yet winget doesn't list it
+      external: !!sp, // there IS a native manager route, yet it doesn't list it
     };
   }
   // Content-detected routes: parse the tool's list output (exit code is useless).
-  const list = listProbe(step, isWin);
+  const list = listProbe(step, os);
   if (list) {
     const out = await runList(list);
     if (!out) return { present: null }; // tool absent/failed → indeterminate
@@ -281,9 +247,9 @@ export async function detectPresentDetailed(
       : skillPresent(detect, out);
     return { present };
   }
-  // Exit-code routes (winget today). Its output lists the version — capture it
+  // Exit-code routes (system managers). Their output lists the version — capture it
   // (versionFrom applies the bundle's version-regex override if present).
-  const probe = routeProbe(step, isWin);
+  const probe = systemProbe(step, os);
   if (!probe) return { present: null };
   const d = await runProbeDetailed(probe);
   return { present: d.ok, diag: d, version: versionFrom(step, d.output) };
@@ -292,7 +258,7 @@ export async function detectPresentDetailed(
 // The boolean|null API everyone already uses — delegates to the detailed one.
 export async function detectPresent(
   step: Step,
-  isWin: boolean,
+  os: Os,
 ): Promise<boolean | null> {
-  return (await detectPresentDetailed(step, isWin)).present;
+  return (await detectPresentDetailed(step, os)).present;
 }
