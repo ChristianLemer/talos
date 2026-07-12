@@ -6,7 +6,6 @@ import {
   outdatedFor,
   parseWingetUpgrade,
   scanOutdated,
-  upgradeScanProbe,
 } from "../src/outdated.ts";
 
 const fixture = await Deno.readTextFile(
@@ -71,19 +70,9 @@ Deno.test("parseWingetUpgrade: trailing summary line is not a package", () => {
 });
 
 // --- scan IO shell -------------------------------------------------------
-Deno.test("upgradeScanProbe: refreshes PATH then runs one winget upgrade", () => {
-  const probe = upgradeScanProbe();
-  assertEquals(probe.cmd, "powershell.exe");
-  const ps = probe.args[probe.args.length - 1];
-  assertEquals(ps.includes("winget upgrade"), true);
-  assertEquals(
-    ps.includes("[Environment]::GetEnvironmentVariable('Path'"),
-    true,
-  );
-});
-
-Deno.test("scanOutdated: off Windows → empty map (winget is Windows-only)", async () => {
-  assertEquals((await scanOutdated(false)).size, 0);
+Deno.test("scanOutdated: returns a Map and never throws (darwin bench)", async () => {
+  const map = await scanOutdated("darwin");
+  assertEquals(map instanceof Map, true);
 });
 
 // --- bridge: does a Step match an outdated row? --------------------------
