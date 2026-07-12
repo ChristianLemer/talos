@@ -12,7 +12,8 @@ packages:
   - name: Obsidian
     description: Local Markdown knowledge base
     winget: Obsidian.Obsidian
+    brew: obsidian
     # NO detect: — Obsidian is a GUI app with no CLI binary on PATH. Presence is
-    # derived from the ROUTE (winget list --id), not a hand-written command. On
-    # Windows that's exact; on Mac (no winget) it reads as indeterminate, not
-    # absent. See detect.ts routeProbe.
+    # derived from the native system-manager ROUTE (winget list on Windows, brew
+    # list on Mac), not a hand-written command. Indeterminate only where no system
+    # manager is practicable, never absent. See detect.ts systemProbe.

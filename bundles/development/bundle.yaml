@@ -18,6 +18,7 @@ packages:
   - name: jj
     description: Jujutsu — a Git-compatible VCS the family uses day to day
     winget: jj-vcs.jj
+    brew: jj
     detect: jj --version
 
   - name: jj skills
@@ -32,4 +33,5 @@ packages:
   - name: Helix
     description: Modal terminal editor
     winget: Helix.Helix
+    brew: helix
     detect: hx --version

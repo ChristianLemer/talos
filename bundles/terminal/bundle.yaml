@@ -28,6 +28,7 @@ packages:
   - name: Starship
     description: Cross-shell prompt
     winget: Starship.Starship
+    brew: starship
     detect: starship --version
 
   - name: Starship config

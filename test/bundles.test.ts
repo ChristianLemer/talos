@@ -161,6 +161,14 @@ Deno.test("loadBundles: systemId is the winget id on windows (exists today)", ()
   assertEquals(rg?.systemId, "BurntSushi.ripgrep.MSVC");
 });
 
+Deno.test("loadBundles: winget+brew package resolves to brew on darwin", () => {
+  const { steps } = loadBundles("bundles", "darwin", () => {});
+  const rg = steps.find((s) => s.name === "ripgrep");
+  assertEquals(rg?.route, "brew");
+  assertEquals(rg?.systemId, "ripgrep");
+  assertEquals(rg?.install, "brew install ripgrep");
+});
+
 Deno.test("loadProfiles: no profiles.yaml → empty list (opens fine)", () => {
   assertEquals(loadProfiles("/nonexistent/path/bundles").profiles, []);
 });

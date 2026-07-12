@@ -26,19 +26,23 @@ packages:
   - name: Node.js
     description: JavaScript runtime — required by this tool itself and by CLI agents
     winget: OpenJS.NodeJS
+    brew: node
     detect: node --version
 
   - name: Git
     description: Version control — required by agent plugin marketplaces
     winget: Git.Git
+    brew: git
     detect: git --version
 
   - name: jq
     description: JSON CLI — required by some agent plugin hooks
     winget: jqlang.jq
+    brew: jq
     detect: jq --version
 
   - name: Nushell
     description: Structured shell — the language Talos config-atoms are written in
     winget: Nushell.Nushell
+    brew: nushell
     detect: nu --version
