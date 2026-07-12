@@ -1,0 +1,99 @@
+// src/managers.ts
+// SystemManager — the strategy for FAMILY 1 routes (system package managers).
+// winget and brew are ONE route with two platform incarnations: same mechanic
+// (install/uninstall/upgrade, exit-code presence, a single machine-wide outdated
+// scan), differing only in binary+subcommand spelling and the OS where each
+// reigns. Adding apt later = one more entry in MANAGERS. Commands are STRINGS;
+// Platform.shellProbe runs them (families 1 & 3 share that substrate).
+import type { Os } from "./platform.ts";
+
+export interface Outdated {
+  current: string;
+  available: string;
+}
+
+export interface SystemManager {
+  route: string; // "winget" | "brew"
+  os: Os[]; // where this manager reigns
+  idField: "winget" | "brew"; // which RawPkg field carries its id
+  install(id: string): string;
+  uninstall(id: string): string;
+  upgrade(id: string): string;
+  presenceCommand(id: string): string; // exit 0 iff installed; stdout carries version
+  parseVersion(id: string, output: string): string;
+  outdatedScanCommand(): string;
+  parseOutdated(output: string): Map<string, Outdated>;
+}
+
+export const WINGET: SystemManager = {
+  route: "winget",
+  os: ["windows"],
+  idField: "winget",
+  install: (id) =>
+    `winget install --id ${id} -e --source winget --accept-source-agreements --accept-package-agreements`,
+  uninstall: (id) => `winget uninstall --id ${id} -e --source winget`,
+  upgrade: (id) =>
+    `winget upgrade --id ${id} -e --source winget --accept-source-agreements --accept-package-agreements`,
+  presenceCommand: (id) =>
+    `winget list --id ${id} --exact --source winget --accept-source-agreements`,
+  parseVersion: (id, output) => {
+    const clean = output
+      // deno-lint-ignore no-control-regex -- strip ANSI so tokens split cleanly
+      .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+    const lc = id.toLowerCase();
+    for (const line of clean.split(/\r?\n/)) {
+      const cols = line.trim().split(/\s{1,}/);
+      const at = cols.findIndex((c) => c.toLowerCase() === lc);
+      if (at >= 0 && cols[at + 1]) return cols[at + 1];
+    }
+    return "";
+  },
+  outdatedScanCommand: () =>
+    `winget upgrade --accept-source-agreements --source winget`,
+  parseOutdated: (output) => parseWingetUpgrade(output),
+};
+
+export const MANAGERS: SystemManager[] = [WINGET];
+
+// The native system manager for this OS — the data-driven selector. null when no
+// system manager reigns here.
+export function nativeManager(os: Os): SystemManager | null {
+  return MANAGERS.find((m) => m.os.includes(os)) ?? null;
+}
+
+// Parse `winget upgrade` output → Map<lowercased-id, {current, available}>. The
+// table is FIXED-WIDTH: slice by the HEADER's column offsets, never by splitting
+// on spaces (names/versions contain spaces; offsets don't lie). Defensive: any
+// hiccup → empty map ("nothing outdated" is the safe direction).
+export function parseWingetUpgrade(raw: string): Map<string, Outdated> {
+  const map = new Map<string, Outdated>();
+  try {
+    const lines = raw
+      // deno-lint-ignore no-control-regex -- \x1b (ESC) is exactly what we strip
+      .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "")
+      .replace(/[─-╿█]/g, "")
+      .split(/\r?\n/)
+      .map((l) => l.replace(/\r/g, ""));
+    const h = lines.findIndex((l) => /\bId\b/.test(l) && /\bAvailable\b/.test(l));
+    if (h < 0) return map;
+    const header = lines[h];
+    const idPos = header.indexOf("Id");
+    const verPos = header.indexOf("Version");
+    const avPos = header.indexOf("Available");
+    const srcPos = header.indexOf("Source");
+    if (idPos < 0 || verPos < 0 || avPos < 0) return map;
+    for (const line of lines.slice(h + 1)) {
+      if (!line.trim()) break;
+      if (/^[-\s]+$/.test(line)) continue;
+      if (line.length < avPos) continue;
+      const id = line.slice(idPos, verPos).trim();
+      const current = line.slice(verPos, avPos).trim();
+      const available = line.slice(avPos, srcPos > avPos ? srcPos : undefined).trim();
+      if (!id || !available) continue;
+      map.set(id.toLowerCase(), { current, available });
+    }
+  } catch {
+    // swallow — empty map is the safe "nothing outdated" direction
+  }
+  return map;
+}
