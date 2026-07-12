@@ -40,3 +40,17 @@ export function shellProbe(os: Os, command: string): Probe {
   }
   return { cmd: "/bin/sh", args: ["-c", command] };
 }
+
+export function pathSep(os: Os): "\\" | "/" {
+  return os === "windows" ? "\\" : "/";
+}
+
+// Env var carrying the machine name / the current user — Windows names them
+// differently from POSIX. Used by server.ts to stamp the consent log.
+export function hostEnvVar(os: Os): string {
+  return os === "windows" ? "COMPUTERNAME" : "HOSTNAME";
+}
+
+export function userEnvVar(os: Os): string {
+  return os === "windows" ? "USERNAME" : "USER";
+}
