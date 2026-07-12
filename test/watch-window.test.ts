@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { makeWatcher, parseScan } from "../src/watch-window.ts";
+import type { Os } from "../src/platform.ts";
 
 // --- parseScan: defensive parse of the PS script's JSON stdout ---------------
 
@@ -32,14 +33,14 @@ function fakeSpawner(queue: string[]) {
 }
 
 function harness(
-  opts: { isWin?: boolean; silenceMs?: number; queue?: string[] } = {},
+  opts: { os?: Os; silenceMs?: number; queue?: string[] } = {},
 ) {
   const emitted: unknown[] = [];
   const sp = fakeSpawner(opts.queue ?? []);
   let clock = 1000;
   const w = makeWatcher({
     i: 2,
-    isWin: opts.isWin ?? true,
+    os: opts.os ?? "windows",
     silenceMs: opts.silenceMs ?? 10_000,
     spawner: sp.fn,
     emit: (m: unknown) => emitted.push(m),
@@ -49,7 +50,7 @@ function harness(
 }
 
 Deno.test("makeWatcher: off Windows is a no-op (never spawns, never emits)", async () => {
-  const h = harness({ isWin: false, queue: ['{"found":true,"title":"X"}'] });
+  const h = harness({ os: "darwin", queue: ['{"found":true,"title":"X"}'] });
   await h.w.runTick(123, 1000);
   assertEquals(h.calls.length, 0);
   assertEquals(h.emitted.length, 0);
@@ -144,7 +145,7 @@ Deno.test("makeWatcher: anti-overlap — a tick while one is in flight is skippe
   let calls = 0;
   const w = makeWatcher({
     i: 2,
-    isWin: true,
+    os: "windows",
     silenceMs: 10_000,
     spawner: () => {
       calls++;

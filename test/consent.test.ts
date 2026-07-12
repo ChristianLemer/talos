@@ -69,14 +69,14 @@ Deno.test("parseConsent: absent/garbage → undecided (first boot shows the dial
 
 Deno.test("sharedLogPath: logs/<host>/<user>.jsonl beside the exe (POSIX)", () => {
   assertEquals(
-    sharedLogPath("/share/Talos", "PC01", "alice", false),
+    sharedLogPath("/share/Talos", "PC01", "alice", "darwin"),
     "/share/Talos/logs/PC01/alice.jsonl",
   );
 });
 
 Deno.test("sharedLogPath: Windows separators", () => {
   assertEquals(
-    sharedLogPath("S:\\Talos", "PC01", "alice", true),
+    sharedLogPath("S:\\Talos", "PC01", "alice", "windows"),
     "S:\\Talos\\logs\\PC01\\alice.jsonl",
   );
 });
@@ -92,7 +92,7 @@ function tempStore(): ConsentStore & { cleanup: () => void } {
     exeDir,
     host: "PC01",
     user: "alice",
-    isWin: false,
+    os: "darwin",
     cleanup: () => {
       Deno.removeSync(localDir, { recursive: true });
       Deno.removeSync(exeDir, { recursive: true });
@@ -136,7 +136,7 @@ Deno.test("appendHistory: NOT consented → local only, no shared copy", () => {
     // shared file must NOT exist
     let sharedExists = true;
     try {
-      Deno.statSync(sharedLogPath(s.exeDir, s.host, s.user, s.isWin));
+      Deno.statSync(sharedLogPath(s.exeDir, s.host, s.user, s.os));
     } catch {
       sharedExists = false;
     }
@@ -159,7 +159,7 @@ Deno.test("appendHistory: consented → local AND shared copy written", () => {
     });
     assertEquals(readHistory(s).map((e) => e.package), ["Git"]);
     const shared = Deno.readTextFileSync(
-      sharedLogPath(s.exeDir, s.host, s.user, s.isWin),
+      sharedLogPath(s.exeDir, s.host, s.user, s.os),
     );
     assertEquals(parseHistory(shared).map((e) => e.package), ["Git"]);
   } finally {

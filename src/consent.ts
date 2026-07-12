@@ -12,6 +12,8 @@
 // parseConsent — unit-tested), EXECUTION is a thin IO shell that never throws (a
 // journal that can't write must not sink an install).
 
+import { type Os, pathSep } from "./platform.ts";
+
 // --- the shapes --------------------------------------------------------------
 
 export interface HistEntry {
@@ -67,14 +69,14 @@ export function parseConsent(raw: string): Consent {
 }
 
 // Where a consented copy lands, beside the exe: logs/<host>/<user>.jsonl. Pure
-// path building (isWin picks the separator) so the IO shell stays trivial.
+// path building (os → pathSep picks the separator) so the IO shell stays trivial.
 export function sharedLogPath(
   exeDir: string,
   host: string,
   user: string,
-  isWin: boolean,
+  os: Os,
 ): string {
-  const sep = isWin ? "\\" : "/";
+  const sep = pathSep(os);
   return [exeDir, "logs", host, `${user}.jsonl`].join(sep);
 }
 
@@ -87,11 +89,11 @@ export interface ConsentStore {
   exeDir: string; // the shared folder the exe sits in (OneDrive)
   host: string; // machine name — namespaces the shared log
   user: string; // user name — the shared log's filename
-  isWin: boolean;
+  os: Os;
 }
 
 function sep(s: ConsentStore): string {
-  return s.isWin ? "\\" : "/";
+  return pathSep(s.os);
 }
 function consentPath(s: ConsentStore): string {
   return `${s.localDir}${sep(s)}consent.json`;
@@ -142,7 +144,7 @@ export function appendHistory(s: ConsentStore, entry: HistEntry): void {
     Deno.writeTextFileSync(localHistPath(s), line, { append: true });
   } catch { /* best-effort */ }
   if (readConsent(s).share) {
-    const shared = sharedLogPath(s.exeDir, s.host, s.user, s.isWin);
+    const shared = sharedLogPath(s.exeDir, s.host, s.user, s.os);
     try {
       ensureDir(shared);
       Deno.writeTextFileSync(shared, line, { append: true });

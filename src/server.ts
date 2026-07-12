@@ -27,17 +27,16 @@ import { makeWatcher, powershellSpawner } from "./watch-window.ts";
 // Server and UI call one actionFor, so they can never drift on what Apply does.
 import { actionFor, desiredState } from "../public/decision.js";
 import { type DepNode, requiresReason, topoSort } from "./deps.ts";
-import { currentOs } from "./platform.ts";
+import { currentOs, hostEnvVar, pathSep, userEnvVar } from "./platform.ts";
 
 const os = currentOs();
-const isWin = os === "windows"; // TEMP: removed in a later unit as call sites migrate
 
 // Per-machine LOCAL data dir — where we extract the native lib, the log, and
 // (later) consent. NEVER on the shared OneDrive next to the exe: the exe is
 // launched by N machines, so everything writable must live on each machine's own
 // disk. Windows → %LOCALAPPDATA%\Talos ; Mac → ~/Library/Application Support/Talos.
 function localDataDir(): string {
-  if (isWin) {
+  if (os === "windows") {
     const base = Deno.env.get("LOCALAPPDATA") ??
       `${Deno.env.get("USERPROFILE")}\\AppData\\Local`;
     return `${base}\\Talos`;
@@ -49,7 +48,7 @@ const DATA_DIR = localDataDir();
 // In --no-terminal (GUI) mode there's NO console — a crash is invisible. Journal
 // every step to a file in the machine-local data dir (NOT next to the exe, which
 // is on the shared OneDrive). Best-effort mkdir so the very first line lands.
-const LOG = `${DATA_DIR}${isWin ? "\\" : "/"}talos.log`;
+const LOG = `${DATA_DIR}${pathSep(os)}talos.log`;
 function log(msg: string) {
   const line = `${new Date().toISOString()} ${msg}`;
   // Echo to the console too — invisible in a --no-terminal build (no console),
@@ -96,7 +95,7 @@ async function loadPty() {
   const here = import.meta.dirname ?? ".";
   const parent = here.replace(/[/\\][^/\\]+$/, ""); // drop the final "/src"
   const embedded = `${parent}/native/${lib}`;
-  const sep = isWin ? "\\" : "/";
+  const sep = pathSep(os);
   const destDir = `${DATA_DIR}${sep}native`;
   const dest = `${destDir}${sep}${lib}`;
   try {
@@ -122,7 +121,7 @@ async function loadPty() {
 let ptyReady = false;
 
 const PORT = 7682; // the real Talos port.
-const SHELL = isWin ? "powershell.exe" : "/bin/bash";
+const SHELL = os === "windows" ? "powershell.exe" : "/bin/bash";
 // public/ is a SIBLING of src/. The embedded virtual FS (no --self-extracting)
 // doesn't normalize "..", so build the sibling path explicitly, like the lib.
 const PUBLIC = `${
@@ -146,9 +145,7 @@ const PUBLIC = `${
 // not an error here — an exe with no bundles beside it opens inert (T2 handles
 // the empty case; core = proposition only).
 const BUNDLES_DIR = Deno.build.standalone
-  ? `${Deno.execPath().replace(/[/\\][^/\\]+$/, "")}${
-    isWin ? "\\" : "/"
-  }bundles`
+  ? `${Deno.execPath().replace(/[/\\][^/\\]+$/, "")}${pathSep(os)}bundles`
   : `${(import.meta.dirname ?? ".").replace(/[/\\][^/\\]+$/, "")}/bundles`;
 log(`bundles dir: ${BUNDLES_DIR}`);
 
@@ -174,10 +171,10 @@ const { columns: PROFILE_COLUMNS, profiles: PROFILES } = loadProfiles(
 const CONSENT: ConsentStore = {
   localDir: DATA_DIR,
   exeDir: BUNDLES_DIR.replace(/[/\\][^/\\]+$/, ""),
-  host: (isWin ? Deno.env.get("COMPUTERNAME") : Deno.env.get("HOSTNAME")) ??
+  host: Deno.env.get(hostEnvVar(os)) ??
     Deno.hostname?.() ?? "host",
-  user: (isWin ? Deno.env.get("USERNAME") : Deno.env.get("USER")) ?? "user",
-  isWin,
+  user: Deno.env.get(userEnvVar(os)) ?? "user",
+  os,
 };
 
 // Build the deps.ts view of the plan: each step as a DepNode carrying whether it
@@ -258,10 +255,10 @@ async function runInPty(
   // Windows: the PATH refresh + `exit $LASTEXITCODE` live inside the -Command
   // script (invisible), so a tool installed earlier this session is found and we
   // still read the WRAPPED command's exit code, not PowerShell's own.
-  const script = isWin
+  const script = os === "windows"
     ? `$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User'); ${cmdline}; exit $LASTEXITCODE`
     : cmdline;
-  const args = isWin
+  const args = os === "windows"
     ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script]
     : ["-c", script];
   const pty = new Pty(SHELL, { args });
@@ -274,7 +271,7 @@ async function runInPty(
   let lastActivity = Date.now();
   const watcher = makeWatcher({
     i,
-    isWin,
+    os,
     silenceMs: WAIT_SILENCE_MS,
     spawner: powershellSpawner,
     emit: (m) => {
@@ -284,7 +281,7 @@ async function runInPty(
     },
     now: () => Date.now(),
   });
-  const watchTimer = isWin
+  const watchTimer = os === "windows"
     ? setInterval(() => watcher.runTick(Deno.pid, lastActivity), WAIT_TICK_MS)
     : null;
 
@@ -334,9 +331,11 @@ async function captureVersion(s: Step): Promise<string> {
     // Run the detect command capturing stdout (the silent presenceProbe only
     // keeps the exit code — here we want the output to pull a version from it).
     const { code, stdout } = await new Deno.Command(
-      isWin ? "powershell.exe" : "/bin/sh",
+      os === "windows" ? "powershell.exe" : "/bin/sh",
       {
-        args: isWin ? ["-NoProfile", "-Command", s.detect] : ["-c", s.detect],
+        args: os === "windows"
+          ? ["-NoProfile", "-Command", s.detect]
+          : ["-c", s.detect],
         stdout: "piped",
         stderr: "null",
         stdin: "null",
@@ -449,8 +448,8 @@ async function applyDiff(
   const acts = (i: number) => !inScope || inScope.has(i);
 
   const [presences, scan] = await Promise.all([
-    Promise.all(STEPS.map((s) => detectPresentDetailed(s, isWin))),
-    scanOutdated(isWin),
+    Promise.all(STEPS.map((s) => detectPresentDetailed(s, os))),
+    scanOutdated(os),
   ]);
 
   // Future state per package for THIS Apply: present now OR the user wants it on
@@ -555,7 +554,7 @@ const APP_HEIGHT = 720;
 // stdio handles, so spawning cmd throws "Invalid handle").
 function chromiumApp(url: string): { cmd: string; args: string[] } | null {
   const flags = [`--app=${url}`, `--window-size=${APP_WIDTH},${APP_HEIGHT}`];
-  const candidates = isWin
+  const candidates = os === "windows"
     ? [
       `${
         Deno.env.get("ProgramFiles(x86)")
@@ -570,7 +569,7 @@ function chromiumApp(url: string): { cmd: string; args: string[] } | null {
         Deno.env.get("ProgramFiles(x86)")
       }\\Google\\Chrome\\Application\\chrome.exe`,
     ]
-    : Deno.build.os === "darwin"
+    : os === "darwin"
     ? [
       "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
       "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -601,7 +600,7 @@ function openPanel() {
     if (app) {
       spawn(app.cmd, app.args);
       log(`openPanel: app window via ${app.cmd}`);
-    } else if (isWin) {
+    } else if (os === "windows") {
       // No Chromium found — hand the URL to the shell's default handler.
       spawn("cmd", ["/c", "start", "", url]);
       log("openPanel: fallback to default browser");
@@ -621,7 +620,7 @@ function openPanel() {
 // faithfully: netstat+taskkill on Windows, lsof+kill on Mac/Linux.
 async function killPortHolder() {
   try {
-    if (isWin) {
+    if (os === "windows") {
       const out = await new Deno.Command("netstat", {
         args: ["-ano"],
         stdin: "null",
@@ -732,8 +731,8 @@ async function detectAll(ws: WebSocket) {
     // (scanOutdated never rejects → empty map on any hiccup), so it can only add
     // "outdated" lights, never block or break the presence pass.
     const [results, scan] = await Promise.all([
-      Promise.all(STEPS.map((s) => detectPresentDetailed(s, isWin))),
-      scanOutdated(isWin),
+      Promise.all(STEPS.map((s) => detectPresentDetailed(s, os))),
+      scanOutdated(os),
     ]);
     // Future state per package: present now OR desired-present at rest (posture
     // default — no user toggle yet at connect). Feeds requires resolution so a

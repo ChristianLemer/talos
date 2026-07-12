@@ -16,6 +16,8 @@
 // The scheduler (setInterval) lives at the call site (server.ts): it's trivial
 // plumbing around runTick(), nothing to test.
 
+import type { Os } from "./platform.ts";
+
 // --- the scan result -------------------------------------------------------
 
 export interface Scan {
@@ -140,7 +142,7 @@ type Emit = (msg: unknown) => void;
 
 export interface WatcherOpts {
   i: number; // step index — tags every message so the UI knows the row
-  isWin: boolean;
+  os: Os;
   silenceMs: number; // pty quiet longer than this + no window → likely UAC
   spawner: Spawner; // runs SCAN_SCRIPT for a pid, returns raw stdout
   emit: Emit; // sends a WS message to the client
@@ -165,7 +167,7 @@ export function makeWatcher(o: WatcherOpts): Watcher {
 
   return {
     async runTick(pid, lastActivity) {
-      if (!o.isWin || stopped || inFlight) return;
+      if (o.os !== "windows" || stopped || inFlight) return;
       inFlight = true;
       try {
         const scan = parseScan(await o.spawner(pid));
