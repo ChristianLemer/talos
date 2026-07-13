@@ -788,6 +788,19 @@ document.getElementById("consent-toggle").onchange = (e) =>
 document.getElementById("clear-log").onclick = () =>
   ws.send(JSON.stringify({ type: "clear-log" }));
 
+// Stamp the UI with the exact source snapshot this exe was built from — in the
+// window title (always visible) and the Log & settings footer. This is the
+// answer to "which binary is actually running?" that cost us a long detour.
+function showBuild(build) {
+  // Order mirrors `jj log`: change id leads, commit id (git-sha) trails.
+  const label = `${build.change} · ${build.sha}`;
+  document.title = `Talos · ${build.change}`;
+  const el = document.getElementById("buildinfo");
+  if (el) {
+    el.textContent = `build ${label} — ${build.builtAt}`;
+  }
+}
+
 function renderLog(consent, history) {
   document.getElementById("consent-toggle").checked =
     !!(consent && consent.share);
@@ -825,6 +838,7 @@ ws.onmessage = (ev) => {
       );
       applySavedSelection(msg.selection); // restore persisted decisions (yellow)
       if (msg.consent && !msg.consent.decided) consentEl.classList.add("show"); // first boot
+      if (msg.build) showBuild(msg.build); // stamp the UI with the exact source snapshot
       break;
     case "log":
       renderLog(msg.consent, msg.history);

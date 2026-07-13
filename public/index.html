@@ -339,6 +339,8 @@
       .dangerbtn:hover { color:#f7768e; border-color:#f7768e; }
       #history { padding:8px 14px 16px; }
       .hist-empty { color:var(--dim); font-size:13px; padding:12px 0; }
+      .buildinfo { padding:14px; color:var(--dim); font-size:11px;
+                   font-family:"JetBrains Mono",monospace; border-top:1px solid var(--line); }
       .hist-row { display:flex; gap:12px; align-items:baseline; padding:6px 0; border-bottom:1px solid var(--line); font-size:13px; }
       .hist-row .h-when { color:var(--dim); font-size:11px; font-family:"JetBrains Mono",monospace; width:130px; flex:none; }
       .hist-row .h-pkg { flex:1; }
@@ -491,6 +493,10 @@
         </div>
       </div>
       <div id="history"></div>
+      <!-- Build stamp: the exact source snapshot this exe was compiled from.
+           Filled by app.js from the plan's `build`. Kills the "which binary is
+           running?" ambiguity — visible without hunting through log files. -->
+      <div id="buildinfo" class="buildinfo"></div>
     </div>
 
     <script>
