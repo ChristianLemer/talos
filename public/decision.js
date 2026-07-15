@@ -7,6 +7,7 @@
 //
 // Everything is a pure function of its arguments: same inputs, same output, no
 // side effects. That is what makes decision.test.mjs possible.
+import { compareVersions } from "./version.js";
 
 // The four postures an author may declare (chezmoi convention).
 export const POSTURES = ["mandatory", "opt-out", "opt-in", "forbidden"];
@@ -91,12 +92,34 @@ export function profileState(profile, active, isIn) {
 // Given a DESIRED state and the machine reality, the action a plain Apply would
 // take — or null if nothing to do. THIS is the rule the server executes and the
 // front previews; they must agree, so they call the same function.
-//   desired present & absent           → install
-//   desired present & present & stale  → upgrade
-//   desired absent  & present          → uninstall (only if removable)
-export function actionFor(desired, { present, outdated, canUninstall }) {
+//   desired present & absent                     → install
+//   desired present & present & below pin        → upgrade   (to the pin)
+//   desired present & present & above pin         → downgrade (to the pin) — MANUAL
+//   desired present & present & stale (no pin)    → upgrade   (to latest)
+//   desired absent  & present                     → uninstall (only if removable)
+//
+// A `pin` (exact version declared in the YAML) REFRAMES "outdated": the reference
+// is no longer "latest" but the pin, so the machine-wide outdated flag is ignored
+// when a pin is present. compareVersions(installed, pin) decides the direction:
+//   installed <  pin → upgrade    (Apply runs it — install/upgrade only)
+//   installed == pin → null       (satisfied — the whole point of an exact pin)
+//   installed >  pin → downgrade  (a distinct action Apply FILTERS OUT: it's the
+//                                   only destructive path — uninstall+install — so
+//                                   it's a manual per-row button, never batched)
+export function actionFor(
+  desired,
+  { present, outdated, canUninstall, pin, installedVersion },
+) {
   if (desired === "present" && !present) return "install";
-  if (desired === "present" && present && outdated) return "upgrade";
+  if (desired === "present" && present) {
+    if (pin) {
+      const cmp = compareVersions(installedVersion || "", pin);
+      if (cmp < 0) return "upgrade";
+      if (cmp > 0) return "downgrade";
+      return null; // at the pin → satisfied
+    }
+    if (outdated) return "upgrade";
+  }
   if (desired === "absent" && present && canUninstall) return "uninstall";
   return null;
 }

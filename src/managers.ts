@@ -17,6 +17,11 @@ export interface SystemManager {
   os: Os[]; // where this manager reigns
   idField: "winget" | "brew"; // which RawPkg field carries its id
   install(id: string): string;
+  // Install at an EXACT version — the pin. winget takes `--version`; brew has no
+  // such flag, so it installs the versioned formula `id@ver` (which exists ONLY
+  // when the tap provides it — the documented brew wall). Used for both pinned
+  // install and pinned upgrade (an exact pin never overshoots to latest).
+  installPinned(id: string, version: string): string;
   uninstall(id: string): string;
   upgrade(id: string): string;
   presenceCommand(id: string): string; // exit 0 iff installed; stdout carries version
@@ -31,6 +36,8 @@ export const WINGET: SystemManager = {
   idField: "winget",
   install: (id) =>
     `winget install --id ${id} -e --source winget --accept-source-agreements --accept-package-agreements`,
+  installPinned: (id, version) =>
+    `winget install --id ${id} -e --version ${version} --source winget --accept-source-agreements --accept-package-agreements`,
   uninstall: (id) => `winget uninstall --id ${id} -e --source winget`,
   upgrade: (id) =>
     `winget upgrade --id ${id} -e --source winget --accept-source-agreements --accept-package-agreements`,
@@ -44,7 +51,10 @@ export const WINGET: SystemManager = {
     for (const line of clean.split(/\r?\n/)) {
       const cols = line.trim().split(/\s{1,}/);
       const at = cols.findIndex((c) => c.toLowerCase() === lc);
-      if (at >= 0 && cols[at + 1]) return cols[at + 1];
+      // Same guard as BREW: the token after the id must look like a version
+      // (starts with a digit), so a "<id> version X" binary line doesn't grab the
+      // word "version". versionFrom then falls back to the generic matcher.
+      if (at >= 0 && /^\d/.test(cols[at + 1] ?? "")) return cols[at + 1];
     }
     return "";
   },
@@ -57,9 +67,19 @@ export const BREW: SystemManager = {
   route: "brew",
   os: ["darwin", "linux"],
   idField: "brew",
-  install: (id) => `brew install ${id}`,
+  // --yes: brew 6.x asks "[y/n]" before upgrading dependencies (e.g. node pulls
+  // c-ares). Talos's xterm is display-only — no stdin reaches the pty — so a
+  // prompt DEADLOCKS the step forever. Clicking Apply is already the consent, so
+  // we auto-answer on every mutating command. uninstall doesn't prompt. The
+  // winget counterpart is --accept-*-agreements.
+  install: (id) => `brew install --yes ${id}`,
+  // brew has no --version flag: an exact version is a SEPARATE versioned formula
+  // `id@ver` (e.g. jq@1.8), which resolves only if the tap ships it. The brew wall
+  // (see memory talos-version-pin): a pin whose formula doesn't exist will fail at
+  // install time — repaint-at-apply then shows the real (unchanged) state.
+  installPinned: (id, version) => `brew install --yes ${id}@${version}`,
   uninstall: (id) => `brew uninstall ${id}`,
-  upgrade: (id) => `brew upgrade ${id}`,
+  upgrade: (id) => `brew upgrade --yes ${id}`,
   // `brew list --versions X` gives the version for a FORMULA but is EMPTY for a
   // cask; the `|| ... --cask` fallback covers casks. Uniform: exit 0 + "<id> <ver>"
   // when present (either kind), exit 1 + "" when absent. brew resolves cask-vs-
@@ -69,7 +89,14 @@ export const BREW: SystemManager = {
   parseVersion: (id, output) => {
     for (const line of output.split(/\r?\n/)) {
       const cols = line.trim().split(/\s+/);
-      if (cols[0]?.toLowerCase() === id.toLowerCase() && cols[1]) {
+      // Require the token AFTER the id to look like a version (starts with a
+      // digit). `brew list` prints "git 2.50.1", but the BINARY probe for a
+      // brew-declared package can print "git version 2.50.1 …" (Apple git) — there
+      // the next token is the word "version". Rejecting it lets versionFrom fall
+      // back to the generic matcher that finds 2.50.1.
+      if (
+        cols[0]?.toLowerCase() === id.toLowerCase() && /^\d/.test(cols[1] ?? "")
+      ) {
         return cols[1];
       }
     }

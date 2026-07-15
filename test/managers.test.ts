@@ -57,9 +57,16 @@ Deno.test("parseWingetUpgrade: real fixture → one entry per outdated row, keye
 });
 
 Deno.test("BREW: install/uninstall/upgrade (brew resolves cask vs formula itself)", () => {
-  assertEquals(BREW.install("ripgrep"), "brew install ripgrep");
+  // --yes: brew 6.x prompts "[y/n]" before upgrading dependencies. Talos's xterm
+  // is display-only (no stdin path), so a prompt DEADLOCKS the step. Pressing
+  // Apply already IS the consent — auto-answer so the command never asks.
+  assertEquals(BREW.install("ripgrep"), "brew install --yes ripgrep");
   assertEquals(BREW.uninstall("ripgrep"), "brew uninstall ripgrep");
-  assertEquals(BREW.upgrade("ripgrep"), "brew upgrade ripgrep");
+  assertEquals(BREW.upgrade("ripgrep"), "brew upgrade --yes ripgrep");
+});
+
+Deno.test("BREW.installPinned: versioned formula, also non-interactive", () => {
+  assertEquals(BREW.installPinned("jq", "1.8"), "brew install --yes jq@1.8");
 });
 
 Deno.test("BREW: presence command is uniform across formula and cask", () => {
@@ -73,6 +80,18 @@ Deno.test("BREW.parseVersion: token after the id (formula and cask alike)", () =
   assertEquals(BREW.parseVersion("jq", "jq 1.8.2"), "1.8.2");
   assertEquals(BREW.parseVersion("obsidian", "obsidian 1.12.7"), "1.12.7");
   assertEquals(BREW.parseVersion("jq", ""), "");
+});
+
+Deno.test("BREW.parseVersion: id followed by a NON-version word → no match (binary-format line)", () => {
+  // The binary probe for a brew-declared package can print a line like
+  // "git version 2.50.1 (Apple Git-155)" (Apple git, NOT brew list's "git 2.50.1").
+  // The token after the id is then "version", not a number — must NOT be taken as
+  // the version. Returning "" lets versionFrom fall back to the generic matcher
+  // that finds 2.50.1. (This is why Git showed the literal word "version".)
+  assertEquals(
+    BREW.parseVersion("git", "git version 2.50.1 (Apple Git-155)"),
+    "",
+  );
 });
 
 Deno.test("BREW.parseOutdated: json=v2 formulae+casks → map keyed by lowercased name", () => {

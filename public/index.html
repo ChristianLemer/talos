@@ -164,8 +164,18 @@
       .uninstalling { color:#e0af68; }
       .upgrading    { color:#7dcfff; }
       .ok           { color:#9ece6a; }
-      /* Version delta shown next to an upgrade row, e.g. 2.54 → 2.55 */
-      .verdelta { font-family:"JetBrains Mono",monospace; font-size:11px; color:#7dcfff; margin-left:6px; }
+      /* The row's version display (paintVersion) — ONE colour language shared with
+         the buttons, so a coloured target matches the button that leads there:
+           .v-cur    current/installed state — BLUE  (same family as the avail btn)
+           .v-push   install/upgrade target  — GREEN (#9ece6a, the add button)
+           .v-remove uninstall → "absent"    — RED   (#f7768e, the remove button)
+           .v-muted  downgrade / past-pin     — GREY  (manual, not pushed)
+         The 📌 pin marker rides inside its number's colour (no separate tint). */
+      .verdelta { font-family:"JetBrains Mono",monospace; font-size:11px; margin-left:6px; }
+      .verdelta .v-cur    { color:#7aa2f7; }
+      .verdelta .v-push   { color:#9ece6a; }
+      .verdelta .v-remove { color:#f7768e; }
+      .verdelta .v-muted  { color:var(--dim); }
       .absent       { color:var(--dim); }
       /* A config-atom the user turned off: self-managed, neutral dim — Talos
          won't touch it, so the row doesn't read as "removed". */
@@ -350,10 +360,41 @@
       .hist-row .h-pkg { flex:1; }
       .hist-row .h-ver { color:var(--dim); font-family:"JetBrains Mono",monospace; font-size:12px; }
       .hist-row .h-act.ok { color:#9ece6a; } .hist-row .h-act.fail { color:#f7768e; }
-      /* Consent + reset-confirm dialogs reuse the overlay box */
-      #consent, #reset-confirm { position:fixed; inset:0; z-index:60; display:none; align-items:center; justify-content:center;
+      /* Consent + reset-confirm + forbidden dialogs reuse the overlay box */
+      #consent, #reset-confirm, #forbidden { position:fixed; inset:0; z-index:60; display:none; align-items:center; justify-content:center;
                  background:rgba(16,17,24,.94); backdrop-filter:blur(3px); padding:40px; }
-      #consent.show, #reset-confirm.show { display:flex; }
+      #consent.show, #reset-confirm.show, #forbidden.show { display:flex; }
+      /* Firewall-403 modal: amber accent (a caution, not a failure), numbered
+         steps, the blocked URL as a fallback link under them. */
+      /* Wider than the plain consent card (48ch) — the numbered steps read badly
+         cramped; give them room. */
+      #forbidden .overlay-card { max-width:62ch; }
+      #forbidden .fb-mark { font-size:30px; color:#e0af68; text-align:center; margin-bottom:10px; }
+      #forbidden h2 { text-align:center; }
+      .fb-steps { color:#a9b1d6; font-size:14px; line-height:1.6; margin:4px 0 12px; padding-left:22px; }
+      /* The reassurance line — amber, on its own line, so it stands out from the step. */
+      .fb-note { color:#e0af68; }
+      .fb-link-wrap { word-break:break-all; }
+      .fb-link-wrap a { color:#7aa2f7; }
+      .fb-link-wrap.empty { display:none; } /* no URL extractable → hide the link line */
+      /* "More info…" — a quiet text link that reveals the raw URL on demand, so
+         the modal isn't cluttered with it by default (most users never need it). */
+      .fb-moreinfo { text-align:center; margin:10px 0 0; }
+      .fb-linkbtn { background:none; border:none; color:var(--dim); font-size:12px;
+                    cursor:pointer; text-decoration:underline; padding:0; }
+      .fb-linkbtn:hover { color:#7aa2f7; }
+      .fb-moreinfo.empty { display:none; } /* no URL → nothing to reveal */
+      /* Row-level firewall banner — the DURABLE recovery UI (the modal is transient).
+         Lives at the top of a forbidden row's panel; amber like the modal. */
+      .fb-banner { display:none; margin:0 0 8px; padding:9px 12px; border-radius:7px; font-size:13px; line-height:1.5;
+                   background:#2b2416; border:1px solid #5a4a24; color:#e0af68; }
+      .fb-banner.show { display:block; }
+      .fb-banner b { color:#f0c886; }
+      .fb-banner a { color:#7aa2f7; word-break:break-all; }
+      .fb-banner-actions { display:flex; gap:8px; margin-top:8px; }
+      .fb-banner-actions button { background:none; border:1px solid #5a4a24; color:#e0af68;
+                   padding:5px 12px; border-radius:6px; font-size:12px; cursor:pointer; }
+      .fb-banner-actions button:hover { background:#3a3320; }
       .consent-card { max-width:48ch; }
       .consent-card h2 { font-size:19px; margin:0 0 12px; }
       .consent-card p { color:#a9b1d6; font-size:14px; line-height:1.55; margin:0 0 10px; }
@@ -418,6 +459,28 @@
         <button id="reset-confirm-yes" class="dlgbtn-danger">Yes, reset to standard</button>
         <button id="reset-confirm-no" class="globalbtn">No — keep my settings</button>
       </div>
+    </div></div>
+
+    <!-- Firewall-403 recovery — a download was blocked by the corporate firewall.
+         Transient: the ROW carries the durable banner + buttons (source of truth);
+         this modal just grabs attention for the active block. Populated + shown by
+         showForbidden() on a `forbidden` event, dismissed on Retry/Give-up/success. -->
+    <div id="forbidden"><div class="overlay-card consent-card">
+      <div class="fb-mark">⚠</div>
+      <h2>A download was blocked by the corporate firewall (403)</h2>
+      <ol class="fb-steps">
+        <li>Click <b>Open blocked page</b> below.</li>
+        <li>On that page, just <b>approve the access request</b>.<br><span class="fb-note">You don't need to download or open anything yourself.</span></li>
+        <li>Come back here and click <b>Retry</b> — Talos downloads it for you.</li>
+      </ol>
+      <div class="consent-actions">
+        <button id="fb-open" class="globalbtn">Open blocked page</button>
+        <button id="fb-retry" class="dlgbtn-sec">Retry</button>
+        <button id="fb-giveup" class="dlgbtn-sec">Give up</button>
+      </div>
+      <!-- Link tucked away — shown only if the user asks (most never need it). -->
+      <p class="fb-moreinfo"><button id="fb-moreinfo" class="fb-linkbtn">More info…</button></p>
+      <p class="fb-link-wrap muted" hidden>Blocked page: <a id="fb-link" href="#" target="_blank" rel="noopener"></a></p>
     </div></div>
 
     <!-- First-boot consent dialog -->

@@ -84,6 +84,67 @@ test("actionFor: converge desired vs machine", () => {
   assert.equal(actionFor("absent", { present: false }), null); // already gone
 });
 
+test("actionFor with a pin: below → upgrade, equal → nothing, above → downgrade", () => {
+  // installed BELOW the pin → bring it up to the pin (Apply auto).
+  assert.equal(
+    actionFor("present", {
+      present: true,
+      pin: "1.8.0",
+      installedVersion: "1.5.0",
+    }),
+    "upgrade",
+  );
+  // installed AT the pin → satisfied, nothing to do.
+  assert.equal(
+    actionFor("present", {
+      present: true,
+      pin: "1.8.0",
+      installedVersion: "1.8.0",
+    }),
+    null,
+  );
+  // installed ABOVE the pin → downgrade (manual button, never Apply).
+  assert.equal(
+    actionFor("present", {
+      present: true,
+      pin: "1.8.0",
+      installedVersion: "2.0.0",
+    }),
+    "downgrade",
+  );
+});
+
+test("actionFor: a pin OVERRIDES the machine-wide outdated flag (pin is the reference)", () => {
+  // outdated says "newer exists", but the pin says 1.8 is the truth and we're AT
+  // it → nothing. Talos must not chase past the user's own pin.
+  assert.equal(
+    actionFor("present", {
+      present: true,
+      outdated: true,
+      pin: "1.8.0",
+      installedVersion: "1.8.0",
+    }),
+    null,
+  );
+});
+
+test("actionFor: absent + pin → install (command carries the pin), absent still wins for removal", () => {
+  assert.equal(
+    actionFor("present", { present: false, pin: "1.8.0" }),
+    "install",
+  );
+  // A pin never keeps a package the user turned off: absent + present → uninstall.
+  assert.equal(
+    actionFor("absent", {
+      present: true,
+      canUninstall: true,
+      pin: "1.8.0",
+      installedVersion: "2.0.0",
+    }),
+    "uninstall",
+  );
+});
+
 test("effectiveToggle: manual toggle always wins over a profile pull", () => {
   assert.equal(effectiveToggle("out", true), "out"); // manual out beats profile → hollow
   assert.equal(effectiveToggle("in", false), "in"); // manual in stands

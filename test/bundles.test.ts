@@ -16,8 +16,8 @@ Deno.test("commandsFor: winget route on windows", () => {
 Deno.test("commandsFor: brew route on darwin", () => {
   const c = commandsFor({ name: "ripgrep", brew: "ripgrep" }, "darwin");
   assertEquals(c.route, "brew");
-  assertEquals(c.install, "brew install ripgrep");
-  assertEquals(c.upgrade, "brew upgrade ripgrep");
+  assertEquals(c.install, "brew install --yes ripgrep");
+  assertEquals(c.upgrade, "brew upgrade --yes ripgrep");
 });
 
 Deno.test("commandsFor: winget+brew package picks the NATIVE manager per OS", () => {
@@ -29,7 +29,10 @@ Deno.test("commandsFor: winget+brew package picks the NATIVE manager per OS", ()
   assertEquals(commandsFor(pkg, "windows").route, "winget");
   assertEquals(commandsFor(pkg, "darwin").route, "brew");
   assertEquals(commandsFor(pkg, "linux").route, "brew");
-  assertEquals(commandsFor(pkg, "darwin").install, "brew install ripgrep");
+  assertEquals(
+    commandsFor(pkg, "darwin").install,
+    "brew install --yes ripgrep",
+  );
 });
 
 Deno.test("commandsFor: cargo reinstalls as its upgrade", () => {
@@ -117,7 +120,69 @@ Deno.test("commandsFor: no route → all null (a need with no way to satisfy it)
     install: null,
     uninstall: null,
     upgrade: null,
+    downgrade: null,
   });
+});
+
+// --- version pinning: install/upgrade target the exact pin; downgrade =
+// uninstall && install-at-pin (destructive path, uniform). No version → downgrade
+// null and install/upgrade unchanged. See memory talos-version-pin.
+Deno.test("commandsFor: unpinned package has no downgrade (pin is the only source)", () => {
+  const c = commandsFor({ name: "ripgrep", brew: "ripgrep" }, "darwin");
+  assertEquals(c.downgrade, null);
+  assertEquals(c.install, "brew install --yes ripgrep"); // unchanged
+  assertEquals(c.upgrade, "brew upgrade --yes ripgrep"); // unchanged
+});
+
+Deno.test("commandsFor: brew pinned → versioned formula, downgrade uninstalls first", () => {
+  const c = commandsFor({ name: "jq", brew: "jq", version: "1.8" }, "darwin");
+  assertEquals(c.install, "brew install --yes jq@1.8");
+  assertEquals(c.upgrade, "brew install --yes jq@1.8"); // upgrade-to-pin = install at pin
+  assertEquals(c.downgrade, "brew uninstall jq && brew install --yes jq@1.8");
+});
+
+Deno.test("commandsFor: winget pinned → --version, downgrade uninstalls first", () => {
+  const c = commandsFor(
+    { name: "Git", winget: "Git.Git", version: "2.43.0" },
+    "windows",
+  );
+  assertEquals(
+    c.install,
+    "winget install --id Git.Git -e --version 2.43.0 --source winget --accept-source-agreements --accept-package-agreements",
+  );
+  assertEquals(
+    c.downgrade,
+    "winget uninstall --id Git.Git -e --source winget && winget install --id Git.Git -e --version 2.43.0 --source winget --accept-source-agreements --accept-package-agreements",
+  );
+});
+
+Deno.test("commandsFor: cargo pinned → --version", () => {
+  const c = commandsFor(
+    { name: "fd", cargo: "fd-find", version: "10.1.0" },
+    "darwin",
+  );
+  assertEquals(c.install, "cargo install fd-find --version 10.1.0");
+  assertEquals(c.upgrade, "cargo install fd-find --version 10.1.0");
+  assertEquals(
+    c.downgrade,
+    "cargo uninstall fd-find && cargo install fd-find --version 10.1.0",
+  );
+});
+
+Deno.test("commandsFor: npm pinned → @version (flags preserved)", () => {
+  const c = commandsFor(
+    {
+      name: "Claude Code",
+      npm: "@anthropic-ai/claude-code",
+      npmFlags: "--foreground-scripts",
+      version: "1.2.3",
+    },
+    "darwin",
+  );
+  assertEquals(
+    c.install,
+    "npm install -g --foreground-scripts @anthropic-ai/claude-code@1.2.3",
+  );
 });
 
 Deno.test("loadBundles: missing dir opens inert (empty plan, no throw)", () => {
@@ -167,7 +232,7 @@ Deno.test("loadBundles: winget+brew package resolves to brew on darwin", () => {
   const rg = steps.find((s) => s.name === "ripgrep");
   assertEquals(rg?.route, "brew");
   assertEquals(rg?.systemId, "ripgrep");
-  assertEquals(rg?.install, "brew install ripgrep");
+  assertEquals(rg?.install, "brew install --yes ripgrep");
 });
 
 Deno.test("outdated bridge: darwin systemId matches a brew-keyed scan (regression: was wingetId)", () => {

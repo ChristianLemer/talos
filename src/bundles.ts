@@ -45,6 +45,11 @@ export interface Commands {
   install: string | null;
   uninstall: string | null;
   upgrade: string | null;
+  // Only non-null when the package is PINNED (`version:` in YAML) AND the route
+  // can express a downgrade: uninstall then install-at-pin. It is the sole
+  // DESTRUCTIVE path, so Apply never runs it (see applyDiff) — it lives as a
+  // manual per-row button. null for every unpinned package.
+  downgrade: string | null;
 }
 
 export interface Step extends Commands {
@@ -69,6 +74,11 @@ export interface Step extends Commands {
   // wrong — the displayed version is the diagnostic that reveals which package
   // needs one. Pure JS regex, no shell, no dependency.
   versionRegex: string | null;
+  // The EXACT version pinned in the YAML (`version:`), or null. When set it is the
+  // REFERENCE: the decision rule (actionFor) compares the installed version to it —
+  // below → upgrade, equal → satisfied, above → downgrade (manual). See
+  // memory talos-version-pin.
+  pin: string | null;
   requires: string[];
   posture: Posture;
 }
@@ -93,6 +103,7 @@ interface RawPkg {
   detect?: string;
   check?: string; // run-route: a dry-run command; exit 0 = converged/present
   "version-regex"?: string; // optional regex refining version extraction from output
+  version?: string; // EXACT pin — the reference the installed version is compared to
   requires?: string[];
 }
 
@@ -118,6 +129,13 @@ export function commandsFor(
   pkg: RawPkg,
   os: Os,
 ): { route: string | null } & Commands {
+  // A pinned package (`version:`) targets an EXACT version. Pinning is per-route:
+  // each manager spells "this exact version" differently, and downgrade — the only
+  // destructive path — is uniformly uninstall-then-install-at-pin. `ver` is the
+  // pin (or ""), used below to branch each route's commands. Routes that can't
+  // pin (run/claude-plugin/skill) simply ignore it and leave downgrade null.
+  const ver = (pkg.version ?? "").trim();
+
   // FAMILY 1 — system manager, arbitrated by OS. If the package declares an id
   // for the manager native to THIS os (pkg.winget on Windows, pkg.brew on
   // darwin/linux), use it; the non-native system id is ignored (winget on a Mac
@@ -126,41 +144,71 @@ export function commandsFor(
   if (mgr) {
     const id = mgr.idField === "winget" ? pkg.winget : pkg.brew;
     if (id) {
+      // Pinned: install AT the pin (a plain upgrade overshoots to latest, wrong
+      // for an exact pin, so upgrade-to-pin == install-at-pin); downgrade first
+      // uninstalls. brew's "install at version" is the versioned formula id@ver
+      // (works ONLY if that formula exists — the documented brew wall); winget
+      // takes --version. installPinned is defined per manager.
+      if (ver) {
+        const inst = mgr.installPinned(id, ver);
+        return {
+          route: mgr.route,
+          install: inst,
+          uninstall: mgr.uninstall(id),
+          upgrade: inst,
+          downgrade: `${mgr.uninstall(id)} && ${inst}`,
+        };
+      }
       return {
         route: mgr.route,
         install: mgr.install(id),
         uninstall: mgr.uninstall(id),
         upgrade: mgr.upgrade(id),
+        downgrade: null,
       };
     }
   }
   if (pkg.cargo) {
     // cargo: cross-platform, no uninstall-by-upgrade — reinstall IS the upgrade.
+    // Pinned → `--version V` (cargo's exact-version flag); downgrade uninstalls first.
+    const inst = ver
+      ? `cargo install ${pkg.cargo} --version ${ver}`
+      : `cargo install ${pkg.cargo}`;
     return {
       route: "cargo",
-      install: `cargo install ${pkg.cargo}`,
+      install: inst,
       uninstall: `cargo uninstall ${pkg.cargo}`,
-      upgrade: `cargo install ${pkg.cargo}`, // cargo reinstalls to latest
+      upgrade: inst, // cargo reinstalls (to latest, or to the pin when pinned)
+      downgrade: ver ? `cargo uninstall ${pkg.cargo} && ${inst}` : null,
     };
   }
   if (pkg.npm) {
     const flags = pkg.npmFlags ? pkg.npmFlags + " " : "";
+    // Pinned → `pkg@V`; else `pkg` for install and `pkg@latest` for upgrade.
+    const instTarget = ver ? `${pkg.npm}@${ver}` : pkg.npm;
     return {
       route: "npm",
-      install: `npm install -g ${flags}${pkg.npm}`,
+      install: `npm install -g ${flags}${instTarget}`,
       uninstall: `npm uninstall -g ${pkg.npm}`,
       // npm has no cheap "list everything outdated" we parse today, so npm
       // upgrades are never TRIGGERED — but the command is here, future-ready.
-      upgrade: `npm install -g ${flags}${pkg.npm}@latest`,
+      // Pinned → upgrade targets the pin, not @latest.
+      upgrade: `npm install -g ${flags}${
+        ver ? `${pkg.npm}@${ver}` : `${pkg.npm}@latest`
+      }`,
+      downgrade: ver
+        ? `npm uninstall -g ${pkg.npm} && npm install -g ${flags}${instTarget}`
+        : null,
     };
   }
   if (pkg.run) {
-    // Escape hatch: a raw command. No upgrade notion.
+    // Escape hatch: a raw command. No upgrade notion, no pin (the command is opaque).
     return {
       route: "run",
       install: pkg.run,
       uninstall: pkg.runUninstall ?? null,
       upgrade: null,
+      downgrade: null,
     };
   }
   if (pkg["claude-plugin"]) {
@@ -179,6 +227,7 @@ export function commandsFor(
       install: `${add}claude plugin install ${id} --scope user`,
       uninstall: `claude plugin uninstall ${id}`,
       upgrade: `claude plugin update ${id}`,
+      downgrade: null, // plugins version by marketplace ref, not a pin we control
     };
   }
   if (pkg.skill) {
@@ -191,9 +240,16 @@ export function commandsFor(
       install: `npx skills add ${src} -g -y`,
       uninstall: `npx skills remove ${name} -y`,
       upgrade: `npx skills update ${name} -y`,
+      downgrade: null,
     };
   }
-  return { route: null, install: null, uninstall: null, upgrade: null };
+  return {
+    route: null,
+    install: null,
+    uninstall: null,
+    upgrade: null,
+    downgrade: null,
+  };
 }
 
 function normPosture(p: string | undefined): Posture {
@@ -268,6 +324,7 @@ export function loadBundles(
           install: sub(cmd.install),
           uninstall: sub(cmd.uninstall),
           upgrade: sub(cmd.upgrade),
+          downgrade: sub(cmd.downgrade),
           route: cmd.route,
           systemId,
           detect: p.detect || null,
@@ -279,6 +336,7 @@ export function loadBundles(
           // install a package. (systemId is null for run/null routes anyway.)
           isConfig: !!p.check && (cmd.route === null || cmd.route === "run"),
           versionRegex: p["version-regex"] || null,
+          pin: p.version || null,
           requires: p.requires ?? [],
           posture: meta.posture,
         });

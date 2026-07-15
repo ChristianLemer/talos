@@ -48,6 +48,29 @@ export function shellProbe(os: Os, command: string): Probe {
   return { cmd: "/bin/sh", args: ["-lc", command] };
 }
 
+// Wrap a command STRING for the INTERACTIVE pty runner (install/upgrade/uninstall
+// shown live in a row's xterm). Sibling of shellProbe, three differences:
+//   - runs in /bin/bash (POSIX) — the SHELL the pty spawns.
+//   - NO 127 guard: the pty runner WANTS the tool's real exit code (and streams
+//     its output verbatim), so it must not swallow failures into a fixed code.
+//   - Windows keeps the PATH refresh + `exit $LASTEXITCODE` (so a tool installed
+//     earlier THIS session is found and we read the WRAPPED command's exit code,
+//     not PowerShell's own), passed as a -Command argument so it's never echoed.
+// The POSIX -lc (LOGIN) is the fix that matters: a Finder-launched .app inherits
+// launchd's minimal PATH (no /opt/homebrew/bin), so a plain -c made `brew`/`node`
+// fail with exit 127 ("command not found") even though the probe (shellProbe, -lc)
+// saw them present. Same reason, same remedy — the runner had been left on -c.
+export function ptyShell(os: Os, command: string): Probe {
+  if (os === "windows") {
+    const ps = `${WIN_PATH_REFRESH} ${command}; exit $LASTEXITCODE`;
+    return {
+      cmd: "powershell.exe",
+      args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+    };
+  }
+  return { cmd: "/bin/bash", args: ["-lc", command] };
+}
+
 export function pathSep(os: Os): "\\" | "/" {
   return os === "windows" ? "\\" : "/";
 }

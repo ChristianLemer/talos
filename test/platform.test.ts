@@ -6,6 +6,7 @@ import {
   hostEnvVar,
   type Os,
   pathSep,
+  ptyShell,
   shellProbe,
   userEnvVar,
 } from "../src/platform.ts";
@@ -44,6 +45,36 @@ Deno.test("shellProbe: Windows wraps in powershell with the 127 guard", () => {
     ),
     true,
   );
+});
+
+Deno.test("ptyShell: POSIX uses a LOGIN shell (-lc) so brew tools are on PATH", () => {
+  const p = ptyShell("darwin", "brew upgrade node");
+  assertEquals(p.cmd, "/bin/bash");
+  // -lc, NOT -c: a Finder-launched .app inherits launchd's minimal PATH (no
+  // /opt/homebrew/bin) — the install/upgrade command would fail with exit 127
+  // ("brew: command not found"). A login shell rebuilds PATH via path_helper.
+  // Same fix as shellProbe, applied to the interactive pty runner.
+  assertEquals(p.args, ["-lc", "brew upgrade node"]);
+});
+
+Deno.test("ptyShell: linux is POSIX too (login shell)", () => {
+  const p = ptyShell("linux", "brew upgrade node");
+  assertEquals(p.cmd, "/bin/bash");
+  assertEquals(p.args, ["-lc", "brew upgrade node"]);
+});
+
+Deno.test("ptyShell: Windows refreshes PATH and reads the wrapped exit code", () => {
+  const p = ptyShell("windows", "winget upgrade --id Git.Git");
+  assertEquals(p.cmd, "powershell.exe");
+  assertEquals(p.args[0], "-NoProfile");
+  assertEquals(p.args.includes("-Command"), true);
+  const script = p.args[p.args.length - 1];
+  assertEquals(
+    script.includes("GetEnvironmentVariable('Path','Machine')"),
+    true,
+  );
+  assertEquals(script.includes("winget upgrade --id Git.Git"), true);
+  assertEquals(script.includes("exit $LASTEXITCODE"), true);
 });
 
 Deno.test("pathSep: Windows backslash, POSIX forward slash", () => {

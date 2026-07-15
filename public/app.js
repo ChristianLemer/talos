@@ -81,6 +81,7 @@ const GLYPH = {
   absent: "·",
   self: "·",
   fail: "✗",
+  forbidden: "⚠",
   unknown: "?",
 };
 const LABEL = {
@@ -96,6 +97,7 @@ const LABEL = {
   absent: "removed",
   self: "self-managed",
   fail: "failed",
+  forbidden: "blocked by firewall",
   // indeterminate: no practicable route to constate presence on this machine
   // (e.g. a winget-only package on Mac). NOT "absent" — we genuinely can't know.
   unknown: "—",
@@ -254,6 +256,58 @@ function paintPkg(i) {
     r.badge.className = "badge self";
   }
 }
+// Render the row's version display — the SINGLE place numbers appear (the delta
+// slot). Reads versionSummary so it can never repeat a number or show a third:
+//   { from, to, pinned }  (see model.versionSummary)
+//     no arrow (to === null) → one number; 📌 before it when pinned:"from"
+//     arrow (to set)          → from → to; 📌 before `to` when pinned:"to"
+// The 📌 marks the pin exactly once and reads NEUTRAL (dim), not green — being at
+// or moving to your pin isn't something to push; the pin is a fact, not a nudge.
+// A pinned "to" migration still shows plainly, but the button's own colour (from
+// isActionable) decides vivid-vs-neutral, not this text.
+// ONE colour language, shared with the buttons (refreshLiveness):
+//   current version   → BLUE  (.v-cur)    — the machine state, what a button acts FROM
+//   pushed target      → GREEN (.v-push)   — install/upgrade Apply WILL run
+//   removal target     → RED   (.v-remove) — uninstall → "absent"
+//   not-pushed target  → GREY  (.v-muted)  — downgrade / upgrade past a pin (manual only)
+// So the eye follows one thread: a green button leads to a green target, a red
+// button to a red "absent", a blue/avail button to a grey (not-pushed) number.
+// The 📌 pin marker rides along inside its number's colour (no separate tint).
+function paintVersion(i) {
+  const r = rows[i];
+  if (!r || !r.delta) return;
+  const v = M.versionSummary(model, i);
+  const cur = (t) => `<span class="v-cur">${t}</span>`;
+  const push = (t) => `<span class="v-push">${t}</span>`;
+  const remove = (t) => `<span class="v-remove">${t}</span>`;
+  const muted = (t) =>
+    `<span class="v-muted" title="available — not pushed (manual)">${t}</span>`;
+  const pin = (t) => `📌${t}`;
+
+  // A PENDING uninstall reads current(blue) → absent(red) — same red as its
+  // button. Keyed on the PLAN action (actionOf), not buttonAction: the latter is
+  // the manual invert (still "upgrade" for an outdated pkg), while actionOf is
+  // what Apply will really do — "uninstall" only when the user wants it absent.
+  if (M.actionOf(model, i) === "uninstall" && v.from) {
+    r.delta.innerHTML = `${cur(v.from)} → ${remove("absent")}`;
+    return;
+  }
+  if (!v.from) {
+    r.delta.innerHTML = ""; // absent / no version to show
+    return;
+  }
+  if (v.to === null) {
+    // One number — the current state, blue. 📌 when it IS the pin (at rest).
+    r.delta.innerHTML = cur(v.pinned === "from" ? pin(v.from) : v.from);
+    return;
+  }
+  // Two numbers: current(blue) → target. Target colour = the button that leads
+  // there: muted (downgrade / upgrade-past-pin) → grey; else a real push → green.
+  const left = cur(v.pinned === "from" ? pin(v.from) : v.from);
+  const rightTxt = v.pinned === "to" ? pin(v.to) : v.to;
+  const right = v.muted ? muted(rightTxt) : push(rightTxt);
+  r.delta.innerHTML = `${left} → ${right}`;
+}
 function setToggle(i, state, opts = {}) {
   if (!M.setDecision(model, i, state)) return; // locked → refused
   paintPkg(i);
@@ -386,6 +440,10 @@ function refreshLiveness() {
       inPlan && act && act.dir === "remove",
     );
     paintPkg(i); // switch colour follows the plan — refresh it as machine state lands
+    paintVersion(i); // version display follows the plan too: toggling a row OUT
+    // flips its target to "→ absent" (uninstall), so it must repaint here, not
+    // only on state/outdated messages. Without this the number stayed stale
+    // (e.g. "→ 15.2.0 update") while the button already said uninstall.
   }
   // Bundle buttons: live if any of their packages would act.
   for (const name of Object.keys(bundleEls)) {
@@ -559,7 +617,12 @@ function render(bundles, steps, profiles = [], columns = 2) {
     };
     const host = document.createElement("div");
     host.className = "term-host";
-    panel.append(copy, host);
+    // Firewall-403 recovery banner — the DURABLE surface (the modal is transient).
+    // Hidden until a `forbidden` event; then it carries the blocked-URL link plus
+    // Retry / Give-up right beside this step's terminal output (the evidence).
+    const fbBanner = document.createElement("div");
+    fbBanner.className = "fb-banner";
+    panel.append(fbBanner, copy, host);
     d.append(sum, panel);
     body.append(d);
     rows[s.i] = {
@@ -570,6 +633,7 @@ function render(bundles, steps, profiles = [], columns = 2) {
       delta,
       apply,
       host,
+      fbBanner,
       term: null,
     };
     paintPkg(s.i); // initial pill: locked word for mandatory/forbidden, else auto
@@ -661,6 +725,111 @@ function hideWait() {
   waitbar.hidden = true;
 }
 
+// Firewall-403 recovery UI. Two surfaces, one state: the ROW banner is durable
+// (the source of truth — survives dismissing the modal, one per row), the MODAL
+// is a transient attention-grabber for the currently-blocked step. `fbActive`
+// holds the step index the modal currently speaks for, so its Retry/Give-up act
+// on the right row. url may be null (nothing extractable) → link-less message.
+const fbEl = document.getElementById("forbidden");
+const fbLinkWrap = document.querySelector(".fb-link-wrap");
+const fbLink = document.getElementById("fb-link");
+const fbMoreInfo = document.querySelector(".fb-moreinfo");
+let fbActive = null;
+let fbActiveUrl = null; // url the modal's "Open blocked page" button acts on
+
+// Ask the server to open the blocked page in a browser beside the panel. On
+// demand (button), never auto — so the user reads the guidance before the
+// window covers it. Falls back to the clickable link if the server can't open.
+function openForbidden(url) {
+  if (url) ws.send(JSON.stringify({ type: "open-forbidden", url }));
+}
+
+function renderLink(el, url) {
+  el.href = url || "#";
+  el.textContent = url || "";
+}
+
+function showForbidden(i, url) {
+  const r = rows[i];
+  if (!r) return;
+  // Row banner (durable) — guidance + Retry/Give-up, built once. No raw link by
+  // default (it's under "More info…" in the modal); the guidance says approve
+  // access, don't download — Talos re-runs the download on Retry.
+  r.fbBanner.innerHTML =
+    `<b>⚠ A download was blocked by the corporate firewall (403).</b><br>` +
+    `Open the blocked page and approve the access request — you don't need to ` +
+    `download anything. Then Retry and Talos fetches it for you.` +
+    `<div class="fb-banner-actions">` +
+    (url ? `<button data-fb="open">Open blocked page</button>` : "") +
+    `<button data-fb="retry">Retry</button>` +
+    `<button data-fb="giveup">Give up</button></div>`;
+  r.fbBanner.classList.add("show");
+  r.details.open = true;
+  const openBtn = r.fbBanner.querySelector('[data-fb="open"]');
+  if (openBtn) openBtn.onclick = () => openForbidden(url);
+  r.fbBanner.querySelector('[data-fb="retry"]').onclick = () => retryStep(i);
+  r.fbBanner.querySelector('[data-fb="giveup"]').onclick = () => giveUp(i);
+  // Transient modal — same guidance, centered and unmissable for the active block.
+  fbActive = i;
+  fbActiveUrl = url;
+  renderLink(fbLink, url);
+  document.getElementById("fb-open").style.display = url ? "" : "none";
+  // Reset the "More info…" disclosure each time: link hidden, prompt shown (only
+  // if there's a URL to reveal).
+  fbLinkWrap.hidden = true;
+  fbMoreInfo.classList.toggle("empty", !url);
+  fbEl.classList.add("show");
+}
+
+function clearForbidden(i) {
+  const r = rows[i];
+  if (r && r.fbBanner) {
+    r.fbBanner.classList.remove("show");
+    r.fbBanner.innerHTML = "";
+  }
+  if (fbActive === i) {
+    fbEl.classList.remove("show");
+    fbActive = null;
+    fbActiveUrl = null;
+  }
+}
+
+function retryStep(i) {
+  if (applyRunning) return;
+  const act = buttonAction(i); // recomputed from current model → the original action
+  if (!act) return;
+  clearForbidden(i);
+  applyRunning = true;
+  refreshLiveness();
+  overall.textContent = "retrying…";
+  ws.send(JSON.stringify({ type: "retry-step", i, action: act.type }));
+}
+
+function giveUp(i) {
+  // Settle the row as a plain failure locally — the user chose to stop. Nothing
+  // to send: the step already exited; this just drops the recovery UI.
+  clearForbidden(i);
+  setStatus(i, "fail");
+}
+
+// "More info…" reveals the raw blocked URL and hides its own prompt — for the
+// rare user who wants to see or copy the exact address.
+document.getElementById("fb-moreinfo").onclick = () => {
+  fbLinkWrap.hidden = false;
+  fbMoreInfo.classList.add("empty");
+};
+
+// Modal buttons mirror the row banner, acting on the step the modal speaks for.
+document.getElementById("fb-open").onclick = () => {
+  if (fbActive !== null) openForbidden(fbActiveUrl);
+};
+document.getElementById("fb-retry").onclick = () => {
+  if (fbActive !== null) retryStep(fbActive);
+};
+document.getElementById("fb-giveup").onclick = () => {
+  if (fbActive !== null) giveUp(fbActive);
+};
+
 function setStatus(i, status) {
   const r = rows[i];
   if (!r) return;
@@ -671,16 +840,26 @@ function setStatus(i, status) {
   r.badge.className = "badge " + status;
   r.badge.textContent = GLYPH[status] || "·";
   r.statusLabel.className = "statusLabel " + status;
-  r.statusLabel.textContent = LABEL[status] || status;
+  // "present" is NO LONGER a word: presence is carried by colour — the ✓ badge and
+  // the yellow installed version (paintVersion). So `ok` clears the label; every
+  // other state keeps its word (absent / checking… / failed / —). A present pkg
+  // with no version (plugin/config-atom) still reads present via the ✓ badge.
+  r.statusLabel.textContent = status === "ok" ? "" : (LABEL[status] || status);
   // Track presence from the settled states, so liveness knows what's on the
   // machine. (Running states are transient — leave presence as it was.)
   M.setStatusData(model, i, status);
   refreshLiveness();
-  if (RUNNING.has(status) || status === "fail") r.details.open = true; // show activity / failures
+  if (RUNNING.has(status) || status === "fail" || status === "forbidden") {
+    r.details.open = true; // show activity / failures / firewall recovery
+  }
   if (status === "ok" || status === "absent") r.details.open = false; // fold completed (frame stays)
-  // A finished/failed row has nothing more to add to its version delta;
-  // a fresh install/remove clears any stale one. (upgrade keeps it — set just before.)
-  if (r.delta && status !== "upgrading") r.delta.textContent = "";
+  // Version display is owned by paintVersion (reads versionSummary). While a row
+  // is RUNNING, blank the delta (transient); once settled, repaint from the model
+  // so the pin marker / cur→avail reappear correctly. Never write numbers here.
+  if (r.delta) {
+    if (RUNNING.has(status)) r.delta.innerHTML = "";
+    else paintVersion(i);
+  }
   // Bundle-level: open while working; STAY open between packages. Packages run
   // SERIALLY (one manager at a time), so `active` dips to 0 between each — folding
   // on active===0 mid-run made the card flap shut/open per package. Folding of a
@@ -863,6 +1042,10 @@ ws.onmessage = (ev) => {
       // present: true → present, false → absent, null → indeterminate (no route
       // to constate here — don't claim absent).
       if (rows[msg.i]) {
+        // Record the live installed version BEFORE setStatus, so the pin
+        // comparison in actionOf/buttonAction sees it when liveness refreshes.
+        // "" when the probe found no version (absent, or a route with no version).
+        M.setInstalledVersion(model, msg.i, msg.version || "");
         // A config-atom the user turned OFF is self-managed: neutral, not
         // "absent". Talos won't touch the file, so we don't judge it — the row
         // says "self-managed" and its button offers a diff (see buttonAction).
@@ -883,14 +1066,12 @@ ws.onmessage = (ev) => {
         if (msg.present === null && msg.reason) {
           rows[msg.i].statusLabel.textContent = msg.reason;
         }
-        // Present WITH a version → the version REPLACES the word "present" (it
-        // already proves presence; "present · 0.19.1" would be redundant). The
-        // green "ok" colour stays (set by setStatus) so presence reads at a
-        // glance. Without a version (plugins, config-atoms) the word "present"
-        // stays — it's then the only presence signal.
-        if (msg.present === true && msg.version) {
-          rows[msg.i].statusLabel.textContent = msg.version;
-        }
+        // Version numbers live in ONE place now (paintVersion → the delta slot),
+        // driven by versionSummary. The statusLabel keeps the PRESENCE WORD
+        // ("present") so we never show the same number twice. paintVersion runs
+        // after the outdated event too (it reads the model), so cur→avail and the
+        // pin marker land in the same single element.
+        paintVersion(msg.i);
         // Installed OUTSIDE winget → append the provenance flag (winget can't
         // upgrade/uninstall it). Present stays present; this just says HOW.
         if (msg.present === true && msg.external) {
@@ -926,13 +1107,25 @@ ws.onmessage = (ev) => {
     case "outdated": { // a present package has a newer version
       const r = rows[msg.i];
       if (!r) break;
-      M.setOutdated(model, msg.i, true);
-      if (r.delta) r.delta.textContent = `${msg.current} → ${msg.available}`;
+      // Carry the available version into the model, then let paintVersion render
+      // it (a pinned package ignores this — its pin owns the display, so no third
+      // number). One renderer, no repetition.
+      M.setOutdated(model, msg.i, true, msg.available);
+      paintVersion(msg.i);
       refreshLiveness(); // now this row's Apply is useful
       break;
     }
     case "step":
       setStatus(msg.i, msg.status);
+      // A step that settled ok clears any lingering firewall recovery UI (the
+      // 403 was transient — the exit code is truth). Retry / new run also reset it.
+      if (msg.status === "ok" || msg.status === "absent") clearForbidden(msg.i);
+      break;
+    case "forbidden":
+      // Live: a download was blocked by the firewall. Show the row banner (durable)
+      // and the transient modal. The server already opened the blocked page beside
+      // the panel; url may be null (nothing extractable → link-less message).
+      showForbidden(msg.i, msg.url || null);
       break;
     case "detail": // version delta for an upgrade, e.g. "2.54→2.55"
       if (rows[msg.i] && rows[msg.i].delta) {

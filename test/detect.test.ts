@@ -21,12 +21,14 @@ function step(partial: Partial<Step>): Step {
     install: null,
     uninstall: null,
     upgrade: null,
+    downgrade: null,
     route: partial.route ?? null,
     systemId: partial.systemId ?? null,
     detect: partial.detect ?? null,
     check: partial.check ?? null,
     isConfig: partial.isConfig ?? false,
     versionRegex: partial.versionRegex ?? null,
+    pin: partial.pin ?? null,
     requires: partial.requires ?? [],
     posture: "opt-in",
   };
@@ -36,7 +38,7 @@ function step(partial: Partial<Step>): Step {
 Deno.test("presenceProbe: POSIX runs the full detect command", () => {
   const p = presenceProbe("node --version", "darwin");
   assertEquals(p?.cmd, "/bin/sh");
-  assertEquals(p?.args, ["-c", "node --version"]);
+  assertEquals(p?.args, ["-lc", "node --version"]);
 });
 
 Deno.test("presenceProbe: Windows wraps with the 127 guard", () => {
@@ -54,7 +56,7 @@ Deno.test("presenceProbe: no detect → null", () => {
 Deno.test("checkProbe: POSIX runs the command verbatim under /bin/sh", () => {
   assertEquals(checkProbe("nu -c 'exit 0'", "darwin"), {
     cmd: "/bin/sh",
-    args: ["-c", "nu -c 'exit 0'"],
+    args: ["-lc", "nu -c 'exit 0'"],
   });
 });
 
@@ -228,6 +230,20 @@ Deno.test("versionFrom: winget route but --version output → falls back to toke
       "helix 25.07.1 (a05c151b)",
     ),
     "25.07.1",
+  );
+});
+
+Deno.test("versionFrom: brew route, binary 'git version X' line → 2.50.1, NOT the word 'version'", () => {
+  // Git declares brew: git but the machine has Apple git (external). The binary
+  // probe prints "git version 2.50.1 (Apple Git-155)" — its second token is the
+  // word "version". parseVersion must reject that non-numeric token so the generic
+  // matcher finds 2.50.1. (Bug: the row displayed the literal word "version".)
+  assertEquals(
+    versionFrom(
+      step({ route: "brew", systemId: "git" }),
+      "git version 2.50.1 (Apple Git-155)",
+    ),
+    "2.50.1",
   );
 });
 

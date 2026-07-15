@@ -11,6 +11,7 @@ import {
   profileState,
   toggleState,
 } from "./decision.js";
+import { compareVersions } from "./version.js";
 
 export function createModel() {
   return {
@@ -60,6 +61,12 @@ export function loadPlan(model, bundles, steps, profiles = []) {
       isConfig: !!s.isConfig,
       present: null,
       outdated: false,
+      // Version pinning: `pin` is the exact reference declared in the YAML (null
+      // when unpinned); `installedVersion` is what the machine reports live (set
+      // by the `state` message). actionOf compares the two. See talos-version-pin.
+      pin: s.pin || null,
+      installedVersion: "",
+      available: "", // the newer version the machine-wide scan found (unpinned only)
       status: "waiting",
       log: "",
       key: `${s.bundle}::${s.name}`,
@@ -116,10 +123,68 @@ export function actionOf(model, i) {
     present: p.present === true,
     outdated: p.outdated,
     canUninstall: p.canUninstall,
+    pin: p.pin,
+    installedVersion: p.installedVersion,
   });
 }
+// The row's version display — the SINGLE source of truth for what numbers show,
+// so nothing can double up (the old bug: statusLabel showed the installed version
+// AND the delta showed cur→avail, repeating the current one). Returns at most two
+// numbers, marks the pin exactly once, and says which target is a "push" vs a
+// muted "for info":
+//   { from, to, pinned, muted }
+//     from   — the installed version (left number), "" when absent
+//     to      — the target (right number), or null when there's nothing to show
+//     pinned  — which number IS the pin: "from" (at the pin), "to" (migrating to
+//               the pin), or null (unpinned). The view badges that number 📌.
+//     muted   — true when `to` is shown FOR INFO ONLY, not as a push: an upgrade
+//               that exists past a pin you're already sitting on. The view greys it.
+// Cases:
+//   absent                          → { from:"",  to:null,  pinned:null, muted:false }
+//   unpinned, up to date             → { from:inst, to:null,  pinned:null, muted:false }
+//   unpinned, outdated               → { from:inst, to:avail, pinned:null, muted:false }
+//   pinned, installed == pin, no upg → { from:inst, to:null,  pinned:"from", muted:false }
+//   pinned, installed == pin, upg    → { from:inst, to:avail, pinned:"from", muted:true }
+//   pinned, installed != pin         → { from:inst, to:pin,   pinned:"to",  muted:false }
+// A pin OWNS the direction: when you're AT the pin, a newer version isn't a
+// migration target (we don't push past your pin) — it's shown greyed so you can
+// still choose to test it. See talos-version-pin.
+export function versionSummary(model, i) {
+  const none = { from: "", to: null, pinned: null, muted: false };
+  const p = model.pkgs.get(i);
+  if (!p) return none;
+  const inst = p.present === true ? (p.installedVersion || "") : "";
+  if (!inst) return none;
+  if (p.pin) {
+    const cmp = compareVersions(inst, p.pin);
+    if (cmp !== 0) {
+      // Off the pin → migration TO the pin. BELOW (cmp<0) is an upgrade Apply
+      // runs → not muted (a push). ABOVE (cmp>0) is a downgrade — manual only,
+      // never batched by Apply → muted, same "not pushed" grey as an upgrade
+      // past a pin. Mirrors AUTO_ACTS excluding downgrade. See talos-version-pin.
+      return { from: inst, to: p.pin, pinned: "to", muted: cmp > 0 };
+    }
+    // At the pin: normally just the pinned number. But if the machine-wide scan
+    // found something newer, SHOW it greyed (muted) — visible to test, not pushed.
+    if (p.outdated && p.available && compareVersions(p.available, p.pin) > 0) {
+      return { from: inst, to: p.available, pinned: "from", muted: true };
+    }
+    return { from: inst, to: null, pinned: "from", muted: false };
+  }
+  // Unpinned: show the machine-wide available only when actually outdated.
+  if (p.outdated && p.available) {
+    return { from: inst, to: p.available, pinned: null, muted: false };
+  }
+  return { from: inst, to: null, pinned: null, muted: false };
+}
+// Would a PLAIN APPLY act here? Mirrors the server's AUTO_ACTS filter exactly:
+// install/uninstall/upgrade are batched by Apply; "downgrade" is NOT (it's the
+// destructive path, a manual per-row button only). Keeping this in lockstep with
+// the server is what stops the button-preview from lighting for a change Apply
+// won't make. See talos-version-pin.
+const AUTO_ACTS = ["install", "uninstall", "upgrade"];
 export function isActionable(model, i) {
-  return actionOf(model, i) != null;
+  return AUTO_ACTS.includes(actionOf(model, i));
 }
 // The manual invert action a row button performs (label + direction + msg type).
 // ALWAYS inverts current machine state: absent→install, present→uninstall,
@@ -132,6 +197,25 @@ export function buttonAction(model, i) {
   // clobber the file the user chose to own.
   if (p.isConfig && desiredOf(model, i) === "absent") {
     return { verb: "diff", dir: "", type: "diff" };
+  }
+  // A pinned & present package: the action is the direction to the pin. This wins
+  // over the outdated branch below (a pin is the reference, not "latest"). The
+  // "downgrade" button is the ONLY way to run a downgrade — Apply never does it.
+  if (p.present && p.pin) {
+    const a = actionOf(model, i);
+    if (a === "downgrade") {
+      return { verb: "downgrade", dir: "remove", type: "downgrade" };
+    }
+    if (a === "upgrade") return { verb: "update", dir: "add", type: "upgrade" };
+    // at the pin → satisfied: fall through to the present/uninstall logic below.
+  }
+  // Desired-ABSENT wins over "outdated → update": you don't update something you
+  // asked to remove. So a present, uninstallable package the user turned out reads
+  // uninstall even when a newer version exists (otherwise the button said "update"
+  // while the plan said uninstall — button/text contradiction). Only offer update
+  // for a package that's staying (desired present).
+  if (p.present && p.canUninstall && desiredOf(model, i) === "absent") {
+    return { verb: "uninstall", dir: "remove", type: "uninstall" };
   }
   if (p.present && p.outdated) {
     return { verb: "update", dir: "add", type: "upgrade" };
@@ -161,7 +245,17 @@ export function setPresence(model, i, present) {
   const p = model.pkgs.get(i);
   if (!p) return;
   p.present = present;
-  if (present !== true) p.outdated = false;
+  if (present !== true) {
+    p.outdated = false;
+    p.available = "";
+    p.installedVersion = ""; // no longer present → no installed version to compare
+  }
+}
+// The version the machine reports for a package right now (from the `state`
+// probe). Feeds the pin comparison in actionOf. Empty string = unknown.
+export function setInstalledVersion(model, i, version) {
+  const p = model.pkgs.get(i);
+  if (p) p.installedVersion = version || "";
 }
 // Settle a package's status; ok/absent/waiting also update presence.
 export function setStatusData(model, i, status) {
@@ -171,14 +265,22 @@ export function setStatusData(model, i, status) {
   if (status === "ok") {
     p.present = true;
     p.outdated = false;
+    p.available = "";
   } else if (status === "absent" || status === "waiting") {
     p.present = false;
     p.outdated = false;
+    p.available = "";
+    p.installedVersion = "";
   }
 }
-export function setOutdated(model, i, on) {
+// Mark a present package stale, carrying the version the scan found available so
+// the display can show cur→avail without a second event. `available` optional
+// (kept for older callers / the boolean-only case).
+export function setOutdated(model, i, on, available = "") {
   const p = model.pkgs.get(i);
-  if (p) p.outdated = !!on;
+  if (!p) return;
+  p.outdated = !!on;
+  p.available = on ? (available || "") : "";
 }
 export function appendLog(model, i, text) {
   const p = model.pkgs.get(i);

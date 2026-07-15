@@ -22,8 +22,11 @@ import {
   profileStateOf,
   removeProfile,
   setDecision,
+  setInstalledVersion,
+  setOutdated,
   setStatusData,
   toggleOf,
+  versionSummary,
 } from "../public/model.js";
 
 // A plan WITH profiles: reuses the opt-in rg/bat fixture, adds two profiles.
@@ -125,6 +128,180 @@ Deno.test("buttonAction always inverts machine state", () => {
   assertEquals(buttonAction(m, 1)?.type, "install");
   setStatusData(m, 1, "ok"); // present
   assertEquals(buttonAction(m, 1)?.type, "uninstall");
+});
+
+Deno.test("buttonAction: an OUTDATED package the user turned OUT → uninstall, not update", () => {
+  const m = seed(); // pkg 1 = opt-in rg, canUninstall
+  setStatusData(m, 1, "ok"); // present
+  setOutdated(m, 1, true, "9.9"); // and outdated
+  setDecision(m, 1, "out"); // but the user wants it GONE
+  // The desired state (absent) must win: you don't "update" something you're
+  // removing. Button + plan agree → uninstall. (Was showing "update" — the
+  // outdated branch fired before the desired-absent check.)
+  assertEquals(buttonAction(m, 1), {
+    verb: "uninstall",
+    dir: "remove",
+    type: "uninstall",
+  });
+  assertEquals(actionOf(m, 1), "uninstall"); // plan agrees
+});
+
+// --- version pinning at the model layer -------------------------------------
+// A pin plan seeds one pinned mandatory package; installed version drives the
+// three-way action. See memory talos-version-pin.
+function seedPinned() {
+  const m = createModel();
+  loadPlan(
+    m,
+    [{ name: "Base", posture: "mandatory", selectable: false }],
+    [{
+      i: 0,
+      name: "jq",
+      bundle: "Base",
+      posture: "mandatory",
+      canUninstall: true,
+      pin: "1.8",
+    }],
+  );
+  return m;
+}
+
+Deno.test("actionOf: pinned + installed below pin → upgrade, at pin → null, above → downgrade", () => {
+  const m = seedPinned();
+  setStatusData(m, 0, "ok"); // present
+  setInstalledVersion(m, 0, "1.5");
+  assertEquals(actionOf(m, 0), "upgrade");
+  setInstalledVersion(m, 0, "1.8");
+  assertEquals(actionOf(m, 0), null); // at the pin → satisfied
+  setInstalledVersion(m, 0, "2.0");
+  assertEquals(actionOf(m, 0), "downgrade");
+});
+
+Deno.test("buttonAction: pinned + installed above pin → downgrade button", () => {
+  const m = seedPinned();
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "2.0");
+  assertEquals(buttonAction(m, 0), {
+    verb: "downgrade",
+    dir: "remove",
+    type: "downgrade",
+  });
+});
+
+// versionSummary — the SINGLE source of the row's version display. Never more
+// than two numbers, never a repeat, and a pin is marked exactly once (`pinned:
+// "from" | "to" | null`) so the view can badge it. This replaces the old split
+// between the statusLabel (installed) and the delta (cur→avail) that doubled the
+// current version on screen. See the UX pass in talos-version-pin.
+Deno.test("versionSummary: unpinned + up to date → just the installed version, no arrow", () => {
+  const m = seed();
+  setStatusData(m, 1, "ok");
+  setInstalledVersion(m, 1, "26.5.0");
+  assertEquals(versionSummary(m, 1), {
+    from: "26.5.0",
+    to: null,
+    pinned: null,
+    muted: false,
+  });
+});
+
+Deno.test("versionSummary: unpinned + outdated → cur→avail ONCE, not muted (a real push)", () => {
+  const m = seed();
+  setStatusData(m, 1, "ok");
+  setInstalledVersion(m, 1, "26.4.0");
+  setOutdated(m, 1, true, "26.5.0"); // available version now carried in the model
+  assertEquals(versionSummary(m, 1), {
+    from: "26.4.0",
+    to: "26.5.0",
+    pinned: null,
+    muted: false,
+  });
+});
+
+Deno.test("versionSummary: pinned AT the pin, NO upgrade → single number, marked pin, no arrow", () => {
+  const m = seedPinned(); // pin 1.8
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "1.8");
+  assertEquals(versionSummary(m, 0), {
+    from: "1.8",
+    to: null,
+    pinned: "from",
+    muted: false,
+  });
+});
+
+Deno.test("versionSummary: pinned AT the pin, upgrade AVAILABLE → 📌pin → avail(muted)", () => {
+  const m = seedPinned(); // pin 1.8
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "1.8");
+  // The machine-wide scan found something newer. We're at the pin, so we don't
+  // push it — but we SHOW it, greyed: "you're pinned here; a newer one exists to
+  // test if you want". The pin (from) stays normal; the avail (to) is muted.
+  setOutdated(m, 0, true, "2.5");
+  assertEquals(versionSummary(m, 0), {
+    from: "1.8",
+    to: "2.5",
+    pinned: "from",
+    muted: true,
+  });
+});
+
+Deno.test("versionSummary: pinned BELOW → installed→pin, pin on target, not muted (real migration)", () => {
+  const m = seedPinned(); // pin 1.8
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "1.5");
+  assertEquals(versionSummary(m, 0), {
+    from: "1.5",
+    to: "1.8",
+    pinned: "to",
+    muted: false,
+  });
+});
+
+Deno.test("versionSummary: pinned ABOVE → installed→pin, MUTED (downgrade is manual, never pushed)", () => {
+  const m = seedPinned(); // pin 1.8
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "2.0");
+  // A downgrade is manual-only (never in Apply), so its target reads muted —
+  // same "not pushed" grey as an upgrade past a pin. Below the pin (a real
+  // upgrade Apply runs) stays not-muted. The direction sign is what differs.
+  assertEquals(versionSummary(m, 0), {
+    from: "2.0",
+    to: "1.8",
+    pinned: "to",
+    muted: true,
+  });
+});
+
+Deno.test("versionSummary: absent → empty (nothing installed to show)", () => {
+  const m = seedPinned();
+  setStatusData(m, 0, "waiting"); // absent
+  assertEquals(versionSummary(m, 0), {
+    from: "",
+    to: null,
+    pinned: null,
+    muted: false,
+  });
+});
+
+Deno.test("isActionable: a downgrade is NOT in the auto plan (mirrors server AUTO_ACTS)", () => {
+  const m = seedPinned();
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "2.0"); // above pin → downgrade
+  // The button offers a downgrade, but Apply must NOT act — so the row is not
+  // "in plan" and its Apply-preview stays neutral (no green/red tint).
+  assertEquals(buttonAction(m, 0)?.type, "downgrade");
+  assertEquals(isActionable(m, 0), false);
+  // Below the pin (upgrade) IS in the plan.
+  setInstalledVersion(m, 0, "1.5");
+  assertEquals(isActionable(m, 0), true);
+});
+
+Deno.test("buttonAction: pinned + installed below pin → update button", () => {
+  const m = seedPinned();
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "1.5");
+  assertEquals(buttonAction(m, 0)?.type, "upgrade");
 });
 
 Deno.test("bundle toggle state: mixed when packages disagree", () => {

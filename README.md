@@ -28,7 +28,8 @@ ship beside it.
 A bundle is a **folder** with a `bundle.yaml`. It lists packages as *needs*
 satisfied by a named route (`winget`, `brew`, `cargo`, `npm`, a raw `run`, a
 Claude Code `claude-plugin`, or a cross-agent `skill`). Copy an existing one and
-edit:
+edit — the full field reference (routes, postures, version pinning, config-atoms,
+profiles) lives in [`bundles/README.md`](bundles/README.md):
 
 ```yaml
 bundle: Editors
