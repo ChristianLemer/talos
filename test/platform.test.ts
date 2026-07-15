@@ -15,10 +15,12 @@ Deno.test("currentOs: returns one of the three known values", () => {
   assertEquals(["windows", "darwin", "linux"].includes(os), true);
 });
 
-Deno.test("shellProbe: POSIX wraps the command in /bin/sh -c", () => {
+Deno.test("shellProbe: POSIX wraps the command in a login /bin/sh -lc", () => {
   const p = shellProbe("darwin", "brew list jq");
   assertEquals(p.cmd, "/bin/sh");
-  assertEquals(p.args, ["-c", "brew list jq"]);
+  // -lc (login): a Finder-launched .app gets a minimal launchd PATH; the login
+  // shell rebuilds it via /etc/profile → path_helper so brew tools are found.
+  assertEquals(p.args, ["-lc", "brew list jq"]);
 });
 
 Deno.test("shellProbe: linux is POSIX too", () => {

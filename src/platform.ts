@@ -38,7 +38,14 @@ export function shellProbe(os: Os, command: string): Probe {
       `${WIN_PATH_REFRESH} $ErrorActionPreference='Stop'; try { ${command}; exit $LASTEXITCODE } catch { exit 127 }`;
     return { cmd: "powershell.exe", args: ["-NoProfile", "-Command", ps] };
   }
-  return { cmd: "/bin/sh", args: ["-c", command] };
+  // POSIX: a LOGIN shell (-lc), not a plain -c. A GUI .app launched from Finder
+  // is started by launchd with a MINIMAL PATH (/usr/bin:/bin:…) — no
+  // /opt/homebrew/bin — so brew-installed tools (node, …) read as "command not
+  // found" (exit 127 → false absent) even when present. A login shell runs
+  // /etc/profile → path_helper, which rebuilds PATH from /etc/paths + /etc/paths.d/*
+  // (homebrew drops its bin there), restoring the tools. This is the POSIX
+  // counterpart of WIN_PATH_REFRESH above — same intent, native mechanism.
+  return { cmd: "/bin/sh", args: ["-lc", command] };
 }
 
 export function pathSep(os: Os): "\\" | "/" {
