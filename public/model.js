@@ -57,6 +57,7 @@ export function loadPlan(model, bundles, steps, profiles = []) {
       bundle: s.bundle,
       posture: s.posture || "mandatory",
       canUninstall: !!s.canUninstall,
+      isConfig: !!s.isConfig,
       present: null,
       outdated: false,
       status: "waiting",
@@ -126,6 +127,12 @@ export function isActionable(model, i) {
 export function buttonAction(model, i) {
   const p = model.pkgs.get(i);
   if (!p) return null;
+  // A config-atom the user turned OFF is self-managed: the button inspects
+  // (diff) rather than installs — it has no install path, and re-applying would
+  // clobber the file the user chose to own.
+  if (p.isConfig && desiredOf(model, i) === "absent") {
+    return { verb: "diff", dir: "", type: "diff" };
+  }
   if (p.present && p.outdated) {
     return { verb: "update", dir: "add", type: "upgrade" };
   }

@@ -25,6 +25,7 @@ function step(partial: Partial<Step>): Step {
     systemId: partial.systemId ?? null,
     detect: partial.detect ?? null,
     check: partial.check ?? null,
+    isConfig: partial.isConfig ?? false,
     versionRegex: partial.versionRegex ?? null,
     requires: partial.requires ?? [],
     posture: "opt-in",

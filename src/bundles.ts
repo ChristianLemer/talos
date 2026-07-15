@@ -58,6 +58,11 @@ export interface Step extends Commands {
   // Distinct from `detect` (which probes a binary on PATH by its first token) — a
   // config-atom shares its apply-logic with this check, so detection can't drift.
   check: string | null;
+  // True for a config-atom: a step whose presence is a `check` (a file it
+  // converges via run/check) with NO install path (no route command, no
+  // systemId). Such a step, when the user turns it OFF, reads "self-managed"
+  // and its button offers a diff, not an install (it has nothing to install).
+  isConfig: boolean;
   // Optional REGEX refining how the version is pulled from detect/route output.
   // Absent → the per-route default extraction is used. Present → capture group 1
   // (or the whole match) IS the version. Added only when the default gets it
@@ -267,6 +272,12 @@ export function loadBundles(
           systemId,
           detect: p.detect || null,
           check: sub(p.check || null),
+          // A config-atom HAS a check and no package-install route: its only
+          // command (if any) is the `run` convergence that shares the check's
+          // apply-logic — never winget/brew/cargo/npm/… (those ARE install
+          // paths). run OR no route + a check ⇒ it converges a file, it doesn't
+          // install a package. (systemId is null for run/null routes anyway.)
+          isConfig: !!p.check && (cmd.route === null || cmd.route === "run"),
           versionRegex: p["version-regex"] || null,
           requires: p.requires ?? [],
           posture: meta.posture,

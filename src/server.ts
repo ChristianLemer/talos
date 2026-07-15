@@ -840,6 +840,7 @@ function startServer() {
             bundle: s.bundle,
             canUninstall: !!s.uninstall,
             posture: s.posture,
+            isConfig: s.isConfig,
           })),
           selection: readSelection(SELECTION),
           profiles: PROFILES,
@@ -913,6 +914,26 @@ function startServer() {
           writeSelection(SELECTION, {
             pkgs: (msg.selection && msg.selection.pkgs) || {},
           });
+        } else if (
+          msg.type === "diff" && typeof msg.i === "number" && STEPS[msg.i]
+        ) {
+          // On-demand, read-only: show what the family patch WOULD change for a
+          // self-managed config-atom, in the row terminal. Runs the atom's check
+          // in diff mode (writes nothing, exits 0). NOT doStep — no history, no
+          // presence change, no version capture. Pure inspection.
+          if (!ptyReady) {
+            socket.send(JSON.stringify({ type: "starting" }));
+            return;
+          }
+          const step = STEPS[msg.i];
+          if (step.check) {
+            const diffCmd = `${step.check} --diff`;
+            serialize(() => runInPty(socket, msg.i, diffCmd))
+              .catch((e) => log(`diff error: ${(e as Error).message}`))
+              .finally(() => socket.send(JSON.stringify({ type: "done" })));
+          } else {
+            socket.send(JSON.stringify({ type: "done" }));
+          }
         } else if (msg.type === "set-consent") {
           // Record the share choice (marks consent decided). No reply needed —
           // the UI already closed its dialog / flipped its toggle optimistically.

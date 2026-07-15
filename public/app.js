@@ -79,6 +79,7 @@ const GLYPH = {
   upgrading: "⠹",
   ok: "✓",
   absent: "·",
+  self: "·",
   fail: "✗",
   unknown: "?",
 };
@@ -93,6 +94,7 @@ const LABEL = {
   upgrading: "updating…",
   ok: "present",
   absent: "removed",
+  self: "self-managed",
   fail: "failed",
   // indeterminate: no practicable route to constate presence on this machine
   // (e.g. a winget-only package on Mac). NOT "absent" — we genuinely can't know.
@@ -239,6 +241,18 @@ function paintPkg(i) {
     })`;
   // A row whose desired state is absent reads dimmer (not wanted).
   r.details.classList.toggle("row-out", M.desiredOf(model, i) === "absent");
+  // Keep self-managed labelling live when the user toggles a config-atom off:
+  // paintPkg/refreshLiveness (the toggle path) never touch statusLabel — only
+  // setStatus does, on scan/step messages — so without this the label would
+  // stay stale ("present") until the next scan. Toggling back IN restores
+  // normal behaviour on the next scan/refresh (setStatus repaints it).
+  const p = model.pkgs.get(i);
+  if (p?.isConfig && M.desiredOf(model, i) === "absent") {
+    r.statusLabel.textContent = "self-managed";
+    r.statusLabel.className = "statusLabel self";
+    r.badge.textContent = "·";
+    r.badge.className = "badge self";
+  }
 }
 function setToggle(i, state, opts = {}) {
   if (!M.setDecision(model, i, state)) return; // locked → refused
@@ -519,7 +533,7 @@ function render(bundles, steps, profiles = [], columns = 2) {
       if (!act) return;
       applyRunning = true;
       refreshLiveness();
-      overall.textContent = "applying…";
+      overall.textContent = act.type === "diff" ? "diffing…" : "applying…";
       ws.send(JSON.stringify({ type: act.type, i: s.i }));
     };
     sum.append(chk, badge, name, delta, st, apply);
@@ -849,6 +863,13 @@ ws.onmessage = (ev) => {
       // present: true → present, false → absent, null → indeterminate (no route
       // to constate here — don't claim absent).
       if (rows[msg.i]) {
+        // A config-atom the user turned OFF is self-managed: neutral, not
+        // "absent". Talos won't touch the file, so we don't judge it — the row
+        // says "self-managed" and its button offers a diff (see buttonAction).
+        if (model.pkgs.get(msg.i)?.isConfig && M.desiredOf(model, msg.i) === "absent") {
+          setStatus(msg.i, "self");
+          break;
+        }
         setStatus(
           msg.i,
           msg.present === true

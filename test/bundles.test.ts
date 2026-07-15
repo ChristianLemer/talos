@@ -183,6 +183,18 @@ Deno.test("outdated bridge: darwin systemId matches a brew-keyed scan (regressio
   assertEquals(outdatedFor(obs?.systemId ?? null, scan)?.available, "1.6.0");
 });
 
+Deno.test("loadBundles: Starship config is a config-atom (isConfig true)", () => {
+  const { steps } = loadBundles("bundles", "windows", () => {});
+  const cfg = steps.find((s) => s.name === "Starship config");
+  assertEquals(cfg?.isConfig, true);
+});
+
+Deno.test("loadBundles: an installable package is NOT a config-atom", () => {
+  const { steps } = loadBundles("bundles", "windows", () => {});
+  const git = steps.find((s) => s.name === "Git");
+  assertEquals(git?.isConfig, false);
+});
+
 Deno.test("loadProfiles: no profiles.yaml → empty list (opens fine)", () => {
   assertEquals(loadProfiles("/nonexistent/path/bundles").profiles, []);
 });

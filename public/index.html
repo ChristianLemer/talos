@@ -167,6 +167,10 @@
       /* Version delta shown next to an upgrade row, e.g. 2.54 → 2.55 */
       .verdelta { font-family:"JetBrains Mono",monospace; font-size:11px; color:#7dcfff; margin-left:6px; }
       .absent       { color:var(--dim); }
+      /* A config-atom the user turned off: self-managed, neutral dim — Talos
+         won't touch it, so the row doesn't read as "removed". */
+      .badge.self       { color:var(--dim); }
+      .statusLabel.self { color:var(--dim); }
       .fail         { color:#f7768e; font-weight:700; }
       /* Apply buttons — one in the hero, one per bundle. Two visual states:
          GHOST (default): dim outline, no fill — nothing useful to do right now.

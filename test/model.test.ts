@@ -264,3 +264,33 @@ Deno.test("clearAllDecisions also drops active profiles (true reset)", () => {
   assertEquals(toggleOf(m, 1), "out"); // back to opt-in default
   assertEquals(profileStateOf(m, "All tools"), "off");
 });
+
+Deno.test("buttonAction: config-atom turned out → diff (not install)", () => {
+  const m = createModel();
+  loadPlan(m, [{ name: "Terminal" }], [
+    {
+      i: 0,
+      name: "Starship config",
+      bundle: "Terminal",
+      posture: "opt-out",
+      isConfig: true,
+    },
+  ], []);
+  setDecision(m, 0, "out");
+  assertEquals(buttonAction(m, 0), { verb: "diff", dir: "", type: "diff" });
+});
+
+Deno.test("buttonAction: config-atom left in → install path unchanged", () => {
+  const m = createModel();
+  loadPlan(m, [{ name: "Terminal" }], [
+    {
+      i: 0,
+      name: "Starship config",
+      bundle: "Terminal",
+      posture: "opt-out",
+      isConfig: true,
+    },
+  ], []);
+  // in + absent (not present) → install, unchanged behaviour
+  assertEquals(buttonAction(m, 0)?.type, "install");
+});
