@@ -21,6 +21,11 @@ import {
   readHistory,
   writeConsent,
 } from "./consent.ts";
+import {
+  readSelection,
+  type SelectionStore,
+  writeSelection,
+} from "./selection.ts";
 import { hideConsoleIfHeadless } from "./win-console.ts";
 import { makeWatcher, powershellSpawner } from "./watch-window.ts";
 // The SHARED decision rule — the SAME file the browser fetches and previews with.
@@ -181,6 +186,10 @@ const CONSENT: ConsentStore = {
   user: Deno.env.get(userEnvVar(os)) ?? "user",
   os,
 };
+
+// The user's persisted intention (toggles). Machine-local, like consent/history —
+// NEVER the shared exe folder. Distinct axis from machine presence (always live).
+const SELECTION: SelectionStore = { localDir: DATA_DIR, os };
 
 // Build the deps.ts view of the plan: each step as a DepNode carrying whether it
 // WILL be present after the Apply. `willBePresent[i]` is index-aligned and the
@@ -832,7 +841,7 @@ function startServer() {
             canUninstall: !!s.uninstall,
             posture: s.posture,
           })),
-          selection: { pkgs: {} },
+          selection: readSelection(SELECTION),
           profiles: PROFILES,
           profileColumns: PROFILE_COLUMNS,
           consent: readConsent(CONSENT),
@@ -896,6 +905,14 @@ function startServer() {
           // live, never remembered. Touches only detection, not the user's
           // selection (that's what Reset is for).
           detectAll(socket);
+        } else if (msg.type === "set-selection") {
+          // Persist the user's intention (toggles). The client already applied it
+          // optimistically, so no reply. Best-effort — a failed write never breaks
+          // the session. Reset sends an empty pkgs map here → stored empty → next
+          // start reloads author defaults (Reset cleans itself, no special path).
+          writeSelection(SELECTION, {
+            pkgs: (msg.selection && msg.selection.pkgs) || {},
+          });
         } else if (msg.type === "set-consent") {
           // Record the share choice (marks consent decided). No reply needed —
           // the UI already closed its dialog / flipped its toggle optimistically.
