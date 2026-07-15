@@ -37,7 +37,11 @@ rm -rf "$app"
 mkdir -p "$contents/MacOS" "$contents/Resources"
 
 # Binary + bundles inside the app (engine reads bundles beside the binary).
-cp "$bin" "$contents/MacOS/Talos"
+# MOVE the bare binary in (not copy): dist/Talos is a throwaway intermediate —
+# the .app is the only macOS deliverable, so leaving a nu binary beside it just
+# invites "which one do I run?". bundles/ is COPIED (dist/bundles must survive —
+# the Windows kit ships it beside Talos.exe).
+mv "$bin" "$contents/MacOS/Talos"
 cp -r "$dist/bundles" "$contents/MacOS/bundles"
 
 # Icon: SVG -> .iconset (all sizes macOS expects) -> .icns.
