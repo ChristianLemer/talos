@@ -40,9 +40,21 @@ def "main apply" [] {
 }
 
 # check: exit 0 if already converged, 1 if applying would change something.
-def "main check" [] {
+# With --diff, print WHAT would change (the differing keys) and always exit 0 —
+# a read-only inspection for a self-managed config; writes nothing either way.
+def "main check" [--diff] {
   let cur = (load)
-  exit (if $cur == ($cur | patch) { 0 } else { 1 })
+  let next = ($cur | patch)
+  if $diff {
+    if $cur == $next {
+      print "no changes — your config already matches the family patch"
+    } else {
+      print "keys the family patch would upsert:"
+      $next | transpose key value | where {|r| ($cur | get --optional $r.key) != $r.value } | table | print
+    }
+    exit 0
+  }
+  exit (if $cur == $next { 0 } else { 1 })
 }
 
 def main [] {
