@@ -34,8 +34,15 @@ const QUIPS = [
   "while (!asleep) { installDependencies(); }",
   "Exit code 0 — the sweetest two characters.",
 ];
+// The splash lives STRICTLY for the duration of the scan: it appears when the
+// analysis starts and is dismissed the instant `state-done` fires (hideSplash).
+// No floor, no padding — the scan is often near-instant, so the splash may only
+// flash. That honesty is the point (chantier splash · étape 1). The 12s timer is
+// a pure safety net (never fires if the scan answers first). The fade-out (~450ms)
+// is the disappearance itself, not added wait.
 const splash = document.getElementById("splash");
 const quipEl = document.getElementById("splash-quip");
+let splashDone = false;
 let qi = Math.floor(Date.now() % QUIPS.length);
 quipEl.textContent = QUIPS[qi];
 const quipTimer = setInterval(() => {
@@ -46,18 +53,14 @@ const quipTimer = setInterval(() => {
     quipEl.style.opacity = "1";
   }, 300);
 }, 2200);
-let splashDone = false;
 function hideSplash() {
   if (splashDone) return;
   splashDone = true;
   clearInterval(quipTimer);
-  // keep it up a beat so the centaur is seen even if detection is instant
-  setTimeout(() => {
-    splash.classList.add("hide");
-    setTimeout(() => splash.remove(), 450);
-  }, 400);
+  splash.classList.add("hide");
+  setTimeout(() => splash.remove(), 450);
 }
-setTimeout(hideSplash, 12000); // safety: never let the splash stick forever
+setTimeout(hideSplash, 12000); // safety net only — state-done normally hides it first
 
 // Shorter terminals (10 rows) — they scroll, and tall fixed boxes waste
 // vertical space on small screens. Smaller font on short viewports.
