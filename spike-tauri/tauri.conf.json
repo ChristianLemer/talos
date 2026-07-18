@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "TalosSpike",
+  "version": "0.0.1",
+  "identifier": "be.lemer.talos.spike",
+  "build": {
+    "frontendDist": "../public"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Talos (spike Tauri)",
+        "width": 520,
+        "height": 900,
+        "url": "http://127.0.0.1:1420"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico", "icons/icon.png"]
+  }
+}
