@@ -733,12 +733,25 @@ function hideWait() {
 const fbEl = document.getElementById("forbidden");
 const fbLinkWrap = document.querySelector(".fb-link-wrap");
 const fbLink = document.getElementById("fb-link");
-const fbMoreInfo = document.querySelector(".fb-moreinfo");
+const fbMoreInfo = document.getElementById("fb-moreinfo");
+const fbStepOpen = document.getElementById("fb-open");
+const fbStepRetry = document.getElementById("fb-retry");
 let fbActive = null;
-let fbActiveUrl = null; // url the modal's "Open blocked page" button acts on
+let fbActiveUrl = null; // url the modal's "Open blocked page" step acts on
+
+// The stepper's amber highlight rides the CURRENT step, so the primary action is
+// never stale. "open" → step 1 lit; "retry" → step 1 done (green ✓), step 3 lit.
+// The passive step 2 never lights (nothing to click in Talos).
+function setFbStep(current) {
+  const done = current === "retry"; // step 1 is done once we've opened the page
+  fbStepOpen.classList.toggle("active", current === "open");
+  fbStepOpen.classList.toggle("done", done);
+  fbStepOpen.querySelector(".fb-marker").textContent = done ? "✓" : "1";
+  fbStepRetry.classList.toggle("active", current === "retry");
+}
 
 // Ask the server to open the blocked page in a browser beside the panel. On
-// demand (button), never auto — so the user reads the guidance before the
+// demand (a step click), never auto — so the user reads the guidance before the
 // window covers it. Falls back to the clickable link if the server can't open.
 function openForbidden(url) {
   if (url) ws.send(JSON.stringify({ type: "open-forbidden", url }));
@@ -769,11 +782,15 @@ function showForbidden(i, url) {
   if (openBtn) openBtn.onclick = () => openForbidden(url);
   r.fbBanner.querySelector('[data-fb="retry"]').onclick = () => retryStep(i);
   r.fbBanner.querySelector('[data-fb="giveup"]').onclick = () => giveUp(i);
-  // Transient modal — same guidance, centered and unmissable for the active block.
+  // Transient modal — the guided stepper for the active block.
   fbActive = i;
   fbActiveUrl = url;
   renderLink(fbLink, url);
-  document.getElementById("fb-open").style.display = url ? "" : "none";
+  // With a URL: step 1 (Open) is the live action. Without one (rare — nothing
+  // extractable): step 1 can't act, so disable it and start the highlight on
+  // Retry (the user clears access however they can, then retries).
+  fbStepOpen.disabled = !url;
+  setFbStep(url ? "open" : "retry");
   // Reset the "More info…" disclosure each time: link hidden, prompt shown (only
   // if there's a URL to reveal).
   fbLinkWrap.hidden = true;
@@ -819,11 +836,15 @@ document.getElementById("fb-moreinfo").onclick = () => {
   fbMoreInfo.classList.add("empty");
 };
 
-// Modal buttons mirror the row banner, acting on the step the modal speaks for.
-document.getElementById("fb-open").onclick = () => {
-  if (fbActive !== null) openForbidden(fbActiveUrl);
+// Step cards act on the block the modal speaks for. Clicking Open opens the page
+// AND advances the highlight to Retry — so when the user comes back, Retry (not
+// Open) is the lit primary action.
+fbStepOpen.onclick = () => {
+  if (fbActive === null) return;
+  openForbidden(fbActiveUrl);
+  setFbStep("retry");
 };
-document.getElementById("fb-retry").onclick = () => {
+fbStepRetry.onclick = () => {
   if (fbActive !== null) retryStep(fbActive);
 };
 document.getElementById("fb-giveup").onclick = () => {
