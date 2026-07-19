@@ -225,6 +225,20 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
             })
         })
         .collect();
+    // The top-panel "needs" (profiles.yaml), loaded at boot. Same keys the front
+    // expects (renderProfiles, app.js:164): name/emoji/usage/highlights/description/packages.
+    let profiles_json: Vec<_> = state
+        .profiles
+        .items
+        .iter()
+        .map(|p| {
+            json!({
+                "name": p.name, "emoji": p.emoji, "usage": p.usage,
+                "highlights": p.highlights, "description": p.description,
+                "packages": p.packages
+            })
+        })
+        .collect();
     // REAL consent (read from the local store): undecided at 1st boot → the front
     // opens the sharing dialog. REAL selection: the persisted toggles the
     // front restores (yellow). Intent is remembered, presence is re-detected.
@@ -233,8 +247,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
         "bundles": bundles_json,
         "steps": steps_json,
         "selection": read_selection(&state.data_dir),
-        "profiles": [],
-        "profileColumns": 2,
+        "profiles": profiles_json,
+        "profileColumns": state.profiles.columns,
         "consent": read_consent(&state.consent),
         "build": crate::build_info::build_json() // exact stamp of the source snapshot (no more hardcoding)
     });
