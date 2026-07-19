@@ -49,7 +49,11 @@ struct AppState {
 /// `disk_root` : `Some(dir)` en dev (`TALOS_PUBLIC` posé) pour éditer le front sans
 /// recompiler ; `None` en release → tout vient des assets scellés (crate::assets),
 /// donc le `.app`/`.exe` lancé par Finder/Explorer trouve toujours son front.
-pub async fn serve(disk_root: Option<PathBuf>) {
+///
+/// `ready` : signal tiré DÈS que le port écoute réellement (bind réussi), pour que
+/// le webview charge l'URL SANS course (raccourci #4 : fini le sleep(500ms) aveugle —
+/// un bind lent, disque partagé/machine lente, laissait le webview taper dans le vide).
+pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::oneshot::Sender<()>>) {
     let os = current_os();
     // Stamp de build en tête de log — "quel binaire tourne vraiment ?" (ordre jj log).
     println!("--- start: {}", crate::build_info::start_line());
@@ -111,6 +115,11 @@ pub async fn serve(disk_root: Option<PathBuf>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:1420")
         .await
         .expect("bind 127.0.0.1:1420 failed");
+    // Le port écoute MAINTENANT — signaler au thread principal qu'il peut charger
+    // l'URL dans le webview (plus de course : le webview attend ce signal exact).
+    if let Some(ready) = ready {
+        let _ = ready.send(());
+    }
     axum::serve(listener, app).await.expect("axum serve failed");
 }
 
