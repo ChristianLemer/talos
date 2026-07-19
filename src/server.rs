@@ -1,13 +1,15 @@
 use axum::{
+    body::Body,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
-    http::header::{HeaderValue, CACHE_CONTROL},
-    response::{Html, IntoResponse, Response},
+    http::header::{HeaderValue, CACHE_CONTROL, CONTENT_TYPE},
+    http::{StatusCode, Uri},
+    response::{IntoResponse, Response},
     routing::get,
     Router,
 };
 use serde_json::json;
+use std::path::PathBuf;
 use std::sync::Arc;
-use tower_http::services::ServeDir;
 
 use crate::bundles::{load_bundles, Plan};
 use crate::detect::detect_present_detailed;
@@ -19,6 +21,10 @@ use crate::platform::{current_os, Os};
 struct AppState {
     plan: Plan,
     os: Os,
+    /// Racine disque des assets front, EN DEV UNIQUEMENT (`TALOS_PUBLIC` posé) :
+    /// permet d'éditer `app.js` sans recompiler. `None` en release → assets SCELLÉS
+    /// dans le binaire (crate::assets), indépendants du cwd (raccourci #3 corrigé).
+    disk_root: Option<PathBuf>,
     /// Cache du mot de passe sudo — modèle C : demandé la 1re fois qu'un step en a
     /// besoin, réutilisé pour les steps suivants du même Apply, EFFACÉ à la fin.
     /// RAM SEULEMENT, jamais disque/log/journal. tokio Mutex (accès async).
@@ -27,8 +33,12 @@ struct AppState {
 
 /// Démarre le serveur HTTP+WS sur 127.0.0.1:1420.
 /// - `/`         → sert index.html (ou upgrade WS si l'en-tête Upgrade est présent)
-/// - autres      → ServeDir sur public/ (app.js, vendor/, css…)
-pub async fn serve(public_dir: String) {
+/// - autres      → assets front (SCELLÉS dans le binaire, ou disque en dev)
+///
+/// `disk_root` : `Some(dir)` en dev (`TALOS_PUBLIC` posé) pour éditer le front sans
+/// recompiler ; `None` en release → tout vient des assets scellés (crate::assets),
+/// donc le `.app`/`.exe` lancé par Finder/Explorer trouve toujours son front.
+pub async fn serve(disk_root: Option<PathBuf>) {
     let os = current_os();
     // Scan des bundles UNE fois au boot (pur : lecture disque + YAML). Le dossier
     // bundles/ vit À CÔTÉ du binaire (frontière hermétique). Absent → plan vide.
@@ -38,21 +48,27 @@ pub async fn serve(public_dir: String) {
         plan.bundles.len(),
         plan.steps.len()
     );
-    let state = Arc::new(AppState { plan, os, sudo_pw: tokio::sync::Mutex::new(None) });
+    let state = Arc::new(AppState {
+        plan,
+        os,
+        disk_root,
+        sudo_pw: tokio::sync::Mutex::new(None),
+    });
 
-    let public = Arc::new(public_dir);
-    let public_for_root = public.clone();
     let state_for_root = state.clone();
+    let state_for_asset = state.clone();
     let app = Router::new()
         .route(
             "/",
             get(move |ws: Option<WebSocketUpgrade>| {
-                let public = public_for_root.clone();
                 let state = state_for_root.clone();
-                async move { root_or_ws(ws, public, state).await }
+                async move { root_or_ws(ws, state).await }
             }),
         )
-        .fallback_service(ServeDir::new(public.as_str()))
+        .fallback(get(move |uri: Uri| {
+            let state = state_for_asset.clone();
+            async move { serve_asset(uri.path(), &state) }
+        }))
         // ANTI-CACHE : le webview (WKWebView macOS / WebView2 Windows) garde app.js
         // en cache disque entre deux lancements → un vieux app.js sans le dernier
         // handler (ex. sudo-prompt) survivait aux rebuilds → le message arrivait mais
@@ -62,6 +78,35 @@ pub async fn serve(public_dir: String) {
         .await
         .expect("bind 127.0.0.1:1420 failed");
     axum::serve(listener, app).await.expect("axum serve failed");
+}
+
+/// Sert un asset front (scellé ou disque), avec un Content-Type déduit de l'extension.
+/// Asset absent → 404. Remplace `ServeDir` (qui lisait un chemin disque relatif au cwd).
+fn serve_asset(path: &str, state: &AppState) -> Response {
+    match crate::assets::resolve(state.disk_root.as_deref(), path) {
+        Some(bytes) => {
+            // Mime sur la clé normalisée : `/` → `index.html` → text/html (pas octet-stream).
+            let mime = mime_for(&crate::assets::normalize(path));
+            (
+                [(CONTENT_TYPE, HeaderValue::from_static(mime))],
+                Body::from(bytes.into_owned()),
+            )
+                .into_response()
+        }
+        None => (StatusCode::NOT_FOUND, "not found").into_response(),
+    }
+}
+
+/// Content-Type minimal par extension (les seuls types servis par le front Talos).
+fn mime_for(path: &str) -> &'static str {
+    match path.rsplit('.').next() {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        _ => "application/octet-stream",
+    }
 }
 
 /// Middleware : ajoute `Cache-Control: no-store` à toute réponse, pour que le webview
@@ -77,18 +122,12 @@ async fn no_cache(req: axum::extract::Request, next: axum::middleware::Next) -> 
 // app.js fait `new WebSocket(ws://location.host)` → chemin racine "/". On distingue
 // un upgrade WS d'une requête HTML normale par la présence de l'en-tête Upgrade
 // (comme src/server.ts:909 qui upgrade sur l'en-tête, pas sur un pathname fixe).
-async fn root_or_ws(
-    ws: Option<WebSocketUpgrade>,
-    public: Arc<String>,
-    state: Arc<AppState>,
-) -> Response {
+async fn root_or_ws(ws: Option<WebSocketUpgrade>, state: Arc<AppState>) -> Response {
     match ws {
         Some(ws) => ws.on_upgrade(move |socket| handle_socket(socket, state)),
-        None => {
-            let html = std::fs::read_to_string(format!("{}/index.html", public.as_str()))
-                .unwrap_or_else(|_| "<h1>index.html introuvable</h1>".into());
-            Html(html).into_response()
-        }
+        // index.html vient des assets scellés (ou du disque en dev) — plus de
+        // read_to_string sur un chemin relatif au cwd (raccourci #3 corrigé).
+        None => serve_asset("/", &state),
     }
 }
 

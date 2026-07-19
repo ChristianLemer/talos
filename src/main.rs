@@ -1,3 +1,4 @@
+mod assets;
 mod bundles;
 mod decision;
 mod deps;
@@ -17,8 +18,11 @@ fn main() {
     std::thread::spawn(|| {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let public = std::env::var("TALOS_PUBLIC").unwrap_or_else(|_| "public".into());
-            server::serve(public).await;
+            // TALOS_PUBLIC = échappatoire DEV : posé → on sert le front depuis ce
+            // dossier disque (édition live sans recompiler). Absent (release, .app/.exe
+            // lancé par Finder/Explorer) → None → assets SCELLÉS dans le binaire.
+            let disk_root = std::env::var_os("TALOS_PUBLIC").map(std::path::PathBuf::from);
+            server::serve(disk_root).await;
         });
     });
     // Laisser au serveur le temps d'écouter avant que le webview charge l'URL.
