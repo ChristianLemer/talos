@@ -105,14 +105,17 @@ export function userToggle(model, i) {
 export function isLocked(model, i) {
   return isLockedPosture(postureOf(model, i));
 }
+// Bundle-driven: the decision fns take (posture, manualToggle, pulled) — pulled =
+// "an active bundle wants this package". A manual toggle wins; else the pull
+// decides; else out. (profiles ARE the bundles now, so inActiveProfile = pulled.)
 export function toggleOf(model, i) {
-  return toggleState(postureOf(model, i), userToggle(model, i));
+  return toggleState(postureOf(model, i), manualToggle(model, i), inActiveProfile(model, i));
 }
 export function desiredOf(model, i) {
-  return desiredState(postureOf(model, i), userToggle(model, i));
+  return desiredState(postureOf(model, i), manualToggle(model, i), inActiveProfile(model, i));
 }
 export function isDeviated(model, i) {
-  return isDeviation(postureOf(model, i), userToggle(model, i));
+  return isDeviation(postureOf(model, i), manualToggle(model, i));
 }
 // The action a plain Apply would take here, or null. present:null → treated as
 // "not known present" (false), the safe direction for install.

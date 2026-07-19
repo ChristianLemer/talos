@@ -98,32 +98,28 @@ test("loadPlan wires packages into bundles", () => {
   assert.deepEqual(m.pkgs.get(1)?.key, "Extras::rg");
 });
 
-test("posture defaults: mandatory locked in, opt-in defaults out", () => {
+test("bundle-driven: everything is OUT until pulled or set (posture ≠ default side)", () => {
   const m = seed();
-  assert.deepEqual(isLocked(m, 0), true); // mandatory
-  assert.deepEqual(toggleOf(m, 0), "in");
-  assert.deepEqual(isLocked(m, 1), false); // opt-in
-  assert.deepEqual(toggleOf(m, 1), "out"); // opt-in defaults out
+  assert.deepEqual(toggleOf(m, 0), "out"); // mandatory no longer "always in"
+  assert.deepEqual(toggleOf(m, 1), "out"); // opt-in out
   assert.deepEqual(desiredOf(m, 1), "absent");
 });
 
-test("setDecision moves an opt-in in; locked package refuses", () => {
+test("setDecision moves a package in; a manual set makes it wanted", () => {
   const m = seed();
   assert.deepEqual(setDecision(m, 1, "in"), true);
   assert.deepEqual(toggleOf(m, 1), "in");
   assert.deepEqual(isDeviated(m, 1), true);
-  assert.deepEqual(setDecision(m, 0, "out"), false); // mandatory can't move
-  assert.deepEqual(toggleOf(m, 0), "in");
 });
 
-test("actionOf: opt-in wanted+absent → install; mandatory present → null", () => {
+test("actionOf: wanted+absent → install; wanted+present+current → null", () => {
   const m = seed();
-  setDecision(m, 1, "in");
+  setDecision(m, 1, "in"); // pull it in
   setStatusData(m, 1, "waiting"); // absent
   assert.deepEqual(actionOf(m, 1), "install");
   assert.deepEqual(isActionable(m, 1), true);
-  setStatusData(m, 0, "ok"); // mandatory present, current
-  assert.deepEqual(actionOf(m, 0), null);
+  setStatusData(m, 1, "ok"); // now present + current
+  assert.deepEqual(actionOf(m, 1), null); // wanted + satisfied → nothing
 });
 
 test("buttonAction always inverts machine state", () => {
@@ -151,8 +147,9 @@ test("buttonAction: an OUTDATED package the user turned OUT → uninstall, not u
 });
 
 // --- version pinning at the model layer -------------------------------------
-// A pin plan seeds one pinned mandatory package; installed version drives the
-// three-way action. See memory talos-version-pin.
+// A pin plan seeds one pinned package the user WANTS (setDecision in — nothing is
+// wanted by default now), so the installed version drives the three-way action.
+// See memory talos-version-pin.
 function seedPinned() {
   const m = createModel();
   loadPlan(
@@ -162,11 +159,13 @@ function seedPinned() {
       i: 0,
       name: "jq",
       bundle: "Base",
-      posture: "mandatory",
+      posture: "opt-out", // non-locked, so the user can pull it in (mandatory
+      // stays locked-from-manual; a pin test just needs a WANTED package)
       canUninstall: true,
       pin: "1.8",
     }],
   );
+  setDecision(m, 0, "in"); // wanted — bundle-driven model has no default-in
   return m;
 }
 
@@ -472,6 +471,7 @@ test("buttonAction: config-atom left in → install path unchanged", () => {
       isConfig: true,
     },
   ], []);
+  setDecision(m, 0, "in"); // wanted (nothing-by-default → pull it in)
   // in + absent (not present) → install, unchanged behaviour
   assert.deepEqual(buttonAction(m, 0)?.type, "install");
 });
