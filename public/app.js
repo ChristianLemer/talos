@@ -168,7 +168,8 @@ function renderProfiles(profiles, columns = 2) {
       ? p.highlights.join(" · ")
       : (p.packages ?? []).slice(0, 3).join(" · ");
     card.innerHTML =
-      `<span class="pc-head"><span class="pc-emoji">${p.emoji || "🎯"}</span>` +
+      `<span class="pc-head"><span class="toggle pc-switch"><span class="knob"></span></span>` +
+      `<span class="pc-emoji">${p.emoji || "🎯"}</span>` +
       `<span class="pc-title">${p.name}</span>` +
       `<span class="pc-count"></span></span>` +
       `<span class="pc-usage">${p.usage || p.description || ""}</span>` +
@@ -188,6 +189,14 @@ function paintProfiles() {
     card.classList.toggle("full", st === "full");
     card.classList.toggle("hollow", st === "hollow");
     card.disabled = busy;
+    const sw = card.querySelector(".pc-switch");
+    if (sw) {
+      // full → on (knob right), hollow → mixed (knob centre, "incomplete"),
+      // off → out (knob left). Mirrors the row switch's visual vocabulary.
+      sw.classList.toggle("on-in", st === "full");
+      sw.classList.toggle("mixed", st === "hollow");
+      sw.classList.toggle("on-out", st === "off");
+    }
     const { present, total } = M.profileProgress(model, name);
     const countEl = card.querySelector(".pc-count");
     if (countEl) countEl.textContent = total ? `${present}/${total}` : "";

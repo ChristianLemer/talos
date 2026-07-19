@@ -226,6 +226,10 @@
       .profile-card:hover { border-color: var(--dim); }
       .profile-card .pc-head { display: flex; align-items: center; gap: 8px; }
       .profile-card .pc-emoji { font-size: 16px; }
+      /* The bundle card's state switch: reuses the .toggle track/knob (styled at
+         the top). full → on-in (right), hollow → mixed (centre, "incomplete"),
+         off → on-out (left). Indicative only — the whole card is the click. */
+      .profile-card .pc-switch { flex: none; pointer-events: none; }
       .profile-card .pc-title { font-weight: 600; font-size: 14px; flex: 1; }
       .profile-card .pc-count { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--dim); }
       .profile-card .pc-usage { color: var(--fg); font-size: 12px; opacity: .85; }
