@@ -87,10 +87,44 @@ pub fn exe_sibling_dir(exe: &std::path::Path) -> PathBuf {
 const WIN_PATH_REFRESH: &str =
     "$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User');";
 
+/// Le shell POSIX de l'UTILISATEUR (résolu depuis $SHELL, fallback /bin/zsh puis
+/// /bin/sh). "Ce que l'utilisateur voit dans son terminal" — c'est LUI qui connaît
+/// les PATH custom de l'user (~/.local/bin, ajouté dans son .zshrc/.bashrc).
+fn user_shell() -> String {
+    std::env::var("SHELL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            // Fallbacks : zsh (défaut macOS moderne) s'il existe, sinon sh (toujours là).
+            for cand in ["/bin/zsh", "/bin/bash"] {
+                if std::path::Path::new(cand).exists() {
+                    return Some(cand.to_string());
+                }
+            }
+            None
+        })
+        .unwrap_or_else(|| "/bin/sh".into())
+}
+
+/// Construit le Probe POSIX pour un shell donné (PUR — le chemin du shell est injecté).
+/// zsh/bash → `-ilc` (interactive + login) : source /etc/profile (PATH système via
+/// path_helper : /opt/homebrew) ET le rc utilisateur (.zshrc/.bashrc : ~/.local/bin,
+/// où vivent claude, uv, pip --user…). Le fix Deno `/bin/sh -lc` ne captait QUE le
+/// PATH système — d'où le faux "absent" sur un outil installé en ~/.local/bin.
+/// Un /bin/sh nu (ni zsh ni bash) → `-lc` seul (sh ne lit pas les rc zsh/bash).
+fn posix_probe(shell: &str, command: &str) -> Probe {
+    let is_rc_shell = shell.ends_with("zsh") || shell.ends_with("bash");
+    let flags = if is_rc_shell { "-ilc" } else { "-lc" };
+    Probe {
+        cmd: shell.to_string(),
+        args: vec![flags.into(), command.into()],
+    }
+}
+
 /// Wrap une commande STRING en Probe dans le shell natif. Windows: garde 127 guard
 /// (try/catch Stop → exit 127) — un CommandNotFoundException ne pose PAS $LASTEXITCODE,
-/// donc "cmd; exit $LASTEXITCODE" lirait 0 (faux positif). POSIX: login shell -lc
-/// (un .app lancé par Finder a un PATH minimal → -lc rebuild via path_helper).
+/// donc "cmd; exit $LASTEXITCODE" lirait 0 (faux positif). POSIX: le SHELL DE L'USER
+/// en interactive+login (voir posix_probe) → voit le PATH système ET ~/.local/bin.
 pub fn shell_probe(os: Os, command: &str) -> Probe {
     match os {
         Os::Windows => {
@@ -102,16 +136,15 @@ pub fn shell_probe(os: Os, command: &str) -> Probe {
                 args: vec!["-NoProfile".into(), "-Command".into(), ps],
             }
         }
-        _ => Probe {
-            cmd: "/bin/sh".into(),
-            args: vec!["-lc".into(), command.into()],
-        },
+        _ => posix_probe(&user_shell(), command),
     }
 }
 
 /// Wrap pour le pty INTERACTIF (install/upgrade/uninstall montrés live). Diffs vs
-/// shell_probe : /bin/bash (POSIX), PAS de 127 guard (le pty veut le vrai exit code),
-/// Windows garde le PATH refresh + exit $LASTEXITCODE.
+/// shell_probe : PAS de 127 guard (le pty veut le vrai exit code) ; Windows garde le
+/// PATH refresh + exit $LASTEXITCODE. POSIX : MÊME shell user en interactive+login que
+/// shell_probe — sinon on détecterait claude (~/.local/bin) mais on ne pourrait ni
+/// l'installer ni le désinstaller (l'install aussi doit voir le PATH de l'user).
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn pty_shell(os: Os, command: &str) -> Probe {
     match os {
@@ -128,10 +161,7 @@ pub fn pty_shell(os: Os, command: &str) -> Probe {
                 ],
             }
         }
-        _ => Probe {
-            cmd: "/bin/bash".into(),
-            args: vec!["-lc".into(), command.into()],
-        },
+        _ => posix_probe(&user_shell(), command),
     }
 }
 
@@ -141,9 +171,12 @@ mod tests {
 
     #[test]
     fn posix_shell_probe_login() {
+        // shell_probe résout le shell RÉEL de l'env ($SHELL) → on teste le CONTRAT,
+        // pas un chemin fixe : un flag login (-lc ou -ilc) + la commande transmise.
+        // (le choix -ilc vs -lc est couvert précisément par posix_probe, pur.)
         let p = shell_probe(Os::Darwin, "brew list");
-        assert_eq!(p.cmd, "/bin/sh");
-        assert_eq!(p.args, vec!["-lc", "brew list"]);
+        assert!(p.args[0] == "-lc" || p.args[0] == "-ilc", "flag login, got {}", p.args[0]);
+        assert_eq!(p.args[1], "brew list");
     }
 
     #[test]
@@ -155,10 +188,21 @@ mod tests {
     }
 
     #[test]
-    fn pty_shell_posix_bash() {
-        let p = pty_shell(Os::Darwin, "brew install jq");
-        assert_eq!(p.cmd, "/bin/bash");
-        assert_eq!(p.args, vec!["-lc", "brew install jq"]);
+    fn posix_probe_zsh_interactive_login() {
+        // zsh/bash → -ilc : source le rc user (.zshrc) → voit ~/.local/bin (claude, uv).
+        let p = posix_probe("/bin/zsh", "claude --version");
+        assert_eq!(p.cmd, "/bin/zsh");
+        assert_eq!(p.args, vec!["-ilc", "claude --version"]);
+        let b = posix_probe("/opt/homebrew/bin/bash", "node --version");
+        assert_eq!(b.args[0], "-ilc");
+    }
+
+    #[test]
+    fn posix_probe_sh_login_only() {
+        // /bin/sh nu ne lit pas les rc zsh/bash → -lc seul (pas -ilc, inutile).
+        let p = posix_probe("/bin/sh", "node --version");
+        assert_eq!(p.cmd, "/bin/sh");
+        assert_eq!(p.args, vec!["-lc", "node --version"]);
     }
 
     #[test]

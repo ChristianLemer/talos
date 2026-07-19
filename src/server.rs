@@ -525,9 +525,14 @@ async fn run_in_pty(
             ),
         ],
     );
+    // POSIX : le shell de l'UTILISATEUR en interactive+login (posix_probe via
+    // pty_shell) — voit le PATH système ET ~/.local/bin (claude, uv…). Fini le
+    // /bin/bash -lc en dur qui ratait ~/.local/bin (faux "command not found").
     #[cfg(not(target_os = "windows"))]
-    let (program, args): (String, Vec<String>) =
-        ("/bin/bash".into(), vec!["-lc".into(), cmdline.to_string()]);
+    let (program, args): (String, Vec<String>) = {
+        let probe = crate::platform::pty_shell(crate::platform::current_os(), cmdline);
+        (probe.cmd, probe.args)
+    };
 
     // Watcher (Windows uniquement) : tick 1200ms → cherche une fenêtre d'assistant
     // surgie derrière le panneau, dedup par titre. Racine = notre pid (comme Deno.pid).
@@ -702,15 +707,9 @@ async fn do_step(
         .send(Message::Text(json!({ "type": "step", "i": i, "status": running }).to_string()))
         .await;
 
-    // Wrapper ptyShell natif (PATH refresh Windows + exit code réel).
-    let probe = crate::platform::pty_shell(os, cmd);
-    let cmdline = if probe.cmd == "/bin/bash" || probe.cmd == "/bin/sh" {
-        // POSIX : run_in_pty gère déjà bash -lc via cfg ; on lui passe la commande nue.
-        cmd.to_string()
-    } else {
-        cmd.to_string()
-    };
-    let (code, forbidden, url) = run_in_pty(socket, state, i as u32, &cmdline).await;
+    // La commande nue est passée à run_in_pty, qui la wrappe dans le shell natif
+    // (POSIX : shell user en -ilc via pty_shell ; Windows : powershell + PATH refresh).
+    let (code, forbidden, url) = run_in_pty(socket, state, i as u32, cmd).await;
     let ok = code == 0 || benign_code(code);
 
     // Ligne de diagnostic dans le terminal de la ligne.
