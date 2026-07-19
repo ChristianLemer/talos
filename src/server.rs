@@ -253,7 +253,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
         let state_msg = json!({
             "type": "state", "i": i,
             "present": p.present, "reason": p.reason,
-            "version": p.version.unwrap_or_default(), "external": p.external
+            "version": p.version.unwrap_or_default(), "external": p.external,
+            "probe": probe_json(&p.diag) // la preuve : commande + sortie + code
         });
         let _ = socket.send(Message::Text(state_msg.to_string())).await;
         if p.present == Some(true) {
@@ -347,6 +348,19 @@ fn log_msg(state: &AppState) -> String {
     .to_string()
 }
 
+/// Construit le champ `probe` d'un message `state` à partir du diag de détection :
+/// la commande RÉELLEMENT lancée + sa sortie COMPLÈTE + son code, pour que l'opérateur
+/// voie dans le terminal de la ligne CE QUI a décidé présent/absent/version. Sortie
+/// non tronquée : quand on doute d'un résultat, on veut la preuve entière (les
+/// commandes de détection sont courtes par nature ; une sortie énorme est elle-même
+/// une information).
+fn probe_json(diag: &Option<crate::detect::ProbeResult>) -> serde_json::Value {
+    match diag {
+        Some(d) => json!({ "cmdline": d.cmdline, "output": d.output, "code": d.code, "ok": d.ok }),
+        None => serde_json::Value::Null,
+    }
+}
+
 /// Extrait un tableau d'indices d'un champ JSON ("on"/"off").
 fn json_indices(v: &serde_json::Value, key: &str) -> Vec<usize> {
     v.get(key)
@@ -426,7 +440,8 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
         let _ = socket
             .send(Message::Text(json!({
                 "type": "state", "i": i, "present": p.present, "reason": reason,
-                "version": p.version.clone().unwrap_or_default(), "external": p.external
+                "version": p.version.clone().unwrap_or_default(), "external": p.external,
+                "probe": probe_json(&p.diag)
             }).to_string()))
             .await;
         if p.present == Some(true) {

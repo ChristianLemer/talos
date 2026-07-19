@@ -10,17 +10,16 @@ pub struct Presence {
     pub reason: Option<String>,
     pub version: Option<String>,
     pub external: bool,
-    #[allow(dead_code)]
+    /// La preuve de détection : commande lancée + sortie + code. Exposée à l'opérateur
+    /// (écrite dans le terminal de la ligne au scan) — "quelle commande a décidé ?".
     pub diag: Option<ProbeResult>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ProbeResult {
     pub ok: bool,
-    #[allow(dead_code)]
     pub code: i32,
     pub output: String,
-    #[allow(dead_code)]
     pub cmdline: String,
 }
 
@@ -128,23 +127,28 @@ pub fn detect_present_detailed(step: &Step, os: Os) -> Presence {
         let sd = sp.as_ref().map(run_probe_detailed);
         let system_ok = sd.as_ref().map(|d| d.ok).unwrap_or(false);
         let present = bin_ok || system_ok;
-        let diag = bin.clone().or_else(|| sd.clone());
         if !present {
+            // Absent : montrer la sonde binaire (celle qu'on interroge d'abord) — la
+            // preuve la plus parlante du "pourquoi absent" (souvent "command not found").
             return Presence {
                 present: Some(false),
-                diag,
+                diag: bin.or(sd),
                 ..Default::default()
             };
         }
         if system_ok {
-            let v = version_from(step, &sd.as_ref().unwrap().output);
+            // Présence établie par la sonde SYSTÈME → c'est ELLE la preuve à montrer
+            // (pas la binaire, qui a pu échouer). diag suit le verdict.
+            let sd = sd.unwrap();
+            let v = version_from(step, &sd.output);
             return Presence {
                 present: Some(true),
                 version: Some(v),
-                diag,
+                diag: Some(sd),
                 ..Default::default()
             };
         }
+        // Présence établie par la sonde BINAIRE → montrer celle-là.
         let v = bin
             .as_ref()
             .map(|d| version_from(step, &d.output))
@@ -153,7 +157,7 @@ pub fn detect_present_detailed(step: &Step, os: Os) -> Presence {
             present: Some(true),
             version: Some(v),
             external: sp.is_some(),
-            diag,
+            diag: bin,
             ..Default::default()
         };
     }
@@ -228,5 +232,34 @@ mod tests {
         if !cfg!(target_os = "windows") {
             assert_eq!(detect_present_detailed(&s, Os::Darwin).present, Some(true));
         }
+    }
+
+    #[test]
+    fn diag_capture_la_commande_de_la_sonde_binaire() {
+        // La preuve montrée doit être la commande RÉELLEMENT lancée (transparence
+        // opérateur : "quelle commande a décidé présent/absent ?").
+        if cfg!(target_os = "windows") {
+            return;
+        }
+        let mut s = step();
+        s.detect = Some("printf v9.9.9".into()); // exit 0 → présent
+        let p = detect_present_detailed(&s, Os::Darwin);
+        assert_eq!(p.present, Some(true));
+        let diag = p.diag.expect("diag capturé");
+        assert!(diag.cmdline.contains("printf v9.9.9"), "cmdline = {}", diag.cmdline);
+        assert!(diag.output.contains("v9.9.9"), "output = {}", diag.output);
+        assert_eq!(p.version.as_deref(), Some("9.9.9"));
+    }
+
+    #[test]
+    fn diag_sur_absent_montre_la_sonde() {
+        if cfg!(target_os = "windows") {
+            return;
+        }
+        let mut s = step();
+        s.detect = Some("false".into()); // exit non-zéro → absent
+        let p = detect_present_detailed(&s, Os::Darwin);
+        assert_eq!(p.present, Some(false));
+        assert!(p.diag.expect("diag").cmdline.contains("false"));
     }
 }

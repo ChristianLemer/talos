@@ -558,6 +558,13 @@ function render(bundles, steps, profiles = [], columns = 2) {
     const body = be ? be.details.querySelector(".bundle-body") : stepsEl;
     const d = document.createElement("details");
     d.classList.add("posture-" + (s.posture || "mandatory")); // dim optional (opt-*) rows
+    // When the row is first opened, flush any pending detection evidence into its
+    // terminal. We DON'T write it at scan time: that would force-create a terminal
+    // per row (17 at once) while the row is collapsed (host height 0 → xterm renders
+    // nothing). Deferring to open means the host is visible and xterm paints correctly.
+    d.addEventListener("toggle", () => {
+      if (d.open) flushProbe(s.i);
+    });
     const sum = document.createElement("summary");
     const chk = makeToggle();
     chk.onclick = (e) => {
@@ -638,6 +645,8 @@ function render(bundles, steps, profiles = [], columns = 2) {
       host,
       fbBanner,
       term: null,
+      probeText: null, // detection evidence, stashed at scan, flushed on first open
+      probeWritten: false,
     };
     paintPkg(s.i); // initial pill: locked word for mandatory/forbidden, else auto
   }
@@ -655,6 +664,38 @@ function ensureTerm(i) {
     r.term.open(r.host);
   }
   return r.term;
+}
+
+// Detection evidence: the exact command run at scan, its raw output, and the verdict.
+// The "don't trust me, check it yourself" surface — when a result looks wrong, the
+// operator sees precisely which command produced it. English only.
+//
+// We STASH it on the row at scan time and only WRITE it when the row is first opened
+// (flushProbe, via the details "toggle" handler). Writing at scan would force-create
+// 17 terminals in collapsed rows (host height 0), where xterm paints nothing.
+function stashProbe(i, probe, state) {
+  if (!rows[i]) return;
+  const verdict = state.present === true
+    ? `present${state.version ? ` (version ${state.version})` : ""}`
+    : state.present === false
+    ? "absent"
+    : "indeterminate";
+  const out = (probe.output || "").replace(/\r?\n/g, "\r\n").replace(/\r\n$/, "");
+  // Cyan bold prompt line for the command, raw output verbatim, dim verdict footer.
+  rows[i].probeText = `\x1b[36;1m$ ${probe.cmdline}\x1b[0m\r\n` +
+    (out ? out + "\r\n" : "") +
+    `\x1b[2m→ ${verdict} · exit ${probe.code}\x1b[0m\r\n`;
+  rows[i].probeWritten = false;
+  // If the row is already open (rare: a re-scan while expanded), flush now.
+  if (rows[i].details?.open) flushProbe(i);
+}
+
+// Write the stashed evidence into the row's terminal, once, when it's visible.
+function flushProbe(i) {
+  const r = rows[i];
+  if (!r || !r.probeText || r.probeWritten) return;
+  ensureTerm(i).write(r.probeText);
+  r.probeWritten = true;
 }
 
 const RUNNING = new Set(["installing", "uninstalling", "upgrading"]);
@@ -1124,6 +1165,10 @@ ws.onmessage = (ev) => {
           rows[msg.i].statusLabel.textContent += " · external";
           rows[msg.i].statusLabel.classList.add("external");
         }
+        // Stash the DETECTION EVIDENCE (command + output + verdict). Written into the
+        // row's terminal when it's first opened — so a doubted result can be checked
+        // without trusting the badge: "which command decided this?".
+        if (msg.probe && msg.probe.cmdline) stashProbe(msg.i, msg.probe, msg);
       }
       break;
     case "state-done":
