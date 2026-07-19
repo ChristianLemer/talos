@@ -282,6 +282,11 @@ pub struct Plan {
 
 /// Scan bundles/ (each subfolder with bundle.yaml). Broken YAML → logged skip.
 /// Folder absent → EMPTY plan (the exe opens inert, doesn't crash).
+///
+/// LEGACY (A3): superseded by `load_from_catalog` (flat catalog/ + bundle refs).
+/// Kept for its tests during the transition; delete once Plan B proves the flat
+/// model in the UI.
+#[allow(dead_code)]
 pub fn load_bundles(root: &str, os: Os, log: &dyn Fn(&str)) -> Plan {
     let mut bundles = Vec::new();
     let mut steps = Vec::new();

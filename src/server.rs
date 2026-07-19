@@ -11,7 +11,7 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::bundles::{load_bundles, Plan};
+use crate::bundles::{load_from_catalog, Plan};
 use crate::consent::{
     append_history, clear_history, read_consent, read_history, write_consent, ConsentStore,
     HistEntry,
@@ -78,7 +78,16 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         PathBuf::from("bundles")
     };
     println!("[bundles] dir: {}", bundles_dir.display());
-    let plan = load_bundles(
+    // The flat catalog sits beside bundles/ (same dev/packaged resolution).
+    let sibling_catalog = sibling_dir.join("catalog");
+    let catalog_dir: PathBuf = if sibling_catalog.is_dir() {
+        sibling_catalog
+    } else {
+        PathBuf::from("catalog")
+    };
+    println!("[catalog] dir: {}", catalog_dir.display());
+    let plan = load_from_catalog(
+        catalog_dir.to_str().unwrap_or("catalog"),
         bundles_dir.to_str().unwrap_or("bundles"),
         os,
         &|m| println!("[bundles] {m}"),
