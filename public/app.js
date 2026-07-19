@@ -193,13 +193,14 @@ function paintProfiles() {
     if (countEl) countEl.textContent = total ? `${present}/${total}` : "";
   }
 }
-// Click rule (additive, per the model): clicking a profile ALWAYS applies it —
-// it pulls its packages in and fills the card. It never "turns off" a profile;
-// you lose a profile only by DESELECTING one of its packages (that turns the
-// card hollow). This matches the user's mental model: a profile is a preset you
-// apply, not a light you toggle. (Reset clears all active profiles at once.)
+// Click rule (bundle-driven, spec Consolidation §2): a bundle card is a TOGGLE.
+// Clicking an inactive one applies it (pulls its packages in); clicking an active
+// one removes it (its pull vanishes). §3 composition: a package shared with
+// another active bundle survives (removeProfile only drops THIS bundle's pull);
+// a manual per-package "out" still wins. (Reset clears all active bundles.)
 function applyProfileClick(name) {
-  M.applyProfile(model, name);
+  if (M.isProfileActive(model, name)) M.removeProfile(model, name);
+  else M.applyProfile(model, name);
   repaintAll();
   persistSelection();
 }
