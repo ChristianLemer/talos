@@ -43,6 +43,17 @@ fn main() {
     // on continue quand même — mieux vaut une fenêtre qui retente qu'un blocage dur.
     let _ = ready_rx.recv_timeout(std::time::Duration::from_secs(5));
     tauri::Builder::default()
+        // Titre de la fenêtre NATIVE = "Talos · <change>" (comme l'ancien Deno). En
+        // chemin A (WS, pas d'IPC), le front ne pilote pas la fenêtre native — le
+        // document.title de app.js ne remonte PAS à la barre de titre OS. On le pose
+        // donc ici, côté Rust, avec le stamp de build (répond à "quel binaire tourne ?").
+        .setup(|app| {
+            use tauri::Manager;
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.set_title(&format!("Talos · {}", build_info::CHANGE));
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("erreur au lancement de Tauri");
 }
