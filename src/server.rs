@@ -523,26 +523,12 @@ async fn run_in_pty(
 ) -> (i32, bool, Option<String>) {
     use base64::{engine::general_purpose::STANDARD, Engine};
 
-    // ptyShell : Windows → powershell + PATH refresh + exit $LASTEXITCODE ; POSIX → bash -lc.
-    #[cfg(target_os = "windows")]
-    let (program, args): (String, Vec<String>) = (
-        "powershell.exe".into(),
-        vec![
-            "-NoProfile".into(),
-            "-ExecutionPolicy".into(),
-            "Bypass".into(),
-            "-Command".into(),
-            format!(
-                "$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+\
-                 [Environment]::GetEnvironmentVariable('Path','User'); {}; exit $LASTEXITCODE",
-                cmdline
-            ),
-        ],
-    );
-    // POSIX : le shell de l'UTILISATEUR en interactive+login (posix_probe via
-    // pty_shell) — voit le PATH système ET ~/.local/bin (claude, uv…). Fini le
-    // /bin/bash -lc en dur qui ratait ~/.local/bin (faux "command not found").
-    #[cfg(not(target_os = "windows"))]
+    // pty_shell est LA source unique du wrapping shell : Windows → powershell + PATH
+    // refresh + exit $LASTEXITCODE + traduction `&&`→garde PS 5.1 ; POSIX → shell user
+    // en interactive+login (voit ~/.local/bin). NE PAS dupliquer ici : la version en dur
+    // qui vivait là court-circuitait pty_shell → le `&&` d'un `claude plugin marketplace
+    // add … && install …` atteignait PS 5.1 tel quel (« token && is not a valid statement
+    // separator »). Un seul chemin, testé (platform::tests).
     let (program, args): (String, Vec<String>) = {
         let probe = crate::platform::pty_shell(crate::platform::current_os(), cmdline);
         (probe.cmd, probe.args)

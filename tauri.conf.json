@@ -10,8 +10,8 @@
     "windows": [
       {
         "title": "Talos",
-        "width": 520,
-        "height": 900,
+        "width": 960,
+        "height": 540,
         "url": "http://127.0.0.1:1420"
       }
     ],

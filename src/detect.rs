@@ -26,7 +26,7 @@ pub struct ProbeResult {
 /// Exécute un Probe, capture code + sortie fusionnée (stdout+stderr).
 pub fn run_probe_detailed(probe: &Probe) -> ProbeResult {
     let cmdline = format!("{} {}", probe.cmd, probe.args.join(" "));
-    match std::process::Command::new(&probe.cmd)
+    match crate::platform::quiet_command(&probe.cmd)
         .args(&probe.args)
         .output()
     {

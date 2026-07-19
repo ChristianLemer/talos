@@ -74,7 +74,7 @@ while($changed){ $changed=$false; foreach($p in $all){ if($tree.Contains([uint32
 $self=$PID
 # msedgewebview2.exe = LE webview de Tauri, enfant de talos.exe donc DANS
 # l'arbre -> doit etre exclu, sinon le watcher detecte NOTRE PROPRE fenetre.
-$skip='msedge.exe','chrome.exe','msedgewebview2.exe','talos.exe'
+$skip='msedge.exe','chrome.exe','msedgewebview2.exe','Talos.exe'
 $result=@{found=$false}
 $cb={ param($h,$p)
   if(-not [W]::IsWindowVisible($h)){ return $true }
@@ -100,7 +100,7 @@ $result | ConvertTo-Json -Compress
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn powershell_spawner(pid: u32) -> String {
     let script = SCAN_SCRIPT.replace("{ROOT_PID}", &pid.to_string());
-    match std::process::Command::new("powershell.exe")
+    match crate::platform::quiet_command("powershell.exe")
         .args([
             "-NoProfile",
             "-ExecutionPolicy",

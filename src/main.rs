@@ -1,3 +1,8 @@
+// En release sur Windows, subsystem GUI : sinon Windows ouvre une fenêtre console
+// noire à côté de la fenêtre native (le binaire démarrerait en subsystem "console").
+// `not(debug_assertions)` → en dev on GARDE la console (logs/panics visibles).
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod agent_content;
 mod assets;
 mod build_info;
@@ -43,6 +48,9 @@ fn main() {
     // on continue quand même — mieux vaut une fenêtre qui retente qu'un blocage dur.
     let _ = ready_rx.recv_timeout(std::time::Duration::from_secs(5));
     tauri::Builder::default()
+        // Persistance taille/position (voir Cargo.toml). Enregistré AVANT setup : le
+        // plugin restaure l'état sauvé au moment où la fenêtre "main" est créée.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         // Titre de la fenêtre NATIVE = "Talos · <change>" (comme l'ancien Deno). En
         // chemin A (WS, pas d'IPC), le front ne pilote pas la fenêtre native — le
         // document.title de app.js ne remonte PAS à la barre de titre OS. On le pose

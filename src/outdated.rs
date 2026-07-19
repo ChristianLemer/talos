@@ -10,7 +10,7 @@ pub fn scan_outdated(os: Os) -> HashMap<String, Outdated> {
         return HashMap::new();
     };
     let probe = shell_probe(os, &mgr.outdated_scan_command());
-    match std::process::Command::new(&probe.cmd)
+    match crate::platform::quiet_command(&probe.cmd)
         .args(&probe.args)
         .output()
     {

@@ -2,6 +2,26 @@
 // La source unique de "quel OS et comment agir dessus".
 
 use std::path::PathBuf;
+use std::process::Command;
+
+/// Construit une `Command` qui NE FAIT PAS surgir de fenêtre console sous Windows.
+/// Talos.exe est en subsystem GUI, mais chaque enfant lancé via `Command`
+/// (powershell/winget au scan) crée SA PROPRE console — d'où la fenêtre noire qui
+/// apparaît "plus tard", pendant le scan. CREATE_NO_WINDOW (0x0800_0000) la supprime.
+/// Ailleurs (macOS/Linux) : un simple `Command::new`, le flag n'existe pas.
+pub fn quiet_command(program: &str) -> Command {
+    let cmd = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut cmd = cmd;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        return cmd;
+    }
+    #[cfg(not(target_os = "windows"))]
+    cmd
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Os {
@@ -121,6 +141,20 @@ fn posix_probe(shell: &str, command: &str) -> Probe {
     }
 }
 
+/// PS 5.1 (le `powershell.exe` de Windows, chemin `v1.0`) ne connaît PAS `&&` — l'opérateur
+/// n'existe qu'à partir de PS 7. Or les commandes d'install sont écrites avec `&&` (canonique
+/// POSIX, exécuté tel quel sur Mac via `bash -lc`). On le traduit ici en chaîne PS équivalente
+/// qui PRÉSERVE le court-circuit ET le code de sortie : chaque `&&` devient un garde qui sort
+/// tôt si l'étape a échoué. `A && B && C` → `A; if ($LASTEXITCODE -ne 0){exit …}; B; …; C`.
+/// Une commande sans `&&` traverse inchangée.
+fn win_and_then(command: &str) -> String {
+    command
+        .split("&&")
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join("; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; ")
+}
+
 /// Wrap une commande STRING en Probe dans le shell natif. Windows: garde 127 guard
 /// (try/catch Stop → exit 127) — un CommandNotFoundException ne pose PAS $LASTEXITCODE,
 /// donc "cmd; exit $LASTEXITCODE" lirait 0 (faux positif). POSIX: le SHELL DE L'USER
@@ -128,6 +162,7 @@ fn posix_probe(shell: &str, command: &str) -> Probe {
 pub fn shell_probe(os: Os, command: &str) -> Probe {
     match os {
         Os::Windows => {
+            let command = win_and_then(command);
             let ps = format!(
                 "{WIN_PATH_REFRESH} $ErrorActionPreference='Stop'; try {{ {command}; exit $LASTEXITCODE }} catch {{ exit 127 }}"
             );
@@ -149,6 +184,7 @@ pub fn shell_probe(os: Os, command: &str) -> Probe {
 pub fn pty_shell(os: Os, command: &str) -> Probe {
     match os {
         Os::Windows => {
+            let command = win_and_then(command);
             let ps = format!("{WIN_PATH_REFRESH} {command}; exit $LASTEXITCODE");
             Probe {
                 cmd: "powershell.exe".into(),
@@ -185,6 +221,30 @@ mod tests {
         assert_eq!(p.cmd, "powershell.exe");
         assert!(p.args.last().unwrap().contains("exit 127"));
         assert!(p.args.last().unwrap().contains("node --version"));
+    }
+
+    #[test]
+    fn win_and_then_translates_double_ampersand() {
+        // `&&` (canonique POSIX) → garde PS 5.1 qui court-circuite sur échec.
+        let out = win_and_then("cargo uninstall ripgrep && cargo install ripgrep");
+        assert!(!out.contains("&&"), "il reste un && : {out}");
+        assert!(out.contains("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }"));
+        assert!(out.starts_with("cargo uninstall ripgrep;"));
+        assert!(out.ends_with("cargo install ripgrep"));
+    }
+
+    #[test]
+    fn win_and_then_passes_through_simple_command() {
+        // Sans && : inchangé (modulo trim), pas de garde parasite.
+        assert_eq!(win_and_then("winget install Foo"), "winget install Foo");
+    }
+
+    #[test]
+    fn windows_shell_probe_lowers_double_ampersand() {
+        // Bout-en-bout : une commande `&&` ne doit JAMAIS atteindre powershell.exe telle
+        // quelle (PS 5.1 : "The token '&&' is not a valid statement separator").
+        let p = shell_probe(Os::Windows, "claude plugin marketplace add \"x\" && claude plugin install y --scope user");
+        assert!(!p.args.last().unwrap().contains("&&"), "&& a fui dans PS : {:?}", p.args.last());
     }
 
     #[test]

@@ -11,6 +11,9 @@ src/build-info.ts
 # Rust / Tauri build artefacts (was spike-tauri/.gitignore before the promotion).
 /target
 /gen/schemas
+# Idem pour le spike jetable resté à côté (schémas régénérés par cargo tauri).
+spike-tauri/target
+spike-tauri/gen/schemas
 # Local scratch — anything with a leading underscore (drafts, spikes, logo work).
 _*
 .playwright-mcp/
