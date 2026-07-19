@@ -433,6 +433,11 @@
       .consent-card h2 { font-size:19px; margin:0 0 12px; }
       .consent-card p { color:#a9b1d6; font-size:14px; line-height:1.55; margin:0 0 10px; }
       .consent-card p.muted { color:var(--dim); font-size:13px; }
+      /* "Recommended" badge — même bleu que le bouton primaire (#3d59a1), pour
+         signaler le choix recommandé (partage) sans crier. Petit, arrondi, inline. */
+      .rec-badge { display:inline-block; margin-left:8px; padding:1px 8px; border-radius:10px;
+        background:rgba(61,89,161,.22); color:#7aa2f7; border:1px solid #3d59a1;
+        font-size:11px; font-weight:600; vertical-align:middle; letter-spacing:.2px; }
       .consent-actions { display:flex; gap:10px; margin-top:18px; justify-content:center; }
       /* Secondary (cancel/decline) button for MODAL dialogs. NOT .rerun — that's
          the per-row Apply button, hidden in simple mode (body:not(.advanced)),
@@ -539,10 +544,12 @@
 
     <!-- First-boot consent dialog -->
     <div id="consent"><div class="overlay-card consent-card">
-      <h2>Share setup data for support?</h2>
+      <h2>Share setup data for support?<span class="rec-badge">Recommended</span></h2>
       <p>Talos can record <b>what it installs</b> (software, versions, dates) so your team
         can offer support and see who still needs to update. Depending on where this tool
         lives, that record may be visible to your team.</p>
+      <p><b>Sharing is strongly recommended</b> — it lets your team help you faster and keep
+        everyone up to date. You stay in control: change it any time, and delete what was collected.</p>
       <p class="muted">It is saved next to this tool — nothing is sent anywhere. You can change
         this any time in the <b>Log</b> tab, and delete what was collected.</p>
       <div class="consent-actions">
@@ -621,8 +628,8 @@
           <label class="switch"><input type="checkbox" id="advanced-toggle"><span class="slider"></span></label>
         </div>
         <div class="set-row">
-          <div><div class="set-title">Share setup data for support</div>
-            <div class="set-desc">When on, the install history is saved next to the tool (visible to your team if the disk is shared). When off, it stays private to this machine.</div></div>
+          <div><div class="set-title">Share setup data for support<span class="rec-badge">Recommended</span></div>
+            <div class="set-desc">When on, the install history is saved next to the tool (visible to your team if the disk is shared). When off, it stays private to this machine. <b>Sharing is strongly recommended</b> so your team can help you stay up to date.</div></div>
           <label class="switch"><input type="checkbox" id="consent-toggle"><span class="slider"></span></label>
         </div>
         <div class="set-row">
