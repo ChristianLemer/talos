@@ -543,7 +543,10 @@ function render(bundles, steps, profiles = [], columns = 2) {
         inProfiles.map((p) => p.name).join(", ")
       }">${inProfiles.map((p) => p.emoji).join("")}</span>`
       : "";
-    name.innerHTML = `${s.name}` + profTags +
+    const cats = Array.isArray(s.categories) && s.categories.length
+      ? ` <span class="cat-tag">${s.categories.join(" · ")}</span>`
+      : "";
+    name.innerHTML = `${s.name}` + cats + profTags +
       (s.description ? ` <span class="desc">— ${s.description}</span>` : "");
     const delta = document.createElement("span"); // version delta on upgrade, e.g. 2.54 → 2.55
     delta.className = "verdelta";

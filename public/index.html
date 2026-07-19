@@ -154,6 +154,11 @@
       .badge { font-family:"JetBrains Mono",monospace; width:1.2em; text-align:center; }
       .name { flex:1; }
       .desc { color:var(--dim); font-size:12px; }
+      /* Category tag on a flat row — a quiet, monospace pill so the eye can
+         group by category without headers (the flatten replaces the accordion). */
+      .cat-tag { font-family:"JetBrains Mono",monospace; font-size:10px; color:var(--dim);
+                 border:1px solid var(--line); border-radius:5px; padding:1px 6px;
+                 margin-left:6px; vertical-align:middle; white-space:nowrap; }
       .statusLabel { font-family:"JetBrains Mono",monospace; font-size:12px; }
       /* Installed outside winget — present, but winget can't manage it. Amber
          hint, not an error: it's a fact about provenance, not a problem. */
