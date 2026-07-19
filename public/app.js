@@ -507,51 +507,11 @@ function render(bundles, steps, profiles = [], columns = 2) {
   scanning = true;
   stepsEl.classList.add("scanning");
   renderProfiles(profiles, columns);
-  for (const b of bundles) {
-    const bd = document.createElement("details");
-    bd.className = "bundle";
-    const bsum = document.createElement("summary");
-    bsum.className = "bundle-head";
-    const chk = makeToggle();
-    chk.onclick = (e) => {
-      e.preventDefault();
-      e.stopPropagation(); // flip without folding
-      flipBundle(b.name);
-    };
-    const ico = document.createElement("span");
-    ico.className = "ico";
-    ico.textContent = b.emoji || "📦";
-    const ct = document.createElement("span");
-    ct.className = "ct";
-    ct.innerHTML = `<span class="cn">${b.name}</span><span class="cd">${
-      b.description || ""
-    }</span>`;
-    const bst = document.createElement("span");
-    bst.className = "bstatus";
-    const bapply = document.createElement("button");
-    bapply.className = "applybtn";
-    bapply.textContent = "Apply";
-    bapply.title = "Apply just this bundle";
-    bapply.onclick = (e) => {
-      e.preventDefault();
-      e.stopPropagation(); // act without folding the accordion
-      applyScoped(model.bundles.get(b.name)?.pkgIds);
-    };
-    bsum.append(chk, ico, ct, bst, bapply);
-    const body = document.createElement("div");
-    body.className = "bundle-body";
-    bd.append(bsum, body);
-    stepsEl.append(bd);
-    bundleEls[b.name] = {
-      details: bd,
-      head: bsum,
-      status: bst,
-      chk,
-      apply: bapply,
-      active: 0, // ephemeral: packages running in this bundle this Apply (animation counter, not domain state, reset each run)
-      failed: false, // ephemeral: a package here failed this run (drives the bundle status badge; not persisted)
-    };
-  }
+  // FLATTEN (spec §2): no bundle accordion. Rows render flat into #steps below.
+  // bundleEls stays empty on purpose — every loop over it no-ops and every
+  // deref is guarded `if (be)`, so the old bundle-accordion behaviour is inert.
+  // Bundle cards on top (needs) live in #profiles; bundle-as-toggle is B2.
+  for (const k of Object.keys(bundleEls)) delete bundleEls[k];
 
   for (const s of steps) {
     const be = bundleEls[s.bundle];
