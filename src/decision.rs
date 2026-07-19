@@ -1,13 +1,13 @@
-// Port de decision.js + version.js — la règle PURE de Talos, SOURCE UNIQUE (au
-// cœur, décision multi-frontend : les clients affichent, ne décident pas).
-// Deux questions : quel est l'état DÉSIRÉ (posture + toggle), et quelle ACTION
-// un Apply prendrait (désir × réalité machine × pin).
+// Port of decision.js + version.js — Talos's PURE rule, SINGLE SOURCE (at the
+// core, multi-frontend decision: clients display, they do not decide).
+// Two questions: what is the DESIRED state (posture + toggle), and what ACTION
+// an Apply would take (desire × machine reality × pin).
 
 use crate::bundles::Posture;
 
-/// Compare deux versions pointées, NUMÉRIQUEMENT segment par segment (2.10 > 2.9).
-/// Segment = préfixe numérique (parseInt : "0-beta" → 0). Segment manquant = 0.
-/// Retourne -1 (a<b) / 0 (==) / 1 (a>b). Pas full semver (voir talos-version-pin).
+/// Compares two dotted versions, NUMERICALLY segment by segment (2.10 > 2.9).
+/// Segment = numeric prefix (parseInt: "0-beta" → 0). Missing segment = 0.
+/// Returns -1 (a<b) / 0 (==) / 1 (a>b). Not full semver (see talos-version-pin).
 pub fn compare_versions(a: &str, b: &str) -> i32 {
     let seg = |v: &str| -> Vec<i64> {
         v.split('.')
@@ -32,24 +32,24 @@ pub fn compare_versions(a: &str, b: &str) -> i32 {
     0
 }
 
-// Ces 4 fonctions (posture → désir) sont la moitié "résolution d'intention" de la
-// règle. Aujourd'hui le FRONT la résout et envoie on/off au serveur ; elles sont
-// donc encore non appelées côté Rust, mais testées et prêtes pour quand le serveur
-// portera la résolution complète (chemin B / une seule source). Gardées exprès.
+// These 4 functions (posture → desire) are the "intention resolution" half of the
+// rule. Today the FRONT resolves it and sends on/off to the server; so they are
+// still uncalled on the Rust side, but tested and ready for when the server
+// carries the full resolution (path B / single source). Kept on purpose.
 #[allow(dead_code)]
-/// Où le toggle démarre (défaut auteur) : mandatory/opt-out → in ; opt-in/forbidden → out.
+/// Where the toggle starts (author default): mandatory/opt-out → in; opt-in/forbidden → out.
 pub fn posture_default_in(posture: &Posture) -> bool {
     matches!(posture, Posture::Mandatory | Posture::OptOut)
 }
 
 #[allow(dead_code)]
-/// L'utilisateur peut-il bouger le toggle ? mandatory/forbidden = verrouillé.
+/// Can the user move the toggle? mandatory/forbidden = locked.
 pub fn is_locked(posture: &Posture) -> bool {
     matches!(posture, Posture::Mandatory | Posture::Forbidden)
 }
 
-/// L'état effectif in/out. Verrouillé → défaut auteur (l'auteur gagne). Sinon le
-/// toggle utilisateur (Some(true)=in, Some(false)=out), ou le défaut si None.
+/// The effective in/out state. Locked → author default (the author wins). Otherwise the
+/// user toggle (Some(true)=in, Some(false)=out), or the default if None.
 fn toggle_in(posture: &Posture, user_toggle: Option<bool>) -> bool {
     if is_locked(posture) {
         return posture_default_in(posture);
@@ -64,7 +64,7 @@ pub enum Desired {
 }
 
 #[allow(dead_code)]
-/// L'état DÉSIRÉ (present|absent) depuis posture + toggle utilisateur.
+/// The DESIRED state (present|absent) from posture + user toggle.
 pub fn desired_state(posture: &Posture, user_toggle: Option<bool>) -> Desired {
     if toggle_in(posture, user_toggle) {
         Desired::Present
@@ -100,14 +100,14 @@ pub struct MachineFacts<'a> {
     pub installed_version: &'a str,
 }
 
-/// L'action qu'un Apply prendrait — ou None. La règle que le serveur EXÉCUTE et
-/// que le front prévisualise (source unique). Un pin recadre "outdated" : la
-/// référence devient le pin, pas "latest".
-///   present désiré & absent            → install
-///   present désiré & présent & <pin    → upgrade (vers le pin)
-///   present désiré & présent & >pin    → downgrade (MANUEL, filtré hors Apply)
-///   present désiré & présent & périmé (sans pin) → upgrade (latest)
-///   absent désiré  & présent & removable → uninstall
+/// The action an Apply would take — or None. The rule the server EXECUTES and
+/// the front previews (single source). A pin reframes "outdated": the
+/// reference becomes the pin, not "latest".
+///   present desired & absent            → install
+///   present desired & present & <pin    → upgrade (to the pin)
+///   present desired & present & >pin    → downgrade (MANUAL, filtered out of Apply)
+///   present desired & present & stale (no pin) → upgrade (latest)
+///   absent desired  & present & removable → uninstall
 pub fn action_for(desired: Desired, f: &MachineFacts) -> Option<Action> {
     if desired == Desired::Present && !f.present {
         return Some(Action::Install);
@@ -117,7 +117,7 @@ pub fn action_for(desired: Desired, f: &MachineFacts) -> Option<Action> {
             return match compare_versions(f.installed_version, pin) {
                 c if c < 0 => Some(Action::Upgrade),
                 c if c > 0 => Some(Action::Downgrade),
-                _ => None, // au pin → satisfait
+                _ => None, // at the pin → satisfied
             };
         }
         if f.outdated {
@@ -136,10 +136,10 @@ mod tests {
 
     #[test]
     fn version_numeric_not_string() {
-        assert_eq!(compare_versions("2.10", "2.9"), 1); // numérique, pas string
-        assert_eq!(compare_versions("1.8", "1.8.0"), 0); // segment manquant = 0
+        assert_eq!(compare_versions("2.10", "2.9"), 1); // numeric, not string
+        assert_eq!(compare_versions("1.8", "1.8.0"), 0); // missing segment = 0
         assert_eq!(compare_versions("1.0", "1.0.1"), -1);
-        assert_eq!(compare_versions("0-beta", "0"), 0); // suffixe pré-release ignoré
+        assert_eq!(compare_versions("0-beta", "0"), 0); // pre-release suffix ignored
     }
 
     #[test]
@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn locked_ignores_toggle() {
-        // forbidden verrouillé → toujours absent même si l'utilisateur coche "in"
+        // forbidden locked → always absent even if the user checks "in"
         assert_eq!(desired_state(&Posture::Forbidden, Some(true)), Desired::Absent);
     }
 

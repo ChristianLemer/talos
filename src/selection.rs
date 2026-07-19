@@ -1,25 +1,25 @@
-//! selection.rs — l'INTENTION de l'utilisateur (les paquets qu'il a basculés in/out
-//! à la main), persistée localement à la machine. Port de src/selection.ts.
+//! selection.rs — the user's INTENT (the packages they toggled in/out
+//! by hand), persisted locally to the machine. Port of src/selection.ts.
 //!
-//! Distinct de la présence machine, toujours re-détectée live ("detect, don't
-//! remember" gouverne la PRÉSENCE, PAS l'intention : un choix ne se re-observe pas,
-//! donc il faut le mémoriser). Même discipline que consent.rs : le PARSING est pur
-//! et défensif (un fichier corrompu ne coule jamais une session), la coquille IO
-//! ne panique jamais. Stocké dans le data-dir LOCAL, JAMAIS le dossier exe partagé.
+//! Distinct from machine presence, always re-detected live ("detect, don't
+//! remember" governs PRESENCE, NOT intent: a choice cannot be re-observed,
+//! so it must be memorized). Same discipline as consent.rs: the PARSING is pure
+//! and defensive (a corrupt file never sinks a session), the IO shell
+//! never panics. Stored in the LOCAL data-dir, NEVER the shared exe folder.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// Intention persistée : clé stable "bundle::name" → bascule "in"/"out".
-/// BTreeMap (ordre déterministe à la sérialisation → écriture stable, diffs propres).
+/// Persisted intent: stable key "bundle::name" → toggle "in"/"out".
+/// BTreeMap (deterministic order at serialization → stable writes, clean diffs).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Selection {
     pub pkgs: BTreeMap<String, String>,
 }
 
-/// Pur, défensif : tout ce qui n'est pas un {pkgs:{clé:"in"|"out"}} bien formé → vide.
-/// Ne garde que les valeurs exactement "in" ou "out" (comme le filtre du TS).
+/// Pure, defensive: anything that is not a well-formed {pkgs:{key:"in"|"out"}} → empty.
+/// Keeps only values that are exactly "in" or "out" (like the TS filter).
 pub fn parse_selection(raw: &str) -> Selection {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
         return Selection::default();
@@ -37,12 +37,12 @@ pub fn parse_selection(raw: &str) -> Selection {
     Selection { pkgs }
 }
 
-/// Chemin du fichier d'intention, dans le data-dir local.
+/// Path of the intent file, in the local data-dir.
 fn selection_path(local_dir: &Path) -> PathBuf {
     local_dir.join("selection.json")
 }
 
-/// Lit l'intention persistée. Absent/illisible → vide (defaults de l'auteur).
+/// Reads the persisted intent. Absent/unreadable → empty (author's defaults).
 pub fn read_selection(local_dir: &Path) -> Selection {
     match std::fs::read_to_string(selection_path(local_dir)) {
         Ok(raw) => parse_selection(&raw),
@@ -50,8 +50,8 @@ pub fn read_selection(local_dir: &Path) -> Selection {
     }
 }
 
-/// Persiste l'intention. Best-effort : une écriture ratée ne coule jamais une
-/// session (au pire on re-repart des defaults de l'auteur au prochain démarrage).
+/// Persists the intent. Best-effort: a failed write never sinks a
+/// session (at worst we restart from the author's defaults on the next launch).
 pub fn write_selection(local_dir: &Path, sel: &Selection) {
     let _ = std::fs::create_dir_all(local_dir);
     if let Ok(json) = serde_json::to_string(sel) {
@@ -64,15 +64,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_garde_seulement_in_out() {
+    fn parse_keeps_only_in_out() {
         let sel = parse_selection(r#"{"pkgs":{"a::x":"in","b::y":"out","c::z":"maybe"}}"#);
         assert_eq!(sel.pkgs.get("a::x"), Some(&"in".to_string()));
         assert_eq!(sel.pkgs.get("b::y"), Some(&"out".to_string()));
-        assert_eq!(sel.pkgs.get("c::z"), None, "valeur hors in/out rejetée");
+        assert_eq!(sel.pkgs.get("c::z"), None, "value outside in/out rejected");
     }
 
     #[test]
-    fn parse_defensif_sur_garbage() {
+    fn parse_defensive_on_garbage() {
         assert_eq!(parse_selection("pas du json").pkgs.len(), 0);
         assert_eq!(parse_selection("{}").pkgs.len(), 0);
         assert_eq!(parse_selection(r#"{"pkgs":42}"#).pkgs.len(), 0);
@@ -87,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn write_puis_read_roundtrip() {
+    fn write_then_read_roundtrip() {
         let dir = std::env::temp_dir().join("talos-test-sel-rt");
         let _ = std::fs::remove_dir_all(&dir);
         let mut sel = Selection::default();

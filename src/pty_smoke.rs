@@ -4,8 +4,8 @@ mod pty;
 use std::io::Write;
 
 fn main() {
-    // Shell natif par plateforme (POSIX login shell -lc, ou PowerShell sur Windows)
-    // comme runInPty/ptyShell — Talos est multi-plateforme, le smoke test aussi.
+    // Native shell per platform (POSIX login shell -lc, or PowerShell on Windows)
+    // like runInPty/ptyShell — Talos is multi-platform, so is the smoke test.
     let (program, args): (&str, Vec<&str>) = if cfg!(target_os = "windows") {
         ("powershell", vec!["-NoProfile", "-Command", "winget list --disable-interactivity"])
     } else if cfg!(target_os = "macos") {

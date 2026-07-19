@@ -1,14 +1,14 @@
-// Port de platform.ts — Os + le wrapping shell (shell_probe / pty_shell).
-// La source unique de "quel OS et comment agir dessus".
+// Port of platform.ts — Os + the shell wrapping (shell_probe / pty_shell).
+// The single source of "which OS and how to act on it".
 
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Construit une `Command` qui NE FAIT PAS surgir de fenêtre console sous Windows.
-/// Talos.exe est en subsystem GUI, mais chaque enfant lancé via `Command`
-/// (powershell/winget au scan) crée SA PROPRE console — d'où la fenêtre noire qui
-/// apparaît "plus tard", pendant le scan. CREATE_NO_WINDOW (0x0800_0000) la supprime.
-/// Ailleurs (macOS/Linux) : un simple `Command::new`, le flag n'existe pas.
+/// Builds a `Command` that does NOT pop up a console window on Windows.
+/// Talos.exe is in the GUI subsystem, but each child launched via `Command`
+/// (powershell/winget at scan time) creates ITS OWN console — hence the black window
+/// that appears "later", during the scan. CREATE_NO_WINDOW (0x0800_0000) suppresses it.
+/// Elsewhere (macOS/Linux): a plain `Command::new`, the flag does not exist.
 pub fn quiet_command(program: &str) -> Command {
     let cmd = Command::new(program);
     #[cfg(target_os = "windows")]
@@ -30,11 +30,11 @@ pub enum Os {
     Linux,
 }
 
-/// Ouvre une URL dans le navigateur par défaut, hors du panneau. Par-OS :
-/// Windows → `cmd /C start "" <url>` (le premier "" est le TITRE que `start` exige,
-/// sinon il prend l'URL pour un titre) ; macOS → `open` ; Linux → `xdg-open`. Via
-/// quiet_command → pas de fenêtre console qui clignote sous Windows. Best-effort :
-/// un échec de spawn est loggé, jamais fatal (le front garde le lien cliquable en repli).
+/// Opens a URL in the default browser, outside the panel. Per-OS:
+/// Windows → `cmd /C start "" <url>` (the first "" is the TITLE that `start` requires,
+/// otherwise it takes the URL as a title); macOS → `open`; Linux → `xdg-open`. Via
+/// quiet_command → no console window flickering on Windows. Best-effort:
+/// a spawn failure is logged, never fatal (the front-end keeps the clickable link as fallback).
 pub fn open_url(url: &str) -> std::io::Result<()> {
     let mut cmd = match current_os() {
         Os::Windows => {
@@ -56,7 +56,7 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
     cmd.spawn().map(|_| ())
 }
 
-/// Anything not windows/darwin → linux (le shell family qu'on supporte là). Ne panique jamais.
+/// Anything not windows/darwin → linux (the shell family we support there). Never panics.
 pub fn current_os() -> Os {
     match std::env::consts::OS {
         "windows" => Os::Windows,
@@ -71,11 +71,11 @@ pub struct Probe {
     pub args: Vec<String>,
 }
 
-/// Data-dir LOCAL par machine — où atterrissent selection/consent/history. JAMAIS
-/// le dossier exe partagé (OneDrive) : l'exe est lancé par N machines, donc tout
-/// ce qui est écrit doit vivre sur le disque propre de chaque machine.
+/// Per-machine LOCAL data-dir — where selection/consent/history land. NEVER
+/// the shared exe folder (OneDrive): the exe is launched by N machines, so everything
+/// written must live on each machine's own disk.
 /// Windows → %LOCALAPPDATA%\Talos ; Mac → ~/Library/Application Support/Talos ;
-/// Linux → $XDG_DATA_HOME/Talos (ou ~/.local/share/Talos). Port de localDataDir().
+/// Linux → $XDG_DATA_HOME/Talos (or ~/.local/share/Talos). Port of localDataDir().
 pub fn local_data_dir(os: Os) -> PathBuf {
     match os {
         Os::Windows => {
@@ -100,24 +100,24 @@ fn home_dir() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
 }
 
-/// Le dossier "à côté de l'exe" — où vit `bundles/` (frontière hermétique : le moteur
-/// change rarement, les bundles souvent, donc À CÔTÉ du binaire, lus au runtime, JAMAIS
-/// scellés). Miroir Rust de `BUNDLES_DIR` du TS (dirname(execPath) en mode compilé).
+/// The "next-to-the-exe" folder — where `bundles/` lives (hermetic boundary: the engine
+/// changes rarely, the bundles often, so NEXT TO the binary, read at runtime, NEVER
+/// sealed). Rust mirror of the TS `BUNDLES_DIR` (dirname(execPath) in compiled mode).
 ///
-/// Pièce macOS : dans un `.app`, l'exe est `Talos.app/Contents/MacOS/talos`. "À côté"
-/// au sens hermétique = à côté du `.app` (modifiable sans toucher au bundle signé), pas
-/// `Contents/MacOS/`. Donc si on détecte le motif `…/X.app/Contents/MacOS/<exe>`, on
-/// remonte hors du `.app`. Sinon (binaire nu en dev, exe Windows/Linux) : le parent direct.
-/// Fonction PURE (prend le chemin de l'exe) → testable sans lancer de process.
+/// macOS wrinkle: in a `.app`, the exe is `Talos.app/Contents/MacOS/talos`. "Next to"
+/// in the hermetic sense = next to the `.app` (editable without touching the signed bundle), not
+/// `Contents/MacOS/`. So if we detect the pattern `…/X.app/Contents/MacOS/<exe>`, we
+/// climb out of the `.app`. Otherwise (bare binary in dev, Windows/Linux exe): the direct parent.
+/// PURE function (takes the exe path) → testable without launching a process.
 pub fn exe_sibling_dir(exe: &std::path::Path) -> PathBuf {
     let parent = exe.parent().unwrap_or(std::path::Path::new("."));
-    // Motif .app : parent = ".../Contents/MacOS", grand-parent = ".../Contents",
-    // arrière-grand-parent = ".../X.app" → on veut le dossier QUI CONTIENT X.app.
+    // .app pattern: parent = ".../Contents/MacOS", grandparent = ".../Contents",
+    // great-grandparent = ".../X.app" → we want the folder THAT CONTAINS X.app.
     if parent.file_name().is_some_and(|n| n == "MacOS") {
         if let Some(contents) = parent.parent() {
             if contents.file_name().is_some_and(|n| n == "Contents") {
                 if let Some(app) = contents.parent() {
-                    // app = ".../X.app" ; son parent = le dossier où poser bundles/.
+                    // app = ".../X.app"; its parent = the folder where bundles/ goes.
                     if app.extension().is_some_and(|e| e == "app") {
                         return app.parent().unwrap_or(app).to_path_buf();
                     }
@@ -128,20 +128,20 @@ pub fn exe_sibling_dir(exe: &std::path::Path) -> PathBuf {
     parent.to_path_buf()
 }
 
-// PATH refresh Windows : un install écrit le registre mais NE propage PAS le PATH
-// aux process déjà lancés → un outil frais lirait "absent" sans ça.
+// Windows PATH refresh: an install writes the registry but does NOT propagate the PATH
+// to already-running processes → a freshly installed tool would read "absent" without this.
 const WIN_PATH_REFRESH: &str =
     "$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User');";
 
-/// Le shell POSIX de l'UTILISATEUR (résolu depuis $SHELL, fallback /bin/zsh puis
-/// /bin/sh). "Ce que l'utilisateur voit dans son terminal" — c'est LUI qui connaît
-/// les PATH custom de l'user (~/.local/bin, ajouté dans son .zshrc/.bashrc).
+/// The USER's POSIX shell (resolved from $SHELL, fallback /bin/zsh then
+/// /bin/sh). "What the user sees in their terminal" — IT is the one that knows
+/// the user's custom PATHs (~/.local/bin, added in their .zshrc/.bashrc).
 fn user_shell() -> String {
     std::env::var("SHELL")
         .ok()
         .filter(|s| !s.is_empty())
         .or_else(|| {
-            // Fallbacks : zsh (défaut macOS moderne) s'il existe, sinon sh (toujours là).
+            // Fallbacks: zsh (modern macOS default) if it exists, otherwise sh (always there).
             for cand in ["/bin/zsh", "/bin/bash"] {
                 if std::path::Path::new(cand).exists() {
                     return Some(cand.to_string());
@@ -152,12 +152,12 @@ fn user_shell() -> String {
         .unwrap_or_else(|| "/bin/sh".into())
 }
 
-/// Construit le Probe POSIX pour un shell donné (PUR — le chemin du shell est injecté).
-/// zsh/bash → `-ilc` (interactive + login) : source /etc/profile (PATH système via
-/// path_helper : /opt/homebrew) ET le rc utilisateur (.zshrc/.bashrc : ~/.local/bin,
-/// où vivent claude, uv, pip --user…). Le fix Deno `/bin/sh -lc` ne captait QUE le
-/// PATH système — d'où le faux "absent" sur un outil installé en ~/.local/bin.
-/// Un /bin/sh nu (ni zsh ni bash) → `-lc` seul (sh ne lit pas les rc zsh/bash).
+/// Builds the POSIX Probe for a given shell (PURE — the shell path is injected).
+/// zsh/bash → `-ilc` (interactive + login): sources /etc/profile (system PATH via
+/// path_helper: /opt/homebrew) AND the user rc (.zshrc/.bashrc: ~/.local/bin,
+/// where claude, uv, pip --user… live). The Deno fix `/bin/sh -lc` captured ONLY the
+/// system PATH — hence the false "absent" on a tool installed in ~/.local/bin.
+/// A bare /bin/sh (neither zsh nor bash) → `-lc` alone (sh does not read the zsh/bash rc).
 fn posix_probe(shell: &str, command: &str) -> Probe {
     let is_rc_shell = shell.ends_with("zsh") || shell.ends_with("bash");
     let flags = if is_rc_shell { "-ilc" } else { "-lc" };
@@ -167,12 +167,12 @@ fn posix_probe(shell: &str, command: &str) -> Probe {
     }
 }
 
-/// PS 5.1 (le `powershell.exe` de Windows, chemin `v1.0`) ne connaît PAS `&&` — l'opérateur
-/// n'existe qu'à partir de PS 7. Or les commandes d'install sont écrites avec `&&` (canonique
-/// POSIX, exécuté tel quel sur Mac via `bash -lc`). On le traduit ici en chaîne PS équivalente
-/// qui PRÉSERVE le court-circuit ET le code de sortie : chaque `&&` devient un garde qui sort
-/// tôt si l'étape a échoué. `A && B && C` → `A; if ($LASTEXITCODE -ne 0){exit …}; B; …; C`.
-/// Une commande sans `&&` traverse inchangée.
+/// PS 5.1 (Windows's `powershell.exe`, path `v1.0`) does NOT know `&&` — the operator
+/// only exists from PS 7 on. Yet install commands are written with `&&` (POSIX canonical,
+/// run as-is on Mac via `bash -lc`). We translate it here into an equivalent PS string
+/// that PRESERVES both the short-circuit AND the exit code: each `&&` becomes a guard that exits
+/// early if the step failed. `A && B && C` → `A; if ($LASTEXITCODE -ne 0){exit …}; B; …; C`.
+/// A command without `&&` passes through unchanged.
 fn win_and_then(command: &str) -> String {
     command
         .split("&&")
@@ -181,10 +181,10 @@ fn win_and_then(command: &str) -> String {
         .join("; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; ")
 }
 
-/// Wrap une commande STRING en Probe dans le shell natif. Windows: garde 127 guard
-/// (try/catch Stop → exit 127) — un CommandNotFoundException ne pose PAS $LASTEXITCODE,
-/// donc "cmd; exit $LASTEXITCODE" lirait 0 (faux positif). POSIX: le SHELL DE L'USER
-/// en interactive+login (voir posix_probe) → voit le PATH système ET ~/.local/bin.
+/// Wraps a STRING command into a Probe in the native shell. Windows: keeps the 127 guard
+/// (try/catch Stop → exit 127) — a CommandNotFoundException does NOT set $LASTEXITCODE,
+/// so "cmd; exit $LASTEXITCODE" would read 0 (false positive). POSIX: the USER's SHELL
+/// in interactive+login (see posix_probe) → sees the system PATH AND ~/.local/bin.
 pub fn shell_probe(os: Os, command: &str) -> Probe {
     match os {
         Os::Windows => {
@@ -201,11 +201,11 @@ pub fn shell_probe(os: Os, command: &str) -> Probe {
     }
 }
 
-/// Wrap pour le pty INTERACTIF (install/upgrade/uninstall montrés live). Diffs vs
-/// shell_probe : PAS de 127 guard (le pty veut le vrai exit code) ; Windows garde le
-/// PATH refresh + exit $LASTEXITCODE. POSIX : MÊME shell user en interactive+login que
-/// shell_probe — sinon on détecterait claude (~/.local/bin) mais on ne pourrait ni
-/// l'installer ni le désinstaller (l'install aussi doit voir le PATH de l'user).
+/// Wrap for the INTERACTIVE pty (install/upgrade/uninstall shown live). Diffs vs
+/// shell_probe: NO 127 guard (the pty wants the real exit code); Windows keeps the
+/// PATH refresh + exit $LASTEXITCODE. POSIX: SAME user shell in interactive+login as
+/// shell_probe — otherwise we would detect claude (~/.local/bin) but could neither
+/// install nor uninstall it (the install too must see the user's PATH).
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn pty_shell(os: Os, command: &str) -> Probe {
     match os {
@@ -233,9 +233,9 @@ mod tests {
 
     #[test]
     fn posix_shell_probe_login() {
-        // shell_probe résout le shell RÉEL de l'env ($SHELL) → on teste le CONTRAT,
-        // pas un chemin fixe : un flag login (-lc ou -ilc) + la commande transmise.
-        // (le choix -ilc vs -lc est couvert précisément par posix_probe, pur.)
+        // shell_probe resolves the REAL shell from the env ($SHELL) → we test the CONTRACT,
+        // not a fixed path: a login flag (-lc or -ilc) + the passed command.
+        // (the -ilc vs -lc choice is covered precisely by posix_probe, pure.)
         let p = shell_probe(Os::Darwin, "brew list");
         assert!(p.args[0] == "-lc" || p.args[0] == "-ilc", "flag login, got {}", p.args[0]);
         assert_eq!(p.args[1], "brew list");
@@ -251,9 +251,9 @@ mod tests {
 
     #[test]
     fn win_and_then_translates_double_ampersand() {
-        // `&&` (canonique POSIX) → garde PS 5.1 qui court-circuite sur échec.
+        // `&&` (POSIX canonical) → PS 5.1 guard that short-circuits on failure.
         let out = win_and_then("cargo uninstall ripgrep && cargo install ripgrep");
-        assert!(!out.contains("&&"), "il reste un && : {out}");
+        assert!(!out.contains("&&"), "a && remains: {out}");
         assert!(out.contains("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }"));
         assert!(out.starts_with("cargo uninstall ripgrep;"));
         assert!(out.ends_with("cargo install ripgrep"));
@@ -261,21 +261,21 @@ mod tests {
 
     #[test]
     fn win_and_then_passes_through_simple_command() {
-        // Sans && : inchangé (modulo trim), pas de garde parasite.
+        // Without &&: unchanged (modulo trim), no spurious guard.
         assert_eq!(win_and_then("winget install Foo"), "winget install Foo");
     }
 
     #[test]
     fn windows_shell_probe_lowers_double_ampersand() {
-        // Bout-en-bout : une commande `&&` ne doit JAMAIS atteindre powershell.exe telle
-        // quelle (PS 5.1 : "The token '&&' is not a valid statement separator").
+        // End-to-end: a `&&` command must NEVER reach powershell.exe as-is
+        // (PS 5.1: "The token '&&' is not a valid statement separator").
         let p = shell_probe(Os::Windows, "claude plugin marketplace add \"x\" && claude plugin install y --scope user");
-        assert!(!p.args.last().unwrap().contains("&&"), "&& a fui dans PS : {:?}", p.args.last());
+        assert!(!p.args.last().unwrap().contains("&&"), "&& leaked into PS: {:?}", p.args.last());
     }
 
     #[test]
     fn posix_probe_zsh_interactive_login() {
-        // zsh/bash → -ilc : source le rc user (.zshrc) → voit ~/.local/bin (claude, uv).
+        // zsh/bash → -ilc: sources the user rc (.zshrc) → sees ~/.local/bin (claude, uv).
         let p = posix_probe("/bin/zsh", "claude --version");
         assert_eq!(p.cmd, "/bin/zsh");
         assert_eq!(p.args, vec!["-ilc", "claude --version"]);
@@ -285,30 +285,30 @@ mod tests {
 
     #[test]
     fn posix_probe_sh_login_only() {
-        // /bin/sh nu ne lit pas les rc zsh/bash → -lc seul (pas -ilc, inutile).
+        // bare /bin/sh does not read the zsh/bash rc → -lc alone (not -ilc, useless).
         let p = posix_probe("/bin/sh", "node --version");
         assert_eq!(p.cmd, "/bin/sh");
         assert_eq!(p.args, vec!["-lc", "node --version"]);
     }
 
     #[test]
-    fn data_dir_termine_par_talos_par_os() {
+    fn data_dir_ends_with_talos_per_os() {
         assert!(local_data_dir(Os::Darwin).ends_with("Library/Application Support/Talos"));
         assert!(local_data_dir(Os::Windows).ends_with("Talos"));
         assert!(local_data_dir(Os::Linux).ends_with("Talos"));
     }
 
     #[test]
-    fn sibling_app_remonte_hors_du_bundle() {
-        // .app : bundles/ doit se poser À CÔTÉ du .app, pas dans Contents/MacOS.
+    fn sibling_app_climbs_out_of_the_bundle() {
+        // .app: bundles/ must land NEXT TO the .app, not in Contents/MacOS.
         let exe = std::path::Path::new("/Apps/OneDrive/Talos.app/Contents/MacOS/talos");
         assert_eq!(exe_sibling_dir(exe), PathBuf::from("/Apps/OneDrive"));
     }
 
     #[test]
-    fn sibling_binaire_nu_est_le_parent() {
-        // Dev (cargo) ou exe Windows/Linux : juste le dossier parent.
-        // (chemins POSIX : le test tourne sur Mac, où `\` n'est pas un séparateur.)
+    fn sibling_bare_binary_is_the_parent() {
+        // Dev (cargo) or Windows/Linux exe: just the parent folder.
+        // (POSIX paths: the test runs on Mac, where `\` is not a separator.)
         let exe = std::path::Path::new("/home/x/talos/target/release/talos");
         assert_eq!(exe_sibling_dir(exe), PathBuf::from("/home/x/talos/target/release"));
         let shared = std::path::Path::new("/mnt/onedrive/Talos/talos");
@@ -316,8 +316,8 @@ mod tests {
     }
 
     #[test]
-    fn sibling_macos_sans_motif_app_reste_parent() {
-        // Un dossier "MacOS" qui n'est PAS dans un .app → pas de remontée magique.
+    fn sibling_macos_without_app_pattern_stays_parent() {
+        // A "MacOS" folder that is NOT inside a .app → no magic climb-out.
         let exe = std::path::Path::new("/random/MacOS/talos");
         assert_eq!(exe_sibling_dir(exe), PathBuf::from("/random/MacOS"));
     }

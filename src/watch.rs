@@ -1,10 +1,10 @@
-// Port de src/watch-window.ts — repère une fenêtre étrangère (assistant/UAC) qui
-// surgit DERRIÈRE le panneau pendant un install. Le P/Invoke Win32 vit ENTIER dans
-// SCAN_SCRIPT (PowerShell) ; Rust ne fait que spawn + parser le JSON de sortie.
+// Port of src/watch-window.ts — spots a foreign window (installer/UAC) that
+// pops up BEHIND the panel during an install. The Win32 P/Invoke lives ENTIRELY in
+// SCAN_SCRIPT (PowerShell); Rust only spawns + parses the output JSON.
 use serde::Deserialize;
 
-// Utilisés uniquement par le watcher #[cfg(windows)] de server.rs — vus « morts »
-// depuis un build Mac/Linux, ce qui est normal (le watcher est Windows-only).
+// Used only by the #[cfg(windows)] watcher in server.rs — seen as "dead"
+// from a Mac/Linux build, which is normal (the watcher is Windows-only).
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Debug, Deserialize, Default, PartialEq)]
 pub struct Scan {
@@ -15,8 +15,8 @@ pub struct Scan {
     pub pushed: bool,
 }
 
-/// Parse défensif du stdout du script PS : tout ce qui est malformé → not found
-/// (direction sûre : ne jamais prétendre qu'une fenêtre est là sans certitude).
+/// Defensive parse of the PS script's stdout: anything malformed → not found
+/// (safe direction: never claim a window is there without certainty).
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn parse_scan(stdout: &str) -> Scan {
     match serde_json::from_str::<Scan>(stdout.trim()) {
@@ -25,10 +25,10 @@ pub fn parse_scan(stdout: &str) -> Scan {
     }
 }
 
-/// Le script PowerShell — COPIE VERBATIM de watch-window.ts (SCAN_SCRIPT, lignes
-/// 53-120). Énumère les fenêtres visibles de l'arbre de process raciné à {ROOT_PID},
-/// exclut msedge/chrome/msedgewebview2/Talos + soi-même, et sur la 1re fenêtre
-/// étrangère : FlashWindowEx + ForceForeground. Émet une ligne JSON {found,title?,pushed}.
+/// The PowerShell script — VERBATIM COPY of watch-window.ts (SCAN_SCRIPT, lines
+/// 53-120). Enumerates the visible windows of the process tree rooted at {ROOT_PID},
+/// excludes msedge/chrome/msedgewebview2/Talos + itself, and on the 1st foreign
+/// window: FlashWindowEx + ForceForeground. Emits a JSON line {found,title?,pushed}.
 pub const SCAN_SCRIPT: &str = r#"
 $ErrorActionPreference='SilentlyContinue'
 Add-Type @"
@@ -72,8 +72,8 @@ $tree.Add($root) | Out-Null
 $changed=$true
 while($changed){ $changed=$false; foreach($p in $all){ if($tree.Contains([uint32]$p.ParentProcessId) -and -not $tree.Contains([uint32]$p.ProcessId)){ $tree.Add([uint32]$p.ProcessId)|Out-Null; $changed=$true } } }
 $self=$PID
-# msedgewebview2.exe = LE webview de Tauri, enfant de talos.exe donc DANS
-# l'arbre -> doit etre exclu, sinon le watcher detecte NOTRE PROPRE fenetre.
+# msedgewebview2.exe = Tauri's OWN webview, a child of talos.exe so IN the tree
+# -> must be excluded, else the watcher detects OUR OWN window.
 $skip='msedge.exe','chrome.exe','msedgewebview2.exe','Talos.exe'
 $result=@{found=$false}
 $cb={ param($h,$p)
@@ -95,8 +95,8 @@ $cb={ param($h,$p)
 $result | ConvertTo-Json -Compress
 "#;
 
-/// Lance SCAN_SCRIPT pour un pid racine via powershell, retourne son stdout (JSON).
-/// Échec de spawn → "{}" (direction sûre : not found). Miroir de powershellSpawner.
+/// Runs SCAN_SCRIPT for a root pid via powershell, returns its stdout (JSON).
+/// Spawn failure → "{}" (safe direction: not found). Mirror of powershellSpawner.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn powershell_spawner(pid: u32) -> String {
     let script = SCAN_SCRIPT.replace("{ROOT_PID}", &pid.to_string());

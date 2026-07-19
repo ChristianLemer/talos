@@ -2,15 +2,15 @@
 name = "talos"
 version = "0.0.1"
 edition = "2021"
-# Deux [[bin]] (Talos + pty-smoke) → Tauri ne sait pas lequel empaqueter depuis que
-# le bin ne s'appelle plus comme le crate. default-run tranche : c'est Talos.
+# Two [[bin]] targets (Talos + pty-smoke) → Tauri can't tell which to bundle since
+# the bin no longer matches the crate name. default-run settles it: Talos.
 default-run = "Talos"
 
 [dependencies]
 tauri = { version = "2", features = [] }
-# Persiste taille+position de la fenêtre à la fermeture, restaure au lancement, en
-# clampant dans la zone visible (jamais hors-écran si un moniteur disparaît). 960×540
-# n'est plus que le défaut du TOUT 1er lancement. Multi-plateforme d'office.
+# Persists window size+position on close, restores on launch, clamped to the visible
+# area (never off-screen if a monitor disappears). 960×540 is now only the very first
+# launch default. Cross-platform out of the box.
 tauri-plugin-window-state = "2"
 axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }

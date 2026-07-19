@@ -1,5 +1,5 @@
-// Port de bundles.ts — scan bundles/ → { bundles, steps }. Pur (serde_yaml), pas
-// de pty/réseau. Le route table : un paquet = un NEED satisfait par une route nommée.
+// Port of bundles.ts — scan bundles/ → { bundles, steps }. Pure (serde_yaml), no
+// pty/network. The route table: a package = a NEED satisfied by a named route.
 use serde::Deserialize;
 
 use crate::managers::{managers, native_manager, IdField};
@@ -131,8 +131,8 @@ pub struct Commands {
     pub downgrade: Option<String>,
 }
 
-/// Le NAMED ROUTE TABLE — port de commandsFor. Family 1 (system manager, arbitré par
-/// OS) d'abord, puis cargo/npm/run/claude-plugin/skill.
+/// The NAMED ROUTE TABLE — port of commandsFor. Family 1 (system manager, arbitrated by
+/// OS) first, then cargo/npm/run/claude-plugin/skill.
 fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
     let ver = pkg.version.as_deref().unwrap_or("").trim().to_string();
     let none = Commands {
@@ -257,8 +257,8 @@ pub struct Plan {
     pub steps: Vec<Step>,
 }
 
-/// Scan bundles/ (chaque sous-dossier avec bundle.yaml). YAML cassé → skip loggé.
-/// Dossier absent → plan VIDE (l'exe ouvre inerte, ne crashe pas).
+/// Scan bundles/ (each subfolder with bundle.yaml). Broken YAML → logged skip.
+/// Folder absent → EMPTY plan (the exe opens inert, doesn't crash).
 pub fn load_bundles(root: &str, os: Os, log: &dyn Fn(&str)) -> Plan {
     let mut bundles = Vec::new();
     let mut steps = Vec::new();

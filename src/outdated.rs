@@ -1,5 +1,5 @@
-// Port de outdated.ts — un scan machine-wide via le manager natif. Best-effort :
-// pas de manager / tout échec → map vide (direction sûre "rien de périmé").
+// Port of outdated.ts — a machine-wide scan via the native manager. Best-effort:
+// no manager / any failure → empty map (safe direction "nothing outdated").
 use std::collections::HashMap;
 
 use crate::managers::{native_manager, Outdated};
@@ -19,7 +19,7 @@ pub fn scan_outdated(os: Os) -> HashMap<String, Outdated> {
     }
 }
 
-/// Le systemId (lowercased) d'un paquet → son entrée outdated, ou None.
+/// A package's systemId (lowercased) → its outdated entry, or None.
 pub fn outdated_for<'a>(
     system_id: Option<&str>,
     scan: &'a HashMap<String, Outdated>,

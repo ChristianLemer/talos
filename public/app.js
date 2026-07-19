@@ -37,7 +37,7 @@ const QUIPS = [
 // The splash lives STRICTLY for the duration of the scan: it appears when the
 // analysis starts and is dismissed the instant `state-done` fires (hideSplash).
 // No floor, no padding — the scan is often near-instant, so the splash may only
-// flash. That honesty is the point (chantier splash · étape 1). The 12s timer is
+// flash. That honesty is the point (splash work · step 1). The 12s timer is
 // a pure safety net (never fires if the scan answers first). The fade-out (~450ms)
 // is the disappearance itself, not added wait.
 const splash = document.getElementById("splash");

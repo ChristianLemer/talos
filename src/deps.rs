@@ -1,14 +1,14 @@
-// Port de deps.ts — dépendances de paquets (`requires:`) sur l'état FUTUR.
-// Une exigence n'est pas "X est là maintenant ?" mais "X sera là après l'Apply ?".
-// Vue GLOBALE (tous les paquets) que la détection par-step ne peut avoir.
+// Port of deps.ts — package dependencies (`requires:`) over the FUTURE state.
+// A requirement is not "is X here now?" but "will X be here after the Apply?".
+// GLOBAL view (all packages) that per-step detection cannot have.
 use std::collections::{HashMap, HashSet};
 
-/// Le minimum sur quoi deps raisonne. Les vrais Step le satisfont structurellement.
+/// The minimum deps reasons over. The real Steps satisfy it structurally.
 #[derive(Debug, Clone)]
 pub struct DepNode {
     pub name: String,
     pub requires: Vec<String>,
-    pub will_be_present: bool, // présent maintenant OU désiré-présent après l'Apply
+    pub will_be_present: bool, // present now OR desired-present after the Apply
 }
 
 fn index_by_name(nodes: &[DepNode]) -> HashMap<String, usize> {
@@ -19,9 +19,9 @@ fn index_by_name(nodes: &[DepNode]) -> HashMap<String, usize> {
         .collect()
 }
 
-/// La raison pour laquelle les exigences d'un nœud ne tiennent pas, ou None.
-/// Une exigence tient ssi le paquet requis existe dans le plan ET will_be_present.
-/// Première exigence en échec gagne le message.
+/// The reason a node's requirements do not hold, or None.
+/// A requirement holds iff the required package exists in the plan AND will_be_present.
+/// First failing requirement wins the message.
 pub fn requires_reason(node: &DepNode, nodes: &[DepNode], idx: &HashMap<String, usize>) -> Option<String> {
     for req in &node.requires {
         match idx.get(req) {
@@ -36,11 +36,11 @@ pub fn requires_reason(node: &DepNode, nodes: &[DepNode], idx: &HashMap<String, 
     None
 }
 
-/// Ordonne le plan d'install pour qu'un paquet requis passe AVANT ses dépendants.
-/// `plan` porte des `i` (index dans nodes). Kahn, en amorçant les nœuds prêts dans
-/// l'ordre DONNÉ du plan (ordre visuel = tie-break stable). Arêtes vers des paquets
-/// HORS plan ignorées (déjà présents). Un cycle → items restants en ordre donné
-/// (défensif : ne panique jamais, ne perd jamais un item).
+/// Orders the install plan so a required package comes BEFORE its dependents.
+/// `plan` carries `i` (index into nodes). Kahn, seeding the ready nodes in
+/// the GIVEN order of the plan (visual order = stable tie-break). Edges to packages
+/// OUT of the plan ignored (already present). A cycle → remaining items in given order
+/// (defensive: never panics, never loses an item).
 pub fn topo_sort<T: Clone>(plan: &[(usize, T)], nodes: &[DepNode], idx: &HashMap<String, usize>) -> Vec<(usize, T)> {
     let in_plan: HashSet<usize> = plan.iter().map(|(i, _)| *i).collect();
     let mut remaining: HashMap<usize, usize> = HashMap::new();
@@ -62,10 +62,10 @@ pub fn topo_sort<T: Clone>(plan: &[(usize, T)], nodes: &[DepNode], idx: &HashMap
     let mut out: Vec<(usize, T)> = Vec::with_capacity(plan.len());
     let mut emitted: HashSet<usize> = HashSet::new();
 
-    // Ordre donné du plan pour départager les indépendants (tie-break visuel stable).
+    // Given order of the plan to break ties among independents (stable visual tie-break).
     let given_order: Vec<usize> = plan.iter().map(|(i, _)| *i).collect();
     loop {
-        // prêts = deps satisfaites, non émis, dans l'ordre donné.
+        // ready = deps satisfied, not emitted, in the given order.
         let ready: Vec<usize> = given_order
             .iter()
             .copied()
@@ -82,7 +82,7 @@ pub fn topo_sort<T: Clone>(plan: &[(usize, T)], nodes: &[DepNode], idx: &HashMap
             }
         }
     }
-    // Cycle / reste non émis → ordre donné (défensif).
+    // Cycle / remainder not emitted → given order (defensive).
     for p in plan {
         if !emitted.contains(&p.0) {
             out.push(p.clone());
@@ -91,7 +91,7 @@ pub fn topo_sort<T: Clone>(plan: &[(usize, T)], nodes: &[DepNode], idx: &HashMap
     out
 }
 
-/// Construit l'index name→pos (exposé pour les appelants).
+/// Builds the name→pos index (exposed for callers).
 pub fn make_index(nodes: &[DepNode]) -> HashMap<String, usize> {
     index_by_name(nodes)
 }
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn topo_required_before_dependent() {
-        // node 0 "app" requires "lib" (node 1). Plan donné [0,1] → doit sortir [1,0].
+        // node 0 "app" requires "lib" (node 1). Given plan [0,1] → must output [1,0].
         let nodes = vec![node("app", &["lib"], true), node("lib", &[], true)];
         let idx = make_index(&nodes);
         let plan = vec![(0usize, "app"), (1usize, "lib")];

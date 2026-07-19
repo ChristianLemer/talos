@@ -1,27 +1,27 @@
-//! Assets front SCELLÉS dans le binaire (raccourci #3 du spike).
+//! Front assets SEALED in the binary (shortcut #3 of the spike).
 //!
-//! Le spike servait `public/` via un chemin RELATIF (`TALOS_PUBLIC`, défaut `"public"`),
-//! lu au runtime par `ServeDir`/`read_to_string`. Lancé par Finder/Explorer, le cwd
-//! n'est PAS la racine du projet → `public/` introuvable → `<h1>index.html introuvable</h1>`.
+//! The spike served `public/` via a RELATIVE path (`TALOS_PUBLIC`, default `"public"`),
+//! read at runtime by `ServeDir`/`read_to_string`. Launched by Finder/Explorer, the cwd
+//! is NOT the project root → `public/` not found → `<h1>index.html introuvable</h1>`.
 //!
-//! Ici on embarque `public/` DANS le binaire à la compilation (comme
-//! `deno compile --include public`), relatif au crate root — donc indépendant du cwd
-//! au runtime. `TALOS_PUBLIC` survit comme ÉCHAPPATOIRE DEV : présent → on lit le
-//! disque (édition live d'`app.js` sans recompiler) ; absent → assets scellés (release).
+//! Here we embed `public/` INTO the binary at compile time (like
+//! `deno compile --include public`), relative to the crate root — thus independent of the
+//! cwd at runtime. `TALOS_PUBLIC` survives as a DEV escape hatch: present → we read the
+//! disk (live editing of `app.js` without recompiling); absent → sealed assets (release).
 
 use rust_embed::RustEmbed;
 use std::borrow::Cow;
 use std::path::Path;
 
-/// `public/` figé dans le binaire à la compilation (relatif au crate root).
+/// `public/` frozen into the binary at compile time (relative to the crate root).
 #[derive(RustEmbed)]
 #[folder = "public/"]
 pub struct Assets;
 
-/// Résout un asset par chemin de requête HTTP.
-/// - `disk_root = Some(dir)` (dev, `TALOS_PUBLIC` posé) → lit le disque sous `dir`.
-/// - `disk_root = None` (release) → sert l'asset SCELLÉ dans le binaire.
-///   `None` de retour = asset absent (→ l'appelant répond 404).
+/// Resolves an asset by HTTP request path.
+/// - `disk_root = Some(dir)` (dev, `TALOS_PUBLIC` set) → reads the disk under `dir`.
+/// - `disk_root = None` (release) → serves the asset SEALED in the binary.
+///   A `None` return = asset absent (→ the caller responds 404).
 pub fn resolve(disk_root: Option<&Path>, path: &str) -> Option<Cow<'static, [u8]>> {
     let rel = normalize(path);
     match disk_root {
@@ -30,10 +30,10 @@ pub fn resolve(disk_root: Option<&Path>, path: &str) -> Option<Cow<'static, [u8]
     }
 }
 
-/// Normalise un chemin de requête en clé d'asset : `""`/`"/"` → `index.html`,
-/// et retire le slash de tête (les clés rust-embed sont relatives, sans `/`).
-/// Public pour que l'appelant déduise le Content-Type sur la clé RÉELLE (sinon `/`
-/// n'a pas d'extension → mauvais mime pour l'index).
+/// Normalizes a request path into an asset key: `""`/`"/"` → `index.html`,
+/// and strips the leading slash (rust-embed keys are relative, without `/`).
+/// Public so the caller can deduce the Content-Type from the REAL key (otherwise `/`
+/// has no extension → wrong mime for the index).
 pub fn normalize(path: &str) -> String {
     let p = path.trim_start_matches('/');
     if p.is_empty() {
@@ -49,15 +49,15 @@ mod tests {
 
     #[test]
     fn embeds_index_and_app() {
-        // Le binaire DOIT contenir les assets front scellés (le cœur du raccourci #3).
-        assert!(Assets::get("index.html").is_some(), "index.html non scellé");
-        assert!(Assets::get("app.js").is_some(), "app.js non scellé");
-        assert!(Assets::get("vendor/xterm.js").is_some(), "vendor/ non scellé");
+        // The binary MUST contain the sealed front assets (the heart of shortcut #3).
+        assert!(Assets::get("index.html").is_some(), "index.html not sealed");
+        assert!(Assets::get("app.js").is_some(), "app.js not sealed");
+        assert!(Assets::get("vendor/xterm.js").is_some(), "vendor/ not sealed");
     }
 
     #[test]
     fn resolve_embedded_returns_bytes() {
-        let bytes = resolve(None, "app.js").expect("app.js scellé");
+        let bytes = resolve(None, "app.js").expect("app.js sealed");
         assert!(!bytes.is_empty());
     }
 
@@ -71,10 +71,10 @@ mod tests {
 
     #[test]
     fn resolve_disk_override_reads_from_dir() {
-        // cwd = crate root pendant `cargo test` → public/ existe sur disque.
-        // Disque et scellé doivent CONCORDER (même source).
-        let disk = resolve(Some(Path::new("public")), "index.html").expect("disque");
-        let sealed = resolve(None, "index.html").expect("scellé");
+        // cwd = crate root during `cargo test` → public/ exists on disk.
+        // Disk and sealed must MATCH (same source).
+        let disk = resolve(Some(Path::new("public")), "index.html").expect("disk");
+        let sealed = resolve(None, "index.html").expect("sealed");
         assert_eq!(disk, sealed);
     }
 

@@ -1,6 +1,6 @@
-// En release sur Windows, subsystem GUI : sinon Windows ouvre une fenêtre console
-// noire à côté de la fenêtre native (le binaire démarrerait en subsystem "console").
-// `not(debug_assertions)` → en dev on GARDE la console (logs/panics visibles).
+// In release on Windows, GUI subsystem: otherwise Windows opens a black console
+// window next to the native window (the binary would start in the "console" subsystem).
+// `not(debug_assertions)` → in dev we KEEP the console (logs/panics visible).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent_content;
@@ -21,19 +21,19 @@ mod server;
 mod watch;
 
 fn main() {
-    // Le serveur HTTP+WS tourne dans son propre runtime tokio, en tâche de fond.
-    // La fenêtre Tauri (webview) charge http://127.0.0.1:1420 → app.js s'y connecte
-    // en WS comme aujourd'hui (location.host = 127.0.0.1:1420), inchangé.
+    // The HTTP+WS server runs in its own tokio runtime, in the background.
+    // The Tauri window (webview) loads http://127.0.0.1:1420 → app.js connects to it
+    // via WS as it does today (location.host = 127.0.0.1:1420), unchanged.
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            // TALOS_PUBLIC = échappatoire DEV : posé → on sert le front depuis ce
-            // dossier disque (édition live sans recompiler). Absent (release, .app/.exe
-            // lancé par Finder/Explorer) → None → assets SCELLÉS dans le binaire.
+            // TALOS_PUBLIC = DEV escape hatch: set → we serve the front from this
+            // disk folder (live editing without recompiling). Absent (release, .app/.exe
+            // launched by Finder/Explorer) → None → assets SEALED in the binary.
             let disk_root = std::env::var_os("TALOS_PUBLIC").map(std::path::PathBuf::from);
-            // Pont oneshot(async) → mpsc(sync) : le serveur tire `bound` quand le port
-            // écoute, on relaie au thread principal (qui n'a pas de runtime async).
+            // oneshot(async) → mpsc(sync) bridge: the server fires `bound` when the port
+            // is listening, we relay it to the main thread (which has no async runtime).
             let (bound_tx, bound_rx) = tokio::sync::oneshot::channel::<()>();
             tokio::spawn(async move {
                 if bound_rx.await.is_ok() {
@@ -43,18 +43,18 @@ fn main() {
             server::serve(disk_root, Some(bound_tx)).await;
         });
     });
-    // Attendre que le port écoute VRAIMENT avant de charger l'URL (raccourci #4 :
-    // fini le sleep aveugle). Garde-fou : si le bind traîne au-delà de 5s (anormal),
-    // on continue quand même — mieux vaut une fenêtre qui retente qu'un blocage dur.
+    // Wait until the port is REALLY listening before loading the URL (shortcut #4:
+    // no more blind sleep). Guard: if the bind drags on beyond 5s (abnormal),
+    // we continue anyway — better a window that retries than a hard block.
     let _ = ready_rx.recv_timeout(std::time::Duration::from_secs(5));
     tauri::Builder::default()
-        // Persistance taille/position (voir Cargo.toml). Enregistré AVANT setup : le
-        // plugin restaure l'état sauvé au moment où la fenêtre "main" est créée.
+        // Size/position persistence (see Cargo.toml). Registered BEFORE setup: the
+        // plugin restores the saved state at the moment the "main" window is created.
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        // Titre de la fenêtre NATIVE = "Talos · <change>" (comme l'ancien Deno). En
-        // chemin A (WS, pas d'IPC), le front ne pilote pas la fenêtre native — le
-        // document.title de app.js ne remonte PAS à la barre de titre OS. On le pose
-        // donc ici, côté Rust, avec le stamp de build (répond à "quel binaire tourne ?").
+        // NATIVE window title = "Talos · <change>" (like the old Deno). On
+        // path A (WS, no IPC), the front does not drive the native window — the
+        // document.title from app.js does NOT propagate to the OS title bar. So we set it
+        // here, on the Rust side, with the build stamp (answers "which binary is running?").
         .setup(|app| {
             use tauri::Manager;
             if let Some(win) = app.get_webview_window("main") {
@@ -63,5 +63,5 @@ fn main() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("erreur au lancement de Tauri");
+        .expect("error launching Tauri");
 }

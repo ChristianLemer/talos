@@ -1,24 +1,24 @@
-//! agent_content.rs — détection du CONTENU agent présent : plugins Claude Code
-//! (route `claude-plugin`) et skills standalone (route `skill`). Port Rust de
-//! agent-content.ts, mais NATIF : lecture disque + serde_json, JAMAIS de shell-out
-//! vers `claude`/`npx` (décision archi : tout en JSON parsé nativement — voir
-//! mémoire talos-parsing-native-json). Parsing PUR et défensif (un fichier corrompu
-//! ne "voit" rien de présent — direction sûre : jamais présent si incertain). L'IO
-//! (lire les chemins réels) est une coquille fine.
+//! agent_content.rs — detection of the agent CONTENT present: Claude Code plugins
+//! (route `claude-plugin`) and standalone skills (route `skill`). Rust port of
+//! agent-content.ts, but NATIVE: disk reads + serde_json, NEVER a shell-out
+//! to `claude`/`npx` (archi decision: everything as natively-parsed JSON — see
+//! memory talos-parsing-native-json). PURE and defensive parsing (a corrupted file
+//! "sees" nothing present — safe direction: never present if uncertain). The IO
+//! (reading the real paths) is a thin shell.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// Un plugin installé, tel que lu dans installed_plugins.json.
+/// An installed plugin, as read from installed_plugins.json.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Plugin {
-    pub id: String,      // ex. "chiron@tekton"
-    pub version: String, // ex. "0.0.2" ("" si inconnue)
+    pub id: String,      // e.g. "chiron@tekton"
+    pub version: String, // e.g. "0.0.2" ("" if unknown)
 }
 
-/// Parse ~/.claude/plugins/installed_plugins.json → liste de plugins. Le format :
+/// Parse ~/.claude/plugins/installed_plugins.json → list of plugins. The format:
 /// `{ "version": 2, "plugins": { "<id>": [ { "version": "...", ... } ], ... } }`.
-/// Défensif : JSON malformé → aucun plugin (jamais "présent" si incertain).
+/// Defensive: malformed JSON → no plugin (never "present" if uncertain).
 pub fn parse_installed_plugins(json: &str) -> Vec<Plugin> {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
         return Vec::new();
@@ -28,7 +28,7 @@ pub fn parse_installed_plugins(json: &str) -> Vec<Plugin> {
     };
     let mut out = Vec::new();
     for (id, entries) in map {
-        // La valeur est un tableau d'installations ; on prend la version de la 1re.
+        // The value is an array of installations; we take the version of the 1st.
         let version = entries
             .as_array()
             .and_then(|a| a.first())
@@ -41,9 +41,9 @@ pub fn parse_installed_plugins(json: &str) -> Vec<Plugin> {
     out
 }
 
-/// Un plugin est-il présent ? `detect` peut être l'id complet "plugin@marketplace"
-/// ou juste la partie "plugin" avant @ (ce qu'un bundle déclare souvent). Retourne
-/// la version trouvée (Some), ou None si absent. Port de pluginPresent (+ version).
+/// Is a plugin present? `detect` can be the full id "plugin@marketplace"
+/// or just the "plugin" part before @ (what a bundle often declares). Returns
+/// the found version (Some), or None if absent. Port of pluginPresent (+ version).
 pub fn plugin_version(detect: &str, plugins: &[Plugin]) -> Option<String> {
     plugins
         .iter()
@@ -51,14 +51,14 @@ pub fn plugin_version(detect: &str, plugins: &[Plugin]) -> Option<String> {
         .map(|p| p.version.clone())
 }
 
-/// Les noms de skills installées : chaque sous-dossier des répertoires de skills est
-/// une skill (ex. ~/.claude/skills/<name>/, ~/.agents/skills/<name>/). Lecture disque
-/// pure (pas de `npx skills list`). Dédupliqué (une skill peut être dans 2 racines).
+/// The names of installed skills: each subfolder of the skill directories is
+/// a skill (e.g. ~/.claude/skills/<name>/, ~/.agents/skills/<name>/). Pure disk
+/// read (no `npx skills list`). Deduplicated (a skill can be in 2 roots).
 pub fn list_skills(dirs: &[PathBuf]) -> BTreeMap<String, PathBuf> {
     let mut out = BTreeMap::new();
     for dir in dirs {
         let Ok(entries) = std::fs::read_dir(dir) else {
-            continue; // dossier absent → rien, pas d'erreur
+            continue; // folder absent → nothing, no error
         };
         for entry in entries.flatten() {
             if entry.path().is_dir() {
@@ -71,13 +71,13 @@ pub fn list_skills(dirs: &[PathBuf]) -> BTreeMap<String, PathBuf> {
     out
 }
 
-/// Une skill nommée est-elle présente ? Retourne le chemin trouvé (preuve), ou None.
+/// Is a named skill present? Returns the found path (proof), or None.
 pub fn skill_path(name: &str, skills: &BTreeMap<String, PathBuf>) -> Option<PathBuf> {
     skills.get(name).cloned()
 }
 
-/// Chemins disque où lire le contenu agent, dérivés du HOME. Cross-platform via HOME
-/// (Mac/Linux) / USERPROFILE (Windows). Le .app/.exe tourne dans le HOME de l'user.
+/// Disk paths where to read the agent content, derived from HOME. Cross-platform via HOME
+/// (Mac/Linux) / USERPROFILE (Windows). The .app/.exe runs in the user's HOME.
 pub fn plugins_json_path(home: &Path) -> PathBuf {
     home.join(".claude").join("plugins").join("installed_plugins.json")
 }
@@ -102,15 +102,15 @@ mod tests {
     }"#;
 
     #[test]
-    fn parse_trouve_les_plugins_et_versions() {
+    fn parse_finds_plugins_and_versions() {
         let ps = parse_installed_plugins(SAMPLE);
         assert_eq!(ps.len(), 3);
         assert_eq!(plugin_version("chiron@tekton", &ps), Some("0.0.2".into()));
     }
 
     #[test]
-    fn plugin_match_id_partiel_avant_arobase() {
-        // Un bundle déclare souvent "chiron" (sans @marketplace).
+    fn plugin_match_partial_id_before_at() {
+        // A bundle often declares "chiron" (without @marketplace).
         let ps = parse_installed_plugins(SAMPLE);
         assert_eq!(plugin_version("chiron", &ps), Some("0.0.2".into()));
         assert_eq!(plugin_version("superpowers", &ps), Some("5.1.0".into()));
@@ -118,7 +118,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_defensif_sur_garbage() {
+    fn parse_defensive_on_garbage() {
         assert_eq!(parse_installed_plugins("not json").len(), 0);
         assert_eq!(parse_installed_plugins("{}").len(), 0);
         assert_eq!(parse_installed_plugins(r#"{"plugins":42}"#).len(), 0);
@@ -126,17 +126,17 @@ mod tests {
 
     #[test]
     fn list_skills_lit_les_sous_dossiers() {
-        // Monte une arbo temporaire : deux racines, une skill partagée.
+        // Sets up a temporary tree: two roots, one shared skill.
         let base = std::env::temp_dir().join("talos-test-skills");
         let _ = std::fs::remove_dir_all(&base);
         let a = base.join("claude").join("skills");
         let b = base.join("agents").join("skills");
         std::fs::create_dir_all(a.join("herdr")).unwrap();
         std::fs::create_dir_all(a.join("homey-cli")).unwrap();
-        std::fs::create_dir_all(b.join("herdr")).unwrap(); // doublon → dédupliqué
+        std::fs::create_dir_all(b.join("herdr")).unwrap(); // duplicate → deduplicated
         std::fs::create_dir_all(b.join("gws-gmail")).unwrap();
         let skills = list_skills(&[a.clone(), b.clone()]);
-        assert_eq!(skills.len(), 3, "herdr dédupliqué"); // herdr, homey-cli, gws-gmail
+        assert_eq!(skills.len(), 3, "herdr deduplicated"); // herdr, homey-cli, gws-gmail
         assert!(skill_path("herdr", &skills).is_some());
         assert!(skill_path("gws-gmail", &skills).is_some());
         assert!(skill_path("absent", &skills).is_none());
@@ -144,13 +144,13 @@ mod tests {
     }
 
     #[test]
-    fn list_skills_dossier_absent_ne_panique_pas() {
+    fn list_skills_missing_dir_does_not_panic() {
         let skills = list_skills(&[PathBuf::from("/nonexistent/xyz/skills")]);
         assert_eq!(skills.len(), 0);
     }
 
     #[test]
-    fn chemins_derives_du_home() {
+    fn paths_derived_from_home() {
         let home = Path::new("/Users/x");
         assert!(plugins_json_path(home).ends_with(".claude/plugins/installed_plugins.json"));
         let dirs = skill_dirs(home);

@@ -1,5 +1,5 @@
-// Port de managers.ts — SystemManager: winget & brew = 1 route, 2 incarnations.
-// Commandes = String (le pty/shell_probe les exécute). Parsers PURS et testables.
+// Port of managers.ts — SystemManager: winget & brew = 1 route, 2 incarnations.
+// Commands = String (the pty/shell_probe runs them). PURE, testable parsers.
 use std::collections::HashMap;
 
 use crate::platform::Os;
@@ -59,7 +59,7 @@ impl SystemManager {
             _ => "brew outdated --json=v2".into(),
         }
     }
-    /// Extrait la version depuis la sortie de presence_command.
+    /// Extracts the version from presence_command's output.
     pub fn parse_version(&self, id: &str, output: &str) -> String {
         match self.route {
             "winget" => parse_winget_version(id, output),
@@ -89,7 +89,7 @@ pub fn managers() -> Vec<&'static SystemManager> {
     vec![&WINGET, &BREW]
 }
 
-/// Le manager natif de cet OS, ou None.
+/// The native manager for this OS, or None.
 pub fn native_manager(os: Os) -> Option<&'static SystemManager> {
     managers().into_iter().find(|m| m.os.contains(&os))
 }
@@ -101,7 +101,7 @@ fn strip_ansi(s: &str) -> String {
         .into_owned()
 }
 
-// winget: "name  Id  Version" — le token après l'id (doit commencer par un chiffre).
+// winget: "name  Id  Version" — the token after the id (must start with a digit).
 fn parse_winget_version(id: &str, output: &str) -> String {
     let clean = strip_ansi(output);
     let lc = id.to_lowercase();
@@ -118,7 +118,7 @@ fn parse_winget_version(id: &str, output: &str) -> String {
     String::new()
 }
 
-// brew: "git 2.50.1" — token après l'id, doit commencer par un chiffre (rejette "version").
+// brew: "git 2.50.1" — token after the id, must start with a digit (rejects "version").
 fn parse_brew_version(id: &str, output: &str) -> String {
     let lc = id.to_lowercase();
     for line in output.lines() {
@@ -134,8 +134,8 @@ fn parse_brew_version(id: &str, output: &str) -> String {
     String::new()
 }
 
-// `winget upgrade` : table FIXED-WIDTH — slice par offsets du HEADER (jamais split
-// espaces : noms/versions contiennent des espaces). Tout hoquet → map vide.
+// `winget upgrade`: FIXED-WIDTH table — slice by HEADER offsets (never split on
+// spaces: names/versions contain spaces). Any hiccup → empty map.
 pub fn parse_winget_upgrade(raw: &str) -> HashMap<String, Outdated> {
     let mut map = HashMap::new();
     let cleaned = strip_ansi(raw);
@@ -162,7 +162,7 @@ pub fn parse_winget_upgrade(raw: &str) -> HashMap<String, Outdated> {
         if line.trim().is_empty() {
             break;
         }
-        // ligne de séparation (tirets/espaces seulement)
+        // separator line (dashes/spaces only)
         if line.trim().chars().all(|c| c == '-' || c.is_whitespace()) {
             continue;
         }
@@ -184,7 +184,7 @@ pub fn parse_winget_upgrade(raw: &str) -> HashMap<String, Outdated> {
     map
 }
 
-// `brew outdated --json=v2` : formulae + casks.
+// `brew outdated --json=v2`: formulae + casks.
 fn parse_brew_outdated(output: &str) -> HashMap<String, Outdated> {
     let mut map = HashMap::new();
     let Ok(json) = serde_json::from_str::<serde_json::Value>(output) else {
@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn brew_version_parse() {
         assert_eq!(parse_brew_version("git", "git 2.50.1"), "2.50.1");
-        assert_eq!(parse_brew_version("git", "git version 2.50.1"), ""); // rejette "version"
+        assert_eq!(parse_brew_version("git", "git version 2.50.1"), ""); // rejects "version"
     }
 
     #[test]

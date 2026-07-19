@@ -1,5 +1,5 @@
-// Port de detect.ts — présence tri-state (Some(true)/Some(false)/None). ASK the
-// machine, jamais un journal. Ne panique jamais : un spawn échoué → absent/indéterminé.
+// Port of detect.ts — tri-state presence (Some(true)/Some(false)/None). ASK the
+// machine, never a journal. Never panics: a failed spawn → absent/undetermined.
 use crate::bundles::Step;
 use crate::managers::{managers, native_manager};
 use crate::platform::{shell_probe, Os, Probe};
@@ -10,8 +10,8 @@ pub struct Presence {
     pub reason: Option<String>,
     pub version: Option<String>,
     pub external: bool,
-    /// La preuve de détection : commande lancée + sortie + code. Exposée à l'opérateur
-    /// (écrite dans le terminal de la ligne au scan) — "quelle commande a décidé ?".
+    /// The detection evidence: command run + output + code. Exposed to the operator
+    /// (written to the row's terminal at scan time) — "which command decided?".
     pub diag: Option<ProbeResult>,
 }
 
@@ -23,7 +23,7 @@ pub struct ProbeResult {
     pub cmdline: String,
 }
 
-/// Exécute un Probe, capture code + sortie fusionnée (stdout+stderr).
+/// Runs a Probe, captures code + merged output (stdout+stderr).
 pub fn run_probe_detailed(probe: &Probe) -> ProbeResult {
     let cmdline = format!("{} {}", probe.cmd, probe.args.join(" "));
     match crate::platform::quiet_command(&probe.cmd)
@@ -56,7 +56,7 @@ fn strip_ansi(s: &str) -> String {
         .into_owned()
 }
 
-/// Extrait la version révélée par la sortie du probe. Override regex bundle > manager > générique.
+/// Extracts the version revealed by the probe's output. Regex override: bundle > manager > generic.
 pub fn version_from(step: &Step, output: &str) -> String {
     let clean = strip_ansi(output);
     if let Some(re_src) = &step.version_regex {
@@ -79,7 +79,7 @@ pub fn version_from(step: &Step, output: &str) -> String {
             }
         }
     }
-    // générique : premier token version-like (pas de \b initial — "v26.4.0").
+    // generic: first version-like token (no leading \b — "v26.4.0").
     regex::Regex::new(r"\d+(?:\.\d+)+(?:[-.\w]*)?")
         .unwrap()
         .find(&clean)
@@ -87,8 +87,8 @@ pub fn version_from(step: &Step, output: &str) -> String {
         .unwrap_or_default()
 }
 
-/// HOME de l'utilisateur (Mac/Linux $HOME, Windows %USERPROFILE%). Le .app/.exe tourne
-/// dans le HOME de l'user, donc le contenu agent (~/.claude, ~/.agents) y est relatif.
+/// The user's HOME (Mac/Linux $HOME, Windows %USERPROFILE%). The .app/.exe runs
+/// in the user's HOME, so the agent content (~/.claude, ~/.agents) is relative to it.
 fn user_home() -> std::path::PathBuf {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -96,9 +96,9 @@ fn user_home() -> std::path::PathBuf {
         .unwrap_or_default()
 }
 
-/// Détecte un plugin Claude (route claude-plugin) ou une skill (route skill) par
-/// LECTURE DISQUE native. `detect:` porte le nom à chercher. Construit un diag qui
-/// montre la preuve (fichier/dossier consulté + verdict), comme les sondes de commande.
+/// Detects a Claude plugin (route claude-plugin) or a skill (route skill) via
+/// native DISK READ. `detect:` carries the name to look for. Builds a diag that
+/// shows the evidence (file/dir consulted + verdict), like the command probes.
 fn detect_agent_content(step: &Step) -> Presence {
     use crate::agent_content::{
         list_skills, parse_installed_plugins, plugin_version, plugins_json_path, skill_dirs,
@@ -114,7 +114,7 @@ fn detect_agent_content(step: &Step) -> Presence {
         let found = plugin_version(name, &plugins);
         let present = found.is_some();
         let version = found.clone().unwrap_or_default();
-        // Preuve : le fichier lu + la ligne trouvée (ou "not found").
+        // Evidence: the file read + the line found (or "not found").
         let evidence = match &found {
             Some(v) => format!("{name}  version {v}"),
             None => format!("{name}: not found"),
@@ -132,8 +132,8 @@ fn detect_agent_content(step: &Step) -> Presence {
         };
     }
 
-    // route "skill" : présence = un sous-dossier du même nom sous ~/.claude/skills
-    // ou ~/.agents/skills.
+    // route "skill": presence = a subdirectory of the same name under ~/.claude/skills
+    // or ~/.agents/skills.
     let dirs = skill_dirs(&home);
     let skills = list_skills(&dirs);
     let found = skill_path(name, &skills);
@@ -172,7 +172,7 @@ fn system_probe(step: &Step, os: Os) -> Option<Probe> {
     Some(shell_probe(os, &mgr.presence_command(sid)))
 }
 
-/// Présence détaillée. Ordre : check → binaire+manager → content-list → exit-code.
+/// Detailed presence. Order: check → binary+manager → content-list → exit-code.
 pub fn detect_present_detailed(step: &Step, os: Os) -> Presence {
     // 1. check (config-atom) — verbatim, exit 0 = converged.
     if let Some(check) = &step.check {
@@ -184,7 +184,7 @@ pub fn detect_present_detailed(step: &Step, os: Os) -> Presence {
             ..Default::default()
         };
     }
-    // 2. binaire (route non content-detected) — 2 sondes combinées.
+    // 2. binary (non content-detected route) — 2 combined probes.
     if step.detect.is_some()
         && !matches!(step.route.as_deref(), Some("claude-plugin") | Some("skill"))
     {
@@ -195,8 +195,8 @@ pub fn detect_present_detailed(step: &Step, os: Os) -> Presence {
         let system_ok = sd.as_ref().map(|d| d.ok).unwrap_or(false);
         let present = bin_ok || system_ok;
         if !present {
-            // Absent : montrer la sonde binaire (celle qu'on interroge d'abord) — la
-            // preuve la plus parlante du "pourquoi absent" (souvent "command not found").
+            // Absent: show the binary probe (the one queried first) — the most
+            // telling evidence of "why absent" (often "command not found").
             return Presence {
                 present: Some(false),
                 diag: bin.or(sd),
@@ -204,8 +204,8 @@ pub fn detect_present_detailed(step: &Step, os: Os) -> Presence {
             };
         }
         if system_ok {
-            // Présence établie par la sonde SYSTÈME → c'est ELLE la preuve à montrer
-            // (pas la binaire, qui a pu échouer). diag suit le verdict.
+            // Presence established by the SYSTEM probe → IT is the evidence to show
+            // (not the binary, which may have failed). diag follows the verdict.
             let sd = sd.unwrap();
             let v = version_from(step, &sd.output);
             return Presence {
@@ -215,7 +215,7 @@ pub fn detect_present_detailed(step: &Step, os: Os) -> Presence {
                 ..Default::default()
             };
         }
-        // Présence établie par la sonde BINAIRE → montrer celle-là.
+        // Presence established by the BINARY probe → show that one.
         let v = bin
             .as_ref()
             .map(|d| version_from(step, &d.output))
@@ -228,13 +228,13 @@ pub fn detect_present_detailed(step: &Step, os: Os) -> Presence {
             ..Default::default()
         };
     }
-    // 3. content-detected (claude-plugin/skill) → lecture disque NATIVE (pas de
-    //    shell-out : décision archi "tout en JSON parsé nativement"). Le `detect:`
-    //    du step porte le nom (id plugin "chiron@tekton"/"chiron", ou nom de skill).
+    // 3. content-detected (claude-plugin/skill) → NATIVE disk read (no
+    //    shell-out: arch decision "everything parsed natively as JSON"). The step's
+    //    `detect:` carries the name (plugin id "chiron@tekton"/"chiron", or skill name).
     if matches!(step.route.as_deref(), Some("claude-plugin") | Some("skill")) {
         return detect_agent_content(step);
     }
-    // 4. exit-code (system manager sans detect binaire).
+    // 4. exit-code (system manager without a binary detect).
     if let Some(probe) = system_probe(step, os) {
         let d = run_probe_detailed(&probe);
         let v = version_from(step, &d.output);
@@ -294,36 +294,36 @@ mod tests {
     #[test]
     fn check_present_when_exit_zero() {
         let mut s = step();
-        s.check = Some("true".into()); // exit 0 sur POSIX
+        s.check = Some("true".into()); // exit 0 on POSIX
         if !cfg!(target_os = "windows") {
             assert_eq!(detect_present_detailed(&s, Os::Darwin).present, Some(true));
         }
     }
 
     #[test]
-    fn diag_capture_la_commande_de_la_sonde_binaire() {
-        // La preuve montrée doit être la commande RÉELLEMENT lancée (transparence
-        // opérateur : "quelle commande a décidé présent/absent ?").
+    fn diag_captures_the_binary_probe_command() {
+        // The evidence shown must be the command ACTUALLY run (operator
+        // transparency: "which command decided present/absent?").
         if cfg!(target_os = "windows") {
             return;
         }
         let mut s = step();
-        s.detect = Some("printf v9.9.9".into()); // exit 0 → présent
+        s.detect = Some("printf v9.9.9".into()); // exit 0 → present
         let p = detect_present_detailed(&s, Os::Darwin);
         assert_eq!(p.present, Some(true));
-        let diag = p.diag.expect("diag capturé");
+        let diag = p.diag.expect("diag captured");
         assert!(diag.cmdline.contains("printf v9.9.9"), "cmdline = {}", diag.cmdline);
         assert!(diag.output.contains("v9.9.9"), "output = {}", diag.output);
         assert_eq!(p.version.as_deref(), Some("9.9.9"));
     }
 
     #[test]
-    fn diag_sur_absent_montre_la_sonde() {
+    fn diag_on_absent_shows_the_probe() {
         if cfg!(target_os = "windows") {
             return;
         }
         let mut s = step();
-        s.detect = Some("false".into()); // exit non-zéro → absent
+        s.detect = Some("false".into()); // non-zero exit → absent
         let p = detect_present_detailed(&s, Os::Darwin);
         assert_eq!(p.present, Some(false));
         assert!(p.diag.expect("diag").cmdline.contains("false"));

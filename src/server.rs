@@ -21,54 +21,54 @@ use crate::outdated::{outdated_for, scan_outdated};
 use crate::platform::{current_os, local_data_dir, Os};
 use crate::selection::{read_selection, write_selection, Selection};
 
-/// L'état partagé du serveur : le Plan scanné UNE fois au démarrage (données pures,
-/// pas de pty/réseau), plus l'OS courant. Cloné (Arc) dans chaque connexion.
+/// The server's shared state: the Plan scanned ONCE at startup (pure data,
+/// no pty/network), plus the current OS. Cloned (Arc) into each connection.
 struct AppState {
     plan: Plan,
     os: Os,
-    /// Racine disque des assets front, EN DEV UNIQUEMENT (`TALOS_PUBLIC` posé) :
-    /// permet d'éditer `app.js` sans recompiler. `None` en release → assets SCELLÉS
-    /// dans le binaire (crate::assets), indépendants du cwd (raccourci #3 corrigé).
+    /// Disk root of the front assets, IN DEV ONLY (`TALOS_PUBLIC` set):
+    /// lets you edit `app.js` without recompiling. `None` in release → assets SEALED
+    /// in the binary (crate::assets), independent of the cwd (shortcut #3 fixed).
     disk_root: Option<PathBuf>,
-    /// Data-dir LOCAL par machine — où selection/consent/history sont persistés
-    /// (JAMAIS le dossier exe partagé). L'INTENTION se mémorise, la PRÉSENCE se
-    /// re-détecte : "detect, don't remember" ne gouverne PAS l'intention.
+    /// Per-machine LOCAL data-dir — where selection/consent/history are persisted
+    /// (NEVER the shared exe folder). INTENT is remembered, PRESENCE is
+    /// re-detected: "detect, don't remember" does NOT govern intent.
     data_dir: PathBuf,
-    /// Le store consentement + journal d'install (chemins/identité injectés).
+    /// The consent store + install journal (paths/identity injected).
     consent: ConsentStore,
-    /// Cache du mot de passe sudo — modèle C : demandé la 1re fois qu'un step en a
-    /// besoin, réutilisé pour les steps suivants du même Apply, EFFACÉ à la fin.
-    /// RAM SEULEMENT, jamais disque/log/journal. tokio Mutex (accès async).
+    /// Sudo password cache — model C: asked the 1st time a step needs it,
+    /// reused for the following steps of the same Apply, CLEARED at the end.
+    /// RAM ONLY, never disk/log/journal. tokio Mutex (async access).
     sudo_pw: tokio::sync::Mutex<Option<String>>,
 }
 
-/// Démarre le serveur HTTP+WS sur 127.0.0.1:1420.
-/// - `/`         → sert index.html (ou upgrade WS si l'en-tête Upgrade est présent)
-/// - autres      → assets front (SCELLÉS dans le binaire, ou disque en dev)
+/// Starts the HTTP+WS server on 127.0.0.1:1420.
+/// - `/`         → serves index.html (or WS upgrade if the Upgrade header is present)
+/// - others      → front assets (SEALED in the binary, or disk in dev)
 ///
-/// `disk_root` : `Some(dir)` en dev (`TALOS_PUBLIC` posé) pour éditer le front sans
-/// recompiler ; `None` en release → tout vient des assets scellés (crate::assets),
-/// donc le `.app`/`.exe` lancé par Finder/Explorer trouve toujours son front.
+/// `disk_root`: `Some(dir)` in dev (`TALOS_PUBLIC` set) to edit the front without
+/// recompiling; `None` in release → everything comes from the sealed assets (crate::assets),
+/// so the `.app`/`.exe` launched by Finder/Explorer always finds its front.
 ///
-/// `ready` : signal tiré DÈS que le port écoute réellement (bind réussi), pour que
-/// le webview charge l'URL SANS course (raccourci #4 : fini le sleep(500ms) aveugle —
-/// un bind lent, disque partagé/machine lente, laissait le webview taper dans le vide).
+/// `ready`: signal fired AS SOON AS the port is actually listening (bind succeeded), so
+/// the webview loads the URL WITHOUT a race (shortcut #4: no more blind sleep(500ms) —
+/// a slow bind, shared disk/slow machine, left the webview hitting nothing).
 pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::oneshot::Sender<()>>) {
     let os = current_os();
-    // Stamp de build en tête de log — "quel binaire tourne vraiment ?" (ordre jj log).
+    // Build stamp at the top of the log — "which binary is really running?" (jj log order).
     println!("--- start: {}", crate::build_info::start_line());
-    // Dossier "à côté de l'exe" (hors du .app si packagé) : c'est LÀ que vivent
-    // bundles/ ET la copie partagée consentie (frontière hermétique — miroir du
-    // BUNDLES_DIR compilé du TS). Résolu depuis l'exe RÉEL, PAS le cwd : un .app
-    // lancé par Finder a cwd=/ → un chemin relatif "bundles" ouvrait vide.
+    // The "next to the exe" folder (outside the .app if packaged): that's WHERE
+    // bundles/ AND the consented shared copy live (hermetic boundary — mirror of
+    // the TS compiled BUNDLES_DIR). Resolved from the REAL exe, NOT the cwd: a .app
+    // launched by Finder has cwd=/ → a relative "bundles" path opened empty.
     let sibling_dir = std::env::current_exe()
         .ok()
         .map(|p| crate::platform::exe_sibling_dir(&p))
         .unwrap_or_else(|| PathBuf::from("."));
-    // Scan des bundles UNE fois au boot (pur : lecture disque + YAML). On cherche
-    // À CÔTÉ de l'exe (cas packagé .app/.exe) ; si absent, on retombe sur "bundles"
-    // relatif au cwd (cas DEV : `cargo run`/`tauri dev` tourne depuis la racine repo,
-    // où l'exe est target/debug/talos mais les bundles sont ./bundles). Absent → plan vide.
+    // Scan the bundles ONCE at boot (pure: disk read + YAML). We look
+    // NEXT TO the exe (packaged .app/.exe case); if absent, we fall back to "bundles"
+    // relative to the cwd (DEV case: `cargo run`/`tauri dev` runs from the repo root,
+    // where the exe is target/debug/talos but the bundles are ./bundles). Absent → empty plan.
     let sibling_bundles = sibling_dir.join("bundles");
     let bundles_dir: PathBuf = if sibling_bundles.is_dir() {
         sibling_bundles
@@ -86,9 +86,9 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         plan.bundles.len(),
         plan.steps.len()
     );
-    // Data-dir local par machine + store consentement. exe_dir = le MÊME dossier à
-    // côté de l'exe (celui qui contient bundles/) — c'est là qu'atterrit la copie
-    // partagée consentie. host/user nomment le log partagé ; env best-effort.
+    // Per-machine local data-dir + consent store. exe_dir = the SAME folder
+    // next to the exe (the one that contains bundles/) — that's where the consented
+    // shared copy lands. host/user name the shared log; env best-effort.
     let data_dir = local_data_dir(os);
     let exe_dir = sibling_dir;
     let consent = ConsentStore {
@@ -124,28 +124,28 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
             let state = state_for_asset.clone();
             async move { serve_asset(uri.path(), &state) }
         }))
-        // ANTI-CACHE : le webview (WKWebView macOS / WebView2 Windows) garde app.js
-        // en cache disque entre deux lancements → un vieux app.js sans le dernier
-        // handler (ex. sudo-prompt) survivait aux rebuilds → le message arrivait mais
-        // tombait dans le default du switch, sans erreur. no-store force le frais.
+        // ANTI-CACHE: the webview (WKWebView macOS / WebView2 Windows) keeps app.js
+        // in disk cache between two launches → an old app.js without the latest
+        // handler (e.g. sudo-prompt) survived rebuilds → the message arrived but
+        // fell into the switch default, without error. no-store forces the fresh one.
         .layer(axum::middleware::from_fn(no_cache));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:1420")
         .await
         .expect("bind 127.0.0.1:1420 failed");
-    // Le port écoute MAINTENANT — signaler au thread principal qu'il peut charger
-    // l'URL dans le webview (plus de course : le webview attend ce signal exact).
+    // The port is listening NOW — signal the main thread that it can load
+    // the URL in the webview (no more race: the webview waits for this exact signal).
     if let Some(ready) = ready {
         let _ = ready.send(());
     }
     axum::serve(listener, app).await.expect("axum serve failed");
 }
 
-/// Sert un asset front (scellé ou disque), avec un Content-Type déduit de l'extension.
-/// Asset absent → 404. Remplace `ServeDir` (qui lisait un chemin disque relatif au cwd).
+/// Serves a front asset (sealed or disk), with a Content-Type inferred from the extension.
+/// Asset absent → 404. Replaces `ServeDir` (which read a disk path relative to the cwd).
 fn serve_asset(path: &str, state: &AppState) -> Response {
     match crate::assets::resolve(state.disk_root.as_deref(), path) {
         Some(bytes) => {
-            // Mime sur la clé normalisée : `/` → `index.html` → text/html (pas octet-stream).
+            // Mime on the normalized key: `/` → `index.html` → text/html (not octet-stream).
             let mime = mime_for(&crate::assets::normalize(path));
             (
                 [(CONTENT_TYPE, HeaderValue::from_static(mime))],
@@ -157,7 +157,7 @@ fn serve_asset(path: &str, state: &AppState) -> Response {
     }
 }
 
-/// Content-Type minimal par extension (les seuls types servis par le front Talos).
+/// Minimal Content-Type per extension (the only types served by the Talos front).
 fn mime_for(path: &str) -> &'static str {
     match path.rsplit('.').next() {
         Some("html") => "text/html; charset=utf-8",
@@ -169,9 +169,9 @@ fn mime_for(path: &str) -> &'static str {
     }
 }
 
-/// Middleware : ajoute `Cache-Control: no-store` à toute réponse, pour que le webview
-/// ne serve jamais un app.js/index.html périmé après un rebuild (cause du modal sudo
-/// qui "ne s'affichait pas" en Tauri alors qu'il marchait en Chrome rechargé à neuf).
+/// Middleware: adds `Cache-Control: no-store` to every response, so the webview
+/// never serves a stale app.js/index.html after a rebuild (cause of the sudo modal
+/// that "didn't show" in Tauri while it worked in a freshly reloaded Chrome).
 async fn no_cache(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
     let mut resp = next.run(req).await;
     resp.headers_mut()
@@ -179,14 +179,14 @@ async fn no_cache(req: axum::extract::Request, next: axum::middleware::Next) -> 
     resp
 }
 
-// app.js fait `new WebSocket(ws://location.host)` → chemin racine "/". On distingue
-// un upgrade WS d'une requête HTML normale par la présence de l'en-tête Upgrade
-// (comme src/server.ts:909 qui upgrade sur l'en-tête, pas sur un pathname fixe).
+// app.js does `new WebSocket(ws://location.host)` → root path "/". We tell
+// a WS upgrade apart from a normal HTML request by the presence of the Upgrade header
+// (like src/server.ts:909 which upgrades on the header, not on a fixed pathname).
 async fn root_or_ws(ws: Option<WebSocketUpgrade>, state: Arc<AppState>) -> Response {
     match ws {
         Some(ws) => ws.on_upgrade(move |socket| handle_socket(socket, state)),
-        // index.html vient des assets scellés (ou du disque en dev) — plus de
-        // read_to_string sur un chemin relatif au cwd (raccourci #3 corrigé).
+        // index.html comes from the sealed assets (or from disk in dev) — no more
+        // read_to_string on a path relative to the cwd (shortcut #3 fixed).
         None => serve_asset("/", &state),
     }
 }
@@ -194,8 +194,8 @@ async fn root_or_ws(ws: Option<WebSocketUpgrade>, state: Arc<AppState>) -> Respo
 async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     let steps = &state.plan.steps;
 
-    // 1) plan RÉEL — bundles + steps scannés de bundles/ (fini le dur). Mêmes clés
-    // que le front attend (voir app.js render/ws.onmessage).
+    // 1) REAL plan — bundles + steps scanned from bundles/ (no more hardcoding). Same keys
+    // the front expects (see app.js render/ws.onmessage).
     let bundles_json: Vec<_> = state
         .plan
         .bundles
@@ -218,9 +218,9 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
             })
         })
         .collect();
-    // Consentement RÉEL (lu du store local) : non décidé au 1er boot → le front
-    // ouvre le dialogue de partage. Selection RÉELLE : les bascules persistées que
-    // le front restaure (jaune). L'intention se mémorise, la présence se re-détecte.
+    // REAL consent (read from the local store): undecided at 1st boot → the front
+    // opens the sharing dialog. REAL selection: the persisted toggles the
+    // front restores (yellow). Intent is remembered, presence is re-detected.
     let plan = json!({
         "type": "plan",
         "bundles": bundles_json,
@@ -229,20 +229,20 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
         "profiles": [],
         "profileColumns": 2,
         "consent": read_consent(&state.consent),
-        "build": crate::build_info::build_json() // stamp exact du snapshot source (fini le dur)
+        "build": crate::build_info::build_json() // exact stamp of the source snapshot (no more hardcoding)
     });
     let _ = socket.send(Message::Text(plan.to_string())).await;
 
-    // 2) SCAN RÉEL — voir scan_and_emit. Fait au connect ET à chaque `rescan` (bouton
-    // Refresh). "Detect, don't remember".
+    // 2) REAL SCAN — see scan_and_emit. Done at connect AND on every `rescan` (Refresh
+    // button). "Detect, don't remember".
     scan_and_emit(&mut socket, &state).await;
 
-    // 4) Boucle de messages du front. Deux familles :
-    //  - `apply` (bouton Apply global, app.js:499) → apply_diff (re-scan, plan, exécution).
-    //  - actions de LIGNE (app.js:598) → un seul bouton sur une ligne envoie
+    // 4) Message loop from the front. Two families:
+    //  - `apply` (global Apply button, app.js:499) → apply_diff (re-scan, plan, execution).
+    //  - ROW actions (app.js:598) → a single button on a row sends
     //    {type:"install"|"uninstall"|"upgrade"|"downgrade", i}. + `retry-step`
-    //    {type, i, action}. On exécute do_step sur cet index (downgrade AUTORISÉ ici :
-    //    c'est un clic manuel explicite, alors que l'Apply batch l'exclut).
+    //    {type, i, action}. We run do_step on that index (downgrade ALLOWED here:
+    //    it's an explicit manual click, whereas the batch Apply excludes it).
     while let Some(Ok(msg)) = socket.recv().await {
         let Message::Text(txt) = msg else { continue };
         let parsed: serde_json::Value = serde_json::from_str(&txt).unwrap_or_default();
@@ -260,7 +260,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     row_action(&mut socket, &state, i, kind).await;
                 }
             }
-            // retry-step : réexécute l'action nommée sur la ligne i (après un échec 403).
+            // retry-step: re-runs the named action on row i (after a 403 failure).
             "retry-step" => {
                 let i = parsed.get("i").and_then(|v| v.as_u64()).map(|n| n as usize);
                 let action = parsed.get("action").and_then(|v| v.as_str());
@@ -268,9 +268,9 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     row_action(&mut socket, &state, i, action).await;
                 }
             }
-            // set-selection : persiste l'intention (bascules). Le client l'a déjà
-            // appliquée optimiste → pas de réponse. Best-effort. Reset envoie un
-            // pkgs vide ici → stocké vide → prochain démarrage recharge les defaults.
+            // set-selection: persists intent (toggles). The client already applied
+            // it optimistically → no response. Best-effort. Reset sends an
+            // empty pkgs here → stored empty → next startup reloads the defaults.
             "set-selection" => {
                 let sel: Selection = parsed
                     .get("selection")
@@ -279,40 +279,40 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     .unwrap_or_default();
                 write_selection(&state.data_dir, &sel);
             }
-            // set-consent : enregistre le choix de partage (marque consent décidé).
-            // Pas de réponse — l'UI a déjà fermé son dialogue / basculé son toggle.
+            // set-consent: records the sharing choice (marks consent decided).
+            // No response — the UI already closed its dialog / flipped its toggle.
             "set-consent" => {
                 let share = parsed.get("share").and_then(|v| v.as_bool()).unwrap_or(false);
                 write_consent(&state.consent, share);
                 println!("[consent] set: share={share}");
             }
-            // get-log : l'onglet Log demande le consentement + l'historique local.
+            // get-log: the Log tab requests the consent + the local history.
             "get-log" => {
                 let _ = socket.send(Message::Text(log_msg(&state))).await;
             }
-            // clear-log : vide le journal LOCAL seul (la copie d'équipe partagée est
-            // laissée intacte), puis renvoie le log vidé pour rafraîchir l'onglet.
+            // clear-log: empties the LOCAL journal only (the shared team copy is
+            // left intact), then returns the emptied log to refresh the tab.
             "clear-log" => {
                 clear_history(&state.consent);
                 println!("[consent] local history cleared");
                 let _ = socket.send(Message::Text(log_msg(&state))).await;
             }
-            // rescan : bouton Refresh → re-scan live de présence (state + state-done).
-            // Sans ce handler, le message tombait dans _ => {} et l'UI restait voilée
-            // (steps-refreshing) sans jamais recevoir de réponse → "refresh forever".
+            // rescan: Refresh button → live re-scan of presence (state + state-done).
+            // Without this handler, the message fell into _ => {} and the UI stayed veiled
+            // (steps-refreshing) without ever receiving a response → "refresh forever".
             "rescan" => {
                 scan_and_emit(&mut socket, &state).await;
             }
-            // open-forbidden : le bouton "Open blocked page" du bandeau 403 → ouvre
-            // l'URL bloquée dans le navigateur par défaut, à côté du panneau, pour que
-            // l'utilisateur approuve l'accès au pare-feu puis Retry. Handler ABSENT au
-            // portage Deno→Rust → le clic tombait dans _ => {} et ne faisait rien.
+            // open-forbidden: the "Open blocked page" button of the 403 banner → opens
+            // the blocked URL in the default browser, next to the panel, so the
+            // user approves the firewall access then Retry. Handler MISSING in the
+            // Deno→Rust port → the click fell into _ => {} and did nothing.
             "open-forbidden" => {
                 if let Some(url) = parsed.get("url").and_then(|v| v.as_str()) {
                     if let Err(e) = crate::platform::open_url(url) {
-                        println!("[forbidden] échec ouverture {url}: {e}");
+                        println!("[forbidden] failed to open {url}: {e}");
                     } else {
-                        println!("[forbidden] ouverture navigateur: {url}");
+                        println!("[forbidden] opening browser: {url}");
                     }
                 }
             }
@@ -321,12 +321,12 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     }
 }
 
-/// SCAN de présence CONCURRENT + émission au front. Chaque probe lance un login shell
-/// (lent : source /etc/profile + rc user), donc on ne SÉRIALISE PAS (spawn_blocking) ;
-/// l'outdated machine-wide (BATCHÉ, une commande) tourne en parallèle. On collecte
-/// tout, puis on émet `state` (+ `outdated` si présent) dans l'ordre, puis `state-done`
-/// (dé-fige l'UI). Appelé au connect ET sur `rescan` (bouton Refresh — sans ce handler,
-/// le message tombait dans le vide → l'UI restait voilée "à jamais").
+/// CONCURRENT presence SCAN + emission to the front. Each probe launches a login shell
+/// (slow: sources /etc/profile + user rc), so we do NOT SERIALIZE (spawn_blocking);
+/// the machine-wide outdated (BATCHED, one command) runs in parallel. We collect
+/// everything, then emit `state` (+ `outdated` if present) in order, then `state-done`
+/// (unfreezes the UI). Called at connect AND on `rescan` (Refresh button — without this
+/// handler, the message fell into the void → the UI stayed veiled "forever").
 async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
     let os = state.os;
     let steps = &state.plan.steps;
@@ -346,7 +346,7 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
             "type": "state", "i": i,
             "present": p.present, "reason": p.reason,
             "version": p.version.unwrap_or_default(), "external": p.external,
-            "probe": probe_json(&p.diag) // la preuve : commande + sortie + code
+            "probe": probe_json(&p.diag) // the proof: command + output + code
         });
         let _ = socket.send(Message::Text(state_msg.to_string())).await;
         if p.present == Some(true) {
@@ -359,13 +359,13 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
             }
         }
     }
-    // state-done — dé-fige l'UI (retire le voile de scan/refresh).
+    // state-done — unfreezes the UI (removes the scan/refresh veil).
     let _ = socket
         .send(Message::Text(json!({ "type": "state-done" }).to_string()))
         .await;
 }
 
-/// Message `log` pour l'onglet Log : consentement courant + historique local.
+/// `log` message for the Log tab: current consent + local history.
 fn log_msg(state: &AppState) -> String {
     json!({
         "type": "log",
@@ -375,12 +375,12 @@ fn log_msg(state: &AppState) -> String {
     .to_string()
 }
 
-/// Construit le champ `probe` d'un message `state` à partir du diag de détection :
-/// la commande RÉELLEMENT lancée + sa sortie COMPLÈTE + son code, pour que l'opérateur
-/// voie dans le terminal de la ligne CE QUI a décidé présent/absent/version. Sortie
-/// non tronquée : quand on doute d'un résultat, on veut la preuve entière (les
-/// commandes de détection sont courtes par nature ; une sortie énorme est elle-même
-/// une information).
+/// Builds the `probe` field of a `state` message from the detection diag:
+/// the command ACTUALLY run + its FULL output + its code, so the operator
+/// sees in the row's terminal WHAT decided present/absent/version. Output
+/// untruncated: when we doubt a result, we want the whole proof (detection
+/// commands are short by nature; a huge output is itself
+/// information).
 fn probe_json(diag: &Option<crate::detect::ProbeResult>) -> serde_json::Value {
     match diag {
         Some(d) => json!({ "cmdline": d.cmdline, "output": d.output, "code": d.code, "ok": d.ok }),
@@ -388,7 +388,7 @@ fn probe_json(diag: &Option<crate::detect::ProbeResult>) -> serde_json::Value {
     }
 }
 
-/// Extrait un tableau d'indices d'un champ JSON ("on"/"off").
+/// Extracts an array of indices from a JSON field ("on"/"off").
 fn json_indices(v: &serde_json::Value, key: &str) -> Vec<usize> {
     v.get(key)
         .and_then(|v| v.as_array())
@@ -396,9 +396,9 @@ fn json_indices(v: &serde_json::Value, key: &str) -> Vec<usize> {
         .unwrap_or_default()
 }
 
-/// Action de LIGNE : un seul bouton sur une ligne (install/uninstall/upgrade/
-/// downgrade). Exécute do_step sur cet index puis émet `done` pour dé-figer l'UI.
-/// downgrade est autorisé (clic manuel explicite, le seul chemin destructif hors batch).
+/// ROW action: a single button on a row (install/uninstall/upgrade/
+/// downgrade). Runs do_step on that index then emits `done` to unfreeze the UI.
+/// downgrade is allowed (explicit manual click, the only destructive path outside the batch).
 async fn row_action(socket: &mut WebSocket, state: &AppState, i: usize, action: &str) {
     use crate::decision::Action;
     let Some(step) = state.plan.steps.get(i) else {
@@ -412,19 +412,19 @@ async fn row_action(socket: &mut WebSocket, state: &AppState, i: usize, action: 
         _ => return,
     };
     do_step(socket, state, i, act, step).await;
-    clear_sudo_pw(state).await; // action de ligne finie : effacer le mot de passe caché
+    clear_sudo_pw(state).await; // row action finished: clear the cached password
     let _ = socket
         .send(Message::Text(json!({ "type": "done" }).to_string()))
         .await;
 }
 
-/// Le cœur : applique la décision tri-state contre la réalité machine.
-///   on  = indices voulus PRÉSENTS ; off = indices voulus ABSENTS.
-/// Re-détecte la présence MAINTENANT (repaint-at-apply : re-constate avant d'agir,
-/// ne fait pas confiance au scan de connexion), repeint les pills, demande à la
-/// règle PARTAGÉE action_for quoi faire, ordonne par dépendances (topo_sort), émet
-/// `apply-plan` (⚠️ ce qui RETIRE le voile "Plotting the gallop…" — raccourci #1 du
-/// spike corrigé), puis exécute chaque étape. Port de applyDiff (src/server.ts).
+/// The heart: applies the tri-state decision against the machine reality.
+///   on  = indices wanted PRESENT; off = indices wanted ABSENT.
+/// Re-detects presence NOW (repaint-at-apply: re-observes before acting,
+/// does not trust the connection scan), repaints the pills, asks the
+/// SHARED rule action_for what to do, orders by dependencies (topo_sort), emits
+/// `apply-plan` (⚠️ which REMOVES the "Plotting the gallop…" veil — shortcut #1 from
+/// the spike fixed), then runs each step. Port of applyDiff (src/server.ts).
 async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, off: Vec<usize>) {
     use crate::decision::{action_for, Action, Desired, MachineFacts};
     use crate::deps::{make_index, requires_reason, topo_sort, DepNode};
@@ -435,7 +435,7 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
     let want_on: HashSet<usize> = on.into_iter().collect();
     let want_off: HashSet<usize> = off.into_iter().collect();
 
-    // Re-scan live CONCURRENT (présence) + outdated batché, comme au connect.
+    // CONCURRENT live re-scan (presence) + batched outdated, like at connect.
     let scan_task = tokio::task::spawn_blocking(move || scan_outdated(os));
     let mut probe_tasks = Vec::with_capacity(steps.len());
     for step in steps.iter() {
@@ -448,7 +448,7 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
         presences.push(task.await.unwrap_or_default());
     }
 
-    // État futur par paquet : présent maintenant OU voulu-on, jamais si voulu-off.
+    // Future state per package: present now OR wanted-on, never if wanted-off.
     let nodes: Vec<DepNode> = steps
         .iter()
         .enumerate()
@@ -461,7 +461,7 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
         .collect();
     let idx = make_index(&nodes);
 
-    // Repeindre les pills AVANT d'agir (repaint-at-apply).
+    // Repaint the pills BEFORE acting (repaint-at-apply).
     for (i, p) in presences.iter().enumerate() {
         let reason = requires_reason(&nodes[i], &nodes, &idx).or_else(|| p.reason.clone());
         let _ = socket
@@ -480,7 +480,7 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
         }
     }
 
-    // Action par paquet : désir (on→present, off→absent, ni l'un ni l'autre→auto=None).
+    // Action per package: desire (on→present, off→absent, neither→auto=None).
     let mut visual_plan: Vec<(usize, Action)> = Vec::new();
     for (i, step) in steps.iter().enumerate() {
         let desired = if want_on.contains(&i) {
@@ -488,7 +488,7 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
         } else if want_off.contains(&i) {
             Some(Desired::Absent)
         } else {
-            None // auto → jamais touché
+            None // auto → never touched
         };
         let Some(desired) = desired else { continue };
         let facts = MachineFacts {
@@ -498,7 +498,7 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
             pin: step.pin.as_deref(),
             installed_version: presences[i].version.as_deref().unwrap_or(""),
         };
-        // DOWNGRADE exclu de l'Apply (seul chemin destructif → bouton manuel).
+        // DOWNGRADE excluded from the Apply (only destructive path → manual button).
         if let Some(a @ (Action::Install | Action::Uninstall | Action::Upgrade)) =
             action_for(desired, &facts)
         {
@@ -506,28 +506,28 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
         }
     }
 
-    // Ordonner par dépendances (requis avant dépendants ; ordre visuel = tie-break).
+    // Order by dependencies (required before dependents; visual order = tie-break).
     let plan = topo_sort(&visual_plan, &nodes, &idx);
     if plan.is_empty() {
         let _ = socket.send(Message::Text(json!({ "type": "done", "nothing": true }).to_string())).await;
         return;
     }
-    // Annoncer TOUT le plan en ordre d'exécution → le front entre en focus-mode et
-    // RETIRE le voile "Plotting the gallop…" (raccourci #1 corrigé).
+    // Announce the WHOLE plan in execution order → the front enters focus-mode and
+    // REMOVES the "Plotting the gallop…" veil (shortcut #1 fixed).
     let plan_json: Vec<_> = plan.iter().map(|(i, a)| json!({ "i": i, "action": a.as_str() })).collect();
     let _ = socket.send(Message::Text(json!({ "type": "apply-plan", "plan": plan_json }).to_string())).await;
 
     for (i, action) in &plan {
         do_step(socket, state, *i, *action, &steps[*i]).await;
     }
-    clear_sudo_pw(state).await; // fin d'Apply : le mot de passe caché est effacé (modèle C)
+    clear_sudo_pw(state).await; // end of Apply: the cached password is cleared (model C)
     let _ = socket.send(Message::Text(json!({ "type": "done" }).to_string())).await;
 }
 
-/// Port de runInPty (src/server.ts:266-348) : streame la commande dans un pty,
-/// scanne le 403 au fil de l'eau, tick le watcher (Windows). Le pty tourne dans un
-/// thread bloquant ; canal mpsc → async. RETOURNE (code, forbidden, url) — le
-/// verdict (done/step/overlay) est laissé à l'appelant (do_step), comme le TS.
+/// Port of runInPty (src/server.ts:266-348): streams the command into a pty,
+/// scans the 403 as it streams, ticks the watcher (Windows). The pty runs in a
+/// blocking thread; mpsc channel → async. RETURNS (code, forbidden, url) — the
+/// verdict (done/step/overlay) is left to the caller (do_step), like the TS.
 async fn run_in_pty(
     socket: &mut WebSocket,
     state: &AppState,
@@ -536,19 +536,19 @@ async fn run_in_pty(
 ) -> (i32, bool, Option<String>) {
     use base64::{engine::general_purpose::STANDARD, Engine};
 
-    // pty_shell est LA source unique du wrapping shell : Windows → powershell + PATH
-    // refresh + exit $LASTEXITCODE + traduction `&&`→garde PS 5.1 ; POSIX → shell user
-    // en interactive+login (voit ~/.local/bin). NE PAS dupliquer ici : la version en dur
-    // qui vivait là court-circuitait pty_shell → le `&&` d'un `claude plugin marketplace
-    // add … && install …` atteignait PS 5.1 tel quel (« token && is not a valid statement
-    // separator »). Un seul chemin, testé (platform::tests).
+    // pty_shell is THE single source of the shell wrapping: Windows → powershell + PATH
+    // refresh + exit $LASTEXITCODE + `&&`→ PS 5.1 guard translation; POSIX → user shell
+    // in interactive+login (sees ~/.local/bin). DO NOT duplicate here: the hardcoded version
+    // that lived here short-circuited pty_shell → the `&&` of a `claude plugin marketplace
+    // add … && install …` reached PS 5.1 as-is ("token && is not a valid statement
+    // separator"). A single path, tested (platform::tests).
     let (program, args): (String, Vec<String>) = {
         let probe = crate::platform::pty_shell(crate::platform::current_os(), cmdline);
         (probe.cmd, probe.args)
     };
 
-    // Watcher (Windows uniquement) : tick 1200ms → cherche une fenêtre d'assistant
-    // surgie derrière le panneau, dedup par titre. Racine = notre pid (comme Deno.pid).
+    // Watcher (Windows only): tick 1200ms → looks for an installer window
+    // surfaced behind the panel, dedup by title. Root = our pid (like Deno.pid).
     #[cfg(target_os = "windows")]
     let (watch_stop, mut watch_rx) = {
         let (wtx, wrx) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
@@ -576,8 +576,8 @@ async fn run_in_pty(
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
     let (code_tx, code_rx) = tokio::sync::oneshot::channel::<i32>();
-    // Canal d'ENTRÉE vers le pty (std::sync::mpsc : le thread pty le draine en
-    // bloquant). C'est par là que le mot de passe sudo est injecté.
+    // INPUT channel to the pty (std::sync::mpsc: the pty thread drains it
+    // blocking). This is where the sudo password is injected.
     let (in_tx, in_rx) = std::sync::mpsc::channel::<Vec<u8>>();
     std::thread::spawn(move || {
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -588,15 +588,15 @@ async fn run_in_pty(
         let _ = code_tx.send(code);
     });
 
-    // Scan 403 + détection d'un prompt sudo au fil de l'eau. Le prompt "Password:"
-    // n'est PAS suivi d'un newline (sudo l'écrit brut), donc on teste la FIN du
-    // buffer courant. Une fois répondu, on ne re-demande pas pour ce step.
+    // 403 scan + sudo prompt detection as it streams. The "Password:" prompt
+    // is NOT followed by a newline (sudo writes it raw), so we test the END of the
+    // current buffer. Once answered, we don't re-ask for this step.
     let mut buf = String::new();
     let mut forbidden = false;
     let mut sudo_answered = false;
     while let Some(chunk) = rx.recv().await {
-        // Toujours accumuler (le prompt sudo peut être découpé sur plusieurs chunks,
-        // ou "Password:" arriver dans un morceau distinct → tester le chunk seul rate).
+        // Always accumulate (the sudo prompt may be split across several chunks,
+        // or "Password:" arrive in a separate piece → testing the chunk alone misses it).
         buf.push_str(&String::from_utf8_lossy(&chunk));
         if !forbidden && crate::forbidden::is403(&buf) {
             forbidden = true;
@@ -605,10 +605,10 @@ async fn run_in_pty(
         if socket.send(Message::Text(out.to_string())).await.is_err() {
             return (-1, forbidden, None);
         }
-        // Prompt sudo ? sudo écrit "Password:" (ou "Password for X:") SANS newline
-        // final — le fix qui compte est de tester le BUFFER ACCUMULÉ (le prompt peut
-        // arriver dans un chunk séparé), pas de multiplier les motifs. Répond UNE fois
-        // par step ; mot de passe du cache (modèle C) ou demandé au front.
+        // Sudo prompt? sudo writes "Password:" (or "Password for X:") WITHOUT a final
+        // newline — the fix that matters is to test the ACCUMULATED BUFFER (the prompt may
+        // arrive in a separate chunk), not to multiply patterns. Answers ONCE
+        // per step; password from the cache (model C) or asked to the front.
         let tail = buf.trim_end().to_lowercase();
         if !sudo_answered && tail.ends_with(':') && tail.contains("password") {
             if let Some(pw) = obtain_sudo_pw(socket, state, i).await {
@@ -618,14 +618,14 @@ async fn run_in_pty(
                 sudo_answered = true;
             }
         }
-        // Relayer les signaux du watcher (non bloquant) au fil de l'eau.
+        // Relay the watcher signals (non-blocking) as they stream.
         #[cfg(target_os = "windows")]
         while let Ok(wmsg) = watch_rx.try_recv() {
             let _ = socket.send(Message::Text(wmsg.to_string())).await;
         }
     }
 
-    // pty fini : stopper le watcher + wait-clear (comme watcher.stop()).
+    // pty finished: stop the watcher + wait-clear (like watcher.stop()).
     #[cfg(target_os = "windows")]
     {
         watch_stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -642,56 +642,56 @@ async fn run_in_pty(
     (code, forbidden, url)
 }
 
-/// Obtient le mot de passe sudo — MODÈLE C. Si le cache RAM le porte déjà (saisi
-/// plus tôt dans cet Apply), on le réutilise sans redemander. Sinon on demande au
-/// front (message `sudo-prompt`), on attend sa réponse (`sudo-pw`), on met en cache.
-/// Le mot de passe ne touche JAMAIS le disque/log/journal. Effacé par clear_sudo_pw
-/// à la fin de l'Apply. None si le front annule (ferme le modal → `sudo-cancel`).
+/// Obtains the sudo password — MODEL C. If the RAM cache already holds it (entered
+/// earlier in this Apply), we reuse it without re-asking. Otherwise we ask the
+/// front (message `sudo-prompt`), wait for its response (`sudo-pw`), cache it.
+/// The password NEVER touches disk/log/journal. Cleared by clear_sudo_pw
+/// at the end of the Apply. None if the front cancels (closes the modal → `sudo-cancel`).
 async fn obtain_sudo_pw(socket: &mut WebSocket, state: &AppState, i: u32) -> Option<String> {
-    // 1) cache ?
+    // 1) cache?
     {
         let guard = state.sudo_pw.lock().await;
         if let Some(pw) = guard.as_ref() {
             return Some(pw.clone());
         }
     }
-    // 2) demander au front (champ masqué).
+    // 2) ask the front (masked field).
     let _ = socket
         .send(Message::Text(
             json!({ "type": "sudo-prompt", "i": i }).to_string(),
         ))
         .await;
-    // 3) attendre la réponse sur la MÊME socket (run_in_pty en a l'usage exclusif ici).
+    // 3) wait for the response on the SAME socket (run_in_pty has exclusive use of it here).
     while let Some(Ok(msg)) = socket.recv().await {
         let Message::Text(txt) = msg else { continue };
         let parsed: serde_json::Value = serde_json::from_str(&txt).unwrap_or_default();
         match parsed.get("type").and_then(|t| t.as_str()) {
             Some("sudo-pw") => {
                 let pw = parsed.get("pw").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                *state.sudo_pw.lock().await = Some(pw.clone()); // cache RAM le temps de l'Apply
+                *state.sudo_pw.lock().await = Some(pw.clone()); // RAM cache for the duration of the Apply
                 return Some(pw);
             }
             Some("sudo-cancel") => return None,
-            _ => {} // ignorer tout autre message pendant l'attente du mot de passe
+            _ => {} // ignore any other message while waiting for the password
         }
     }
     None
 }
 
-/// Efface le mot de passe caché (fin d'Apply / fermeture). RAM remise à None.
+/// Clears the cached password (end of Apply / close). RAM reset to None.
 async fn clear_sudo_pw(state: &AppState) {
     *state.sudo_pw.lock().await = None;
 }
 
-// Codes de sortie bénins (winget : "déjà installé / pas d'upgrade applicable").
-// Un exit non-zéro dans cette liste = succès quand même. Port de BENIGN_CODES.
+// Benign exit codes (winget: "already installed / no applicable upgrade").
+// A non-zero exit in this list = success anyway. Port of BENIGN_CODES.
 fn benign_code(code: i32) -> bool {
     matches!(code, -1978335189 | -1978335212)
 }
 
-/// Exécute UNE étape (install/upgrade/uninstall) : streame la commande, lit l'exit
-/// code, émet `step` (running → ok/absent/fail/forbidden) et le verdict 403.
-/// Port de doStep (src/server.ts:400-460). Retourne true si l'étape a réussi.
+/// Runs ONE step (install/upgrade/uninstall): streams the command, reads the exit
+/// code, emits `step` (running → ok/absent/fail/forbidden) and the 403 verdict.
+/// Port of doStep (src/server.ts:400-460). Returns true if the step succeeded.
 async fn do_step(
     socket: &mut WebSocket,
     state: &AppState,
@@ -708,7 +708,7 @@ async fn do_step(
         Action::Downgrade => step.downgrade.as_deref(),
     };
     let Some(cmd) = cmd else {
-        return false; // pas de commande pour cette route → skip
+        return false; // no command for this route → skip
     };
     let running = match action {
         Action::Uninstall => "uninstalling",
@@ -720,12 +720,12 @@ async fn do_step(
         .send(Message::Text(json!({ "type": "step", "i": i, "status": running }).to_string()))
         .await;
 
-    // La commande nue est passée à run_in_pty, qui la wrappe dans le shell natif
-    // (POSIX : shell user en -ilc via pty_shell ; Windows : powershell + PATH refresh).
+    // The bare command is passed to run_in_pty, which wraps it in the native shell
+    // (POSIX: user shell in -ilc via pty_shell; Windows: powershell + PATH refresh).
     let (code, forbidden, url) = run_in_pty(socket, state, i as u32, cmd).await;
     let ok = code == 0 || benign_code(code);
 
-    // Ligne de diagnostic dans le terminal de la ligne.
+    // Diagnostic line in the row's terminal.
     let line = format!("\r\n\x1b[2m[{}] exit {code} → {}\x1b[0m\r\n", action.as_str(), if ok { "ok" } else { "failed" });
     {
         use base64::{engine::general_purpose::STANDARD, Engine};
@@ -751,11 +751,11 @@ async fn do_step(
             .await;
     }
 
-    // Re-détecter la présence APRÈS un install/upgrade réussi (comme captureVersion) —
-    // et RÉÉMETTRE un `state` au front, pour que la version fraîche s'affiche TOUT DE
-    // SUITE (avant, elle n'était calculée que pour le journal → le front gardait
-    // "absent/sans version" jusqu'à un refresh manuel). Le handler `state` du front
-    // fait setInstalledVersion + paintVersion, donc rien à changer côté UI.
+    // Re-detect presence AFTER a successful install/upgrade (like captureVersion) —
+    // and RE-EMIT a `state` to the front, so the fresh version shows RIGHT
+    // AWAY (before, it was only computed for the journal → the front kept
+    // "absent/no version" until a manual refresh). The front's `state` handler
+    // does setInstalledVersion + paintVersion, so nothing to change on the UI side.
     let version = if ok && action != Action::Uninstall {
         let step_c = step.clone();
         let p = tokio::task::spawn_blocking(move || detect_present_detailed(&step_c, os))

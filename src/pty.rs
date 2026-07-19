@@ -2,13 +2,13 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use std::sync::mpsc::Receiver;
 
-/// Lance `program args...` dans un pty et appelle `on_bytes` pour chaque chunk lu.
-/// Retourne le code de sortie du process.
+/// Runs `program args...` in a pty and calls `on_bytes` for each chunk read.
+/// Returns the process exit code.
 ///
-/// `input` : canal OPTIONNEL d'entrée vers le pty (stdin). Quand présent, un thread
-/// draine le receiver et écrit les octets dans le master → permet de répondre à un
-/// prompt interactif (ex. sudo "Password:" lors d'un `brew uninstall` de cask GUI).
-/// None = comportement historique (display-only, aucune entrée).
+/// `input`: OPTIONAL input channel to the pty (stdin). When present, a thread
+/// drains the receiver and writes the bytes to the master → allows responding to an
+/// interactive prompt (e.g. sudo "Password:" during a `brew uninstall` of a GUI cask).
+/// None = historical behavior (display-only, no input).
 pub fn run<F: FnMut(&[u8])>(
     program: &str,
     args: &[&str],
@@ -37,8 +37,8 @@ pub fn run<F: FnMut(&[u8])>(
         .try_clone_reader()
         .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-    // Écriture vers le pty (stdin du sous-process) : un thread draine le canal
-    // d'entrée. Le mot de passe sudo y arrive quand l'appelant l'a obtenu du front.
+    // Writing to the pty (the subprocess's stdin): a thread drains the input
+    // channel. The sudo password arrives here when the caller has obtained it from the front.
     if let Some(rx) = input {
         if let Ok(mut writer) = pair.master.take_writer() {
             std::thread::spawn(move || {
@@ -52,12 +52,12 @@ pub fn run<F: FnMut(&[u8])>(
         }
     }
 
-    // ConPTY (Windows) : le reader ne reçoit PAS toujours l'EOF à la fin de la commande
-    // si un petit-enfant a hérité du handle de console — cas `claude`, un process Node.
-    // La boucle de lecture resterait alors bloquée → l'appelant ne verrait jamais l'exit
-    // code → l'UI figée sur "installing". Fix : on attend la fin du CHILD sur un thread ;
-    // à sa sortie on DROP le master, ce qui ferme la pseudo-console et débloque le reader.
-    // Sur macOS/Linux l'EOF arrive déjà tout seul → ce drop est inoffensif (même résultat).
+    // ConPTY (Windows): the reader does NOT always receive EOF at the end of the command
+    // if a grandchild inherited the console handle — the `claude` case, a Node process.
+    // The read loop would then stay blocked → the caller would never see the exit
+    // code → the UI frozen on "installing". Fix: we wait for the CHILD to finish on a thread;
+    // on its exit we DROP the master, which closes the pseudo-console and unblocks the reader.
+    // On macOS/Linux EOF already arrives on its own → this drop is harmless (same result).
     let (code_tx, code_rx) = std::sync::mpsc::channel::<i32>();
     let master = pair.master;
     std::thread::spawn(move || {
@@ -65,7 +65,7 @@ pub fn run<F: FnMut(&[u8])>(
             .wait()
             .map(|s| s.exit_code() as i32)
             .unwrap_or(-1);
-        drop(master); // ferme la pseudo-console → force l'EOF côté reader
+        drop(master); // closes the pseudo-console → forces EOF on the reader side
         let _ = code_tx.send(code);
     });
 
@@ -77,6 +77,6 @@ pub fn run<F: FnMut(&[u8])>(
             Err(_) => break,
         }
     }
-    // Le child a fini (sinon le reader n'aurait pas EOF) : son code nous attend.
+    // The child has finished (otherwise the reader would not have EOF): its code awaits us.
     Ok(code_rx.recv().unwrap_or(-1))
 }
