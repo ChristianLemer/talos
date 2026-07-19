@@ -51,6 +51,8 @@ struct AppState {
 /// donc le `.app`/`.exe` lancé par Finder/Explorer trouve toujours son front.
 pub async fn serve(disk_root: Option<PathBuf>) {
     let os = current_os();
+    // Stamp de build en tête de log — "quel binaire tourne vraiment ?" (ordre jj log).
+    println!("--- start: {}", crate::build_info::start_line());
     // Scan des bundles UNE fois au boot (pur : lecture disque + YAML). Le dossier
     // bundles/ vit À CÔTÉ du binaire (frontière hermétique). Absent → plan vide.
     let plan = load_bundles("bundles", os, &|m| println!("[bundles] {m}"));
@@ -202,7 +204,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
         "profiles": [],
         "profileColumns": 2,
         "consent": read_consent(&state.consent),
-        "build": { "sha": "tauri", "change": "phase1", "builtAt": "dev" }
+        "build": crate::build_info::build_json() // stamp exact du snapshot source (fini le dur)
     });
     let _ = socket.send(Message::Text(plan.to_string())).await;
 

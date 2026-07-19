@@ -1,4 +1,5 @@
 mod assets;
+mod build_info;
 mod bundles;
 mod consent;
 mod decision;
