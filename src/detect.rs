@@ -274,6 +274,7 @@ mod tests {
             pin: None,
             requires: vec![],
             posture: Posture::OptIn,
+            categories: vec!["misc".into()],
         }
     }
 

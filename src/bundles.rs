@@ -123,6 +123,7 @@ pub struct Step {
     #[allow(dead_code)]
     pub requires: Vec<String>,
     pub posture: Posture,
+    pub categories: Vec<String>,
 }
 
 pub struct Commands {
@@ -325,6 +326,11 @@ pub fn load_bundles(root: &str, os: Os, log: &dyn Fn(&str)) -> Plan {
                 pin: p.version.clone(),
                 requires: p.requires.clone(),
                 posture: meta.posture.clone(),
+                categories: if p.category.is_empty() {
+                    vec!["misc".to_string()]
+                } else {
+                    p.category.clone()
+                },
             });
         }
         log(&format!(
@@ -411,5 +417,41 @@ packages:
 "#;
         let b: RawBundle = serde_yaml::from_str(raw).unwrap();
         assert!(b.packages[0].category.is_empty());
+    }
+
+    fn write_bundle(dir: &std::path::Path, folder: &str, yaml: &str) {
+        let d = dir.join(folder);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("bundle.yaml"), yaml).unwrap();
+    }
+
+    #[test]
+    fn step_carries_categories() {
+        let root = std::env::temp_dir().join("talos-test-cat-carry");
+        let _ = std::fs::remove_dir_all(&root);
+        write_bundle(
+            &root,
+            "editors",
+            "bundle: Editors\npackages:\n  - name: VS Code\n    brew: visual-studio-code\n    category: [editors, ide]\n",
+        );
+        let plan = load_bundles(root.to_str().unwrap(), Os::Darwin, &|_| {});
+        let step = plan.steps.iter().find(|s| s.name == "VS Code").unwrap();
+        assert_eq!(step.categories, vec!["editors", "ide"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn step_without_category_defaults_to_misc() {
+        let root = std::env::temp_dir().join("talos-test-cat-misc");
+        let _ = std::fs::remove_dir_all(&root);
+        write_bundle(
+            &root,
+            "base",
+            "bundle: Base\npackages:\n  - name: Node.js\n    brew: node\n",
+        );
+        let plan = load_bundles(root.to_str().unwrap(), Os::Darwin, &|_| {});
+        let step = plan.steps.iter().find(|s| s.name == "Node.js").unwrap();
+        assert_eq!(step.categories, vec!["misc"]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
