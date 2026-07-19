@@ -340,8 +340,10 @@
          worked on. Untouched + succeeded rows are hidden; the running one shows;
          failures stay visible+open. On done, everything reappears (failures
          already open, so they stand out). A bundle with no shown row hides too. */
-      body.applying .bundle-body > details:not(.focus-show) { display:none; }
-      body.applying .bundle.focus-empty { display:none; }
+      /* Focus mode (during Apply): hide every row except those in the plan.
+         Flat list → rows are direct <details> children of #steps. The old
+         .bundle-body / .bundle.focus-empty selectors are dead post-flatten. */
+      body.applying #steps > details:not(.focus-show) { display:none; }
       /* Settings rows + history */
       #settings { padding:14px 14px 4px; }
       .set-row { display:flex; align-items:center; gap:14px; padding:12px 0; border-bottom:1px solid var(--line); }
