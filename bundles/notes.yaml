@@ -1,0 +1,9 @@
+# Notes — a local Markdown knowledge base. Recommended (opt-out): installed by
+# default, but you may decline.
+bundle: Notes
+emoji: 📓
+description: A local Markdown knowledge base.
+priority: 30
+selectable: true
+posture: opt-out
+packages: [obsidian]

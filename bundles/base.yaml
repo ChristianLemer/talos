@@ -1,0 +1,11 @@
+# Foundation — the invisible plumbing every agent and tool stands on. The NEUTRAL
+# substrate — no client named here (hermeticity). Nushell is here as the LANGUAGE
+# OF RECIPES: config-atoms are written in `nu`. The engine NEVER calls `nu`
+# itself — only bundle CONTENT does.
+bundle: Foundation
+emoji: 🧱
+description: The plumbing everything stands on — runtime, version control, JSON.
+priority: 0
+selectable: true
+posture: opt-out # the recommended default; present unless you flip out
+packages: [node, git, jq, nushell]

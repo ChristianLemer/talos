@@ -1,0 +1,7 @@
+# AWS CLI — cloud tooling for Bedrock-backed agents.
+name: AWS CLI
+description: Command-line access to AWS — credentials, SSO, Bedrock auth
+winget: Amazon.AWSCLI
+brew: awscli
+detect: aws --version
+category: [cloud]

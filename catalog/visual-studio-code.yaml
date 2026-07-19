@@ -1,0 +1,7 @@
+# Visual Studio Code — where you see and edit what the AI produces.
+name: Visual Studio Code
+description: Where you see and edit what the AI produces
+winget: Microsoft.VisualStudioCode
+brew: visual-studio-code
+detect: code --version
+category: [editors]

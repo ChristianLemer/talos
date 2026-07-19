@@ -1,0 +1,12 @@
+# Starship config — a config-atom (stream patch). Ships beside starship.nu in
+# catalog/; {dir} expands to the catalog dir. apply = open|patch|save;
+# check = dry-run (exit 0 converged, 1 drifted).
+name: Starship config
+description: A sensible Starship prompt config the family ships
+run: nu "{dir}/starship.nu" apply
+check: nu "{dir}/starship.nu" check
+# No uninstall: a leftover config is inert, and removing it could destroy the
+# user's own edits (same no-clobber stance as apply).
+category: [terminal]
+requires:
+  - Starship

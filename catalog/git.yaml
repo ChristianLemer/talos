@@ -1,0 +1,7 @@
+# Git — version control, required by agent plugin marketplaces.
+name: Git
+description: Version control — required by agent plugin marketplaces
+winget: Git.Git
+brew: git
+detect: git --version
+category: [vcs]

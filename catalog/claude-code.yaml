@@ -1,0 +1,10 @@
+# Claude Code — the default AI agent (opt-out via the Agents bundle).
+name: Claude Code
+description: Anthropic's official CLI agent — installed globally via npm
+npm: "@anthropic-ai/claude-code"
+npmFlags: "--allow-scripts=@anthropic-ai/claude-code"
+detect: claude --version
+category: [agents]
+requires:
+  - Node.js # a PACKAGE name (matches Node.js), resolved against the plan —
+# satisfied if Node.js is present OR wanted

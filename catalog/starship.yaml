@@ -1,0 +1,7 @@
+# Starship — cross-shell prompt.
+name: Starship
+description: Cross-shell prompt
+winget: Starship.Starship
+brew: starship
+detect: starship --version
+category: [terminal]

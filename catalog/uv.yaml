@@ -1,0 +1,7 @@
+# uv — Python package manager.
+name: uv
+description: Python package manager — lets an agent build and run programs for you
+winget: astral-sh.uv
+brew: uv
+detect: uv --version
+category: [languages]

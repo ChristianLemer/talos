@@ -1,0 +1,7 @@
+# jq — JSON CLI, required by some agent plugin hooks.
+name: jq
+description: JSON CLI — required by some agent plugin hooks
+winget: jqlang.jq
+brew: jq
+detect: jq --version
+category: [foundation]

@@ -1,0 +1,10 @@
+# AWS — cloud tooling. Opt-out: the family's agents are Bedrock-backed, so the
+# AWS CLI is a default prerequisite. Kept OUT of Foundation on purpose — the
+# neutral substrate names no client; AWS is a specific need.
+bundle: AWS
+emoji: ☁️
+description: AWS command-line tooling — for Bedrock-backed agents (auth, SSO).
+priority: 40
+selectable: true
+posture: opt-out # Bedrock auth by default; decline if you don't use AWS
+packages: [aws-cli]

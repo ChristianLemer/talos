@@ -1,0 +1,10 @@
+# Obsidian — local Markdown knowledge base.
+name: Obsidian
+description: Local Markdown knowledge base
+winget: Obsidian.Obsidian
+brew: obsidian
+# NO detect: — Obsidian is a GUI app with no CLI binary on PATH. Presence is
+# derived from the native system-manager ROUTE (winget list on Windows, brew
+# list on Mac), not a hand-written command. Indeterminate only where no system
+# manager is practicable, never absent. See detect.rs systemProbe.
+category: [notes]

@@ -1,0 +1,7 @@
+# jj — Jujutsu, a Git-compatible VCS the family uses day to day.
+name: jj
+description: Jujutsu — a Git-compatible VCS the family uses day to day
+winget: jj-vcs.jj
+brew: jj
+detect: jj --version
+category: [vcs]

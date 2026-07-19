@@ -1,0 +1,7 @@
+# Node.js — JavaScript runtime, required by Talos itself and CLI agents.
+name: Node.js
+description: JavaScript runtime — required by this tool itself and by CLI agents
+winget: OpenJS.NodeJS
+brew: node
+detect: node --version
+category: [foundation]

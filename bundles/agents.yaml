@@ -1,0 +1,10 @@
+# Agents — the AI client(s) that stand on the neutral Foundation. The engine
+# names no specific agent in its code (hermeticity: the core knows no client);
+# the CHOICE of agent lives here, as references into the catalog.
+bundle: Agents
+emoji: 🤖
+description: The AI agent that runs on top — pick yours.
+priority: 5
+selectable: true
+posture: opt-out # Claude Code installed by default; decline or swap freely
+packages: [claude-code]

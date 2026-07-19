@@ -1,0 +1,7 @@
+# fd — fast, friendly alternative to find.
+name: fd
+description: Fast, friendly alternative to find
+winget: sharkdp.fd
+brew: fd
+detect: fd --version
+category: [terminal]

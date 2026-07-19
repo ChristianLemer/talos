@@ -1,0 +1,11 @@
+# Automation — what lets your AI script, run programs, and automate work. Each
+# tool travels WITH its AI manual (the Claude plugin that teaches the agent to
+# use it). Nushell itself lives in Foundation; here we add its AI manual, plus
+# Python tooling.
+bundle: Automation
+emoji: ⚙️
+description: What lets your AI script, run programs, and automate work.
+priority: 15
+selectable: true
+posture: opt-out # recommended — the AI can automate unless you opt out
+packages: [nushell-dev, uv, astral]

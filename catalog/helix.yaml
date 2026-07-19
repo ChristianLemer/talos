@@ -1,0 +1,7 @@
+# Helix — modal terminal editor.
+name: Helix
+description: Modal terminal editor
+winget: Helix.Helix
+brew: helix
+detect: hx --version
+category: [editors]

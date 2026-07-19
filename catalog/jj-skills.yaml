@@ -1,0 +1,10 @@
+# jj skills — AI manual (Claude plugin) for Jujutsu, pairs with the jj binary.
+name: jj skills
+description: AI manual for Jujutsu — pairs with the jj binary
+claude-plugin: jj@claude-plugin-jj
+marketplace: kawaz/claude-plugin-jj
+detect: jj
+category: [automation]
+requires:
+  - jj
+  - Claude Code

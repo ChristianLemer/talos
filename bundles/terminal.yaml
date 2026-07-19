@@ -1,0 +1,11 @@
+# Terminal — a comfortable prompt for the terminal you and your AI share.
+# Recommended (opt-out). Starship ships WITH its config as two atoms: the binary
+# (starship) and the config (starship-config, a stream patch). The config's patch
+# lives in catalog/starship.nu; {dir} expands to the catalog dir.
+bundle: Terminal
+emoji: 🐚
+description: A cross-shell prompt for a comfortable terminal.
+priority: 20
+selectable: true
+posture: opt-out
+packages: [starship, starship-config]

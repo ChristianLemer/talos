@@ -1,0 +1,7 @@
+# bat — cat with syntax highlighting.
+name: bat
+description: cat with syntax highlighting
+winget: sharkdp.bat
+brew: bat
+detect: bat --version
+category: [terminal]

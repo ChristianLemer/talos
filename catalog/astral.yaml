@@ -1,0 +1,10 @@
+# astral — AI manual (Claude plugin) for Python tooling (uv, ruff, ty).
+name: astral
+description: AI manual for Python — uv, ruff, ty (formatting, linting, typing)
+claude-plugin: astral@astral-sh
+marketplace: astral-sh/claude-code-plugins
+detect: astral
+category: [automation]
+requires:
+  - uv
+  - Claude Code

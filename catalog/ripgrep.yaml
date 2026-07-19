@@ -1,0 +1,7 @@
+# ripgrep — blazingly fast search.
+name: ripgrep
+description: Blazingly fast search
+winget: BurntSushi.ripgrep.MSVC
+brew: ripgrep
+detect: rg --version
+category: [terminal]

@@ -1,0 +1,11 @@
+# Chiron — the methodological companion (tekton corpus).
+name: Chiron
+description: The wise centaur — methodological companion of the tekton corpus
+claude-plugin: chiron@tekton
+# Site-specific: the Tekton marketplace folder on a shared drive. Adjust
+# per deployment (a local path, not a github repo).
+marketplace: "<vault>/<zone>/Tekton"
+detect: chiron
+category: [methodology]
+requires:
+  - Claude Code
