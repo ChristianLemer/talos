@@ -95,7 +95,7 @@ test("loadPlan wires packages into bundles", () => {
   const m = seed();
   assert.deepEqual(m.pkgs.size, 3);
   assert.deepEqual(m.bundles.get("Extras")?.pkgIds, [1, 2]);
-  assert.deepEqual(m.pkgs.get(1)?.key, "Extras::rg");
+  assert.deepEqual(m.pkgs.get(1)?.key, "rg"); // key = package name now (flat catalog)
 });
 
 test("bundle-driven: everything is OUT until pulled or set (posture ≠ default side)", () => {
@@ -326,7 +326,7 @@ test("persist + restore selection by key", () => {
   const m = seed();
   setDecision(m, 1, "in");
   const saved = { pkgs: persistablePkgs(m) };
-  assert.deepEqual(saved.pkgs, { "Extras::rg": "in" });
+  assert.deepEqual(saved.pkgs, { "rg": "in" }); // key = package name now
   const m2 = seed();
   applySavedSelection(m2, saved);
   assert.deepEqual(toggleOf(m2, 1), "in");

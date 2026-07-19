@@ -69,7 +69,11 @@ export function loadPlan(model, bundles, steps, profiles = []) {
       available: "", // the newer version the machine-wide scan found (unpinned only)
       status: "waiting",
       log: "",
-      key: `${s.bundle}::${s.name}`,
+      // Bundle-driven: steps come from the flat catalog (bundle=""), so identity
+      // is the package name (unique per catalog file), not `${bundle}::${name}`.
+      // Old selection.json keyed the old way → won't match → clean reset (only
+      // intent is lost; machine reality is re-scanned). Spec Consolidation §6.
+      key: s.name,
     });
     const be = model.bundles.get(s.bundle);
     if (be) be.pkgIds.push(s.i);

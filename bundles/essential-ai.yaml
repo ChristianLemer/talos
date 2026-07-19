@@ -1,0 +1,12 @@
+# Essential AI — the minimum bundle: an AI agent you can talk to, and a place to
+# read its work. References packages by name (resolved against the catalog).
+bundle: Essential AI
+emoji: 🌱
+usage: Talk to an AI agent and read its work in a proper editor.
+highlights: [Claude Code, VS Code]
+description: The minimum — an AI agent you can talk to, and a place to read it.
+packages:
+  - Node.js
+  - Nushell
+  - Claude Code
+  - Visual Studio Code

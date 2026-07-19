@@ -91,26 +91,6 @@ struct RawBundle {
     packages: Vec<RawPkg>,
 }
 
-/// A bundle in the flat model: metadata + a list of catalog package IDS
-/// (it no longer CONTAINS packages, it REFERENCES them).
-#[derive(Debug, Deserialize, Default)]
-struct RawBundleRef {
-    #[serde(default)]
-    bundle: Option<String>,
-    #[serde(default)]
-    emoji: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    priority: Option<i64>,
-    #[serde(default)]
-    selectable: Option<bool>,
-    #[serde(default)]
-    posture: Option<String>,
-    #[serde(default)]
-    packages: Vec<String>,
-}
-
 #[derive(Debug, Clone)]
 pub struct BundleMeta {
     pub name: String,
@@ -372,14 +352,16 @@ pub fn load_bundles(root: &str, os: Os, log: &dyn Fn(&str)) -> Plan {
     Plan { bundles, steps }
 }
 
-/// FLAT-model loader: packages come from `catalog/`, bundles from `bundles/*.yaml`
-/// referencing package ids. Emits the SAME Plan shape as load_bundles so the
-/// current UI is unchanged. Each catalog package appears once; its nominal
-/// `Step.bundle` is the FIRST bundle (by priority order) that references it.
-/// `{dir}` resolves to the catalog dir (where sidecar files live).
+/// FLAT-model loader (bundle-driven, spec Consolidation §6): emits EVERY catalog
+/// package as a step (so the Catalog tab can list all), with `Step.bundle = ""` —
+/// bundles no longer OWN packages, they only pull them (loaded separately via
+/// profiles.rs as the top cards). Nothing is wanted by default; a package becomes
+/// "in" only when an active bundle pulls it or the user toggles it. `{dir}`
+/// resolves to the catalog dir (where sidecar files like starship.nu live).
+/// `_bundles_dir` is unused here (bundles feed the cards, not the steps).
 pub fn load_from_catalog(
     catalog_dir: &str,
-    bundles_dir: &str,
+    _bundles_dir: &str,
     os: Os,
     log: &dyn Fn(&str),
 ) -> Plan {
@@ -388,99 +370,48 @@ pub fn load_from_catalog(
         "catalog: {} packages from {catalog_dir}",
         catalog.len()
     ));
-
-    // Read + parse each bundle file (a *.yaml directly under bundles_dir).
-    let mut raw_bundles: Vec<RawBundleRef> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(bundles_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
-                continue; // skip README.md and non-yaml
-            }
-            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            if stem == "profiles" {
-                continue; // profiles.yaml is the needs panel, loaded separately
-            }
-            let Ok(raw) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            match serde_yaml::from_str::<RawBundleRef>(&raw) {
-                Ok(b) => raw_bundles.push(b),
-                Err(e) => log(&format!("bundle skipped (bad YAML): {stem} — {e}")),
-            }
-        }
-    } else {
-        log(&format!("no bundles dir at {bundles_dir} — opening inert"));
-    }
-
-    // Order bundles by priority (stable nominal-parent assignment below).
-    raw_bundles.sort_by_key(|b| b.priority.unwrap_or(100));
-
-    let mut bundles: Vec<BundleMeta> = Vec::new();
-    let mut steps: Vec<Step> = Vec::new();
     let sub = |s: Option<String>| -> Option<String> { s.map(|v| v.replace("{dir}", catalog_dir)) };
-    for b in &raw_bundles {
-        let posture = Posture::parse(b.posture.as_deref());
-        let meta = BundleMeta {
-            name: b.bundle.clone().unwrap_or_default(),
-            emoji: b.emoji.clone().unwrap_or_else(|| "📦".into()),
-            description: b.description.clone().unwrap_or_default(),
-            priority: b.priority.unwrap_or(100),
-            selectable: b.selectable.unwrap_or(true),
-            posture: posture.clone(),
-        };
-        for id in &b.packages {
-            let Some(cp) = catalog.get(id) else {
-                log(&format!(
-                    "bundle {} references unknown package id: {id}",
-                    meta.name
-                ));
-                continue;
-            };
-            // Package appears ONCE: skip if an earlier (lower-priority) bundle
-            // already emitted it. Nominal parent = that first referencer.
-            if steps.iter().any(|s| s.name == cp.pkg.name) {
-                continue;
-            }
-            let p = &cp.pkg;
-            let cmd = commands_for(p, os);
-            let mgr = managers()
-                .into_iter()
-                .find(|m| Some(m.route) == cmd.route.as_deref());
-            let system_id = mgr.and_then(|m| match m.id_field {
-                IdField::Winget => p.winget.clone(),
-                IdField::Brew => p.brew.clone(),
-            });
-            let is_config =
-                p.check.is_some() && (cmd.route.is_none() || cmd.route.as_deref() == Some("run"));
-            steps.push(Step {
-                bundle: meta.name.clone(),
-                name: p.name.clone(),
-                description: p.description.clone().unwrap_or_default(),
-                install: sub(cmd.install),
-                uninstall: sub(cmd.uninstall),
-                upgrade: sub(cmd.upgrade),
-                downgrade: sub(cmd.downgrade),
-                route: cmd.route,
-                system_id,
-                detect: p.detect.clone(),
-                check: sub(p.check.clone()),
-                is_config,
-                version_regex: p.version_regex.clone(),
-                pin: p.version.clone(),
-                requires: p.requires.clone(),
-                posture: meta.posture.clone(),
-                categories: if p.category.is_empty() {
-                    vec!["misc".to_string()]
-                } else {
-                    p.category.clone()
-                },
-            });
-        }
-        bundles.push(meta);
+    let mut steps: Vec<Step> = Vec::new();
+    for cp in catalog.values() {
+        let p = &cp.pkg;
+        let cmd = commands_for(p, os);
+        let mgr = managers()
+            .into_iter()
+            .find(|m| Some(m.route) == cmd.route.as_deref());
+        let system_id = mgr.and_then(|m| match m.id_field {
+            IdField::Winget => p.winget.clone(),
+            IdField::Brew => p.brew.clone(),
+        });
+        let is_config =
+            p.check.is_some() && (cmd.route.is_none() || cmd.route.as_deref() == Some("run"));
+        steps.push(Step {
+            bundle: String::new(), // bundles don't own packages anymore
+            name: p.name.clone(),
+            description: p.description.clone().unwrap_or_default(),
+            install: sub(cmd.install),
+            uninstall: sub(cmd.uninstall),
+            upgrade: sub(cmd.upgrade),
+            downgrade: sub(cmd.downgrade),
+            route: cmd.route,
+            system_id,
+            detect: p.detect.clone(),
+            check: sub(p.check.clone()),
+            is_config,
+            version_regex: p.version_regex.clone(),
+            pin: p.version.clone(),
+            requires: p.requires.clone(),
+            posture: Posture::parse(None), // per-package posture is a later add
+            categories: if p.category.is_empty() {
+                vec!["misc".to_string()]
+            } else {
+                p.category.clone()
+            },
+        });
     }
-    bundles.sort_by_key(|b| b.priority);
-    Plan { bundles, steps }
+    Plan {
+        bundles: Vec::new(),
+        steps,
+    }
 }
 
 #[cfg(test)]
@@ -592,65 +523,34 @@ packages:
     }
 
     #[test]
-    fn resolver_builds_steps_from_refs() {
+    fn emits_every_catalog_package_with_empty_bundle() {
         use std::fs;
-        let root = std::env::temp_dir().join("talos-test-a3-resolver");
+        let root = std::env::temp_dir().join("talos-test-b2-catalog");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("catalog")).unwrap();
-        fs::create_dir_all(root.join("bundles")).unwrap();
         fs::write(
             root.join("catalog/git.yaml"),
             "name: Git\nbrew: git\ncategory: [vcs]\n",
         )
         .unwrap();
         fs::write(root.join("catalog/node.yaml"), "name: Node.js\nbrew: node\n").unwrap();
-        fs::write(
-            root.join("bundles/ai.yaml"),
-            "bundle: AI\nemoji: 🌱\npriority: 5\npackages: [git, node]\n",
-        )
-        .unwrap();
+        // Bundle-driven: EVERY catalog package emits once, bundle="" (bundles no
+        // longer own packages). bundles_dir is unused now.
         let plan = load_from_catalog(
             root.join("catalog").to_str().unwrap(),
-            root.join("bundles").to_str().unwrap(),
+            "unused",
             Os::Darwin,
             &|_| {},
         );
-        assert_eq!(plan.bundles.len(), 1);
-        assert_eq!(plan.bundles[0].name, "AI");
+        assert!(plan.bundles.is_empty());
         assert_eq!(plan.steps.len(), 2);
         let git = plan.steps.iter().find(|s| s.name == "Git").unwrap();
-        assert_eq!(git.bundle, "AI");
+        assert_eq!(git.bundle, ""); // no owning bundle
         assert_eq!(git.categories, vec!["vcs"]);
         assert_eq!(git.route.as_deref(), Some("brew"));
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn resolver_package_referenced_once_even_if_two_bundles() {
-        use std::fs;
-        let root = std::env::temp_dir().join("talos-test-a3-shared");
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("catalog")).unwrap();
-        fs::create_dir_all(root.join("bundles")).unwrap();
-        fs::write(root.join("catalog/git.yaml"), "name: Git\nbrew: git\n").unwrap();
-        fs::write(
-            root.join("bundles/ai.yaml"),
-            "bundle: AI\npriority: 1\npackages: [git]\n",
-        )
-        .unwrap();
-        fs::write(
-            root.join("bundles/term.yaml"),
-            "bundle: Terminal\npriority: 2\npackages: [git]\n",
-        )
-        .unwrap();
-        let plan = load_from_catalog(
-            root.join("catalog").to_str().unwrap(),
-            root.join("bundles").to_str().unwrap(),
-            Os::Darwin,
-            &|_| {},
-        );
-        assert_eq!(plan.steps.iter().filter(|s| s.name == "Git").count(), 1);
-        assert_eq!(plan.steps[0].bundle, "AI");
+        // Node has no category tag → defaults to misc.
+        let node = plan.steps.iter().find(|s| s.name == "Node.js").unwrap();
+        assert_eq!(node.categories, vec!["misc"]);
         let _ = fs::remove_dir_all(&root);
     }
 }

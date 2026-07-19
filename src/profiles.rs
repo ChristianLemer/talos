@@ -10,7 +10,9 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Default)]
 struct RawProfile {
-    #[serde(default)]
+    // A bundle file uses `bundle:`; the legacy profiles.yaml used `profile:`.
+    // Accept both so one shape reads either.
+    #[serde(default, alias = "bundle")]
     profile: Option<String>,
     #[serde(default)]
     emoji: Option<String>,
@@ -79,16 +81,50 @@ pub fn parse_profiles(raw: &str) -> Profiles {
     }
 }
 
-/// Read & parse `<dir>/profiles.yaml`. Absent/unreadable → empty panel with the
-/// normal `columns` default (2), same as a valid file that lists no profiles —
-/// the frontend hides the panel on empty `items` either way. (An absent file is
-/// a normal state, not corruption, so it takes the healthy default, not the
-/// bare `Profiles::default()` columns of 0.)
+/// Parse ONE bundle file (spec Consolidation §1: the 4 profiles are now one file
+/// each). A bundle file is `{bundle:, emoji:, usage:, highlights:, description:,
+/// packages: [names]}`. Returns None if it has no name (not a bundle card).
+pub fn parse_one_bundle(raw: &str) -> Option<Profile> {
+    let p: RawProfile = serde_yaml::from_str(raw).ok()?;
+    let name = p.profile?;
+    Some(Profile {
+        name,
+        emoji: p.emoji.unwrap_or_else(|| "🎯".into()),
+        usage: p.usage.unwrap_or_default(),
+        highlights: p.highlights,
+        description: p.description.unwrap_or_default(),
+        packages: p.packages,
+    })
+}
+
+/// Load the bundle cards: every `*.yaml` under `dir` that names a bundle becomes
+/// a card (spec Consolidation §1 — the 4 profiles are now 4 bundle files). Read
+/// in sorted path order for a stable card order. Absent dir / bad file → skipped.
+/// The legacy single `profiles.yaml` (if present) is also read via parse_profiles
+/// for back-compat, but the current model ships one file per bundle.
 pub fn load_profiles(dir: &str) -> Profiles {
-    match std::fs::read_to_string(format!("{dir}/profiles.yaml")) {
-        Ok(raw) => parse_profiles(&raw),
-        Err(_) => parse_profiles(""),
+    let mut items = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        let mut paths: Vec<_> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("yaml"))
+            .collect();
+        paths.sort();
+        for path in paths {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let Ok(raw) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if stem == "profiles" {
+                // Legacy multi-profile file: expand it into cards too.
+                items.extend(parse_profiles(&raw).items);
+            } else if let Some(p) = parse_one_bundle(&raw) {
+                items.push(p);
+            }
+        }
     }
+    Profiles { columns: 2, items }
 }
 
 #[cfg(test)]
@@ -166,5 +202,36 @@ profiles:
         let p = load_profiles("/nonexistent/talos/dir");
         assert!(p.items.is_empty());
         assert_eq!(p.columns, 2);
+    }
+
+    #[test]
+    fn parse_one_bundle_reads_bundle_key() {
+        let raw = "bundle: Essential AI\nemoji: 🌱\nusage: talk to AI\npackages: [Node.js, Claude Code]\n";
+        let p = parse_one_bundle(raw).unwrap();
+        assert_eq!(p.name, "Essential AI");
+        assert_eq!(p.emoji, "🌱");
+        assert_eq!(p.usage, "talk to AI");
+        assert_eq!(p.packages, vec!["Node.js", "Claude Code"]);
+    }
+
+    #[test]
+    fn parse_one_bundle_none_without_name() {
+        assert!(parse_one_bundle("emoji: 🎯\npackages: [Git]\n").is_none());
+    }
+
+    #[test]
+    fn load_reads_multiple_bundle_files_sorted() {
+        let dir = std::env::temp_dir().join("talos-test-bundle-cards");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a-first.yaml"), "bundle: First\npackages: [Git]\n").unwrap();
+        std::fs::write(dir.join("b-second.yaml"), "bundle: Second\npackages: [Node.js]\n")
+            .unwrap();
+        std::fs::write(dir.join("README.md"), "ignored").unwrap();
+        let p = load_profiles(dir.to_str().unwrap());
+        assert_eq!(p.items.len(), 2);
+        assert_eq!(p.items[0].name, "First"); // sorted path order
+        assert_eq!(p.items[1].name, "Second");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

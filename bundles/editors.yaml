@@ -1,9 +1,0 @@
-# Editors — where you see and edit what the AI produces. Recommended (opt-out):
-# installed by default, but you may decline.
-bundle: Editors
-emoji: ✏️
-description: Where you see and edit what the AI produces.
-priority: 10
-selectable: true
-posture: opt-out # recommended — installed unless you opt out
-packages: [visual-studio-code, marktext]

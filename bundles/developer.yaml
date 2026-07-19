@@ -1,0 +1,23 @@
+# Developer — the full kit: version control, terminal editing, all the tooling.
+bundle: Developer
+emoji: 🛠️
+usage: Ship code end to end — version control, terminal editing, full tooling.
+highlights: [jj, Helix, ripgrep]
+description: The full kit — version control, terminal editing, all the tooling.
+packages:
+  - Node.js
+  - Git
+  - Nushell
+  - Claude Code
+  - Chiron
+  - Visual Studio Code
+  - uv
+  - astral
+  - nushell-dev
+  - jj
+  - jj skills
+  - Helix
+  - Starship
+  - ripgrep
+  - fd
+  - bat
