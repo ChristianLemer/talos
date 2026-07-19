@@ -69,6 +69,8 @@ struct RawPkg {
     version: Option<String>,
     #[serde(default)]
     requires: Vec<String>,
+    #[serde(default)]
+    category: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -385,5 +387,29 @@ mod tests {
     fn no_route_yields_none() {
         let c = commands_for(&pkg("bare"), Os::Darwin);
         assert!(c.route.is_none() && c.install.is_none());
+    }
+
+    #[test]
+    fn category_parsed_from_yaml() {
+        let raw = r#"
+bundle: T
+packages:
+  - name: VS Code
+    brew: visual-studio-code
+    category: [editors, ide]
+"#;
+        let b: RawBundle = serde_yaml::from_str(raw).unwrap();
+        assert_eq!(b.packages[0].category, vec!["editors", "ide"]);
+    }
+
+    #[test]
+    fn category_absent_is_empty_vec() {
+        let raw = r#"
+bundle: T
+packages:
+  - name: bare
+"#;
+        let b: RawBundle = serde_yaml::from_str(raw).unwrap();
+        assert!(b.packages[0].category.is_empty());
     }
 }
