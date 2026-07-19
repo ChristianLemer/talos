@@ -303,6 +303,19 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
             "rescan" => {
                 scan_and_emit(&mut socket, &state).await;
             }
+            // open-forbidden : le bouton "Open blocked page" du bandeau 403 → ouvre
+            // l'URL bloquée dans le navigateur par défaut, à côté du panneau, pour que
+            // l'utilisateur approuve l'accès au pare-feu puis Retry. Handler ABSENT au
+            // portage Deno→Rust → le clic tombait dans _ => {} et ne faisait rien.
+            "open-forbidden" => {
+                if let Some(url) = parsed.get("url").and_then(|v| v.as_str()) {
+                    if let Err(e) = crate::platform::open_url(url) {
+                        println!("[forbidden] échec ouverture {url}: {e}");
+                    } else {
+                        println!("[forbidden] ouverture navigateur: {url}");
+                    }
+                }
+            }
             _ => {}
         }
     }

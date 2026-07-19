@@ -30,6 +30,32 @@ pub enum Os {
     Linux,
 }
 
+/// Ouvre une URL dans le navigateur par défaut, hors du panneau. Par-OS :
+/// Windows → `cmd /C start "" <url>` (le premier "" est le TITRE que `start` exige,
+/// sinon il prend l'URL pour un titre) ; macOS → `open` ; Linux → `xdg-open`. Via
+/// quiet_command → pas de fenêtre console qui clignote sous Windows. Best-effort :
+/// un échec de spawn est loggé, jamais fatal (le front garde le lien cliquable en repli).
+pub fn open_url(url: &str) -> std::io::Result<()> {
+    let mut cmd = match current_os() {
+        Os::Windows => {
+            let mut c = quiet_command("cmd");
+            c.args(["/C", "start", "", url]);
+            c
+        }
+        Os::Darwin => {
+            let mut c = quiet_command("open");
+            c.arg(url);
+            c
+        }
+        Os::Linux => {
+            let mut c = quiet_command("xdg-open");
+            c.arg(url);
+            c
+        }
+    };
+    cmd.spawn().map(|_| ())
+}
+
 /// Anything not windows/darwin → linux (le shell family qu'on supporte là). Ne panique jamais.
 pub fn current_os() -> Os {
     match std::env::consts::OS {
