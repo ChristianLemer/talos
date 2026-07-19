@@ -54,6 +54,34 @@ fn home_dir() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
 }
 
+/// Le dossier "à côté de l'exe" — où vit `bundles/` (frontière hermétique : le moteur
+/// change rarement, les bundles souvent, donc À CÔTÉ du binaire, lus au runtime, JAMAIS
+/// scellés). Miroir Rust de `BUNDLES_DIR` du TS (dirname(execPath) en mode compilé).
+///
+/// Pièce macOS : dans un `.app`, l'exe est `Talos.app/Contents/MacOS/talos`. "À côté"
+/// au sens hermétique = à côté du `.app` (modifiable sans toucher au bundle signé), pas
+/// `Contents/MacOS/`. Donc si on détecte le motif `…/X.app/Contents/MacOS/<exe>`, on
+/// remonte hors du `.app`. Sinon (binaire nu en dev, exe Windows/Linux) : le parent direct.
+/// Fonction PURE (prend le chemin de l'exe) → testable sans lancer de process.
+pub fn exe_sibling_dir(exe: &std::path::Path) -> PathBuf {
+    let parent = exe.parent().unwrap_or(std::path::Path::new("."));
+    // Motif .app : parent = ".../Contents/MacOS", grand-parent = ".../Contents",
+    // arrière-grand-parent = ".../X.app" → on veut le dossier QUI CONTIENT X.app.
+    if parent.file_name().is_some_and(|n| n == "MacOS") {
+        if let Some(contents) = parent.parent() {
+            if contents.file_name().is_some_and(|n| n == "Contents") {
+                if let Some(app) = contents.parent() {
+                    // app = ".../X.app" ; son parent = le dossier où poser bundles/.
+                    if app.extension().is_some_and(|e| e == "app") {
+                        return app.parent().unwrap_or(app).to_path_buf();
+                    }
+                }
+            }
+        }
+    }
+    parent.to_path_buf()
+}
+
 // PATH refresh Windows : un install écrit le registre mais NE propage PAS le PATH
 // aux process déjà lancés → un outil frais lirait "absent" sans ça.
 const WIN_PATH_REFRESH: &str =
@@ -138,5 +166,29 @@ mod tests {
         assert!(local_data_dir(Os::Darwin).ends_with("Library/Application Support/Talos"));
         assert!(local_data_dir(Os::Windows).ends_with("Talos"));
         assert!(local_data_dir(Os::Linux).ends_with("Talos"));
+    }
+
+    #[test]
+    fn sibling_app_remonte_hors_du_bundle() {
+        // .app : bundles/ doit se poser À CÔTÉ du .app, pas dans Contents/MacOS.
+        let exe = std::path::Path::new("/Apps/OneDrive/Talos.app/Contents/MacOS/talos");
+        assert_eq!(exe_sibling_dir(exe), PathBuf::from("/Apps/OneDrive"));
+    }
+
+    #[test]
+    fn sibling_binaire_nu_est_le_parent() {
+        // Dev (cargo) ou exe Windows/Linux : juste le dossier parent.
+        // (chemins POSIX : le test tourne sur Mac, où `\` n'est pas un séparateur.)
+        let exe = std::path::Path::new("/home/x/talos/target/release/talos");
+        assert_eq!(exe_sibling_dir(exe), PathBuf::from("/home/x/talos/target/release"));
+        let shared = std::path::Path::new("/mnt/onedrive/Talos/talos");
+        assert_eq!(exe_sibling_dir(shared), PathBuf::from("/mnt/onedrive/Talos"));
+    }
+
+    #[test]
+    fn sibling_macos_sans_motif_app_reste_parent() {
+        // Un dossier "MacOS" qui n'est PAS dans un .app → pas de remontée magique.
+        let exe = std::path::Path::new("/random/MacOS/talos");
+        assert_eq!(exe_sibling_dir(exe), PathBuf::from("/random/MacOS"));
     }
 }

@@ -57,23 +57,40 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
     let os = current_os();
     // Stamp de build en tête de log — "quel binaire tourne vraiment ?" (ordre jj log).
     println!("--- start: {}", crate::build_info::start_line());
-    // Scan des bundles UNE fois au boot (pur : lecture disque + YAML). Le dossier
-    // bundles/ vit À CÔTÉ du binaire (frontière hermétique). Absent → plan vide.
-    let plan = load_bundles("bundles", os, &|m| println!("[bundles] {m}"));
+    // Dossier "à côté de l'exe" (hors du .app si packagé) : c'est LÀ que vivent
+    // bundles/ ET la copie partagée consentie (frontière hermétique — miroir du
+    // BUNDLES_DIR compilé du TS). Résolu depuis l'exe RÉEL, PAS le cwd : un .app
+    // lancé par Finder a cwd=/ → un chemin relatif "bundles" ouvrait vide.
+    let sibling_dir = std::env::current_exe()
+        .ok()
+        .map(|p| crate::platform::exe_sibling_dir(&p))
+        .unwrap_or_else(|| PathBuf::from("."));
+    // Scan des bundles UNE fois au boot (pur : lecture disque + YAML). On cherche
+    // À CÔTÉ de l'exe (cas packagé .app/.exe) ; si absent, on retombe sur "bundles"
+    // relatif au cwd (cas DEV : `cargo run`/`tauri dev` tourne depuis la racine repo,
+    // où l'exe est target/debug/talos mais les bundles sont ./bundles). Absent → plan vide.
+    let sibling_bundles = sibling_dir.join("bundles");
+    let bundles_dir: PathBuf = if sibling_bundles.is_dir() {
+        sibling_bundles
+    } else {
+        PathBuf::from("bundles")
+    };
+    println!("[bundles] dir: {}", bundles_dir.display());
+    let plan = load_bundles(
+        bundles_dir.to_str().unwrap_or("bundles"),
+        os,
+        &|m| println!("[bundles] {m}"),
+    );
     println!(
         "[plan] {} bundles, {} steps",
         plan.bundles.len(),
         plan.steps.len()
     );
-    // Data-dir local par machine + store consentement. exe_dir = le dossier où siège
-    // l'exe (parent de bundles/) — c'est là qu'atterrit la copie partagée consentie.
-    // host/user nomment le log partagé ; lecture env best-effort avec fallbacks (la
-    // copie partagée est un bonus, jamais load-bearing).
+    // Data-dir local par machine + store consentement. exe_dir = le MÊME dossier à
+    // côté de l'exe (celui qui contient bundles/) — c'est là qu'atterrit la copie
+    // partagée consentie. host/user nomment le log partagé ; env best-effort.
     let data_dir = local_data_dir(os);
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."));
+    let exe_dir = sibling_dir;
     let consent = ConsentStore {
         local_dir: data_dir.clone(),
         exe_dir,
