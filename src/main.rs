@@ -15,6 +15,7 @@ mod forbidden;
 mod managers;
 mod outdated;
 mod platform;
+mod profiles;
 mod pty;
 mod selection;
 mod server;
