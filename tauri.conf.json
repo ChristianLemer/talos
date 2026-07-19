@@ -4,7 +4,7 @@
   "version": "0.0.1",
   "identifier": "be.lemer.talos.spike",
   "build": {
-    "frontendDist": "../public"
+    "frontendDist": "public"
   },
   "app": {
     "windows": [

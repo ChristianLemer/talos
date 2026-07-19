@@ -10,7 +10,7 @@ fn main() {
     std::thread::spawn(|| {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let public = std::env::var("TALOS_PUBLIC").unwrap_or_else(|_| "../public".into());
+            let public = std::env::var("TALOS_PUBLIC").unwrap_or_else(|_| "public".into());
             server::serve(public).await;
         });
     });
