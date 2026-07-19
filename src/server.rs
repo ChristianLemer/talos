@@ -192,7 +192,6 @@ async fn root_or_ws(ws: Option<WebSocketUpgrade>, state: Arc<AppState>) -> Respo
 }
 
 async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
-    let os = state.os;
     let steps = &state.plan.steps;
 
     // 1) plan RÉEL — bundles + steps scannés de bundles/ (fini le dur). Mêmes clés
@@ -234,44 +233,9 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     });
     let _ = socket.send(Message::Text(plan.to_string())).await;
 
-    // 2) SCAN RÉEL, CONCURRENT — chaque probe lance un login shell (lent : source
-    // /etc/profile), donc on ne SÉRIALISE PAS (40s → ~3s). Chaque détection part
-    // dans un spawn_blocking ; l'outdated machine-wide (BATCHÉ, une commande) tourne
-    // en parallèle. On collecte tout, puis on émet dans l'ordre. "Detect, don't remember".
-    let scan_task = tokio::task::spawn_blocking(move || scan_outdated(os));
-    let mut probe_tasks = Vec::with_capacity(steps.len());
-    for step in steps.iter() {
-        let step = step.clone();
-        probe_tasks.push(tokio::task::spawn_blocking(move || {
-            detect_present_detailed(&step, os)
-        }));
-    }
-    let scan = scan_task.await.unwrap_or_default();
-    for (i, task) in probe_tasks.into_iter().enumerate() {
-        let p = task.await.unwrap_or_default();
-        let sid = steps[i].system_id.clone();
-        let state_msg = json!({
-            "type": "state", "i": i,
-            "present": p.present, "reason": p.reason,
-            "version": p.version.unwrap_or_default(), "external": p.external,
-            "probe": probe_json(&p.diag) // la preuve : commande + sortie + code
-        });
-        let _ = socket.send(Message::Text(state_msg.to_string())).await;
-        if p.present == Some(true) {
-            if let Some(od) = outdated_for(sid.as_deref(), &scan) {
-                let _ = socket
-                    .send(Message::Text(
-                        json!({ "type": "outdated", "i": i, "current": od.current, "available": od.available }).to_string(),
-                    ))
-                    .await;
-            }
-        }
-    }
-
-    // 3) state-done — dé-fige l'UI (app.js:1104)
-    let _ = socket
-        .send(Message::Text(json!({ "type": "state-done" }).to_string()))
-        .await;
+    // 2) SCAN RÉEL — voir scan_and_emit. Fait au connect ET à chaque `rescan` (bouton
+    // Refresh). "Detect, don't remember".
+    scan_and_emit(&mut socket, &state).await;
 
     // 4) Boucle de messages du front. Deux familles :
     //  - `apply` (bouton Apply global, app.js:499) → apply_diff (re-scan, plan, exécution).
@@ -333,9 +297,59 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 println!("[consent] local history cleared");
                 let _ = socket.send(Message::Text(log_msg(&state))).await;
             }
+            // rescan : bouton Refresh → re-scan live de présence (state + state-done).
+            // Sans ce handler, le message tombait dans _ => {} et l'UI restait voilée
+            // (steps-refreshing) sans jamais recevoir de réponse → "refresh forever".
+            "rescan" => {
+                scan_and_emit(&mut socket, &state).await;
+            }
             _ => {}
         }
     }
+}
+
+/// SCAN de présence CONCURRENT + émission au front. Chaque probe lance un login shell
+/// (lent : source /etc/profile + rc user), donc on ne SÉRIALISE PAS (spawn_blocking) ;
+/// l'outdated machine-wide (BATCHÉ, une commande) tourne en parallèle. On collecte
+/// tout, puis on émet `state` (+ `outdated` si présent) dans l'ordre, puis `state-done`
+/// (dé-fige l'UI). Appelé au connect ET sur `rescan` (bouton Refresh — sans ce handler,
+/// le message tombait dans le vide → l'UI restait voilée "à jamais").
+async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
+    let os = state.os;
+    let steps = &state.plan.steps;
+    let scan_task = tokio::task::spawn_blocking(move || scan_outdated(os));
+    let mut probe_tasks = Vec::with_capacity(steps.len());
+    for step in steps.iter() {
+        let step = step.clone();
+        probe_tasks.push(tokio::task::spawn_blocking(move || {
+            detect_present_detailed(&step, os)
+        }));
+    }
+    let scan = scan_task.await.unwrap_or_default();
+    for (i, task) in probe_tasks.into_iter().enumerate() {
+        let p = task.await.unwrap_or_default();
+        let sid = steps[i].system_id.clone();
+        let state_msg = json!({
+            "type": "state", "i": i,
+            "present": p.present, "reason": p.reason,
+            "version": p.version.unwrap_or_default(), "external": p.external,
+            "probe": probe_json(&p.diag) // la preuve : commande + sortie + code
+        });
+        let _ = socket.send(Message::Text(state_msg.to_string())).await;
+        if p.present == Some(true) {
+            if let Some(od) = outdated_for(sid.as_deref(), &scan) {
+                let _ = socket
+                    .send(Message::Text(
+                        json!({ "type": "outdated", "i": i, "current": od.current, "available": od.available }).to_string(),
+                    ))
+                    .await;
+            }
+        }
+    }
+    // state-done — dé-fige l'UI (retire le voile de scan/refresh).
+    let _ = socket
+        .send(Message::Text(json!({ "type": "state-done" }).to_string()))
+        .await;
 }
 
 /// Message `log` pour l'onglet Log : consentement courant + historique local.
@@ -738,16 +752,26 @@ async fn do_step(
             .await;
     }
 
-    // Journaliser l'issue (local toujours ; copie partagée ssi consenti). Version
-    // best-effort : re-détectée après un install/upgrade réussi (comme captureVersion),
-    // vide sinon. Un échec de journal ne doit JAMAIS couler un step.
+    // Re-détecter la présence APRÈS un install/upgrade réussi (comme captureVersion) —
+    // et RÉÉMETTRE un `state` au front, pour que la version fraîche s'affiche TOUT DE
+    // SUITE (avant, elle n'était calculée que pour le journal → le front gardait
+    // "absent/sans version" jusqu'à un refresh manuel). Le handler `state` du front
+    // fait setInstalledVersion + paintVersion, donc rien à changer côté UI.
     let version = if ok && action != Action::Uninstall {
-        let step = step.clone();
-        tokio::task::spawn_blocking(move || detect_present_detailed(&step, os).version)
+        let step_c = step.clone();
+        let p = tokio::task::spawn_blocking(move || detect_present_detailed(&step_c, os))
             .await
             .ok()
-            .flatten()
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let v = p.version.clone().unwrap_or_default();
+        let _ = socket
+            .send(Message::Text(json!({
+                "type": "state", "i": i, "present": p.present,
+                "version": v, "external": p.external,
+                "probe": probe_json(&p.diag)
+            }).to_string()))
+            .await;
+        v
     } else {
         String::new()
     };

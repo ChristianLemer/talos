@@ -620,9 +620,9 @@ function render(bundles, steps, profiles = [], columns = 2) {
         /\x1b\[[0-9;?]*[A-Za-z]/g,
         "",
       );
-      navigator.clipboard.writeText(text).then(() => {
-        copy.innerHTML = ICON_OK;
-        setTimeout(() => copy.innerHTML = ICON_COPY, 1200);
+      copyText(text).then((ok) => {
+        copy.innerHTML = ok ? ICON_OK : ICON_COPY;
+        if (ok) setTimeout(() => copy.innerHTML = ICON_COPY, 1200);
       });
     };
     const host = document.createElement("div");
@@ -666,6 +666,36 @@ function ensureTerm(i) {
   return r.term;
 }
 
+// Copy text to the clipboard, robustly. navigator.clipboard is often UNAVAILABLE in
+// a WKWebView served over plain http://127.0.0.1 (non-secure context) — it either
+// doesn't exist or its promise rejects, and the old code had no fallback, so copying
+// failed silently. Try the modern API, then fall back to a hidden-textarea +
+// execCommand("copy") (works in non-secure contexts). Returns true on success.
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_) {
+    // fall through to the legacy path
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.append(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch (_) {
+    return false;
+  }
+}
+
 // Detection evidence: the exact command run at scan, its raw output, and the verdict.
 // The "don't trust me, check it yourself" surface — when a result looks wrong, the
 // operator sees precisely which command produced it. English only.
@@ -686,6 +716,9 @@ function stashProbe(i, probe, state) {
     (out ? out + "\r\n" : "") +
     `\x1b[2m→ ${verdict} · exit ${probe.code}\x1b[0m\r\n`;
   rows[i].probeWritten = false;
+  // Also feed the copy buffer: the detection evidence must be copyable too, not just
+  // install output. Without this, copying a scan-only row yields an empty string.
+  M.appendLog(model, i, rows[i].probeText.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ""));
   // If the row is already open (rare: a re-scan while expanded), flush now.
   if (rows[i].details?.open) flushProbe(i);
 }
