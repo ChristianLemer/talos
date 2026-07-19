@@ -38,21 +38,27 @@ export function isLockedPosture(posture) {
 // The user's toggle for a package is "in" | "out" | null (untouched → follow the
 // default). Locked postures ignore the toggle entirely (author wins). This is the
 // effective in/out.
-export function toggleState(posture, userToggle) {
-  if (isLockedPosture(posture)) return postureDefault(posture);
-  return userToggle === "in" || userToggle === "out" ? userToggle : postureDefault(posture);
+// Bundle-driven model: a package is "in" only if a bundle pulls it OR the user
+// set it in by hand. Untouched + unpulled → out (nothing by default). posture no
+// longer sets a default SIDE; only `forbidden` matters (locked out — an integrator
+// can ban a package). `mandatory` is no longer "always in" (nothing is
+// indispensable — plumbing is pulled via `requires`). See spec Consolidation §3-4.
+export function toggleState(posture, userToggle, pulled) {
+  if (posture === "forbidden") return "out"; // locked out, always
+  if (userToggle === "in" || userToggle === "out") return userToggle; // manual wins
+  return pulled ? "in" : "out";
 }
 
-// The DESIRED state (present|absent), from posture + the user's toggle.
-export function desiredState(posture, userToggle) {
-  return toggleState(posture, userToggle) === "in" ? "present" : "absent";
+// The DESIRED state (present|absent), from posture + the user's toggle + pull.
+export function desiredState(posture, userToggle, pulled) {
+  return toggleState(posture, userToggle, pulled) === "in" ? "present" : "absent";
 }
 
-// Has the user DEVIATED from the author's default? (drives the "vivid when moved,
-// neutral when at default" colouring). Locked → never a deviation.
+// Deviation now = the user set a manual toggle (the only "off the default" signal
+// in a bundle-driven model, where the default is simply "what the bundles pull").
 export function isDeviation(posture, userToggle) {
-  if (isLockedPosture(posture)) return false;
-  return toggleState(posture, userToggle) !== postureDefault(posture);
+  if (posture === "forbidden") return false;
+  return userToggle === "in" || userToggle === "out";
 }
 
 // --- Profiles: named, additive package sets ---------------------------------

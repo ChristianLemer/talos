@@ -35,35 +35,35 @@ test("isLockedPosture", () => {
   assert.equal(isLockedPosture("opt-out"), false);
 });
 
-test("toggleState: locked postures ignore the user toggle", () => {
-  assert.equal(toggleState("mandatory", "out"), "in"); // can't flip a mandatory out
-  assert.equal(toggleState("forbidden", "in"), "out"); // can't flip a forbidden in
+test("bundle-driven: untouched package is OUT regardless of posture", () => {
+  // No active bundle (pulled=false), no manual toggle → out. Posture no longer
+  // sets the default side (spec Consolidation §3-4).
+  assert.equal(toggleState("opt-out", null, false), "out");
+  assert.equal(toggleState("opt-in", null, false), "out");
+  assert.equal(toggleState("mandatory", null, false), "out");
 });
 
-test("toggleState: free postures follow the user, else the default", () => {
-  assert.equal(toggleState("opt-out", null), "in"); // untouched → default in
-  assert.equal(toggleState("opt-out", "out"), "out"); // user flipped
-  assert.equal(toggleState("opt-in", null), "out"); // untouched → default out
-  assert.equal(toggleState("opt-in", "in"), "in"); // user flipped
+test("bundle-driven: an active-bundle pull makes it in", () => {
+  assert.equal(toggleState("opt-in", null, true), "in"); // pulled by a bundle
+  assert.equal(desiredState("opt-in", null, true), "present");
 });
 
-test("desiredState: in→present, out→absent", () => {
-  assert.equal(desiredState("mandatory", null), "present");
-  assert.equal(desiredState("forbidden", null), "absent");
-  assert.equal(desiredState("opt-out", null), "present");
-  assert.equal(desiredState("opt-out", "out"), "absent");
-  assert.equal(desiredState("opt-in", null), "absent");
-  assert.equal(desiredState("opt-in", "in"), "present");
+test("bundle-driven: manual toggle wins over the pull", () => {
+  assert.equal(toggleState("opt-out", "out", true), "out"); // manual out beats pull
+  assert.equal(toggleState("opt-in", "in", false), "in"); // manual in without pull
+  assert.equal(desiredState("opt-in", "in", false), "present");
 });
 
-test("isDeviation: true only when the user moved off the default", () => {
-  assert.equal(isDeviation("opt-out", null), false); // at default
-  assert.equal(isDeviation("opt-out", "in"), false); // same as default
-  assert.equal(isDeviation("opt-out", "out"), true); // moved
-  assert.equal(isDeviation("opt-in", null), false);
-  assert.equal(isDeviation("opt-in", "in"), true); // moved
-  assert.equal(isDeviation("mandatory", "out"), false); // locked → never a deviation
-  assert.equal(isDeviation("forbidden", "in"), false);
+test("forbidden stays locked out even if pulled or manually set in", () => {
+  assert.equal(toggleState("forbidden", "in", true), "out");
+  assert.equal(desiredState("forbidden", "in", true), "absent");
+});
+
+test("isDeviation: true iff the user set a manual toggle (forbidden never)", () => {
+  assert.equal(isDeviation("opt-out", null), false); // no manual → not deviated
+  assert.equal(isDeviation("opt-out", "in"), true); // manual set
+  assert.equal(isDeviation("opt-in", "out"), true); // manual set
+  assert.equal(isDeviation("forbidden", "in"), false); // locked → never
 });
 
 test("actionFor: converge desired vs machine", () => {
