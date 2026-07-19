@@ -14,6 +14,7 @@ packages:
     winget: Microsoft.VisualStudioCode
     brew: visual-studio-code
     detect: code --version
+    category: [editors]
 
   - name: MarkText
     description: Distraction-free Markdown editor — specs, briefs, notes

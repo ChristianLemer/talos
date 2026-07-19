@@ -214,7 +214,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
             json!({
                 "i": i, "name": s.name, "description": s.description, "bundle": s.bundle,
                 "canUninstall": s.uninstall.is_some(), "posture": s.posture.as_str(),
-                "isConfig": s.is_config, "pin": s.pin
+                "isConfig": s.is_config, "pin": s.pin, "categories": s.categories
             })
         })
         .collect();
