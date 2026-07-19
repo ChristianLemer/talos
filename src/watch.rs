@@ -72,9 +72,9 @@ $tree.Add($root) | Out-Null
 $changed=$true
 while($changed){ $changed=$false; foreach($p in $all){ if($tree.Contains([uint32]$p.ParentProcessId) -and -not $tree.Contains([uint32]$p.ProcessId)){ $tree.Add([uint32]$p.ProcessId)|Out-Null; $changed=$true } } }
 $self=$PID
-# msedgewebview2.exe = LE webview de Tauri, enfant de talos-spike.exe donc DANS
+# msedgewebview2.exe = LE webview de Tauri, enfant de talos.exe donc DANS
 # l'arbre -> doit etre exclu, sinon le watcher detecte NOTRE PROPRE fenetre.
-$skip='msedge.exe','chrome.exe','msedgewebview2.exe','talos-spike.exe'
+$skip='msedge.exe','chrome.exe','msedgewebview2.exe','talos.exe'
 $result=@{found=$false}
 $cb={ param($h,$p)
   if(-not [W]::IsWindowVisible($h)){ return $true }

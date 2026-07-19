@@ -1,5 +1,5 @@
 [package]
-name = "talos-spike"
+name = "talos"
 version = "0.0.1"
 edition = "2021"
 
@@ -21,7 +21,7 @@ name = "pty-smoke"
 path = "src/pty_smoke.rs"
 
 [[bin]]
-name = "talos-spike"
+name = "talos"
 path = "src/main.rs"
 
 [build-dependencies]

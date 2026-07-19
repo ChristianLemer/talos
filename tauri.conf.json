@@ -1,15 +1,15 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TalosSpike",
+  "productName": "Talos",
   "version": "0.0.1",
-  "identifier": "be.lemer.talos.spike",
+  "identifier": "be.lemer.talos",
   "build": {
     "frontendDist": "public"
   },
   "app": {
     "windows": [
       {
-        "title": "Talos (spike Tauri)",
+        "title": "Talos",
         "width": 520,
         "height": 900,
         "url": "http://127.0.0.1:1420"
