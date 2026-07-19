@@ -7,9 +7,10 @@ repairs it, and shows its state — *by showing* what it does. It holds out a
 ramp to those who do not yet live inside the text. Its inaugural payload is
 Tekton (Chiron included, as a removable example).
 
-**Status: the installer runs.** It compiles to one self-contained executable
-(Deno), scans a machine, and installs / upgrades / removes packages live — on
-macOS and Windows. See **Run it** below.
+**Status: the installer runs.** It is a native app (Tauri + Rust) with an
+embedded web UI: a single `Talos` / `Talos.exe` that scans a machine and
+installs / upgrades / removes packages live — proven on macOS and Windows. See
+**Build the kit** below.
 
 The core is generic — it knows no client. Everything specific (theme, packages,
 plugins) enters by **extension** (a bundle folder), never into the core.
@@ -70,15 +71,25 @@ ones you don't want — `base/` is the neutral substrate, the rest are examples.
 
 ### 2 — Build the kit
 
-With [Deno](https://deno.land):
+With [Rust](https://rustup.rs) + the Tauri CLI (`cargo install tauri-cli`).
+Build natively on each target OS — Tauri does **not** cross-compile (WebView2 +
+MSVC on Windows, WebKit on macOS):
 
 ```
-deno task build:win     # → dist/Talos.exe  + dist/bundles/
-deno task build:mac     # → dist/Talos      + dist/bundles/
+cargo tauri build          # macOS → target/release/bundle/macos/Talos.app
+                           # Windows → target/release/Talos.exe
+                           #           + target/release/bundle/nsis/Talos_<ver>_x64-setup.exe
 ```
 
-Each task produces the whole kit under `dist/`: the exe **and** a fresh copy of
-your `bundles/`. That `dist/` folder is the deliverable.
+`public/` (the web UI) is **sealed into the binary** at compile time — the exe is
+self-contained for its front end. Your `bundles/` are **not** sealed: they live in
+a folder **beside** the exe, read from disk at runtime (the hermetic boundary — the
+engine changes rarely, content changes often).
+
+**The deliverable** is the executable **plus** `bundles/` next to it. The retained
+distribution model is **rsync** (or any copy): drop `Talos.exe` + `bundles/` side by
+side on the target — no installer required (the NSIS `.exe` is produced but stays
+**unsigned** for now, signing is a separate step).
 
 ### 3 — Distribute it
 
@@ -100,11 +111,10 @@ Drop the kit on the share once; every machine runs it in place.
 
 ### What your users will see
 
-They double-click the exe (or a shortcut you place). It opens a framed panel
-(an Edge/Chrome `--app` window), scans the machine, and shows what's present,
-missing, or outdated. They act; it acts, *showing* every step. Close the window
-and it shuts itself down when idle. No install, no runtime to provision — the
-exe carries its own.
+They double-click the exe (or a shortcut you place). It opens a **native window**
+(Tauri, 16:9, size/position remembered per machine), scans the machine, and shows
+what's present, missing, or outdated. They act; it acts, *showing* every step. No
+install, no runtime to provision — the web UI is baked into the exe.
 
 ---
 

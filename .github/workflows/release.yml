@@ -1,10 +1,18 @@
-# Release — on a tag `v*`, each OS runner natively compiles ITS target, smoke-tests
-# the binary (boots → HTTP 200, catches the invisible dlopen crash), and attaches
-# it to a GitHub Release. Pre-release is automatic when the tag contains a `-`
-# (v0.1.0-beta.1 → pre-release; v0.1.0 → latest). Targets: mac-arm64 + win-x64 only.
+# Release — on a tag `v*`, each OS runner NATIVELY builds its target with
+# `cargo tauri build` and attaches the bundle(s) to a GitHub Release. Native per
+# OS because Tauri does NOT cross-compile (WebView2 + MSVC on Windows, WebKit on
+# macOS). Pre-release is automatic when the tag contains a `-` (v0.1.0-beta.1 →
+# pre-release; v0.1.0 → latest).
 #
-# The CI calls the SAME `deno task build:*` we run locally — no drift between the
-# binary you test on your machine and the one users download.
+# NO runtime smoke-test: the binary is now a NATIVE GUI app (Tauri window), not a
+# headless server — it won't boot reliably on a display-less runner. The real
+# runtime check is a manual smoke-test on a real Windows machine (see the porting
+# garde-fous in docs/superpowers/TASK-tauri-migration.md). CI proves it COMPILES
+# and produces installable bundles; it does not prove it runs.
+#
+# The runner produces UNSIGNED bundles (signing/notarisation is a separate step,
+# deliberately deferred). windows-latest is x64 native → MSVC + WebView2 already
+# present, which sidesteps the Parallels cross-compile pitfalls.
 
 name: release
 
@@ -22,59 +30,38 @@ jobs:
       fail-fast: false # one OS failing shouldn't cancel the other's artifact
       matrix:
         include:
-          - os: macos-14 # Apple Silicon runner → matches aarch64-apple-darwin
-            task: build:mac
-            artifact: dist/Talos
-          - os: windows-latest # x64 runner → matches x86_64-pc-windows-msvc
-            task: build:win
-            artifact: dist/Talos.exe
+          - os: macos-14 # Apple Silicon runner → aarch64-apple-darwin
+            # .dmg (+ the .app inside the bundle dir)
+            artifacts: |
+              target/release/bundle/dmg/*.dmg
+          - os: windows-latest # x64 runner → x86_64-pc-windows-msvc
+            # bare exe + NSIS installer
+            artifacts: |
+              target/release/Talos.exe
+              target/release/bundle/nsis/*-setup.exe
 
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.x
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Build (${{ matrix.task }})
-        run: deno task ${{ matrix.task }}
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
 
-      # Smoke-test on the runner's NATIVE OS: this is the only runtime check the
-      # CI can do (a Linux runner can't launch the .exe). It catches the
-      # `symbol not found` / dlopen failure that is invisible in --no-terminal mode.
-      - name: Smoke-test (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          ./${{ matrix.artifact }} &
-          PID=$!
-          sleep 5
-          code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:7682/ || echo "000")
-          kill $PID 2>/dev/null || true
-          echo "HTTP $code"
-          test "$code" = "200"
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
 
-      - name: Smoke-test (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $p = Start-Process -FilePath "${{ matrix.artifact }}" -PassThru
-          Start-Sleep -Seconds 5
-          try {
-            $r = Invoke-WebRequest -Uri "http://localhost:7682/" -UseBasicParsing -TimeoutSec 10
-            $code = $r.StatusCode
-          } catch {
-            $code = 0
-          }
-          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-          Write-Host "HTTP $code"
-          if ($code -ne 200) { exit 1 }
+      # Native GUI build → produces the OS bundle(s). No cross-compile.
+      - name: Build (cargo tauri build)
+        run: cargo tauri build
 
-      - name: Upload artifact to the Release
+      - name: Upload bundle(s) to the Release
         uses: softprops/action-gh-release@v2
         with:
           # A tag containing "-" (v0.1.0-beta.1) is flagged pre-release.
           prerelease: ${{ contains(github.ref_name, '-') }}
-          files: ${{ matrix.artifact }}
-          fail_on_unmatched_files: true
+          files: ${{ matrix.artifacts }}
+          fail_on_unmatched_files: false # bundle naming varies by version; don't hard-fail
