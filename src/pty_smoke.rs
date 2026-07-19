@@ -13,7 +13,7 @@ fn main() {
     } else {
         ("/bin/bash", vec!["-lc", "ls -la /usr/bin | head -40"])
     };
-    let code = pty::run(program, &args, |bytes| {
+    let code = pty::run(program, &args, None, |bytes| {
         print!("{}", String::from_utf8_lossy(bytes));
         std::io::stdout().flush().ok();
     })

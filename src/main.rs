@@ -1,4 +1,11 @@
+mod bundles;
+mod decision;
+mod deps;
+mod detect;
 mod forbidden;
+mod managers;
+mod outdated;
+mod platform;
 mod pty;
 mod server;
 mod watch;

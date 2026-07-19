@@ -1005,6 +1005,28 @@ document.getElementById("consent-toggle").onchange = (e) =>
 document.getElementById("clear-log").onclick = () =>
   ws.send(JSON.stringify({ type: "clear-log" }));
 
+// --- sudo password dialog (masked; local WS only, never stored) ---
+const sudoEl = document.getElementById("sudo");
+const sudoInput = document.getElementById("sudo-input");
+function showSudo() {
+  sudoInput.value = "";
+  sudoEl.classList.add("show");
+  sudoInput.focus();
+}
+function hideSudo() {
+  sudoEl.classList.remove("show");
+  sudoInput.value = ""; // never keep the secret in the DOM after use
+}
+document.getElementById("sudo-form").onsubmit = (e) => {
+  e.preventDefault();
+  ws.send(JSON.stringify({ type: "sudo-pw", pw: sudoInput.value }));
+  hideSudo();
+};
+document.getElementById("sudo-cancel").onclick = () => {
+  ws.send(JSON.stringify({ type: "sudo-cancel" }));
+  hideSudo();
+};
+
 // Stamp the UI with the exact source snapshot this exe was built from — in the
 // window title (always visible) and the Log & settings footer. This is the
 // answer to "which binary is actually running?" that cost us a long detour.
@@ -1150,6 +1172,11 @@ ws.onmessage = (ev) => {
       // and the transient modal. The server already opened the blocked page beside
       // the panel; url may be null (nothing extractable → link-less message).
       showForbidden(msg.i, msg.url || null);
+      break;
+    case "sudo-prompt":
+      // A step hit a sudo "Password:" prompt (e.g. removing a GUI app). Show the
+      // masked field. The server asks ONCE per Apply (model C), then reuses it.
+      showSudo();
       break;
     case "detail": // version delta for an upgrade, e.g. "2.54→2.55"
       if (rows[msg.i] && rows[msg.i].delta) {

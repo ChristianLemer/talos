@@ -361,9 +361,13 @@
       .hist-row .h-ver { color:var(--dim); font-family:"JetBrains Mono",monospace; font-size:12px; }
       .hist-row .h-act.ok { color:#9ece6a; } .hist-row .h-act.fail { color:#f7768e; }
       /* Consent + reset-confirm + forbidden dialogs reuse the overlay box */
-      #consent, #reset-confirm, #forbidden { position:fixed; inset:0; z-index:60; display:none; align-items:center; justify-content:center;
+      #consent, #reset-confirm, #forbidden, #sudo { position:fixed; inset:0; z-index:60; display:none; align-items:center; justify-content:center;
                  background:rgba(16,17,24,.94); backdrop-filter:blur(3px); padding:40px; }
-      #consent.show, #reset-confirm.show, #forbidden.show { display:flex; }
+      #consent.show, #reset-confirm.show, #forbidden.show, #sudo.show { display:flex; }
+      .sudo-input { width:100%; box-sizing:border-box; margin:14px 0 4px; padding:10px 12px;
+                 font-size:15px; border-radius:8px; border:1px solid #414868;
+                 background:#1a1b26; color:#c0caf5; }
+      .sudo-input:focus { outline:none; border-color:#7aa2f7; }
       /* Firewall-403 modal — a VERTICAL GUIDED STEPPER. It's a real 3-phase
          sequence (open → approve → retry), so numbered steps are honest here.
          The two actionable phases ARE buttons (the whole card clicks); the amber
@@ -545,6 +549,24 @@
         <button id="consent-yes" class="globalbtn">Yes, share for support</button>
         <button id="consent-no" class="dlgbtn-sec">Keep it private</button>
       </div>
+    </div></div>
+
+    <!-- Sudo password modal — asked ONCE per Apply, only when a step needs admin
+         rights (e.g. removing a GUI app). Masked field; the value is sent over the
+         local WebSocket and NEVER stored on disk. Model C: reused for the rest of
+         the Apply, then cleared. -->
+    <div id="sudo"><div class="overlay-card consent-card">
+      <h2>🔐 Administrator password needed</h2>
+      <p>This step needs your Mac password to change a system app (like removing an
+        application). It is used <b>only for this action</b> and never saved.</p>
+      <form id="sudo-form" autocomplete="off">
+        <input type="password" id="sudo-input" class="sudo-input" autocomplete="off"
+               placeholder="Your Mac password" aria-label="Administrator password" />
+        <div class="consent-actions">
+          <button type="submit" id="sudo-ok" class="globalbtn">Continue</button>
+          <button type="button" id="sudo-cancel" class="dlgbtn-sec">Cancel</button>
+        </div>
+      </form>
     </div></div>
 
     <header>
