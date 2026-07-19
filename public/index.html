@@ -344,6 +344,10 @@
          Flat list → rows are direct <details> children of #steps. The old
          .bundle-body / .bundle.focus-empty selectors are dead post-flatten. */
       body.applying #steps > details:not(.focus-show) { display:none; }
+      /* Two tabs over ONE list (spec Consolidation §5): the Bundles tab shows only
+         WANTED rows (.want = an active bundle or a manual pick selects it); the
+         Catalog tab shows everything. During an Apply, focus mode above wins. */
+      body.tab-bundles:not(.applying) #steps > details:not(.want) { display:none; }
       /* Settings rows + history */
       #settings { padding:14px 14px 4px; }
       .set-row { display:flex; align-items:center; gap:14px; padding:12px 0; border-bottom:1px solid var(--line); }
@@ -591,11 +595,12 @@
       </div>
     </header>
     <nav>
-      <button class="tab active" data-view="setup">Setup</button>
+      <button class="tab active" data-view="bundles">Bundles</button>
+      <button class="tab" data-view="catalog">Catalog</button>
       <button class="tab" data-view="log">Log &amp; settings</button>
     </nav>
 
-    <div id="view-setup" class="view active">
+    <div id="view-bundles" class="view active">
       <!-- Apply lives WITH the list it acts on (not in the global header): the
            refresh overlay + focus mode both live in #steps, so co-locating the
            trigger with its feedback closes the "clicked from another tab, no

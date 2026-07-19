@@ -246,7 +246,11 @@ function paintPkg(i) {
       _postureDefault(posture)
     })`;
   // A row whose desired state is absent reads dimmer (not wanted).
-  r.details.classList.toggle("row-out", M.desiredOf(model, i) === "absent");
+  const wanted = M.desiredOf(model, i) === "present";
+  r.details.classList.toggle("row-out", !wanted);
+  // `.want` drives the Bundles-tab scope (spec §5): that tab shows only wanted
+  // rows; the Catalog tab shows all. Marked here so it tracks every toggle/pull.
+  r.details.classList.toggle("want", wanted);
   // Keep self-managed labelling live when the user toggles a config-atom off:
   // paintPkg/refreshLiveness (the toggle path) never touch statusLabel — only
   // setStatus does, on scan/step messages — so without this the label would
@@ -993,21 +997,26 @@ document.getElementById("refresh-all").onclick = () => {
   ws.send(JSON.stringify({ type: "rescan" }));
 };
 
-// --- tabs ---
+// --- tabs (Bundles / Catalog / Log) ---
+// Bundles and Catalog share ONE DOM (#view-bundles holds #steps); they differ
+// only by body scope class (tab-bundles filters to .want rows, tab-catalog shows
+// all — see the CSS). Only the Log tab swaps to a different view container.
+function setTab(v) {
+  document.querySelectorAll(".tab").forEach((t) =>
+    t.classList.toggle("active", t.dataset.view === v)
+  );
+  const isLog = v === "log";
+  document.getElementById("view-bundles").classList.toggle("active", !isLog);
+  document.getElementById("view-log").classList.toggle("active", isLog);
+  document.body.classList.toggle("tab-bundles", v === "bundles");
+  document.body.classList.toggle("tab-catalog", v === "catalog");
+  if (isLog) ws.send(JSON.stringify({ type: "get-log" }));
+}
 document.querySelectorAll(".tab").forEach((tab) => {
-  tab.onclick = () => {
-    document.querySelectorAll(".tab").forEach((t) =>
-      t.classList.toggle("active", t === tab)
-    );
-    const v = tab.dataset.view;
-    document.getElementById("view-setup").classList.toggle(
-      "active",
-      v === "setup",
-    );
-    document.getElementById("view-log").classList.toggle("active", v === "log");
-    if (v === "log") ws.send(JSON.stringify({ type: "get-log" }));
-  };
+  tab.onclick = () => setTab(tab.dataset.view);
 });
+// Default scope: the Bundles tab (only wanted rows) is the active tab at load.
+document.body.classList.add("tab-bundles");
 
 // --- advanced mode: a pure UI preference (per-package toggles, postures, per-
 // bundle Apply). Default OFF → simple: one on/off switch per bundle. Stored in
