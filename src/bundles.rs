@@ -32,45 +32,45 @@ impl Posture {
     }
 }
 
-#[derive(Debug, Deserialize, Default)]
-struct RawPkg {
-    name: String,
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct RawPkg {
+    pub name: String,
     #[serde(default)]
-    description: Option<String>,
+    pub description: Option<String>,
     #[serde(default)]
-    winget: Option<String>,
+    pub winget: Option<String>,
     #[serde(default)]
-    brew: Option<String>,
+    pub brew: Option<String>,
     #[serde(default)]
-    cargo: Option<String>,
+    pub cargo: Option<String>,
     #[serde(default)]
-    npm: Option<String>,
+    pub npm: Option<String>,
     #[serde(default, rename = "npmFlags")]
-    npm_flags: Option<String>,
+    pub npm_flags: Option<String>,
     #[serde(default)]
-    run: Option<String>,
+    pub run: Option<String>,
     #[serde(default, rename = "runUninstall")]
-    run_uninstall: Option<String>,
+    pub run_uninstall: Option<String>,
     #[serde(default, rename = "claude-plugin")]
-    claude_plugin: Option<String>,
+    pub claude_plugin: Option<String>,
     #[serde(default)]
-    marketplace: Option<String>,
+    pub marketplace: Option<String>,
     #[serde(default)]
-    skill: Option<String>,
+    pub skill: Option<String>,
     #[serde(default, rename = "skillName")]
-    skill_name: Option<String>,
+    pub skill_name: Option<String>,
     #[serde(default)]
-    detect: Option<String>,
+    pub detect: Option<String>,
     #[serde(default)]
-    check: Option<String>,
+    pub check: Option<String>,
     #[serde(default, rename = "version-regex")]
-    version_regex: Option<String>,
+    pub version_regex: Option<String>,
     #[serde(default)]
-    version: Option<String>,
+    pub version: Option<String>,
     #[serde(default)]
-    requires: Vec<String>,
+    pub requires: Vec<String>,
     #[serde(default)]
-    category: Vec<String>,
+    pub category: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
