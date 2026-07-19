@@ -79,6 +79,18 @@ pub fn parse_profiles(raw: &str) -> Profiles {
     }
 }
 
+/// Read & parse `<dir>/profiles.yaml`. Absent/unreadable → empty panel with the
+/// normal `columns` default (2), same as a valid file that lists no profiles —
+/// the frontend hides the panel on empty `items` either way. (An absent file is
+/// a normal state, not corruption, so it takes the healthy default, not the
+/// bare `Profiles::default()` columns of 0.)
+pub fn load_profiles(dir: &str) -> Profiles {
+    match std::fs::read_to_string(format!("{dir}/profiles.yaml")) {
+        Ok(raw) => parse_profiles(&raw),
+        Err(_) => parse_profiles(""),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,5 +143,28 @@ profiles:
         assert!(parse_profiles("not: [valid").items.is_empty());
         assert_eq!(parse_profiles("not: [valid").columns, 0);
         assert!(parse_profiles("").items.is_empty());
+    }
+
+    #[test]
+    fn load_reads_profiles_yaml_from_dir() {
+        let dir = std::env::temp_dir().join("talos-test-profiles-load");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("profiles.yaml"),
+            "columns: 2\nprofiles:\n  - profile: Dev\n    packages: [Git, Node.js]\n",
+        )
+        .unwrap();
+        let p = load_profiles(dir.to_str().unwrap());
+        assert_eq!(p.items.len(), 1);
+        assert_eq!(p.items[0].name, "Dev");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_absent_file_yields_empty() {
+        let p = load_profiles("/nonexistent/talos/dir");
+        assert!(p.items.is_empty());
+        assert_eq!(p.columns, 2);
     }
 }

@@ -19,12 +19,14 @@ use crate::consent::{
 use crate::detect::detect_present_detailed;
 use crate::outdated::{outdated_for, scan_outdated};
 use crate::platform::{current_os, local_data_dir, Os};
+use crate::profiles::{load_profiles, Profiles};
 use crate::selection::{read_selection, write_selection, Selection};
 
 /// The server's shared state: the Plan scanned ONCE at startup (pure data,
 /// no pty/network), plus the current OS. Cloned (Arc) into each connection.
 struct AppState {
     plan: Plan,
+    profiles: Profiles,
     os: Os,
     /// Disk root of the front assets, IN DEV ONLY (`TALOS_PUBLIC` set):
     /// lets you edit `app.js` without recompiling. `None` in release → assets SEALED
@@ -86,6 +88,10 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         plan.bundles.len(),
         plan.steps.len()
     );
+    // The top-panel "needs" (profiles.yaml lives INSIDE the same bundles dir; the
+    // bundle scan skips it because it only reads subfolders with a bundle.yaml).
+    let profiles = load_profiles(bundles_dir.to_str().unwrap_or("bundles"));
+    println!("[plan] {} profiles", profiles.items.len());
     // Per-machine local data-dir + consent store. exe_dir = the SAME folder
     // next to the exe (the one that contains bundles/) — that's where the consented
     // shared copy lands. host/user name the shared log; env best-effort.
@@ -103,6 +109,7 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
     };
     let state = Arc::new(AppState {
         plan,
+        profiles,
         os,
         disk_root,
         data_dir,
