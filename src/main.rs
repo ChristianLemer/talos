@@ -1,3 +1,4 @@
+mod agent_content;
 mod assets;
 mod build_info;
 mod bundles;

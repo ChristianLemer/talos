@@ -87,6 +87,73 @@ pub fn version_from(step: &Step, output: &str) -> String {
         .unwrap_or_default()
 }
 
+/// HOME de l'utilisateur (Mac/Linux $HOME, Windows %USERPROFILE%). Le .app/.exe tourne
+/// dans le HOME de l'user, donc le contenu agent (~/.claude, ~/.agents) y est relatif.
+fn user_home() -> std::path::PathBuf {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default()
+}
+
+/// Détecte un plugin Claude (route claude-plugin) ou une skill (route skill) par
+/// LECTURE DISQUE native. `detect:` porte le nom à chercher. Construit un diag qui
+/// montre la preuve (fichier/dossier consulté + verdict), comme les sondes de commande.
+fn detect_agent_content(step: &Step) -> Presence {
+    use crate::agent_content::{
+        list_skills, parse_installed_plugins, plugin_version, plugins_json_path, skill_dirs,
+        skill_path,
+    };
+    let name = step.detect.as_deref().unwrap_or("").trim();
+    let home = user_home();
+
+    if step.route.as_deref() == Some("claude-plugin") {
+        let path = plugins_json_path(&home);
+        let json = std::fs::read_to_string(&path).unwrap_or_default();
+        let plugins = parse_installed_plugins(&json);
+        let found = plugin_version(name, &plugins);
+        let present = found.is_some();
+        let version = found.clone().unwrap_or_default();
+        // Preuve : le fichier lu + la ligne trouvée (ou "not found").
+        let evidence = match &found {
+            Some(v) => format!("{name}  version {v}"),
+            None => format!("{name}: not found"),
+        };
+        return Presence {
+            present: Some(present),
+            version: Some(version),
+            diag: Some(ProbeResult {
+                ok: present,
+                code: if present { 0 } else { 1 },
+                output: evidence,
+                cmdline: format!("read {}", path.display()),
+            }),
+            ..Default::default()
+        };
+    }
+
+    // route "skill" : présence = un sous-dossier du même nom sous ~/.claude/skills
+    // ou ~/.agents/skills.
+    let dirs = skill_dirs(&home);
+    let skills = list_skills(&dirs);
+    let found = skill_path(name, &skills);
+    let present = found.is_some();
+    let evidence = match &found {
+        Some(p) => format!("{}", p.display()),
+        None => format!("{name}: not found in ~/.claude/skills or ~/.agents/skills"),
+    };
+    Presence {
+        present: Some(present),
+        diag: Some(ProbeResult {
+            ok: present,
+            code: if present { 0 } else { 1 },
+            output: evidence,
+            cmdline: "scan skill dirs".into(),
+        }),
+        ..Default::default()
+    }
+}
+
 fn presence_probe(detect_cmd: Option<&str>, os: Os) -> Option<Probe> {
     let cmd = detect_cmd.unwrap_or("").trim();
     if cmd.is_empty() {
@@ -161,12 +228,11 @@ pub fn detect_present_detailed(step: &Step, os: Os) -> Presence {
             ..Default::default()
         };
     }
-    // 3. content-detected (claude-plugin/skill) → indéterminé en Phase 1 (parse reporté).
+    // 3. content-detected (claude-plugin/skill) → lecture disque NATIVE (pas de
+    //    shell-out : décision archi "tout en JSON parsé nativement"). Le `detect:`
+    //    du step porte le nom (id plugin "chiron@tekton"/"chiron", ou nom de skill).
     if matches!(step.route.as_deref(), Some("claude-plugin") | Some("skill")) {
-        return Presence {
-            present: None,
-            ..Default::default()
-        };
+        return detect_agent_content(step);
     }
     // 4. exit-code (system manager sans detect binaire).
     if let Some(probe) = system_probe(step, os) {
