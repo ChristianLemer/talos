@@ -257,9 +257,12 @@ function paintPkg(i) {
   // A row whose desired state is absent reads dimmer (not wanted).
   const wanted = M.desiredOf(model, i) === "present";
   r.details.classList.toggle("row-out", !wanted);
-  // `.want` drives the Bundles-tab scope (spec §5): that tab shows only wanted
-  // rows; the Catalog tab shows all. Marked here so it tracks every toggle/pull.
+  // `.want` = wanted (drives the Bundles-tab scope). `.bundle-member` = pulled by
+  // an active bundle, EVEN IF a manual "out" overrides it — so an un-checked
+  // member stays visible (greyed) in the Bundles tab and the bundle reads
+  // "incomplete" (hollow) instead of the row silently vanishing. Spec Cons §3.
   r.details.classList.toggle("want", wanted);
+  r.details.classList.toggle("bundle-member", M.inActiveProfile(model, i));
   // Keep self-managed labelling live when the user toggles a config-atom off:
   // paintPkg/refreshLiveness (the toggle path) never touch statusLabel — only
   // setStatus does, on scan/step messages — so without this the label would

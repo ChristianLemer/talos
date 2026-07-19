@@ -348,10 +348,15 @@
          Flat list → rows are direct <details> children of #steps. The old
          .bundle-body / .bundle.focus-empty selectors are dead post-flatten. */
       body.applying #steps > details:not(.focus-show) { display:none; }
-      /* Two tabs over ONE list (spec Consolidation §5): the Bundles tab shows only
-         WANTED rows (.want = an active bundle or a manual pick selects it); the
-         Catalog tab shows everything. During an Apply, focus mode above wins. */
-      body.tab-bundles:not(.applying) #steps > details:not(.want) { display:none; }
+      /* Two tabs over ONE list (spec Consolidation §5): the Bundles tab shows what
+         the active bundles select — WANTED rows, PLUS any member of an active
+         bundle you un-checked (kept visible so you SEE the bundle become
+         incomplete). Everything else is hidden here (it lives in Catalog). During
+         an Apply, focus mode above wins. */
+      body.tab-bundles:not(.applying) #steps > details:not(.want):not(.bundle-member) { display:none; }
+      /* A member you turned out: visible but clearly deactivated (dim + struck
+         name), so "the bundle is now incomplete" reads at a glance. */
+      body.tab-bundles #steps > details.bundle-member.row-out .name { opacity:.5; text-decoration:line-through; }
       /* Settings rows + history */
       #settings { padding:14px 14px 4px; }
       .set-row { display:flex; align-items:center; gap:14px; padding:12px 0; border-bottom:1px solid var(--line); }
