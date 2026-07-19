@@ -12,9 +12,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::bundles::{load_bundles, Plan};
+use crate::consent::{
+    append_history, clear_history, read_consent, read_history, write_consent, ConsentStore,
+    HistEntry,
+};
 use crate::detect::detect_present_detailed;
 use crate::outdated::{outdated_for, scan_outdated};
-use crate::platform::{current_os, Os};
+use crate::platform::{current_os, local_data_dir, Os};
+use crate::selection::{read_selection, write_selection, Selection};
 
 /// L'état partagé du serveur : le Plan scanné UNE fois au démarrage (données pures,
 /// pas de pty/réseau), plus l'OS courant. Cloné (Arc) dans chaque connexion.
@@ -25,6 +30,12 @@ struct AppState {
     /// permet d'éditer `app.js` sans recompiler. `None` en release → assets SCELLÉS
     /// dans le binaire (crate::assets), indépendants du cwd (raccourci #3 corrigé).
     disk_root: Option<PathBuf>,
+    /// Data-dir LOCAL par machine — où selection/consent/history sont persistés
+    /// (JAMAIS le dossier exe partagé). L'INTENTION se mémorise, la PRÉSENCE se
+    /// re-détecte : "detect, don't remember" ne gouverne PAS l'intention.
+    data_dir: PathBuf,
+    /// Le store consentement + journal d'install (chemins/identité injectés).
+    consent: ConsentStore,
     /// Cache du mot de passe sudo — modèle C : demandé la 1re fois qu'un step en a
     /// besoin, réutilisé pour les steps suivants du même Apply, EFFACÉ à la fin.
     /// RAM SEULEMENT, jamais disque/log/journal. tokio Mutex (accès async).
@@ -48,10 +59,31 @@ pub async fn serve(disk_root: Option<PathBuf>) {
         plan.bundles.len(),
         plan.steps.len()
     );
+    // Data-dir local par machine + store consentement. exe_dir = le dossier où siège
+    // l'exe (parent de bundles/) — c'est là qu'atterrit la copie partagée consentie.
+    // host/user nomment le log partagé ; lecture env best-effort avec fallbacks (la
+    // copie partagée est un bonus, jamais load-bearing).
+    let data_dir = local_data_dir(os);
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."));
+    let consent = ConsentStore {
+        local_dir: data_dir.clone(),
+        exe_dir,
+        host: std::env::var("HOSTNAME")
+            .or_else(|_| std::env::var("COMPUTERNAME"))
+            .unwrap_or_else(|_| "host".into()),
+        user: std::env::var("USER")
+            .or_else(|_| std::env::var("USERNAME"))
+            .unwrap_or_else(|_| "user".into()),
+    };
     let state = Arc::new(AppState {
         plan,
         os,
         disk_root,
+        data_dir,
+        consent,
         sudo_pw: tokio::sync::Mutex::new(None),
     });
 
@@ -159,14 +191,17 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
             })
         })
         .collect();
+    // Consentement RÉEL (lu du store local) : non décidé au 1er boot → le front
+    // ouvre le dialogue de partage. Selection RÉELLE : les bascules persistées que
+    // le front restaure (jaune). L'intention se mémorise, la présence se re-détecte.
     let plan = json!({
         "type": "plan",
         "bundles": bundles_json,
         "steps": steps_json,
-        "selection": {},
+        "selection": read_selection(&state.data_dir),
         "profiles": [],
         "profileColumns": 2,
-        "consent": { "decided": true },
+        "consent": read_consent(&state.consent),
         "build": { "sha": "tauri", "change": "phase1", "builtAt": "dev" }
     });
     let _ = socket.send(Message::Text(plan.to_string())).await;
@@ -240,9 +275,48 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     row_action(&mut socket, &state, i, action).await;
                 }
             }
+            // set-selection : persiste l'intention (bascules). Le client l'a déjà
+            // appliquée optimiste → pas de réponse. Best-effort. Reset envoie un
+            // pkgs vide ici → stocké vide → prochain démarrage recharge les defaults.
+            "set-selection" => {
+                let sel: Selection = parsed
+                    .get("selection")
+                    .cloned()
+                    .and_then(|s| serde_json::from_value(s).ok())
+                    .unwrap_or_default();
+                write_selection(&state.data_dir, &sel);
+            }
+            // set-consent : enregistre le choix de partage (marque consent décidé).
+            // Pas de réponse — l'UI a déjà fermé son dialogue / basculé son toggle.
+            "set-consent" => {
+                let share = parsed.get("share").and_then(|v| v.as_bool()).unwrap_or(false);
+                write_consent(&state.consent, share);
+                println!("[consent] set: share={share}");
+            }
+            // get-log : l'onglet Log demande le consentement + l'historique local.
+            "get-log" => {
+                let _ = socket.send(Message::Text(log_msg(&state))).await;
+            }
+            // clear-log : vide le journal LOCAL seul (la copie d'équipe partagée est
+            // laissée intacte), puis renvoie le log vidé pour rafraîchir l'onglet.
+            "clear-log" => {
+                clear_history(&state.consent);
+                println!("[consent] local history cleared");
+                let _ = socket.send(Message::Text(log_msg(&state))).await;
+            }
             _ => {}
         }
     }
+}
+
+/// Message `log` pour l'onglet Log : consentement courant + historique local.
+fn log_msg(state: &AppState) -> String {
+    json!({
+        "type": "log",
+        "consent": read_consent(&state.consent),
+        "history": read_history(&state.consent),
+    })
+    .to_string()
 }
 
 /// Extrait un tableau d'indices d'un champ JSON ("on"/"off").
@@ -621,5 +695,29 @@ async fn do_step(
             .send(Message::Text(json!({ "type": "forbidden", "i": i, "url": url }).to_string()))
             .await;
     }
+
+    // Journaliser l'issue (local toujours ; copie partagée ssi consenti). Version
+    // best-effort : re-détectée après un install/upgrade réussi (comme captureVersion),
+    // vide sinon. Un échec de journal ne doit JAMAIS couler un step.
+    let version = if ok && action != Action::Uninstall {
+        let step = step.clone();
+        tokio::task::spawn_blocking(move || detect_present_detailed(&step, os).version)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    append_history(
+        &state.consent,
+        &HistEntry {
+            at: chrono::Utc::now().to_rfc3339(),
+            package: step.name.clone(),
+            version,
+            action: action.as_str().to_string(),
+            ok,
+        },
+    );
     ok
 }

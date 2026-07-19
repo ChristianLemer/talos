@@ -1,6 +1,8 @@
 // Port de platform.ts — Os + le wrapping shell (shell_probe / pty_shell).
 // La source unique de "quel OS et comment agir dessus".
 
+use std::path::PathBuf;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Os {
     Windows,
@@ -21,6 +23,35 @@ pub fn current_os() -> Os {
 pub struct Probe {
     pub cmd: String,
     pub args: Vec<String>,
+}
+
+/// Data-dir LOCAL par machine — où atterrissent selection/consent/history. JAMAIS
+/// le dossier exe partagé (OneDrive) : l'exe est lancé par N machines, donc tout
+/// ce qui est écrit doit vivre sur le disque propre de chaque machine.
+/// Windows → %LOCALAPPDATA%\Talos ; Mac → ~/Library/Application Support/Talos ;
+/// Linux → $XDG_DATA_HOME/Talos (ou ~/.local/share/Talos). Port de localDataDir().
+pub fn local_data_dir(os: Os) -> PathBuf {
+    match os {
+        Os::Windows => {
+            let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(|| {
+                let up = std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_default();
+                up.join("AppData").join("Local")
+            });
+            base.join("Talos")
+        }
+        Os::Darwin => home_dir()
+            .join("Library")
+            .join("Application Support")
+            .join("Talos"),
+        Os::Linux => std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home_dir().join(".local").join("share"))
+            .join("Talos"),
+    }
+}
+
+fn home_dir() -> PathBuf {
+    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
 }
 
 // PATH refresh Windows : un install écrit le registre mais NE propage PAS le PATH
@@ -100,5 +131,12 @@ mod tests {
         let p = pty_shell(Os::Darwin, "brew install jq");
         assert_eq!(p.cmd, "/bin/bash");
         assert_eq!(p.args, vec!["-lc", "brew install jq"]);
+    }
+
+    #[test]
+    fn data_dir_termine_par_talos_par_os() {
+        assert!(local_data_dir(Os::Darwin).ends_with("Library/Application Support/Talos"));
+        assert!(local_data_dir(Os::Windows).ends_with("Talos"));
+        assert!(local_data_dir(Os::Linux).ends_with("Talos"));
     }
 }

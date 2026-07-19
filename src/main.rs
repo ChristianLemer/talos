@@ -1,5 +1,6 @@
 mod assets;
 mod bundles;
+mod consent;
 mod decision;
 mod deps;
 mod detect;
@@ -8,6 +9,7 @@ mod managers;
 mod outdated;
 mod platform;
 mod pty;
+mod selection;
 mod server;
 mod watch;
 
