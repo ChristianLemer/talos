@@ -217,16 +217,21 @@
         align-items: start;
       }
       .bundle-col { display: flex; flex-direction: column; gap: 10px; }
-      /* The chain reads top-to-bottom with a small step-in per level + a link line,
-         so "Development needs Data needs Documents needs Base" is visible. */
-      .bundle-col.chain .profile-card:not(:first-child) { margin-left: 18px; position: relative; }
+      /* The chain reads top-to-bottom as a STAIRCASE, one step-in per depth level
+         (Base=0 flush, Documents=1, Data=2, Development=3), each with a link line
+         up to its parent — so the dependency order is visible at a glance. */
+      .bundle-col.chain .profile-card { position: relative; }
+      .bundle-col.chain .profile-card:nth-child(2) { margin-left: 20px; }
+      .bundle-col.chain .profile-card:nth-child(3) { margin-left: 40px; }
+      .bundle-col.chain .profile-card:nth-child(4) { margin-left: 60px; }
+      .bundle-col.chain .profile-card:nth-child(5) { margin-left: 80px; }
       .bundle-col.chain .profile-card:not(:first-child)::before {
         content: ""; position: absolute; left: -12px; top: -16px; width: 12px; bottom: 50%;
         border-left: 2px solid var(--line); border-bottom: 2px solid var(--line);
         border-bottom-left-radius: 6px;
       }
       @media (max-width: 640px) { #profiles { grid-template-columns: 1fr; }
-        .bundle-col.chain .profile-card:not(:first-child) { margin-left: 0; }
+        .bundle-col.chain .profile-card { margin-left: 0 !important; }
         .bundle-col.chain .profile-card:not(:first-child)::before { display: none; } }
       .profile-card {
         display: flex; flex-direction: column; gap: 4px;

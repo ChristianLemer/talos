@@ -189,13 +189,30 @@ function renderProfiles(_profiles, _columns = 2) {
   const neededByOthers = new Set();
   for (const p of profiles) for (const n of p.needs ?? []) neededByOthers.add(n);
   const isChain = (p) => (p.needs?.length ?? 0) > 0 || neededByOthers.has(p.name);
+  // Depth in the dependency chain = how many `needs` deep (Base=0, Documents=1,
+  // Data=2, Development=3). Sort the chain column by depth so the staircase reads
+  // top-down in dependency order, not file-load order. Cycle-guarded.
+  const byName = new Map(profiles.map((p) => [p.name, p]));
+  const depthOf = (p, seen = new Set()) => {
+    if (seen.has(p.name)) return 0; // cycle guard
+    seen.add(p.name);
+    const deps = (p.needs ?? []).map((n) => byName.get(n)).filter(Boolean);
+    return deps.length ? 1 + Math.max(...deps.map((d) => depthOf(d, seen))) : 0;
+  };
   const chainCol = document.createElement("div");
   chainCol.className = "bundle-col chain";
   const soloCol = document.createElement("div");
   soloCol.className = "bundle-col standalone";
-  for (const p of profiles) {
+  const chain = profiles.filter(isChain).sort((a, b) => depthOf(a) - depthOf(b));
+  const solo = profiles.filter((p) => !isChain(p));
+  for (const p of chain) {
     const card = makeProfileCard(p);
-    (isChain(p) ? chainCol : soloCol).append(card);
+    chainCol.append(card);
+    profileEls[p.name] = card;
+  }
+  for (const p of solo) {
+    const card = makeProfileCard(p);
+    soloCol.append(card);
     profileEls[p.name] = card;
   }
   bar.append(chainCol, soloCol);
