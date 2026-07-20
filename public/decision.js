@@ -9,17 +9,6 @@
 // side effects. That is what makes decision.test.mjs possible.
 import { compareVersions } from "./version.js";
 
-// The four postures an author may declare (chezmoi convention).
-export const POSTURES = ["mandatory", "opt-out", "opt-in", "forbidden"];
-
-// Resolve the posture that applies to a package: its own if valid, else the
-// bundle's default if valid, else "mandatory" (the safe, non-negotiable default).
-export function resolvePosture(pkgPosture, bundlePosture) {
-  if (POSTURES.includes(pkgPosture)) return pkgPosture;
-  if (POSTURES.includes(bundlePosture)) return bundlePosture;
-  return "mandatory";
-}
-
 // A posture is a two-level thing: WHERE its toggle starts (the author's default,
 // "in" | "out") and WHETHER the user may move it. Guillaume's model: the only
 // user choice is a binary in/out toggle; the posture just decides the default

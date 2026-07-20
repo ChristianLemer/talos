@@ -10,16 +10,8 @@ import {
   isLockedPosture,
   postureDefault,
   profileState,
-  resolvePosture,
   toggleState,
 } from "../public/decision.js";
-
-test("resolvePosture: pkg › bundle › mandatory", () => {
-  assert.equal(resolvePosture("opt-in", "opt-out"), "opt-in"); // pkg wins
-  assert.equal(resolvePosture(undefined, "opt-out"), "opt-out"); // inherits bundle
-  assert.equal(resolvePosture(undefined, undefined), "mandatory"); // default
-  assert.equal(resolvePosture("bogus", "nope"), "mandatory"); // invalid → default
-});
 
 test("postureDefault: which side the toggle starts on", () => {
   assert.equal(postureDefault("mandatory"), "in");
