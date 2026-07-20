@@ -19,10 +19,26 @@ pub struct Selection {
     pub pkgs: BTreeMap<String, String>,
     #[serde(default)]
     pub personal: Vec<String>,
+    /// Names of the bundles the user has activated (the top cards). Restored so
+    /// the cascade + card state survive a restart. `active_bundles` on the wire.
+    #[serde(default, rename = "activeBundles")]
+    pub active_bundles: Vec<String>,
+}
+
+/// Read a JSON field as a Vec<String>, dropping non-string entries. Absent → empty.
+fn string_array(v: &serde_json::Value, key: &str) -> Vec<String> {
+    v.get(key)
+        .and_then(|p| p.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|e| e.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Pure, defensive: anything not well-formed → dropped. `pkgs` keeps only "in"/
-/// "out" values; `personal` keeps only string entries (non-strings dropped).
+/// "out" values; `personal` + `activeBundles` keep only string entries.
 pub fn parse_selection(raw: &str) -> Selection {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
         return Selection::default();
@@ -37,16 +53,11 @@ pub fn parse_selection(raw: &str) -> Selection {
             }
         }
     }
-    let personal = v
-        .get("personal")
-        .and_then(|p| p.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|e| e.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
-    Selection { pkgs, personal }
+    Selection {
+        pkgs,
+        personal: string_array(&v, "personal"),
+        active_bundles: string_array(&v, "activeBundles"),
+    }
 }
 
 /// Path of the intent file, in the local data-dir.
@@ -97,6 +108,13 @@ mod tests {
         assert_eq!(sel.personal, vec!["Git".to_string(), "rg".to_string()]);
         // absent personal → empty (serde default), not an error
         assert!(parse_selection(r#"{"pkgs":{}}"#).personal.is_empty());
+    }
+
+    #[test]
+    fn parses_active_bundles() {
+        let sel = parse_selection(r#"{"pkgs":{},"activeBundles":["Base","Data",7]}"#);
+        assert_eq!(sel.active_bundles, vec!["Base".to_string(), "Data".to_string()]);
+        assert!(parse_selection(r#"{"pkgs":{}}"#).active_bundles.is_empty());
     }
 
     #[test]

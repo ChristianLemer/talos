@@ -22,8 +22,10 @@ import {
   isInPersonal,
   isLocked,
   isProfileActive,
+  applySavedActiveBundles,
   loadPlan,
   PERSONAL_BUNDLE,
+  persistableActiveBundles,
   persistablePkgs,
   profileProgress,
   profilesForPkg,
@@ -62,6 +64,27 @@ test("bundle cascade: activating a bundle activates its needs transitively", () 
   assert.equal(isProfileActive(m, "Data"), false);
   assert.equal(isProfileActive(m, "Documents"), true);
   assert.equal(isProfileActive(m, "Base"), true);
+});
+
+test("active bundles persist + restore (with cascade)", () => {
+  const m = createModel();
+  const plan = [
+    { name: "Base", packages: [], needs: [] },
+    { name: "Documents", packages: [], needs: ["Base"] },
+    { name: "Terminal", packages: [], needs: [] },
+  ];
+  loadPlan(m, [], [], plan);
+  applyProfile(m, "Documents"); // cascades Base
+  applyProfile(m, "Terminal");
+  const saved = persistableActiveBundles(m); // excludes the always-on personal
+  assert.deepEqual(saved.sort(), ["Base", "Documents", "Terminal"]);
+  // Fresh model, restore
+  const m2 = createModel();
+  loadPlan(m2, [], [], plan);
+  applySavedActiveBundles(m2, saved);
+  assert.equal(isProfileActive(m2, "Documents"), true);
+  assert.equal(isProfileActive(m2, "Base"), true);
+  assert.equal(isProfileActive(m2, "Terminal"), true);
 });
 
 test("bundle cascade is cycle-guarded", () => {

@@ -135,12 +135,14 @@ function persistSelection() {
     selection: {
       pkgs: M.persistablePkgs(model),
       personal: M.persistablePersonal(model), // My setup members (spec §14)
+      activeBundles: M.persistableActiveBundles(model), // which cards are on
     },
   }));
 }
 function applySavedSelection(sel) {
   M.applySavedSelection(model, sel);
   M.applySavedPersonal(model, sel?.personal); // restore My setup members (spec §14)
+  M.applySavedActiveBundles(model, sel?.activeBundles); // restore active cards + cascade
   repaintAll();
 }
 // Repaint EVERYTHING — used after a change that can move many rows at once (a

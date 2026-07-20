@@ -498,3 +498,13 @@ export function applySavedPersonal(model, list) {
   const p = model.profiles.get(PERSONAL_BUNDLE);
   if (p) p.packages = [...list];
 }
+// Active bundles — which top cards the user activated (excludes the always-on
+// personal bundle, re-added by loadPlan). Restored so the cascade + card state
+// survive a restart. Only names that still exist as profiles are re-activated.
+export function persistableActiveBundles(model) {
+  return [...model.activeProfiles].filter((n) => n !== PERSONAL_BUNDLE);
+}
+export function applySavedActiveBundles(model, list) {
+  if (!Array.isArray(list)) return;
+  for (const name of list) if (model.profiles.has(name)) applyProfile(model, name);
+}
