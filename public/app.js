@@ -155,37 +155,50 @@ function repaintAll() {
 
 // --- profiles: a bar of one-click additive selections -----------------------
 const profileEls = {}; // name → card element
-function renderProfiles(_profiles, columns = 2) {
+function makeProfileCard(p) {
+  const card = document.createElement("button");
+  card.className = "profile-card";
+  const hl = (p.highlights && p.highlights.length)
+    ? p.highlights.join(" · ")
+    : (p.packages ?? []).slice(0, 3).join(" · ");
+  card.innerHTML =
+    `<span class="pc-head"><span class="toggle pc-switch"><span class="knob"></span></span>` +
+    `<span class="pc-emoji">${p.emoji || "🎯"}</span>` +
+    `<span class="pc-title">${p.name}</span>` +
+    `<span class="pc-count"></span></span>` +
+    `<span class="pc-usage">${p.usage || p.description || ""}</span>` +
+    `<span class="pc-highlights">${hl}</span>`;
+  card.onclick = () => applyProfileClick(p.name);
+  return card;
+}
+function renderProfiles(_profiles, _columns = 2) {
   const bar = document.getElementById("profiles");
   bar.innerHTML = "";
   for (const k of Object.keys(profileEls)) delete profileEls[k];
-  // Render from the MODEL's profiles, not the raw server list: the model also
-  // holds the always-on personal bundle ("My setup"), seeded by loadPlan, which
-  // the server never sends. So the personal card is present from the start.
+  // Render from the MODEL (it holds the always-on "My setup" the server never sends).
   const profiles = [...model.profiles.values()];
   if (!profiles.length) {
     bar.hidden = true;
     return;
   }
   bar.hidden = false;
-  bar.style.setProperty("--cols", String(columns));
+  // TWO COLUMNS (spec §24): the dependency CHAIN on the left, STANDALONE bundles
+  // (incl. My setup) on the right. A bundle is "chain" if it has `needs` OR is
+  // needed by another; the rest are standalone. Chain kept in declared order so
+  // Base→Documents→Data→Development reads top-to-bottom.
+  const neededByOthers = new Set();
+  for (const p of profiles) for (const n of p.needs ?? []) neededByOthers.add(n);
+  const isChain = (p) => (p.needs?.length ?? 0) > 0 || neededByOthers.has(p.name);
+  const chainCol = document.createElement("div");
+  chainCol.className = "bundle-col chain";
+  const soloCol = document.createElement("div");
+  soloCol.className = "bundle-col standalone";
   for (const p of profiles) {
-    const card = document.createElement("button");
-    card.className = "profile-card";
-    const hl = (p.highlights && p.highlights.length)
-      ? p.highlights.join(" · ")
-      : (p.packages ?? []).slice(0, 3).join(" · ");
-    card.innerHTML =
-      `<span class="pc-head"><span class="toggle pc-switch"><span class="knob"></span></span>` +
-      `<span class="pc-emoji">${p.emoji || "🎯"}</span>` +
-      `<span class="pc-title">${p.name}</span>` +
-      `<span class="pc-count"></span></span>` +
-      `<span class="pc-usage">${p.usage || p.description || ""}</span>` +
-      `<span class="pc-highlights">${hl}</span>`;
-    card.onclick = () => applyProfileClick(p.name);
-    bar.append(card);
+    const card = makeProfileCard(p);
+    (isChain(p) ? chainCol : soloCol).append(card);
     profileEls[p.name] = card;
   }
+  bar.append(chainCol, soloCol);
   paintProfiles();
 }
 // Paint each card: state class (off/full/hollow = INTENT) + present-count

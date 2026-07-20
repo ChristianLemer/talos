@@ -206,16 +206,28 @@
                   transition:color .15s, border-color .15s; }
       .resetbtn:hover { color:#e0af68; border-color:#e0af68; }
       .resetbtn:disabled { opacity:.4; cursor:default; }
-      /* Profiles panel — a responsive grid of usage cards. --cols is the config
-         max (set inline by app.js); minmax collapses to 1 column when narrow so
-         cards never get cramped. */
+      /* Bundle panel — TWO columns (spec §24): the dependency CHAIN on the left
+         (Base→Documents→Data→Development, each needs the one above), STANDALONE
+         bundles on the right (Terminal tools, Legacy, My setup). */
       #profiles {
         display: grid;
-        gap: 12px;
+        gap: 12px 20px;
         padding: 2px 12px 12px;
-        grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr));
+        grid-template-columns: 1fr 1fr;
+        align-items: start;
       }
-      @media (max-width: 640px) { #profiles { grid-template-columns: 1fr; } }
+      .bundle-col { display: flex; flex-direction: column; gap: 10px; }
+      /* The chain reads top-to-bottom with a small step-in per level + a link line,
+         so "Development needs Data needs Documents needs Base" is visible. */
+      .bundle-col.chain .profile-card:not(:first-child) { margin-left: 18px; position: relative; }
+      .bundle-col.chain .profile-card:not(:first-child)::before {
+        content: ""; position: absolute; left: -12px; top: -16px; width: 12px; bottom: 50%;
+        border-left: 2px solid var(--line); border-bottom: 2px solid var(--line);
+        border-bottom-left-radius: 6px;
+      }
+      @media (max-width: 640px) { #profiles { grid-template-columns: 1fr; }
+        .bundle-col.chain .profile-card:not(:first-child) { margin-left: 0; }
+        .bundle-col.chain .profile-card:not(:first-child)::before { display: none; } }
       .profile-card {
         display: flex; flex-direction: column; gap: 4px;
         text-align: left; background: none; color: var(--fg);
