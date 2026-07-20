@@ -193,17 +193,26 @@ function renderProfiles(_profiles, columns = 2) {
 function paintProfiles() {
   const busy = applyRunning || scanning;
   for (const [name, card] of Object.entries(profileEls)) {
-    const st = M.profileStateOf(model, name); // "off" | "full" | "hollow"
-    card.classList.toggle("full", st === "full");
-    card.classList.toggle("hollow", st === "hollow");
+    // Card visual = MY activation (not coverage), so the click (toggle own
+    // activation) always matches what the card shows — fixes the "can't deselect
+    // a card filled indirectly" bug. Three states (spec §21b):
+    //   active   — I clicked it (in activeProfiles)
+    //   indirect — NOT activated, but its members are all wanted via ANOTHER
+    //              active bundle → intermediate tint ("already covered")
+    //   hollow   — active but a member was pulled out (incomplete)
+    //   off      — none of the above
+    const active = M.isProfileActive(model, name);
+    const coverage = M.profileStateOf(model, name); // "off" | "full" | "hollow"
+    const indirect = !active && coverage === "full";
+    card.classList.toggle("full", active && coverage !== "hollow");
+    card.classList.toggle("hollow", active && coverage === "hollow");
+    card.classList.toggle("indirect", indirect);
     card.disabled = busy;
     const sw = card.querySelector(".pc-switch");
     if (sw) {
-      // full → on (knob right), hollow → mixed (knob centre, "incomplete"),
-      // off → out (knob left). Mirrors the row switch's visual vocabulary.
-      sw.classList.toggle("on-in", st === "full");
-      sw.classList.toggle("mixed", st === "hollow");
-      sw.classList.toggle("on-out", st === "off");
+      sw.classList.toggle("on-in", active && coverage !== "hollow");
+      sw.classList.toggle("mixed", (active && coverage === "hollow") || indirect);
+      sw.classList.toggle("on-out", !active && !indirect);
     }
     // "installed / wanted" — progress toward what this bundle will put down.
     // Blank when the bundle wants nothing (inactive) so an off card stays quiet.

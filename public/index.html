@@ -264,6 +264,11 @@
       .profile-card.full .pc-highlights,
       .profile-card.full .pc-count { color: var(--fg); opacity: .9; }
       .profile-card.full:hover { filter: brightness(1.15); }
+      /* indirect: NOT activated by the user, but its members are all wanted via
+         ANOTHER active bundle → intermediate tint ("already covered, no need to
+         activate me"). Distinct from full (my activation) and off. Spec §21b. */
+      .profile-card.indirect { border-color: #414868; background: #20283f; }
+      .profile-card.indirect .pc-count { color: #7aa2f7; }
       .profile-card:disabled { opacity: .5; cursor: default; filter: none; }
       /* Profile-membership emojis shown next to a package name — a quiet hint of
          which profiles include this package. */
