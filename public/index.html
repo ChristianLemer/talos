@@ -407,6 +407,14 @@
          Those belong to the Bundles (action) tab. */
       body.tab-catalog #profiles { display:none; }
       body.tab-catalog .hero-apply { display:none; }
+      /* Separator between the bundle cards and the package list: label left, view
+         toggle right, a rule above. Bundles tab only (Catalog groups by category). */
+      #list-sep { display:flex; align-items:center; justify-content:space-between;
+        padding:6px 12px 4px; margin-top:4px; border-top:1px solid var(--line); }
+      #list-sep .list-sep-label { font-size:11px; font-weight:600; letter-spacing:.4px;
+        text-transform:uppercase; color:var(--dim); }
+      body.tab-catalog #list-sep { display:none; }
+      body.applying #list-sep { display:none; }
       /* Settings rows + history */
       #settings { padding:14px 14px 4px; }
       .set-row { display:flex; align-items:center; gap:14px; padding:12px 0; border-bottom:1px solid var(--line); }
@@ -671,7 +679,6 @@
           <button id="install-all" class="applybtn">Apply</button>
         </div>
         <span id="globalhint">Installs what you checked, updates what's outdated, removes what you unchecked.</span>
-        <button id="show-all" class="resetbtn" title="Show every package, not just what will change">Show all</button>
         <span id="overall">connecting…</span>
       </div>
       <!-- Waiting-window banner: an installer opened a window behind the panel. -->
@@ -679,6 +686,13 @@
       <!-- Profile bar: one-click additive selections. Populated by app.js from the
            plan's `profiles`; hidden entirely when there are none. -->
       <div id="profiles" hidden></div>
+      <!-- Separator between the bundle cards and the package list: a label on the
+           left, and on the right the view toggle (only-what-changes vs everything).
+           Bundles tab only (hidden in Catalog, which is grouped-by-category). -->
+      <div id="list-sep">
+        <span class="list-sep-label">Packages</span>
+        <button id="show-all" class="resetbtn" title="Show every package, not just what will change">Show all</button>
+      </div>
       <div id="steps">
         <!-- Refresh overlay: fixed child of #steps, shown via .steps-refreshing on
              the parent. render() appends bundles after it, so it survives. -->
