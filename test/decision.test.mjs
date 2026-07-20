@@ -28,9 +28,9 @@ test("postureDefault: which side the toggle starts on", () => {
   assert.equal(postureDefault("forbidden"), "out");
 });
 
-test("isLockedPosture", () => {
-  assert.equal(isLockedPosture("mandatory"), true);
+test("isLockedPosture: only forbidden locks (nothing is indispensable, §4)", () => {
   assert.equal(isLockedPosture("forbidden"), true);
+  assert.equal(isLockedPosture("mandatory"), false); // no longer locked-in
   assert.equal(isLockedPosture("opt-in"), false);
   assert.equal(isLockedPosture("opt-out"), false);
 });

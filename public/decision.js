@@ -31,8 +31,11 @@ export function resolvePosture(pkgPosture, bundlePosture) {
 export function postureDefault(posture) {
   return (posture === "mandatory" || posture === "opt-out") ? "in" : "out";
 }
+// Only `forbidden` locks (locked OUT — an integrator bans a package). `mandatory`
+// no longer locks: nothing is indispensable (spec §4), so any package a bundle
+// pulls can still be manually toggled out (the bundle then reads hollow).
 export function isLockedPosture(posture) {
-  return posture === "mandatory" || posture === "forbidden";
+  return posture === "forbidden";
 }
 
 // The user's toggle for a package is "in" | "out" | null (untouched → follow the

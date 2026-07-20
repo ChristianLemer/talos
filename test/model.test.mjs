@@ -348,10 +348,16 @@ test("bundleAnyActionable + bundleAct reflect pending package actions", () => {
   assert.deepEqual(bundleAct(m, "Extras"), "add");
 });
 
-test("bundleToggleState: all-locked bundle defaults to on-in", () => {
-  const m = seed();
-  // Base holds only the mandatory Node (locked) → no free packages.
-  assert.deepEqual(bundleToggleState(m, "Base"), "on-in");
+test("bundleToggleState: all-locked (forbidden) bundle defaults to on-in", () => {
+  // Only `forbidden` locks now (§4). Build a bundle whose sole package is
+  // forbidden → no free packages → the toggle defaults to on-in.
+  const m = createModel();
+  loadPlan(
+    m,
+    [{ name: "Banned", posture: "forbidden", selectable: false }],
+    [{ i: 0, name: "nope", bundle: "Banned", posture: "forbidden" }],
+  );
+  assert.deepEqual(bundleToggleState(m, "Banned"), "on-in");
 });
 
 // --- profiles: additive pull, hollow on manual out, clean removal ------------
