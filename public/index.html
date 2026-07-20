@@ -413,6 +413,8 @@
         padding:6px 12px 4px; margin-top:4px; border-top:1px solid var(--line); }
       #list-sep .list-sep-label { font-size:11px; font-weight:600; letter-spacing:.4px;
         text-transform:uppercase; color:var(--dim); }
+      .list-sep-toggle { display:flex; align-items:center; gap:8px; cursor:pointer; }
+      .list-sep-toggle .sep-toggle-label { font-size:12px; color:var(--dim); }
       body.tab-catalog #list-sep { display:none; }
       body.applying #list-sep { display:none; }
       /* Settings rows + history */
@@ -691,7 +693,10 @@
            Bundles tab only (hidden in Catalog, which is grouped-by-category). -->
       <div id="list-sep">
         <span class="list-sep-label">Packages</span>
-        <button id="show-all" class="resetbtn" title="Show every package, not just what will change">Show all</button>
+        <label class="list-sep-toggle" title="Show every package, not just what will change">
+          <span class="sep-toggle-label">Show all</span>
+          <span class="switch"><input type="checkbox" id="show-all"><span class="slider"></span></span>
+        </label>
       </div>
       <div id="steps">
         <!-- Refresh overlay: fixed child of #steps, shown via .steps-refreshing on

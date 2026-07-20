@@ -1125,13 +1125,26 @@ document.getElementById("refresh-all").onclick = () => {
   overall.textContent = "checking…";
   ws.send(JSON.stringify({ type: "rescan" }));
 };
-// "Show all" — the Bundles tab shows only changing rows by default (the diff);
-// this toggles the wider view (everything the active bundles select). Label
-// flips to reflect the current mode.
-document.getElementById("show-all").onclick = (e) => {
-  const showAll = document.body.classList.toggle("show-all");
-  e.currentTarget.textContent = showAll ? "Show changes only" : "Show all";
+// "Show all" — a UI preference (like advanced mode): the Bundles tab shows only
+// changing rows by default (the diff); flip this to reveal everything the active
+// bundles select. Persisted in localStorage so it sticks across sessions.
+const showAllToggle = document.getElementById("show-all");
+function applyShowAll(on) {
+  document.body.classList.toggle("show-all", on);
+  showAllToggle.checked = on;
+}
+showAllToggle.onchange = (e) => {
+  const on = e.target.checked;
+  try {
+    localStorage.setItem("talos.showAll", on ? "1" : "0");
+  } catch {}
+  applyShowAll(on);
 };
+try {
+  applyShowAll(localStorage.getItem("talos.showAll") === "1");
+} catch {
+  applyShowAll(false);
+}
 
 // --- tabs (Bundles / Catalog / Log) ---
 // Bundles and Catalog share ONE DOM (#view-bundles holds #steps); they differ
