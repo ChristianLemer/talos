@@ -376,13 +376,13 @@
          Flat list → rows are direct <details> children of #steps. The old
          .bundle-body / .bundle.focus-empty selectors are dead post-flatten. */
       body.applying #steps > details:not(.focus-show) { display:none; }
-      /* Two tabs over ONE list (spec Consolidation §5): the Bundles tab = the
-         ACTION view. It shows WANTED rows, PLUS members of an active bundle you
-         un-checked (so you SEE it become incomplete), PLUS anything a plain Apply
-         WOULD REMOVE (.will-remove) — removals belong to the diff as much as
-         installs. Everything else is hidden here (it lives in Catalog). During an
-         Apply, focus mode above wins. */
-      body.tab-bundles:not(.applying) #steps > details:not(.want):not(.bundle-member):not(.will-remove) { display:none; }
+      /* Bundles tab = the ACTION view. DEFAULT (diff-only): show ONLY rows a plain
+         Apply would change (.will-change = install/update/remove). The "Show all"
+         toggle adds body.show-all → the wider view: wanted rows + members of an
+         active bundle you un-checked (so you SEE it become incomplete) + removals.
+         During an Apply, focus mode above wins. */
+      body.tab-bundles:not(.applying):not(.show-all) #steps > details:not(.will-change) { display:none; }
+      body.tab-bundles.show-all:not(.applying) #steps > details:not(.want):not(.bundle-member):not(.will-remove) { display:none; }
       /* A member you turned out: visible but clearly deactivated (dim + struck
          name), so "the bundle is now incomplete" reads at a glance. */
       body.tab-bundles #steps > details.bundle-member.row-out .name { opacity:.5; text-decoration:line-through; }
@@ -671,6 +671,7 @@
           <button id="install-all" class="applybtn">Apply</button>
         </div>
         <span id="globalhint">Installs what you checked, updates what's outdated, removes what you unchecked.</span>
+        <button id="show-all" class="resetbtn" title="Show every package, not just what will change">Show all</button>
         <span id="overall">connecting…</span>
       </div>
       <!-- Waiting-window banner: an installer opened a window behind the panel. -->

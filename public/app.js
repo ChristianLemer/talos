@@ -342,6 +342,10 @@ function paintPkg(i) {
   // and the destruction is invisible until it happens. Spec: the action tab shows
   // what Apply does — both sides.
   r.details.classList.toggle("will-remove", M.actionOf(model, i) === "uninstall");
+  // `.will-change` = a plain Apply WOULD act on this row (install/update/remove).
+  // Drives the Bundles-tab "diff only" mode: by default show only what changes,
+  // with a toggle to reveal everything.
+  r.details.classList.toggle("will-change", M.isActionable(model, i));
   // Keep self-managed labelling live when the user toggles a config-atom off:
   // paintPkg/refreshLiveness (the toggle path) never touch statusLabel — only
   // setStatus does, on scan/step messages — so without this the label would
@@ -1120,6 +1124,13 @@ document.getElementById("refresh-all").onclick = () => {
   paintProfiles();
   overall.textContent = "checking…";
   ws.send(JSON.stringify({ type: "rescan" }));
+};
+// "Show all" — the Bundles tab shows only changing rows by default (the diff);
+// this toggles the wider view (everything the active bundles select). Label
+// flips to reflect the current mode.
+document.getElementById("show-all").onclick = (e) => {
+  const showAll = document.body.classList.toggle("show-all");
+  e.currentTarget.textContent = showAll ? "Show changes only" : "Show all";
 };
 
 // --- tabs (Bundles / Catalog / Log) ---
