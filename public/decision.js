@@ -89,13 +89,19 @@ export function effectiveToggle(userToggle, inActiveProfile) {
   return inActiveProfile ? "in" : null;
 }
 
-// A profile's derived state. `active` = is it in the active set; `isIn(pkgKey)`
-// = is that package effectively "in" right now (caller composes posture + toggle
-// + profiles). Pure: same inputs, same output.
-export function profileState(profile, active, isIn) {
-  if (!active) return "off";
+// A bundle's derived state — computed PURELY from its packages' wanted-ness, not
+// from whether the card was clicked. `isIn(pkgKey)` = is that package effectively
+// "in" right now (caller composes posture + toggle + bundle pull). So a bundle
+// whose packages are all wanted (even via manual picks that happen to cover it)
+// reads `full`; some wanted → `hollow`; none → `off`. The card never lies about
+// its members. `active` is kept in the signature for callers but no longer gates
+// the visual (an empty bundle with no packages is trivially off).
+export function profileState(profile, _active, isIn) {
   const pkgs = profile.packages ?? [];
-  return pkgs.every((key) => isIn(key)) ? "full" : "hollow";
+  if (pkgs.length === 0) return "off";
+  if (pkgs.every((key) => isIn(key))) return "full";
+  if (pkgs.some((key) => isIn(key))) return "hollow";
+  return "off";
 }
 
 // Given a DESIRED state and the machine reality, the action a plain Apply would

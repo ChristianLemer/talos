@@ -152,24 +152,27 @@ test("effectiveToggle: manual toggle always wins over a profile pull", () => {
   assert.equal(effectiveToggle(null, false), null); // untouched → follow posture
 });
 
-test("profileState: off when not active", () => {
+// State is DERIVED from the packages, not from the active flag (a bundle whose
+// members are all wanted — even via manual picks — reads full). The `active`
+// arg is ignored by profileState now; passed as false to prove it doesn't gate.
+test("profileState: off when NONE of its packages are in", () => {
   const p = { packages: ["a", "b"] };
-  assert.equal(profileState(p, false, () => true), "off");
+  assert.equal(profileState(p, false, () => false), "off");
 });
 
-test("profileState: full when active and all packages are in", () => {
+test("profileState: full when all packages are in (even if 'inactive')", () => {
   const p = { packages: ["a", "b"] };
-  assert.equal(profileState(p, true, () => true), "full");
+  assert.equal(profileState(p, false, () => true), "full");
 });
 
-test("profileState: hollow when active but a package was pulled out", () => {
+test("profileState: hollow when only some packages are in", () => {
   const p = { packages: ["a", "b"] };
-  const isIn = (k) => k !== "b"; // b manually out
-  assert.equal(profileState(p, true, isIn), "hollow");
+  const isIn = (k) => k !== "b"; // b out, a in
+  assert.equal(profileState(p, false, isIn), "hollow");
 });
 
-test("profileState: empty package list is trivially full when active", () => {
-  assert.equal(profileState({ packages: [] }, true, () => false), "full");
+test("profileState: empty package list → off (nothing to want)", () => {
+  assert.equal(profileState({ packages: [] }, true, () => false), "off");
 });
 
 test("model A: an opt-in left untouched but PRESENT resolves to uninstall", () => {
