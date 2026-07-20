@@ -44,6 +44,7 @@ export function loadPlan(model, bundles, steps, profiles = []) {
       usage: p.usage || p.description || "",
       highlights: p.highlights ?? [],
       packages: p.packages ?? [],
+      needs: p.needs ?? [], // other bundles this one depends on (cascade, §23)
     });
   }
   for (const b of bundles) {
@@ -381,7 +382,18 @@ export function bundleAct(model, name) {
 // userToggle). Additive — it never writes decisions and never forces anything
 // out, so a manual "out" still wins (that turns the profile hollow).
 export function applyProfile(model, name) {
-  if (model.profiles.has(name)) model.activeProfiles.add(name);
+  // Activate this bundle AND, transitively, every bundle it `needs:` — for real,
+  // "as if clicked" (spec §23). Cycle-guarded via the seen set. Deactivating does
+  // NOT reverse-cascade (removeProfile drops only the one bundle) — the dependency
+  // pulls but never pushes back, so order never matters.
+  const seen = new Set();
+  const activate = (n) => {
+    if (seen.has(n) || !model.profiles.has(n)) return;
+    seen.add(n);
+    model.activeProfiles.add(n);
+    for (const dep of model.profiles.get(n).needs ?? []) activate(dep);
+  };
+  activate(name);
 }
 // Remove a profile from the active set: its pull vanishes, but a package it
 // shared with another active profile or a manual "in" survives (userToggle

@@ -244,7 +244,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
             json!({
                 "name": p.name, "emoji": p.emoji, "usage": p.usage,
                 "highlights": p.highlights, "description": p.description,
-                "packages": p.packages
+                "packages": p.packages, "needs": p.needs
             })
         })
         .collect();

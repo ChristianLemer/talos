@@ -24,6 +24,10 @@ struct RawProfile {
     description: Option<String>,
     #[serde(default)]
     packages: Vec<String>,
+    // Other bundles this one depends on: activating it activates them too (real
+    // cascade, spec §23). Empty for standalone bundles.
+    #[serde(default)]
+    needs: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -43,6 +47,7 @@ pub struct Profile {
     pub highlights: Vec<String>,
     pub description: String,
     pub packages: Vec<String>,
+    pub needs: Vec<String>,
 }
 
 /// The whole profiles panel: the cards + the grid column count.
@@ -72,6 +77,7 @@ pub fn parse_profiles(raw: &str) -> Profiles {
                 highlights: p.highlights,
                 description: p.description.unwrap_or_default(),
                 packages: p.packages,
+                needs: p.needs,
             })
         })
         .collect();
@@ -94,6 +100,7 @@ pub fn parse_one_bundle(raw: &str) -> Option<Profile> {
         highlights: p.highlights,
         description: p.description.unwrap_or_default(),
         packages: p.packages,
+        needs: p.needs,
     })
 }
 
@@ -217,6 +224,15 @@ profiles:
     #[test]
     fn parse_one_bundle_none_without_name() {
         assert!(parse_one_bundle("emoji: 🎯\npackages: [Git]\n").is_none());
+    }
+
+    #[test]
+    fn parse_one_bundle_reads_needs() {
+        let p = parse_one_bundle("bundle: Data\nneeds: [Documents]\npackages: [uv]\n").unwrap();
+        assert_eq!(p.needs, vec!["Documents"]);
+        // absent needs → empty
+        let q = parse_one_bundle("bundle: Base\npackages: [Git]\n").unwrap();
+        assert!(q.needs.is_empty());
     }
 
     #[test]

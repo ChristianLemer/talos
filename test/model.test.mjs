@@ -45,6 +45,36 @@ test("personal bundle: exists, always active, empty by default", () => {
   assert.deepEqual(m.profiles.get(PERSONAL_BUNDLE).packages, []);
 });
 
+test("bundle cascade: activating a bundle activates its needs transitively", () => {
+  const m = createModel();
+  loadPlan(m, [], [{ i: 0, name: "uv", bundle: "", posture: "opt-in" }], [
+    { name: "Base", packages: [], needs: [] },
+    { name: "Documents", packages: [], needs: ["Base"] },
+    { name: "Data", packages: ["uv"], needs: ["Documents"] },
+  ]);
+  applyProfile(m, "Data");
+  // Data + its chain are active (as if clicked, §23).
+  assert.equal(isProfileActive(m, "Data"), true);
+  assert.equal(isProfileActive(m, "Documents"), true);
+  assert.equal(isProfileActive(m, "Base"), true);
+  // Deactivating Data does NOT reverse-cascade — Documents/Base stay.
+  removeProfile(m, "Data");
+  assert.equal(isProfileActive(m, "Data"), false);
+  assert.equal(isProfileActive(m, "Documents"), true);
+  assert.equal(isProfileActive(m, "Base"), true);
+});
+
+test("bundle cascade is cycle-guarded", () => {
+  const m = createModel();
+  loadPlan(m, [], [], [
+    { name: "A", packages: [], needs: ["B"] },
+    { name: "B", packages: [], needs: ["A"] }, // cycle
+  ]);
+  applyProfile(m, "A"); // must not infinite-loop
+  assert.equal(isProfileActive(m, "A"), true);
+  assert.equal(isProfileActive(m, "B"), true);
+});
+
 test("addToPersonal / removeFromPersonal grow it and pull the package", () => {
   const m = createModel();
   loadPlan(m, [], [{ i: 0, name: "rg", bundle: "", posture: "opt-in" }], []);
