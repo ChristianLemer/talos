@@ -358,15 +358,19 @@
          Flat list → rows are direct <details> children of #steps. The old
          .bundle-body / .bundle.focus-empty selectors are dead post-flatten. */
       body.applying #steps > details:not(.focus-show) { display:none; }
-      /* Two tabs over ONE list (spec Consolidation §5): the Bundles tab shows what
-         the active bundles select — WANTED rows, PLUS any member of an active
-         bundle you un-checked (kept visible so you SEE the bundle become
-         incomplete). Everything else is hidden here (it lives in Catalog). During
-         an Apply, focus mode above wins. */
-      body.tab-bundles:not(.applying) #steps > details:not(.want):not(.bundle-member) { display:none; }
+      /* Two tabs over ONE list (spec Consolidation §5): the Bundles tab = the
+         ACTION view. It shows WANTED rows, PLUS members of an active bundle you
+         un-checked (so you SEE it become incomplete), PLUS anything a plain Apply
+         WOULD REMOVE (.will-remove) — removals belong to the diff as much as
+         installs. Everything else is hidden here (it lives in Catalog). During an
+         Apply, focus mode above wins. */
+      body.tab-bundles:not(.applying) #steps > details:not(.want):not(.bundle-member):not(.will-remove) { display:none; }
       /* A member you turned out: visible but clearly deactivated (dim + struck
          name), so "the bundle is now incomplete" reads at a glance. */
       body.tab-bundles #steps > details.bundle-member.row-out .name { opacity:.5; text-decoration:line-through; }
+      /* A row Apply will UNINSTALL: red left bar + tint, so a removal is
+         unmistakable in the action view (same red as the remove button). */
+      #steps > details.will-remove { border-left:3px solid #f7768e; background:rgba(247,118,142,.05); }
       /* Settings rows + history */
       #settings { padding:14px 14px 4px; }
       .set-row { display:flex; align-items:center; gap:14px; padding:12px 0; border-bottom:1px solid var(--line); }

@@ -282,6 +282,12 @@ function paintPkg(i) {
   // "incomplete" (hollow) instead of the row silently vanishing. Spec Cons §3.
   r.details.classList.toggle("want", wanted);
   r.details.classList.toggle("bundle-member", M.inActiveProfile(model, i));
+  // `.will-remove` = a plain Apply WOULD uninstall this (present + not wanted, or
+  // vetoed). It must be VISIBLE in the Bundles tab (the action view): removals
+  // belong to the diff as much as installs. Without this the row is hidden there
+  // and the destruction is invisible until it happens. Spec: the action tab shows
+  // what Apply does — both sides.
+  r.details.classList.toggle("will-remove", M.actionOf(model, i) === "uninstall");
   // Keep self-managed labelling live when the user toggles a config-atom off:
   // paintPkg/refreshLiveness (the toggle path) never touch statusLabel — only
   // setStatus does, on scan/step messages — so without this the label would
