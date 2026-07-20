@@ -205,14 +205,29 @@ function renderProfiles(_profiles, _columns = 2) {
   soloCol.className = "bundle-col standalone";
   const chain = profiles.filter(isChain).sort((a, b) => depthOf(a) - depthOf(b));
   const solo = profiles.filter((p) => !isChain(p));
+  // A header per column so the two natures read at a glance.
+  const colHead = (text) => {
+    const h = document.createElement("div");
+    h.className = "bundle-col-head";
+    h.textContent = text;
+    return h;
+  };
+  // Cards live in an inner wrapper so the staircase nth-child counts only cards,
+  // not the header.
+  const chainCards = document.createElement("div");
+  chainCards.className = "bundle-col-cards";
+  const soloCards = document.createElement("div");
+  soloCards.className = "bundle-col-cards";
+  if (chain.length) chainCol.append(colHead("Levels — each builds on the one above"), chainCards);
+  if (solo.length) soloCol.append(colHead("Add-ons — independent"), soloCards);
   for (const p of chain) {
     const card = makeProfileCard(p);
-    chainCol.append(card);
+    chainCards.append(card);
     profileEls[p.name] = card;
   }
   for (const p of solo) {
     const card = makeProfileCard(p);
-    soloCol.append(card);
+    soloCards.append(card);
     profileEls[p.name] = card;
   }
   bar.append(chainCol, soloCol);
@@ -592,9 +607,26 @@ function render(bundles, steps, profiles = [], columns = 2) {
   // Bundle cards on top (needs) live in #profiles; bundle-as-toggle is B2.
   for (const k of Object.keys(bundleEls)) delete bundleEls[k];
 
-  for (const s of steps) {
+  // Order rows by primary category then name, and inject a category header before
+  // each group. The Catalog tab shows the headers (grouped-by-category view, spec
+  // §22); the Bundles tab hides them (it filters to wanted/will-remove rows). Rows
+  // are keyed by s.i, so reordering the DOM is safe.
+  const primaryCat = (s) => (Array.isArray(s.categories) && s.categories[0]) || "misc";
+  const orderedSteps = [...steps].sort((a, b) =>
+    primaryCat(a).localeCompare(primaryCat(b)) || a.name.localeCompare(b.name)
+  );
+  let lastCat = null;
+  for (const s of orderedSteps) {
     const be = bundleEls[s.bundle];
     const body = be ? be.details.querySelector(".bundle-body") : stepsEl;
+    const cat = primaryCat(s);
+    if (cat !== lastCat) {
+      const h = document.createElement("div");
+      h.className = "cat-header";
+      h.textContent = cat;
+      stepsEl.append(h);
+      lastCat = cat;
+    }
     const d = document.createElement("details");
     d.classList.add("posture-" + (s.posture || "mandatory")); // dim optional (opt-*) rows
     // When the row is first opened, flush any pending detection evidence into its

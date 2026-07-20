@@ -216,23 +216,27 @@
         grid-template-columns: 1fr 1fr;
         align-items: start;
       }
-      .bundle-col { display: flex; flex-direction: column; gap: 10px; }
+      .bundle-col { display: flex; flex-direction: column; gap: 8px; }
+      .bundle-col-cards { display: flex; flex-direction: column; gap: 10px; }
+      /* Column header — a quiet uppercase label naming each column's nature. */
+      .bundle-col-head { font-size: 11px; font-weight: 600; letter-spacing: .4px;
+        text-transform: uppercase; color: var(--dim); padding: 0 2px 2px; }
       /* The chain reads top-to-bottom as a STAIRCASE, one step-in per depth level
          (Base=0 flush, Documents=1, Data=2, Development=3), each with a link line
          up to its parent — so the dependency order is visible at a glance. */
       .bundle-col.chain .profile-card { position: relative; }
-      .bundle-col.chain .profile-card:nth-child(2) { margin-left: 20px; }
-      .bundle-col.chain .profile-card:nth-child(3) { margin-left: 40px; }
-      .bundle-col.chain .profile-card:nth-child(4) { margin-left: 60px; }
-      .bundle-col.chain .profile-card:nth-child(5) { margin-left: 80px; }
-      .bundle-col.chain .profile-card:not(:first-child)::before {
+      .bundle-col.chain .bundle-col-cards .profile-card:nth-child(2) { margin-left: 20px; }
+      .bundle-col.chain .bundle-col-cards .profile-card:nth-child(3) { margin-left: 40px; }
+      .bundle-col.chain .bundle-col-cards .profile-card:nth-child(4) { margin-left: 60px; }
+      .bundle-col.chain .bundle-col-cards .profile-card:nth-child(5) { margin-left: 80px; }
+      .bundle-col.chain .bundle-col-cards .profile-card:not(:first-child)::before {
         content: ""; position: absolute; left: -12px; top: -16px; width: 12px; bottom: 50%;
         border-left: 2px solid var(--line); border-bottom: 2px solid var(--line);
         border-bottom-left-radius: 6px;
       }
       @media (max-width: 640px) { #profiles { grid-template-columns: 1fr; }
-        .bundle-col.chain .profile-card { margin-left: 0 !important; }
-        .bundle-col.chain .profile-card:not(:first-child)::before { display: none; } }
+        .bundle-col.chain .bundle-col-cards .profile-card { margin-left: 0 !important; }
+        .bundle-col.chain .bundle-col-cards .profile-card:not(:first-child)::before { display: none; } }
       .profile-card {
         display: flex; flex-direction: column; gap: 4px;
         text-align: left; background: none; color: var(--fg);
@@ -383,6 +387,17 @@
       /* A row Apply will UNINSTALL: red left bar + tint, so a removal is
          unmistakable in the action view (same red as the remove button). */
       #steps > details.will-remove { border-left:3px solid #f7768e; background:rgba(247,118,142,.05); }
+      /* Category headers: shown ONLY in the Catalog tab (the grouped-by-category
+         browse view, spec §22). Hidden in the Bundles tab, which filters to the
+         wanted/will-remove rows and has no use for category grouping. */
+      .cat-header { font-size:11px; font-weight:600; letter-spacing:.4px; text-transform:uppercase;
+        color:var(--dim); padding:14px 4px 4px; border-bottom:1px solid var(--line); margin:0 0 2px; }
+      body.tab-bundles .cat-header { display:none; }
+      /* Catalog tab (spec §22) = browse the full list grouped by category. NO
+         bundle cards, NO Apply/Reset header — just packages + their 3-state toggle.
+         Those belong to the Bundles (action) tab. */
+      body.tab-catalog #profiles { display:none; }
+      body.tab-catalog .hero-apply { display:none; }
       /* Settings rows + history */
       #settings { padding:14px 14px 4px; }
       .set-row { display:flex; align-items:center; gap:14px; padding:12px 0; border-bottom:1px solid var(--line); }
