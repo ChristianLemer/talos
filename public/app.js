@@ -927,6 +927,10 @@ function setStatus(i, status) {
   // machine. (Running states are transient — leave presence as it was.)
   M.setStatusData(model, i, status);
   refreshLiveness();
+  // The card's X/Y count (profileProgress) reads machine PRESENCE, which just
+  // changed — repaint the cards so the count tracks the scan, not only manual
+  // toggles. Without this the count stayed stale until the next card/row click.
+  paintProfiles();
   if (RUNNING.has(status) || status === "fail" || status === "forbidden") {
     r.details.open = true; // show activity / failures / firewall recovery
   }
