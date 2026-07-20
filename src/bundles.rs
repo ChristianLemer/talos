@@ -400,7 +400,9 @@ pub fn load_from_catalog(
             version_regex: p.version_regex.clone(),
             pin: p.version.clone(),
             requires: p.requires.clone(),
-            posture: Posture::parse(None), // per-package posture is a later add
+            posture: Posture::OptIn, // catalog default: free + out-by-default
+            // (bundle-driven: the bundle pull decides "in", not the posture).
+            // per-package posture declared in YAML is a later add.
             categories: if p.category.is_empty() {
                 vec!["misc".to_string()]
             } else {
