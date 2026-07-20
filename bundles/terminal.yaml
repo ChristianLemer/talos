@@ -1,0 +1,13 @@
+# Terminal tools — a comfortable prompt + fast CLI utilities. Standalone: depends
+# on nothing, activated independently of the chain (spec §24).
+bundle: Terminal tools
+emoji: 🐚
+usage: A comfortable terminal — prompt and fast CLI tools.
+highlights: [Starship, ripgrep, bat]
+description: Cross-shell prompt and speedy command-line utilities.
+packages:
+  - Starship
+  - Starship config
+  - ripgrep
+  - fd
+  - bat

@@ -1,0 +1,16 @@
+# Base — the socle: plumbing + the AI agent + methodology. Everything stands on
+# it. The chain (Documents ← Data ← Development) needs Base; activating any of
+# them activates Base too (real cascade, spec §23).
+bundle: Base
+emoji: 🧱
+usage: The essentials — an AI agent, the plumbing it runs on, the method.
+highlights: [Claude Code, Chiron]
+description: The foundation every workspace stands on.
+packages:
+  - Node.js
+  - Git
+  - jq
+  - Nushell
+  - AWS CLI
+  - Claude Code
+  - Chiron

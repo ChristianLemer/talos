@@ -1,0 +1,16 @@
+# Legacy study designers — the tools the study designers used in the very first
+# installer (Isabelle's list). Standalone: depends on nothing (spec §24).
+# FileZilla is binary-only for now; its FTP config atom comes later.
+bundle: Legacy study designers
+emoji: 📦
+usage: The classic toolkit study designers relied on.
+highlights: [Notepad++, FileZilla, 7-Zip]
+description: Familiar Windows tools from the first installer.
+packages:
+  - Notepad++
+  - "7-Zip"
+  - Greenshot
+  - FileZilla
+  - Espanso
+  - Miro
+  - Obsidian

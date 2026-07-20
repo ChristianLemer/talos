@@ -1,0 +1,12 @@
+# Documents — see, edit and note what the AI produces. Needs Base (the agent +
+# plumbing). Activating Documents activates Base too (real cascade, spec §23).
+bundle: Documents
+emoji: 📄
+usage: See, edit and note what the AI produces.
+highlights: [VS Code, Obsidian]
+description: Editors and a knowledge base for documents.
+needs: [Base]
+packages:
+  - Visual Studio Code
+  - MarkText
+  - Obsidian

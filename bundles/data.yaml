@@ -1,0 +1,11 @@
+# Data — Python tooling for data work. Needs Documents (which needs Base), so
+# activating Data cascades the whole chain below it (spec §23).
+bundle: Data
+emoji: 📊
+usage: Work with data — Python tooling.
+highlights: [uv, astral]
+description: Python package manager and AI tooling for data.
+needs: [Documents]
+packages:
+  - uv
+  - astral
