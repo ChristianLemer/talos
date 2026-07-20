@@ -218,9 +218,11 @@
       }
       .bundle-col { display: flex; flex-direction: column; gap: 8px; }
       .bundle-col-cards { display: flex; flex-direction: column; gap: 10px; }
-      /* Column header — a quiet uppercase label naming each column's nature. */
-      .bundle-col-head { font-size: 11px; font-weight: 600; letter-spacing: .4px;
-        text-transform: uppercase; color: var(--dim); padding: 0 2px 2px; }
+      /* Column header — names each column's nature. Prominent: accent colour,
+         larger, with an underline rule so the two columns read as titled sections. */
+      .bundle-col-head { font-size: 13px; font-weight: 700; letter-spacing: .3px;
+        color: #7aa2f7; padding: 2px 2px 6px; margin-bottom: 4px;
+        border-bottom: 2px solid #3d59a1; }
       /* The chain reads top-to-bottom as a STAIRCASE, one step-in per depth level
          (Base=0 flush, Documents=1, Data=2, Development=3), each with a link line
          up to its parent — so the dependency order is visible at a glance. */
@@ -388,11 +390,18 @@
          unmistakable in the action view (same red as the remove button). */
       #steps > details.will-remove { border-left:3px solid #f7768e; background:rgba(247,118,142,.05); }
       /* Category headers: shown ONLY in the Catalog tab (the grouped-by-category
-         browse view, spec §22). Hidden in the Bundles tab, which filters to the
-         wanted/will-remove rows and has no use for category grouping. */
-      .cat-header { font-size:11px; font-weight:600; letter-spacing:.4px; text-transform:uppercase;
+         browse view, spec §22), where each is an ACCORDION toggle (click folds its
+         group). Hidden in the Bundles tab. */
+      .cat-header { display:flex; align-items:center; gap:6px; cursor:pointer;
+        font-size:11px; font-weight:600; letter-spacing:.4px; text-transform:uppercase;
         color:var(--dim); padding:14px 4px 4px; border-bottom:1px solid var(--line); margin:0 0 2px; }
+      .cat-header:hover { color:var(--fg); }
+      .cat-caret { font-size:10px; transition:transform .12s; }
+      .cat-header.cat-collapsed .cat-caret { transform:rotate(-90deg); }
       body.tab-bundles .cat-header { display:none; }
+      /* A row folded away by its category accordion — only in the Catalog tab
+         (the accordion is a Catalog affordance; Bundles has its own scope). */
+      body.tab-catalog #steps > details.cat-hidden { display:none; }
       /* Catalog tab (spec §22) = browse the full list grouped by category. NO
          bundle cards, NO Apply/Reset header — just packages + their 3-state toggle.
          Those belong to the Bundles (action) tab. */

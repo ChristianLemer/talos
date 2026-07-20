@@ -623,11 +623,22 @@ function render(bundles, steps, profiles = [], columns = 2) {
     if (cat !== lastCat) {
       const h = document.createElement("div");
       h.className = "cat-header";
-      h.textContent = cat;
+      h.dataset.cat = cat;
+      h.innerHTML = `<span class="cat-caret">▾</span><span class="cat-name">${cat}</span>`;
+      // Accordion (Catalog only): click folds/unfolds this category's rows. We
+      // toggle a `.cat-collapsed` set tracked on the header + hide its rows by
+      // data-cat. Rows stay in the DOM (Bundles tab still sees them flat).
+      h.onclick = () => {
+        const collapsed = h.classList.toggle("cat-collapsed");
+        stepsEl.querySelectorAll("details[data-cat]").forEach((row) => {
+          if (row.dataset.cat === cat) row.classList.toggle("cat-hidden", collapsed);
+        });
+      };
       stepsEl.append(h);
       lastCat = cat;
     }
     const d = document.createElement("details");
+    d.dataset.cat = cat; // for the Catalog accordion (fold by category)
     d.classList.add("posture-" + (s.posture || "mandatory")); // dim optional (opt-*) rows
     // When the row is first opened, flush any pending detection evidence into its
     // terminal. We DON'T write it at scan time: that would force-create a terminal
