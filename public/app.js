@@ -255,12 +255,6 @@ function actClass(i) {
 function paintPkg(i) {
   const r = rows[i];
   if (!r) return;
-  // Catalog "Add" reflects personal-bundle membership: "✓ Added" when in, else "Add".
-  if (r.add) {
-    const inPersonal = M.isInPersonal(model, model.pkgs.get(i)?.name);
-    r.add.textContent = inPersonal ? "✓ Added" : "Add";
-    r.add.classList.toggle("in", inPersonal);
-  }
   const locked = M.isLocked(model, i);
   const el = r.chk;
   // Two layers (spec §21b): POSITION = the raw manual hand (in/out/null→auto),
@@ -612,19 +606,9 @@ function render(bundles, steps, profiles = [], columns = 2) {
       overall.textContent = act.type === "diff" ? "diffing…" : "applying…";
       ws.send(JSON.stringify({ type: act.type, i: s.i }));
     };
-    // Catalog "Add" — the ONLY gesture for WANTING (spec §16): add/remove the
-    // package to the user's personal bundle. Shown only in the Catalog tab (CSS);
-    // in Bundles the row toggle is the veto. Adding pulls it in via My setup.
-    const add = document.createElement("button");
-    add.className = "addbtn";
-    add.onclick = (e) => {
-      e.preventDefault();
-      if (M.isInPersonal(model, s.name)) M.removeFromPersonal(model, s.name);
-      else M.addToPersonal(model, s.name);
-      repaintAll();
-      persistSelection();
-    };
-    sum.append(chk, badge, name, delta, st, add, apply);
+    // Wanting is now the ✓ cell of the segmented toggle (spec §20) — no separate
+    // Add button. "My extras" = the packages set to ✓ (manualToggle "in").
+    sum.append(chk, badge, name, delta, st, apply);
     const panel = document.createElement("div");
     panel.className = "panel";
     const copy = document.createElement("button");
@@ -662,7 +646,6 @@ function render(bundles, steps, profiles = [], columns = 2) {
       statusLabel: st,
       delta,
       apply,
-      add,
       host,
       fbBanner,
       term: null,

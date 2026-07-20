@@ -289,16 +289,6 @@
                border-radius:6px; cursor:pointer; font-size:12px; opacity:.55; transition:opacity .12s; }
       details:hover .rerun { opacity:1; }
       .rerun:hover { color:var(--fg); border-color:var(--line); background:var(--line); }
-      /* Catalog "Add" — the wanting gesture (adds to My setup). Shown ONLY in the
-         Catalog tab; in Bundles the row toggle is the veto (spec §16). "✓ Added"
-         (class .in) reads done, in accent. */
-      .addbtn { background:none; color:#7aa2f7; border:1px solid #3d59a1; padding:3px 11px;
-                border-radius:6px; cursor:pointer; font-size:12px; white-space:nowrap;
-                transition:background .12s, color .12s; }
-      .addbtn:hover { background:#3d59a1; color:var(--fg); }
-      .addbtn.in { color:#9ece6a; border-color:#2c3a2c; }
-      .addbtn.in:hover { background:#2c3a2c; color:var(--fg); }
-      body.tab-bundles .addbtn { display:none; } /* Add is the Catalog gesture only */
       /* The row button IS the preview. Its text says what (install/update/
          uninstall); its colour says whether it's part of the Apply PLAN:
            green/red (add/remove) = a plain Apply WILL do this now — directional.
