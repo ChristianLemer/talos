@@ -477,3 +477,12 @@ export function applySavedSelection(model, sel) {
     }
   }
 }
+// Personal bundle members — the package NAMES the user added from the Catalog.
+export function persistablePersonal(model) {
+  return [...(model.profiles.get(PERSONAL_BUNDLE)?.packages ?? [])];
+}
+export function applySavedPersonal(model, list) {
+  if (!Array.isArray(list)) return;
+  const p = model.profiles.get(PERSONAL_BUNDLE);
+  if (p) p.packages = [...list];
+}

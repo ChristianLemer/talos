@@ -11,15 +11,18 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// Persisted intent: stable key "bundle::name" → toggle "in"/"out".
-/// BTreeMap (deterministic order at serialization → stable writes, clean diffs).
+/// Persisted intent: per-package toggle (name → "in"/"out") PLUS the personal
+/// bundle's member list (`personal`: package names the user added from the
+/// Catalog — spec §14). BTreeMap for deterministic writes / clean diffs.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Selection {
     pub pkgs: BTreeMap<String, String>,
+    #[serde(default)]
+    pub personal: Vec<String>,
 }
 
-/// Pure, defensive: anything that is not a well-formed {pkgs:{key:"in"|"out"}} → empty.
-/// Keeps only values that are exactly "in" or "out" (like the TS filter).
+/// Pure, defensive: anything not well-formed → dropped. `pkgs` keeps only "in"/
+/// "out" values; `personal` keeps only string entries (non-strings dropped).
 pub fn parse_selection(raw: &str) -> Selection {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
         return Selection::default();
@@ -34,7 +37,16 @@ pub fn parse_selection(raw: &str) -> Selection {
             }
         }
     }
-    Selection { pkgs }
+    let personal = v
+        .get("personal")
+        .and_then(|p| p.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|e| e.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    Selection { pkgs, personal }
 }
 
 /// Path of the intent file, in the local data-dir.
@@ -77,6 +89,14 @@ mod tests {
         assert_eq!(parse_selection("{}").pkgs.len(), 0);
         assert_eq!(parse_selection(r#"{"pkgs":42}"#).pkgs.len(), 0);
         assert_eq!(parse_selection(r#"{"pkgs":{"k":true}}"#).pkgs.len(), 0);
+    }
+
+    #[test]
+    fn parses_personal_list_dropping_non_strings() {
+        let sel = parse_selection(r#"{"pkgs":{},"personal":["Git","rg",42]}"#);
+        assert_eq!(sel.personal, vec!["Git".to_string(), "rg".to_string()]);
+        // absent personal → empty (serde default), not an error
+        assert!(parse_selection(r#"{"pkgs":{}}"#).personal.is_empty());
     }
 
     #[test]

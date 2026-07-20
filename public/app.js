@@ -132,11 +132,15 @@ const ICON_OK =
 function persistSelection() {
   ws.send(JSON.stringify({
     type: "set-selection",
-    selection: { pkgs: M.persistablePkgs(model) },
+    selection: {
+      pkgs: M.persistablePkgs(model),
+      personal: M.persistablePersonal(model), // My setup members (spec §14)
+    },
   }));
 }
 function applySavedSelection(sel) {
   M.applySavedSelection(model, sel);
+  M.applySavedPersonal(model, sel?.personal); // restore My setup members (spec §14)
   repaintAll();
 }
 // Repaint EVERYTHING — used after a change that can move many rows at once (a
