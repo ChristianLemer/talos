@@ -419,9 +419,10 @@ test("profilesForPkg: lists the profiles a package belongs to", () => {
   assert.deepEqual(profilesForPkg(m, 0), []);
 });
 
-test("profileProgress: counts present packages over total (machine truth)", () => {
+test("profileProgress: installed / WANTED — total is the goal, present the progress", () => {
   const m = seedWithProfiles();
-  // nothing present yet
+  applyProfile(m, "All tools"); // pull rg + bat in → both wanted
+  // wanted 2, none installed yet
   assert.deepEqual(profileProgress(m, "All tools"), { present: 0, total: 2 });
   setStatusData(m, 1, "ok"); // rg present
   assert.deepEqual(profileProgress(m, "All tools"), { present: 1, total: 2 });
@@ -434,10 +435,18 @@ test("profileProgress: unknown profile → 0/0", () => {
   assert.deepEqual(profileProgress(m, "Nope"), { present: 0, total: 0 });
 });
 
-test("profileProgress: reflects presence, not intent", () => {
+test("profileProgress: inactive bundle wants nothing → 0/0", () => {
   const m = seedWithProfiles();
-  applyProfile(m, "All tools"); // intent: full — but nothing installed
+  // Not applied → no package is desired-present → the goal is empty.
+  assert.deepEqual(profileProgress(m, "All tools"), { present: 0, total: 0 });
+});
+
+test("profileProgress: total shrinks when a member is de-selected (extra out)", () => {
+  const m = seedWithProfiles();
+  applyProfile(m, "All tools"); // rg + bat wanted → total 2
   assert.deepEqual(profileProgress(m, "All tools"), { present: 0, total: 2 });
+  setDecision(m, 2, "out"); // user drops bat → no longer in the goal
+  assert.deepEqual(profileProgress(m, "All tools"), { present: 0, total: 1 });
 });
 
 test("clearAllDecisions also drops active profiles (true reset)", () => {

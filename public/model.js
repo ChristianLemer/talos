@@ -390,20 +390,26 @@ export function profileStateOf(model, name) {
   });
 }
 
-// Present-count for a profile — MACHINE TRUTH, live-derived (not intent). Of the
-// profile's packages, how many are present on the machine right now. Distinct
-// from profileStateOf (off/full/hollow = intention). A profile can be "full"
-// (intended) yet 0/N present (nothing installed yet) — both are correct.
+// Progress-count for a bundle card — "installed / wanted", i.e. how far the
+// machine has come toward what this bundle WILL put down. `total` = the bundle's
+// packages that are desired-present (the future: what Apply will install/keep),
+// `present` = those already installed now. So present ≤ total, and it reads as
+// progress toward the goal, tracking BOTH the scan (present rises) and toggles
+// (total shifts). An inactive bundle wants nothing → 0/0 (the view blanks it).
 export function profileProgress(model, name) {
   const prof = model.profiles.get(name);
   if (!prof) return { present: 0, total: 0 };
-  const byName = new Map();
-  for (const p of model.pkgs.values()) byName.set(p.name, p);
-  let present = 0;
+  const idByName = new Map();
+  for (const [i, p] of model.pkgs) idByName.set(p.name, i);
+  let present = 0, total = 0;
   for (const pkgName of prof.packages) {
-    if (byName.get(pkgName)?.present === true) present++;
+    const i = idByName.get(pkgName);
+    if (i == null) continue;
+    if (desiredOf(model, i) !== "present") continue; // not wanted → not in the goal
+    total++;
+    if (model.pkgs.get(i)?.present === true) present++;
   }
-  return { present, total: prof.packages.length };
+  return { present, total };
 }
 
 // --- persistence (by stable key, survives reordering) -----------------------

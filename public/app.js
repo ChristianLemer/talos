@@ -197,9 +197,14 @@ function paintProfiles() {
       sw.classList.toggle("mixed", st === "hollow");
       sw.classList.toggle("on-out", st === "off");
     }
+    // "installed / wanted" — progress toward what this bundle will put down.
+    // Blank when the bundle wants nothing (inactive) so an off card stays quiet.
     const { present, total } = M.profileProgress(model, name);
     const countEl = card.querySelector(".pc-count");
-    if (countEl) countEl.textContent = total ? `${present}/${total}` : "";
+    if (countEl) {
+      countEl.textContent = total ? `${present}/${total}` : "";
+      countEl.title = total ? `${present} installed of ${total} this bundle wants` : "";
+    }
   }
 }
 // Click rule (bundle-driven, spec Consolidation §2): a bundle card is a TOGGLE.
