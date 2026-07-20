@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   actionOf,
+  addToPersonal,
   applyProfile,
   applySavedSelection,
   bundleAct,
@@ -18,12 +19,16 @@ import {
   desiredOf,
   isActionable,
   isDeviated,
+  isInPersonal,
   isLocked,
+  isProfileActive,
   loadPlan,
+  PERSONAL_BUNDLE,
   persistablePkgs,
   profileProgress,
   profilesForPkg,
   profileStateOf,
+  removeFromPersonal,
   removeProfile,
   setDecision,
   setInstalledVersion,
@@ -32,6 +37,26 @@ import {
   toggleOf,
   versionSummary,
 } from "../public/model.js";
+
+test("personal bundle: exists, always active, empty by default", () => {
+  const m = createModel();
+  loadPlan(m, [], [{ i: 0, name: "rg", bundle: "", posture: "opt-in" }], []);
+  assert.equal(isProfileActive(m, PERSONAL_BUNDLE), true); // always on
+  assert.deepEqual(m.profiles.get(PERSONAL_BUNDLE).packages, []);
+});
+
+test("addToPersonal / removeFromPersonal grow it and pull the package", () => {
+  const m = createModel();
+  loadPlan(m, [], [{ i: 0, name: "rg", bundle: "", posture: "opt-in" }], []);
+  addToPersonal(m, "rg");
+  assert.deepEqual(m.profiles.get(PERSONAL_BUNDLE).packages, ["rg"]);
+  assert.equal(isInPersonal(m, "rg"), true);
+  assert.equal(toggleOf(m, 0), "in"); // promoted by My setup
+  assert.equal(desiredOf(m, 0), "present");
+  removeFromPersonal(m, "rg");
+  assert.deepEqual(m.profiles.get(PERSONAL_BUNDLE).packages, []);
+  assert.equal(toggleOf(m, 0), "out"); // no longer promoted
+});
 
 // A plan WITH profiles: reuses the opt-in rg/bat fixture, adds two profiles.
 function seedWithProfiles() {
@@ -449,12 +474,15 @@ test("profileProgress: total shrinks when a member is de-selected (extra out)", 
   assert.deepEqual(profileProgress(m, "All tools"), { present: 0, total: 1 });
 });
 
-test("clearAllDecisions also drops active profiles (true reset)", () => {
+test("clearAllDecisions drops author profiles but keeps personal empty+active", () => {
   const m = seedWithProfiles();
   applyProfile(m, "All tools");
+  addToPersonal(m, "rg"); // user also picked something
   setDecision(m, 1, "out");
   clearAllDecisions(m);
-  assert.deepEqual(m.activeProfiles.size, 0);
+  // Only the always-on personal bundle remains active, now empty.
+  assert.deepEqual([...m.activeProfiles], [PERSONAL_BUNDLE]);
+  assert.deepEqual(m.profiles.get(PERSONAL_BUNDLE).packages, []);
   assert.deepEqual(m.decision.size, 0);
   assert.deepEqual(toggleOf(m, 1), "out"); // back to opt-in default
   assert.deepEqual(profileStateOf(m, "All tools"), "off");

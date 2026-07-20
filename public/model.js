@@ -13,6 +13,12 @@ import {
 } from "./decision.js";
 import { compareVersions } from "./version.js";
 
+// The user's own editable bundle — always active, promotes what the user ADDED
+// from the Catalog. "Wanting" lives here (force is retired, spec §17): a package
+// is wanted if an active bundle (author's or this one) promotes it and it isn't
+// vetoed. Its members persist locally (selection.personal).
+export const PERSONAL_BUNDLE = "My setup";
+
 export function createModel() {
   return {
     pkgs: new Map(), // i -> PkgRecord
@@ -78,6 +84,32 @@ export function loadPlan(model, bundles, steps, profiles = []) {
     const be = model.bundles.get(s.bundle);
     if (be) be.pkgIds.push(s.i);
   }
+  // Seed the always-on personal bundle (spec §14-17). Its members are restored
+  // separately from the local store (applySavedPersonal), not from the server.
+  if (!model.profiles.has(PERSONAL_BUNDLE)) {
+    model.profiles.set(PERSONAL_BUNDLE, {
+      name: PERSONAL_BUNDLE,
+      emoji: "⭐",
+      usage: "The packages you picked yourself.",
+      highlights: [],
+      description: "Your own selection.",
+      packages: [],
+    });
+  }
+  model.activeProfiles.add(PERSONAL_BUNDLE);
+}
+
+// --- personal bundle (the user's own editable, always-active bundle) ---------
+export function addToPersonal(model, pkgName) {
+  const p = model.profiles.get(PERSONAL_BUNDLE);
+  if (p && !p.packages.includes(pkgName)) p.packages.push(pkgName);
+}
+export function removeFromPersonal(model, pkgName) {
+  const p = model.profiles.get(PERSONAL_BUNDLE);
+  if (p) p.packages = p.packages.filter((n) => n !== pkgName);
+}
+export function isInPersonal(model, pkgName) {
+  return !!model.profiles.get(PERSONAL_BUNDLE)?.packages.includes(pkgName);
 }
 
 // --- per-package queries (delegate rules to decision.js) --------------------
@@ -247,6 +279,13 @@ export function setDecision(model, i, state) {
 export function clearAllDecisions(model) {
   model.decision.clear();
   model.activeProfiles.clear();
+  // The personal bundle is always-on and emptied by a reset (not removed): clear
+  // its members, then re-activate it so "My setup" stays present but blank.
+  const personal = model.profiles.get(PERSONAL_BUNDLE);
+  if (personal) {
+    personal.packages = [];
+    model.activeProfiles.add(PERSONAL_BUNDLE);
+  }
 }
 export function setPresence(model, i, present) {
   const p = model.pkgs.get(i);
@@ -358,7 +397,13 @@ export function isProfileActive(model, name) {
 // default OR has an active profile — both are cleared by clearAllDecisions. The
 // domain answer to "is Reset meaningful right now?", kept out of the view.
 export function canReset(model) {
-  if (model.activeProfiles.size > 0) return true;
+  // Any ACTIVE author bundle (not the always-on personal one) is a change.
+  for (const name of model.activeProfiles) {
+    if (name !== PERSONAL_BUNDLE) return true;
+  }
+  // A non-empty personal bundle (the user added packages) is a change.
+  if ((model.profiles.get(PERSONAL_BUNDLE)?.packages.length ?? 0) > 0) return true;
+  // A manual override (veto) on any package is a change.
   for (const i of model.pkgs.keys()) if (isDeviated(model, i)) return true;
   return false;
 }
