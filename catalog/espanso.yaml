@@ -1,0 +1,6 @@
+# Espanso — cross-platform text expander.
+name: Espanso
+description: A cross-platform text expander written in Rust.
+winget: Espanso.Espanso
+brew: espanso
+category: [legacy]

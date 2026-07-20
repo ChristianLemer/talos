@@ -1,0 +1,6 @@
+# 7-Zip — file archiver with a high compression ratio.
+name: 7-Zip
+description: A file archiver with a high compression ratio
+winget: 7zip.7zip
+brew: sevenzip
+category: [legacy]

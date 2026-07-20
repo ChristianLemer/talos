@@ -1,0 +1,5 @@
+# Notepad++ — source code editor and Notepad replacement for Windows.
+name: Notepad++
+description: Source code editor and Notepad replacement for Windows.
+winget: Notepad++.Notepad++
+category: [legacy]

@@ -1,0 +1,6 @@
+# FileZilla — FTP/SFTP client. Binary only for now; the FTP config atom will be
+# added later (like starship-config) when the config file is available.
+name: FileZilla
+description: FTP, FTPS and SFTP client
+winget: TimKosse.FileZilla.Client
+category: [legacy]

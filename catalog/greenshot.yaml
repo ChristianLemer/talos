@@ -1,0 +1,5 @@
+# Greenshot — screenshot tool for Windows.
+name: Greenshot
+description: Screenshot tool for Windows.
+winget: Greenshot.Greenshot
+category: [legacy]

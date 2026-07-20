@@ -1,0 +1,6 @@
+# Miro — visual collaboration whiteboard.
+name: Miro
+description: A visual collaboration platform.
+winget: Miro.Miro
+brew: miro
+category: [legacy]
