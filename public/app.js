@@ -155,10 +155,14 @@ function repaintAll() {
 
 // --- profiles: a bar of one-click additive selections -----------------------
 const profileEls = {}; // name → card element
-function renderProfiles(profiles, columns = 2) {
+function renderProfiles(_profiles, columns = 2) {
   const bar = document.getElementById("profiles");
   bar.innerHTML = "";
   for (const k of Object.keys(profileEls)) delete profileEls[k];
+  // Render from the MODEL's profiles, not the raw server list: the model also
+  // holds the always-on personal bundle ("My setup"), seeded by loadPlan, which
+  // the server never sends. So the personal card is present from the start.
+  const profiles = [...model.profiles.values()];
   if (!profiles.length) {
     bar.hidden = true;
     return;
