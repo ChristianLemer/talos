@@ -110,6 +110,27 @@
       .toggle.locked::before { content:"🔒"; position:absolute; left:44px; top:2px; font-size:11px; }
       .toggle:not(.locked):hover { filter:brightness(1.2); }
 
+      /* 3-detent segmented control (row): ✕ · auto · ✓. POSITION = which cell is
+         .sel (the user's hand). COLOUR = act-add/act-remove on the whole .seg (the
+         diff from actionOf), so `auto` can glow green/red. Spec §21b. */
+      .seg { display:inline-flex; border:1px solid var(--line); border-radius:7px;
+             overflow:hidden; flex:none; font-size:11px; line-height:1; }
+      .seg-cell { background:none; border:0; color:var(--dim); cursor:pointer;
+                  padding:4px 8px; font:inherit; transition:background .12s, color .12s; }
+      .seg-cell + .seg-cell { border-left:1px solid var(--line); }
+      .seg-cell:hover:not(.sel):not(:disabled) { color:var(--fg); background:var(--line); }
+      .seg-cell.sel { color:var(--fg); }
+      .seg-cell.seg-auto.sel { background:#2a2e42; }               /* neutral middle */
+      .seg-cell.seg-in.sel   { background:#2c3a2c; color:#c0caf5; } /* want (calm green) */
+      .seg-cell.seg-out.sel  { background:#3a2c30; color:#c0caf5; } /* refuse (calm red) */
+      /* COLOUR overlay — the diff. When Apply WOULD act, the selected cell goes
+         VIVID: green (install/update) or red (remove). Rides actionOf, independent
+         of which cell is selected (auto included). */
+      .seg.act-add    .seg-cell.sel { background:#9ece6a; color:#16161e; }
+      .seg.act-remove .seg-cell.sel { background:#f7768e; color:#16161e; }
+      .seg.locked { opacity:.5; }
+      .seg.locked .seg-cell { cursor:not-allowed; }
+
       /* --- SIMPLE vs ADVANCED: only GRANULARITY differs, not the switch's meaning.
          Simple = one switch per bundle. Advanced adds per-package toggles, per-
          bundle & per-row Apply, and the default-side dot. The colour rule above is

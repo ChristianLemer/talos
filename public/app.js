@@ -227,13 +227,17 @@ function applyProfileClick(name) {
   persistSelection();
 }
 
-// A real sliding switch: a track with a knob that sits left (out), right (in),
-// or centre (mixed). State classes (on-in / on-out / mixed / locked / deviated)
-// are set by paintPkg/paintBundle; the CSS positions and colours the knob.
+// A 3-detent segmented control: ✕ (out) · auto · ✓ (in). POSITION is the user's
+// hand (which cell is .sel); COLOUR (green/red) is overlaid by paintPkg from the
+// computed action, independently — so `auto` can read green (a bundle will
+// install it) or red (present, no longer wanted). See spec §21b.
 function makeToggle() {
   const el = document.createElement("span");
-  el.className = "toggle on-in";
-  el.innerHTML = '<span class="knob"></span>';
+  el.className = "seg";
+  el.innerHTML =
+    '<button class="seg-cell seg-out" data-v="out" title="Refuse — never install">✕</button>' +
+    '<button class="seg-cell seg-auto" data-v="auto" title="Auto — follow the bundles">auto</button>' +
+    '<button class="seg-cell seg-in" data-v="in" title="Want — always install">✓</button>';
   return el;
 }
 
@@ -257,22 +261,18 @@ function paintPkg(i) {
     r.add.textContent = inPersonal ? "✓ Added" : "Add";
     r.add.classList.toggle("in", inPersonal);
   }
-  const posture = M.postureOf(model, i);
-  const on = M.toggleOf(model, i); // "in" | "out"
   const locked = M.isLocked(model, i);
-  const deviated = M.isDeviated(model, i);
   const el = r.chk;
-  el.className = "toggle" + (on === "in" ? " on-in" : " on-out") +
-    (locked ? " locked" : "") + (deviated ? " deviated" : "") + actClass(i);
-  el.dataset.default = _postureDefault(posture); // CSS marks the default side (advanced only)
-  el.style.cursor = locked ? "not-allowed" : "pointer";
-  el.title = locked
-    ? (posture === "mandatory"
-      ? "Required by the author — always installed"
-      : "Blocked by the author — never installed")
-    : `Toggle: in = install, out = skip (author default: ${
-      _postureDefault(posture)
-    })`;
+  // Two layers (spec §21b): POSITION = the raw manual hand (in/out/null→auto),
+  // shown as the selected cell. COLOUR = the computed diff (actClass from
+  // actionOf), on the whole control, so `auto` can glow green/red.
+  const manual = M.manualToggle(model, i); // "in" | "out" | null(auto)
+  const sel = manual === "in" ? "in" : manual === "out" ? "out" : "auto";
+  el.className = "seg" + (locked ? " locked" : "") + actClass(i);
+  el.querySelectorAll(".seg-cell").forEach((cell) => {
+    cell.classList.toggle("sel", cell.dataset.v === sel);
+    cell.disabled = locked;
+  });
   // A row whose desired state is absent reads dimmer (not wanted).
   const wanted = M.desiredOf(model, i) === "present";
   r.details.classList.toggle("row-out", !wanted);
@@ -569,11 +569,14 @@ function render(bundles, steps, profiles = [], columns = 2) {
     });
     const sum = document.createElement("summary");
     const chk = makeToggle();
-    chk.onclick = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      flipPkg(s.i);
-    };
+    chk.querySelectorAll(".seg-cell").forEach((cell) => {
+      cell.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const v = cell.dataset.v; // "out" | "auto" | "in"
+        setToggle(s.i, v === "auto" ? null : v); // null = auto (clears the manual)
+      };
+    });
     const badge = document.createElement("span");
     badge.className = "badge checking";
     badge.textContent = "⠹"; // pre-scan spinner, not a verdict yet
