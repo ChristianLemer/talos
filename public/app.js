@@ -120,8 +120,6 @@ const LABEL = {
 // (see desiredState). Apply converges the machine to the desired state —
 // model A, chezmoi-pure: an opt-in left auto but present WILL be removed.
 // Only "on"/"off" overrides are persisted; "auto" is absence.
-const bundleEls = {}; // bundle name → DOM refs + ephemeral run counters
-// (data — pkgIds/posture/selectable — lives in model.bundles).
 const ICON_COPY =
   '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
 const ICON_OK =
@@ -153,11 +151,10 @@ function applySavedSelection(sel) {
   repaintAll();
 }
 // Repaint EVERYTHING — used after a change that can move many rows at once (a
-// profile applied/removed, a restored selection). Package switches, bundle pills,
-// profile chips, then the global liveness/plan preview.
+// profile applied/removed, a restored selection). Package switches, profile
+// chips, then the global liveness/plan preview.
 function repaintAll() {
   for (const i of model.pkgs.keys()) paintPkg(i);
-  for (const name of Object.keys(bundleEls)) paintBundle(name);
   paintProfiles();
   refreshLiveness();
 }
@@ -421,81 +418,9 @@ function paintVersion(i) {
 function setToggle(i, state, opts = {}) {
   if (!M.setDecision(model, i, state)) return; // locked → refused
   paintPkg(i);
-  const b = model.pkgs.get(i)?.bundle; // repaint the parent bundle pill:
-  if (b) paintBundle(b); // its in/out/MIXED may have changed
   paintProfiles(); // a manual toggle can make a profile go hollow (or full again)
   refreshLiveness();
   if (!opts.silent) persistSelection();
-}
-// Clicking the toggle flips to the OTHER side (in ↔ out) from wherever it is now.
-function flipPkg(i) {
-  if (!M.isLocked(model, i)) {
-    setToggle(i, M.toggleOf(model, i) === "in" ? "out" : "in");
-  }
-}
-
-// A bundle is LOCKED if not selectable, or all its packages are locked.
-function bundleLocked(name) {
-  return M.bundleLocked(model, name);
-}
-// The bundle toggle APPLIES a side to all its changeable packages at once (not an
-// inherited layer — it writes each package's own toggle). Locked packages keep
-// the author's choice.
-function setBundleToggle(name, state, opts = {}) {
-  if (bundleLocked(name)) return;
-  const bm = model.bundles.get(name);
-  if (!bm) return;
-  bm.pkgIds.forEach((i) => {
-    if (!M.isLocked(model, i)) setToggle(i, state, { silent: true });
-  });
-  paintBundle(name);
-  if (!opts.silent) persistSelection();
-}
-// Clicking the bundle toggle: if every changeable package is already "in", flip
-// them all to "out"; otherwise pull them all "in". (Majority-in → out, else in.)
-function flipBundle(name) {
-  if (bundleLocked(name)) return;
-  const bm = model.bundles.get(name);
-  const free = bm.pkgIds.filter((i) => !M.isLocked(model, i));
-  const allIn = free.every((i) => M.toggleOf(model, i) === "in");
-  setBundleToggle(name, allIn ? "out" : "in");
-}
-// Paint the bundle's own toggle, reflecting its changeable packages in THREE
-// states: all in → on-in, all out → on-out, a MIX → "mixed" (greyed, neither
-// side lit) so the bundle toggle never lies about a panachage. deviated = any
-// package moved off its author default.
-function paintBundle(name) {
-  const be = bundleEls[name];
-  const bm = model.bundles.get(name);
-  if (!be || !bm) return;
-  const el = be.chk;
-  if (bundleLocked(name)) {
-    el.className = "toggle locked " +
-      (bm.posture === "forbidden" ? "on-out" : "on-in");
-    el.dataset.default = _postureDefault(bm.posture);
-    el.style.cursor = "not-allowed";
-    el.title = bm.selectable
-      ? "All packages here are fixed by the author"
-      : "This bundle is always on";
-    return;
-  }
-  const state = M.bundleToggleState(model, name); // "on-in" | "on-out" | "mixed"
-  const deviated = bm.pkgIds.some((i) => M.isDeviated(model, i));
-  const actDir = M.bundleAct(model, name); // "add" | "remove" | ""
-  const act = actDir === "add"
-    ? " act-add"
-    : actDir === "remove"
-    ? " act-remove"
-    : "";
-  el.className = "toggle " + state + (deviated ? " deviated" : "") + act;
-  el.dataset.default = _postureDefault(bm.posture);
-  el.style.cursor = "pointer";
-  el.title = state === "mixed"
-    ? "Mixed — some in, some out. Click to pull all in."
-    : "Toggle the whole bundle in / out";
-}
-function refreshBundleChk(name) {
-  paintBundle(name);
 }
 
 // Would applying package `i` actually DO something, given its EFFECTIVE
@@ -555,18 +480,6 @@ function refreshLiveness() {
     // only on state/outdated messages. Without this the number stayed stale
     // (e.g. "→ 15.2.0 update") while the button already said uninstall.
   }
-  // Bundle buttons: live if any of their packages would act.
-  for (const name of Object.keys(bundleEls)) {
-    const be = bundleEls[name];
-    const live = M.bundleAnyActionable(model, name);
-    be.apply.classList.toggle("live", live && !busy);
-    be.apply.disabled = busy;
-    paintBundle(name); // bundle switch colour follows the plan too
-    // Preview the plan AT REST: a bundle with pending actions opens, a stable
-    // one folds. Only when idle — during a run the execution logic (setStatus)
-    // owns open/close, and we never fight the user's manual toggle mid-run.
-    if (!busy) be.details.open = live;
-  }
   // Global button: live if anything anywhere would act.
   const g = document.getElementById("install-all");
   g.classList.toggle("live", ids.some(isActionable) && !busy);
@@ -606,8 +519,8 @@ function applyScoped(scopeIdx) {
   ws.send(JSON.stringify({ type: "apply", on, off, scope: scopeIdx }));
 }
 
-function render(bundles, steps, profiles = [], columns = 2) {
-  M.loadPlan(model, bundles, steps, profiles);
+function render(steps, profiles = [], columns = 2) {
+  M.loadPlan(model, steps, profiles);
   // The scan starts now and won't settle until `state-done`. Freeze actions and
   // dim the panel until then: rows show "checking…", nothing is clickable, and
   // each lights up as its probe answers — no acting on an incomplete plan.
@@ -615,11 +528,7 @@ function render(bundles, steps, profiles = [], columns = 2) {
   stepsEl.classList.add("scanning");
   renderProfiles(profiles, columns);
   // FLATTEN (spec §2): no bundle accordion. Rows render flat into #steps below.
-  // bundleEls stays empty on purpose — every loop over it no-ops and every
-  // deref is guarded `if (be)`, so the old bundle-accordion behaviour is inert.
-  // Bundle cards on top (needs) live in #profiles; bundle-as-toggle is B2.
-  for (const k of Object.keys(bundleEls)) delete bundleEls[k];
-
+  // Bundle cards on top (needs) live in #profiles (renderProfiles).
   // Order rows by primary category then name, and inject a category header before
   // each group. The Catalog tab shows the headers (grouped-by-category view, spec
   // §22); the Bundles tab hides them (it filters to wanted/will-remove rows). Rows
@@ -630,8 +539,6 @@ function render(bundles, steps, profiles = [], columns = 2) {
   );
   let lastCat = null;
   for (const s of orderedSteps) {
-    const be = bundleEls[s.bundle];
-    const body = be ? be.details.querySelector(".bundle-body") : stepsEl;
     const cat = primaryCat(s);
     if (cat !== lastCat) {
       const h = document.createElement("div");
@@ -734,7 +641,7 @@ function render(bundles, steps, profiles = [], columns = 2) {
     fbBanner.className = "fb-banner";
     panel.append(fbBanner, copy, host);
     d.append(sum, panel);
-    body.append(d);
+    stepsEl.append(d);
     rows[s.i] = {
       details: d,
       chk,
@@ -750,8 +657,6 @@ function render(bundles, steps, profiles = [], columns = 2) {
     };
     paintPkg(s.i); // initial pill: locked word for mandatory/forbidden, else auto
   }
-  // Now that every bundle knows its packages, paint bundle pills (locked or auto).
-  for (const name of Object.keys(bundleEls)) refreshBundleChk(name);
   // Freeze all actions immediately: the scan (scanning=true) hasn't settled, so
   // no button should be live until state-done proves the plan complete.
   refreshLiveness();
@@ -865,7 +770,6 @@ function enterFocusMode(planIndices) {
     // focus-show = this row is part of the plan → stays visible throughout.
     rows[i].details.classList.toggle("focus-show", inPlan.has(i));
   }
-  recomputeEmptyBundles();
 }
 function exitFocusMode() {
   document.body.classList.remove("applying");
@@ -873,21 +777,6 @@ function exitFocusMode() {
   // it (failures open, successes folded) — the failures thus stand out on return.
   for (const i of Object.keys(rows).map(Number)) {
     rows[i].details.classList.remove("focus-show");
-  }
-  for (const name of Object.keys(bundleEls)) {
-    bundleEls[name].details.classList.remove("focus-empty");
-  }
-}
-// Hide a bundle card whose every row is currently focus-hidden (no empty shells).
-function recomputeEmptyBundles() {
-  if (!document.body.classList.contains("applying")) return;
-  for (const name of Object.keys(bundleEls)) {
-    const be = bundleEls[name];
-    const pkgIds = model.bundles.get(name)?.pkgIds || [];
-    const anyShown = pkgIds.some((i) =>
-      rows[i]?.details.classList.contains("focus-show")
-    );
-    be.details.classList.toggle("focus-empty", !anyShown);
   }
 }
 
@@ -1062,34 +951,6 @@ function setStatus(i, status) {
     if (RUNNING.has(status)) r.delta.innerHTML = "";
     else paintVersion(i);
   }
-  // Bundle-level: open while working; STAY open between packages. Packages run
-  // SERIALLY (one manager at a time), so `active` dips to 0 between each — folding
-  // on active===0 mid-run made the card flap shut/open per package. Folding of a
-  // finished bundle now happens ONCE, at the end of the whole Apply (see `done`).
-  const be = bundleEls[model.pkgs.get(i)?.bundle];
-  if (be) {
-    if (RUNNING.has(status)) {
-      be.active++;
-      be.details.open = true;
-    }
-    if (status === "fail") {
-      be.failed = true;
-      be.details.open = true;
-    }
-    if (status === "ok" || status === "absent" || status === "fail") {
-      be.active = Math.max(0, be.active - 1);
-    }
-    be.status.textContent = status === "installing"
-      ? "installing…"
-      : status === "uninstalling"
-      ? "removing…"
-      : status === "upgrading"
-      ? "updating…"
-      : be.failed
-      ? "failed"
-      : "";
-    be.status.className = "bstatus " + (be.failed ? "fail" : status);
-  }
 }
 
 const ws = new WebSocket(`ws://${location.host}`);
@@ -1261,7 +1122,6 @@ ws.onmessage = (ev) => {
   switch (msg.type) {
     case "plan":
       render(
-        msg.bundles || [],
         msg.steps,
         msg.profiles || [],
         msg.profileColumns,
@@ -1396,15 +1256,6 @@ ws.onmessage = (ev) => {
       applyRunning = false;
       stepsEl.classList.remove("steps-refreshing"); // net: scan found nothing → no apply-plan
       exitFocusMode(); // everything reappears — failures already open, stand out
-      // Fold bundles that finished cleanly — ONCE, now the whole run is over (not
-      // between packages). A failed bundle stays open so its error is visible.
-      for (const be of Object.values(bundleEls)) {
-        be.active = 0;
-        if (!be.failed) {
-          be.details.open = false;
-          be.status.textContent = "";
-        }
-      }
       refreshLiveness(); // unlock; re-light what's still useful
       break;
     case "overlay":

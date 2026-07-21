@@ -22,7 +22,6 @@ export const PERSONAL_BUNDLE = "My setup";
 export function createModel() {
   return {
     pkgs: new Map(), // i -> PkgRecord
-    bundles: new Map(), // name -> BundleRecord
     decision: new Map(), // i -> "in" | "out"  (absence = auto)
     profiles: new Map(), // name -> ProfileRecord {name, emoji, description, packages}
     activeProfiles: new Set(), // names of profiles the user has applied
@@ -30,10 +29,9 @@ export function createModel() {
   };
 }
 
-// Build the model from the server `plan` message (bundles + flat steps + profiles).
-export function loadPlan(model, bundles, steps, profiles = []) {
+// Build the model from the server `plan` message (flat steps + profiles).
+export function loadPlan(model, steps, profiles = []) {
   model.pkgs.clear();
-  model.bundles.clear();
   model.profiles.clear();
   model.activeProfiles.clear();
   for (const p of profiles) {
@@ -47,16 +45,6 @@ export function loadPlan(model, bundles, steps, profiles = []) {
       needs: p.needs ?? [], // other bundles this one depends on (cascade, §23)
     });
   }
-  for (const b of bundles) {
-    model.bundles.set(b.name, {
-      name: b.name,
-      emoji: b.emoji || "📦",
-      description: b.description || "",
-      posture: b.posture || "mandatory",
-      selectable: b.selectable !== false,
-      pkgIds: [],
-    });
-  }
   for (const s of steps) {
     model.pkgs.set(s.i, {
       i: s.i,
@@ -66,6 +54,7 @@ export function loadPlan(model, bundles, steps, profiles = []) {
       posture: s.posture || "mandatory",
       canUninstall: !!s.canUninstall,
       isConfig: !!s.isConfig,
+      requires: s.requires ?? [], // package names this one needs (transitive pull, §8)
       present: null,
       outdated: false,
       // Version pinning: `pin` is the exact reference declared in the YAML (null
@@ -82,8 +71,6 @@ export function loadPlan(model, bundles, steps, profiles = []) {
       // intent is lost; machine reality is re-scanned). Spec Consolidation §6.
       key: s.name,
     });
-    const be = model.bundles.get(s.bundle);
-    if (be) be.pkgIds.push(s.i);
   }
   // Seed the always-on personal bundle (spec §14-17). Its members are restored
   // separately from the local store (applySavedPersonal), not from the server.
@@ -137,19 +124,61 @@ export function inActiveProfile(model, i) {
 // active profile pulls it "in"; else null (follow posture). This is what makes a
 // profile additive yet overridable — the rule lives in decision.effectiveToggle.
 export function userToggle(model, i) {
-  return effectiveToggle(manualToggle(model, i), inActiveProfile(model, i));
+  return effectiveToggle(manualToggle(model, i), isPulled(model, i));
 }
 export function isLocked(model, i) {
   return isLockedPosture(postureOf(model, i));
 }
+// A package REFUSES to be wanted if the author forbade it or the user vetoed it by
+// hand. Such a package never installs, so it also can't propagate its `requires`.
+function refuses(model, i) {
+  return isLocked(model, i) || manualToggle(model, i) === "out";
+}
+// The set of package NAMES that end up wanted "in" — the fixpoint of: SEED with
+// what a manual "in" or an active bundle pulls, then CLOSE over `requires` (a
+// wanted package pulls its requirements "in" too, transitively). A manual "out"
+// or `forbidden` STOPS propagation (§8: a package that won't install can't pull
+// its deps). Cycle-safe: the set only grows, so the walk terminates. This is the
+// live transitive pull, computed in the model (deps.rs only ORDERS the install).
+export function wantedNames(model) {
+  const nameToId = new Map();
+  for (const [i, p] of model.pkgs) nameToId.set(p.name, i);
+  const wanted = new Set();
+  for (const [i, p] of model.pkgs) {
+    if (refuses(model, i)) continue;
+    if (manualToggle(model, i) === "in" || inActiveProfile(model, i)) wanted.add(p.name);
+  }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const name of [...wanted]) {
+      const p = model.pkgs.get(nameToId.get(name));
+      for (const req of p?.requires ?? []) {
+        const j = nameToId.get(req);
+        if (j == null || refuses(model, j) || wanted.has(req)) continue;
+        wanted.add(req);
+        changed = true;
+      }
+    }
+  }
+  return wanted;
+}
+// Is this package pulled "in" — by an active bundle OR by a wanted package that
+// requires it (transitively)? Feeds the `pulled` argument of the decision rules.
+// (When the user forced it "in" by hand, the manual toggle wins upstream anyway,
+// so reporting it as pulled too is harmless — toggleState checks manual first.)
+export function isPulled(model, i) {
+  const name = model.pkgs.get(i)?.name;
+  return name != null && wantedNames(model).has(name);
+}
 // Bundle-driven: the decision fns take (posture, manualToggle, pulled) — pulled =
-// "an active bundle wants this package". A manual toggle wins; else the pull
-// decides; else out. (profiles ARE the bundles now, so inActiveProfile = pulled.)
+// "an active bundle OR a wanted dependant wants this package". A manual toggle
+// wins; else the pull decides; else out. See isPulled + wantedNames (§8).
 export function toggleOf(model, i) {
-  return toggleState(postureOf(model, i), manualToggle(model, i), inActiveProfile(model, i));
+  return toggleState(postureOf(model, i), manualToggle(model, i), isPulled(model, i));
 }
 export function desiredOf(model, i) {
-  return desiredState(postureOf(model, i), manualToggle(model, i), inActiveProfile(model, i));
+  return desiredState(postureOf(model, i), manualToggle(model, i), isPulled(model, i));
 }
 export function isDeviated(model, i) {
   return isDeviation(postureOf(model, i), manualToggle(model, i));
@@ -336,45 +365,6 @@ export function appendLog(model, i, text) {
 export function resetLog(model, i) {
   const p = model.pkgs.get(i);
   if (p) p.log = "";
-}
-
-// --- bundle queries ---------------------------------------------------------
-export function bundleLocked(model, name) {
-  const be = model.bundles.get(name);
-  if (!be) return true;
-  if (!be.selectable) return true;
-  return be.pkgIds.length > 0 && be.pkgIds.every((i) => isLocked(model, i));
-}
-// Three-state toggle for a bundle: all in → "on-in", all out → "on-out",
-// a real mix → "mixed". Empty free-list → "on-in" (nothing to mix).
-// Returns tokens WITHOUT a leading space; the view adds the space when it
-// concatenates the className (so don't reintroduce a " mixed" comparison).
-export function bundleToggleState(model, name) {
-  const be = model.bundles.get(name);
-  if (!be) return "on-in";
-  const free = be.pkgIds.filter((i) => !isLocked(model, i));
-  if (free.length === 0) return "on-in"; // all locked → default in
-  const allIn = free.every((i) => toggleOf(model, i) === "in");
-  const allOut = free.every((i) => toggleOf(model, i) === "out");
-  if (allIn || allOut) return (allOut && !allIn) ? "on-out" : "on-in";
-  return "mixed";
-}
-export function bundleAnyActionable(model, name) {
-  const be = model.bundles.get(name);
-  return !!be && be.pkgIds.some((i) => isActionable(model, i));
-}
-// Aggregate colour direction for a bundle: "add" if any pkg would install/update,
-// else "remove" if any would remove, else "".
-export function bundleAct(model, name) {
-  const be = model.bundles.get(name);
-  if (!be) return "";
-  let removes = false;
-  for (const i of be.pkgIds) {
-    const a = actionOf(model, i);
-    if (a === "install" || a === "upgrade") return "add";
-    if (a === "uninstall") removes = true;
-  }
-  return removes ? "remove" : "";
 }
 
 // --- profiles ---------------------------------------------------------------

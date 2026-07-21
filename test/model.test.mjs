@@ -8,10 +8,6 @@ import {
   addToPersonal,
   applyProfile,
   applySavedSelection,
-  bundleAct,
-  bundleAnyActionable,
-  bundleLocked,
-  bundleToggleState,
   buttonAction,
   canReset,
   clearAllDecisions,
@@ -42,14 +38,14 @@ import {
 
 test("personal bundle: exists, always active, empty by default", () => {
   const m = createModel();
-  loadPlan(m, [], [{ i: 0, name: "rg", bundle: "", posture: "opt-in" }], []);
+  loadPlan(m, [{ i: 0, name: "rg", bundle: "", posture: "opt-in" }], []);
   assert.equal(isProfileActive(m, PERSONAL_BUNDLE), true); // always on
   assert.deepEqual(m.profiles.get(PERSONAL_BUNDLE).packages, []);
 });
 
 test("bundle cascade: activating a bundle activates its needs transitively", () => {
   const m = createModel();
-  loadPlan(m, [], [{ i: 0, name: "uv", bundle: "", posture: "opt-in" }], [
+  loadPlan(m, [{ i: 0, name: "uv", bundle: "", posture: "opt-in" }], [
     { name: "Base", packages: [], needs: [] },
     { name: "Documents", packages: [], needs: ["Base"] },
     { name: "Data", packages: ["uv"], needs: ["Documents"] },
@@ -73,14 +69,14 @@ test("active bundles persist + restore (with cascade)", () => {
     { name: "Documents", packages: [], needs: ["Base"] },
     { name: "Terminal", packages: [], needs: [] },
   ];
-  loadPlan(m, [], [], plan);
+  loadPlan(m, [], plan);
   applyProfile(m, "Documents"); // cascades Base
   applyProfile(m, "Terminal");
   const saved = persistableActiveBundles(m); // excludes the always-on personal
   assert.deepEqual(saved.sort(), ["Base", "Documents", "Terminal"]);
   // Fresh model, restore
   const m2 = createModel();
-  loadPlan(m2, [], [], plan);
+  loadPlan(m2, [], plan);
   applySavedActiveBundles(m2, saved);
   assert.equal(isProfileActive(m2, "Documents"), true);
   assert.equal(isProfileActive(m2, "Base"), true);
@@ -89,7 +85,7 @@ test("active bundles persist + restore (with cascade)", () => {
 
 test("deactivating a needed bundle reverse-cascades its dependents", () => {
   const m = createModel();
-  loadPlan(m, [], [], [
+  loadPlan(m, [], [
     { name: "Base", packages: [], needs: [] },
     { name: "Documents", packages: [], needs: ["Base"] },
     { name: "Development", packages: [], needs: ["Documents"] },
@@ -108,7 +104,7 @@ test("deactivating a needed bundle reverse-cascades its dependents", () => {
 
 test("bundle cascade is cycle-guarded", () => {
   const m = createModel();
-  loadPlan(m, [], [], [
+  loadPlan(m, [], [
     { name: "A", packages: [], needs: ["B"] },
     { name: "B", packages: [], needs: ["A"] }, // cycle
   ]);
@@ -119,7 +115,7 @@ test("bundle cascade is cycle-guarded", () => {
 
 test("addToPersonal / removeFromPersonal grow it and pull the package", () => {
   const m = createModel();
-  loadPlan(m, [], [{ i: 0, name: "rg", bundle: "", posture: "opt-in" }], []);
+  loadPlan(m, [{ i: 0, name: "rg", bundle: "", posture: "opt-in" }], []);
   addToPersonal(m, "rg");
   assert.deepEqual(m.profiles.get(PERSONAL_BUNDLE).packages, ["rg"]);
   assert.equal(isInPersonal(m, "rg"), true);
@@ -135,10 +131,6 @@ function seedWithProfiles() {
   const m = createModel();
   loadPlan(
     m,
-    [
-      { name: "Base", posture: "mandatory", selectable: false },
-      { name: "Extras", posture: "opt-in", selectable: true },
-    ],
     [
       { i: 0, name: "Node", bundle: "Base", posture: "mandatory" },
       { i: 1, name: "rg", bundle: "Extras", posture: "opt-in" },
@@ -157,10 +149,6 @@ function seed() {
   const m = createModel();
   loadPlan(
     m,
-    [
-      { name: "Base", posture: "mandatory", selectable: false },
-      { name: "Extras", posture: "opt-in", selectable: true },
-    ],
     [
       {
         i: 0,
@@ -188,10 +176,9 @@ function seed() {
   return m;
 }
 
-test("loadPlan wires packages into bundles", () => {
+test("loadPlan loads the flat step list keyed by package name", () => {
   const m = seed();
   assert.deepEqual(m.pkgs.size, 3);
-  assert.deepEqual(m.bundles.get("Extras")?.pkgIds, [1, 2]);
   assert.deepEqual(m.pkgs.get(1)?.key, "rg"); // key = package name now (flat catalog)
 });
 
@@ -251,7 +238,6 @@ function seedPinned() {
   const m = createModel();
   loadPlan(
     m,
-    [{ name: "Base", posture: "mandatory", selectable: false }],
     [{
       i: 0,
       name: "jq",
@@ -404,21 +390,6 @@ test("buttonAction: pinned + installed below pin → update button", () => {
   assert.deepEqual(buttonAction(m, 0)?.type, "upgrade");
 });
 
-test("bundle toggle state: mixed when packages disagree", () => {
-  const m = seed();
-  setDecision(m, 1, "in");
-  setDecision(m, 2, "out");
-  assert.deepEqual(bundleToggleState(m, "Extras"), "mixed");
-  setDecision(m, 2, "in");
-  assert.deepEqual(bundleToggleState(m, "Extras"), "on-in");
-});
-
-test("Base bundle is locked (not selectable)", () => {
-  const m = seed();
-  assert.deepEqual(bundleLocked(m, "Base"), true);
-  assert.deepEqual(bundleLocked(m, "Extras"), false);
-});
-
 test("persist + restore selection by key", () => {
   const m = seed();
   setDecision(m, 1, "in");
@@ -435,26 +406,6 @@ test("clearAllDecisions returns everything to posture defaults", () => {
   clearAllDecisions(m);
   assert.deepEqual(toggleOf(m, 1), "out"); // back to opt-in default
   assert.deepEqual(m.decision.size, 0);
-});
-
-test("bundleAnyActionable + bundleAct reflect pending package actions", () => {
-  const m = seed();
-  setDecision(m, 1, "in");
-  setStatusData(m, 1, "waiting"); // opt-in wanted but absent → install
-  assert.deepEqual(bundleAnyActionable(m, "Extras"), true);
-  assert.deepEqual(bundleAct(m, "Extras"), "add");
-});
-
-test("bundleToggleState: all-locked (forbidden) bundle defaults to on-in", () => {
-  // Only `forbidden` locks now (§4). Build a bundle whose sole package is
-  // forbidden → no free packages → the toggle defaults to on-in.
-  const m = createModel();
-  loadPlan(
-    m,
-    [{ name: "Banned", posture: "forbidden", selectable: false }],
-    [{ i: 0, name: "nope", bundle: "Banned", posture: "forbidden" }],
-  );
-  assert.deepEqual(bundleToggleState(m, "Banned"), "on-in");
 });
 
 // --- profiles: additive pull, hollow on manual out, clean removal ------------
@@ -562,7 +513,7 @@ test("clearAllDecisions drops author profiles but keeps personal empty+active", 
 
 test("buttonAction: config-atom turned out → diff (not install)", () => {
   const m = createModel();
-  loadPlan(m, [{ name: "Terminal" }], [
+  loadPlan(m, [
     {
       i: 0,
       name: "Starship config",
@@ -577,7 +528,7 @@ test("buttonAction: config-atom turned out → diff (not install)", () => {
 
 test("buttonAction: config-atom left in → install path unchanged", () => {
   const m = createModel();
-  loadPlan(m, [{ name: "Terminal" }], [
+  loadPlan(m, [
     {
       i: 0,
       name: "Starship config",
@@ -589,4 +540,77 @@ test("buttonAction: config-atom left in → install path unchanged", () => {
   setDecision(m, 0, "in"); // wanted (nothing-by-default → pull it in)
   // in + absent (not present) → install, unchanged behaviour
   assert.deepEqual(buttonAction(m, 0)?.type, "install");
+});
+
+// --- B5: transitive requires pull (spec Consolidation §8) --------------------
+// Wanting a package pulls its `requires:` in too, transitively. A package is
+// wanted if a bundle pulls it OR the user forces it OR a wanted package requires
+// it. The walk is cycle-guarded and lives in model.js (not Rust).
+test("requires pull: forcing a package in pulls its direct requirement in", () => {
+  const m = createModel();
+  loadPlan(m, [
+    { i: 0, name: "Claude Code", bundle: "", posture: "opt-in", requires: ["Node.js"] },
+    { i: 1, name: "Node.js", bundle: "", posture: "opt-in" },
+  ], []);
+  setDecision(m, 0, "in"); // want Claude Code
+  assert.deepEqual(toggleOf(m, 1), "in"); // Node.js pulled in by the requirement
+  assert.deepEqual(desiredOf(m, 1), "present");
+});
+
+test("requires pull: transitive through a chain (astral → Claude Code → Node.js)", () => {
+  const m = createModel();
+  loadPlan(m, [
+    { i: 0, name: "astral", bundle: "", posture: "opt-in", requires: ["Claude Code"] },
+    { i: 1, name: "Claude Code", bundle: "", posture: "opt-in", requires: ["Node.js"] },
+    { i: 2, name: "Node.js", bundle: "", posture: "opt-in" },
+  ], []);
+  setDecision(m, 0, "in"); // want astral only
+  assert.deepEqual(toggleOf(m, 1), "in"); // Claude Code pulled (direct)
+  assert.deepEqual(toggleOf(m, 2), "in"); // Node.js pulled (transitive)
+});
+
+test("requires pull: an unwanted package does NOT pull its requirements", () => {
+  const m = createModel();
+  loadPlan(m, [
+    { i: 0, name: "Claude Code", bundle: "", posture: "opt-in", requires: ["Node.js"] },
+    { i: 1, name: "Node.js", bundle: "", posture: "opt-in" },
+  ], []);
+  // nobody wants Claude Code → Node.js stays out (nothing-by-default)
+  assert.deepEqual(toggleOf(m, 0), "out");
+  assert.deepEqual(toggleOf(m, 1), "out");
+});
+
+test("requires pull: a manual 'out' on the required package wins over the pull", () => {
+  const m = createModel();
+  loadPlan(m, [
+    { i: 0, name: "Claude Code", bundle: "", posture: "opt-in", requires: ["Node.js"] },
+    { i: 1, name: "Node.js", bundle: "", posture: "opt-in" },
+  ], []);
+  setDecision(m, 0, "in"); // want Claude Code
+  setDecision(m, 1, "out"); // but veto Node.js by hand
+  assert.deepEqual(toggleOf(m, 1), "out"); // manual out wins (guard rail)
+});
+
+test("requires pull: a cycle does not hang (a requires b, b requires a)", () => {
+  const m = createModel();
+  loadPlan(m, [
+    { i: 0, name: "a", bundle: "", posture: "opt-in", requires: ["b"] },
+    { i: 1, name: "b", bundle: "", posture: "opt-in", requires: ["a"] },
+  ], []);
+  setDecision(m, 0, "in");
+  assert.deepEqual(toggleOf(m, 0), "in");
+  assert.deepEqual(toggleOf(m, 1), "in"); // pulled by a, cycle-guarded (terminates)
+});
+
+test("requires pull: a bundle pulling a package also pulls that package's requires", () => {
+  const m = createModel();
+  loadPlan(m, [
+    { i: 0, name: "Claude Code", bundle: "", posture: "opt-in", requires: ["Node.js"] },
+    { i: 1, name: "Node.js", bundle: "", posture: "opt-in" },
+  ], [
+    { name: "Base", packages: ["Claude Code"], needs: [] },
+  ]);
+  applyProfile(m, "Base"); // bundle pulls Claude Code
+  assert.deepEqual(toggleOf(m, 0), "in"); // pulled by bundle
+  assert.deepEqual(toggleOf(m, 1), "in"); // Node.js pulled via Claude Code's requires
 });

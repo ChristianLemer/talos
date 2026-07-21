@@ -92,11 +92,7 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         os,
         &|m| println!("[bundles] {m}"),
     );
-    println!(
-        "[plan] {} bundles, {} steps",
-        plan.bundles.len(),
-        plan.steps.len()
-    );
+    println!("[plan] {} steps", plan.steps.len());
     // The top-panel "needs" (profiles.yaml lives INSIDE the same bundles dir; the
     // bundle scan skips it because it only reads subfolders with a bundle.yaml).
     let profiles = load_profiles(bundles_dir.to_str().unwrap_or("bundles"));
@@ -210,19 +206,9 @@ async fn root_or_ws(ws: Option<WebSocketUpgrade>, state: Arc<AppState>) -> Respo
 async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     let steps = &state.plan.steps;
 
-    // 1) REAL plan — bundles + steps scanned from bundles/ (no more hardcoding). Same keys
-    // the front expects (see app.js render/ws.onmessage).
-    let bundles_json: Vec<_> = state
-        .plan
-        .bundles
-        .iter()
-        .map(|b| {
-            json!({
-                "name": b.name, "emoji": b.emoji, "description": b.description,
-                "priority": b.priority, "selectable": b.selectable, "posture": b.posture.as_str()
-            })
-        })
-        .collect();
+    // 1) REAL plan — flat steps scanned from the catalog (no more hardcoding). Same keys
+    // the front expects (see app.js render/ws.onmessage). Bundles are the top cards,
+    // sent separately as `profiles` (profiles.rs) — steps no longer carry a bundle layer.
     let steps_json: Vec<_> = steps
         .iter()
         .enumerate()
@@ -230,7 +216,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
             json!({
                 "i": i, "name": s.name, "description": s.description, "bundle": s.bundle,
                 "canUninstall": s.uninstall.is_some(), "posture": s.posture.as_str(),
-                "isConfig": s.is_config, "pin": s.pin, "categories": s.categories
+                "isConfig": s.is_config, "pin": s.pin, "categories": s.categories,
+                "requires": s.requires // package names this one needs (B5 transitive pull, §8)
             })
         })
         .collect();
@@ -253,7 +240,6 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     // front restores (yellow). Intent is remembered, presence is re-detected.
     let plan = json!({
         "type": "plan",
-        "bundles": bundles_json,
         "steps": steps_json,
         "selection": read_selection(&state.data_dir),
         "profiles": profiles_json,

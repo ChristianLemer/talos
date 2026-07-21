@@ -5,6 +5,11 @@ use serde::Deserialize;
 use crate::managers::{managers, native_manager, IdField};
 use crate::platform::Os;
 
+// The install-policy vocabulary the front-end speaks (see model.js isLockedPosture:
+// `forbidden` locks a row). `load_from_catalog` emits every package as `OptIn`
+// today; per-package posture declared in catalog YAML is a planned add, at which
+// point `parse` wires the other variants back in. Kept as the extension point.
+#[allow(dead_code)] // only OptIn is constructed until per-package YAML posture lands
 #[derive(Debug, Clone, PartialEq)]
 pub enum Posture {
     Mandatory,
@@ -14,6 +19,7 @@ pub enum Posture {
 }
 
 impl Posture {
+    #[allow(dead_code)] // wiring stub for per-package YAML posture (see enum note)
     fn parse(s: Option<&str>) -> Posture {
         match s {
             Some("opt-out") => Posture::OptOut,
@@ -71,34 +77,6 @@ pub struct RawPkg {
     pub requires: Vec<String>,
     #[serde(default)]
     pub category: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct RawBundle {
-    #[serde(default)]
-    bundle: Option<String>,
-    #[serde(default)]
-    emoji: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    priority: Option<i64>,
-    #[serde(default)]
-    selectable: Option<bool>,
-    #[serde(default)]
-    posture: Option<String>,
-    #[serde(default)]
-    packages: Vec<RawPkg>,
-}
-
-#[derive(Debug, Clone)]
-pub struct BundleMeta {
-    pub name: String,
-    pub emoji: String,
-    pub description: String,
-    pub priority: i64,
-    pub selectable: bool,
-    pub posture: Posture,
 }
 
 #[derive(Debug, Clone)]
@@ -256,100 +234,7 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
 }
 
 pub struct Plan {
-    pub bundles: Vec<BundleMeta>,
     pub steps: Vec<Step>,
-}
-
-/// Scan bundles/ (each subfolder with bundle.yaml). Broken YAML → logged skip.
-/// Folder absent → EMPTY plan (the exe opens inert, doesn't crash).
-///
-/// LEGACY (A3): superseded by `load_from_catalog` (flat catalog/ + bundle refs).
-/// Kept for its tests during the transition; delete once Plan B proves the flat
-/// model in the UI.
-#[allow(dead_code)]
-pub fn load_bundles(root: &str, os: Os, log: &dyn Fn(&str)) -> Plan {
-    let mut bundles = Vec::new();
-    let mut steps = Vec::new();
-    let Ok(entries) = std::fs::read_dir(root) else {
-        log(&format!("no bundles dir at {root} — opening inert"));
-        return Plan { bundles, steps };
-    };
-    for entry in entries.flatten() {
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        let dir_name = entry.file_name().to_string_lossy().into_owned();
-        let bundle_dir = format!("{root}/{dir_name}");
-        let file = format!("{bundle_dir}/bundle.yaml");
-        let Ok(raw) = std::fs::read_to_string(&file) else {
-            continue;
-        };
-        let b: RawBundle = match serde_yaml::from_str(&raw) {
-            Ok(b) => b,
-            Err(e) => {
-                log(&format!("bundle skipped (bad YAML): {dir_name} — {e}"));
-                continue;
-            }
-        };
-        let posture = Posture::parse(b.posture.as_deref());
-        let meta = BundleMeta {
-            name: b.bundle.clone().unwrap_or_else(|| dir_name.clone()),
-            emoji: b.emoji.clone().unwrap_or_else(|| "📦".into()),
-            description: b.description.clone().unwrap_or_default(),
-            priority: b.priority.unwrap_or(100),
-            selectable: b.selectable.unwrap_or(true),
-            posture: posture.clone(),
-        };
-        let sub = |s: Option<String>| -> Option<String> {
-            s.map(|v| v.replace("{dir}", &bundle_dir))
-        };
-        for p in &b.packages {
-            let cmd = commands_for(p, os);
-            let mgr = managers()
-                .into_iter()
-                .find(|m| Some(m.route) == cmd.route.as_deref());
-            let system_id = mgr.and_then(|m| match m.id_field {
-                IdField::Winget => p.winget.clone(),
-                IdField::Brew => p.brew.clone(),
-            });
-            let is_config =
-                p.check.is_some() && (cmd.route.is_none() || cmd.route.as_deref() == Some("run"));
-            steps.push(Step {
-                bundle: meta.name.clone(),
-                name: p.name.clone(),
-                description: p.description.clone().unwrap_or_default(),
-                install: sub(cmd.install),
-                uninstall: sub(cmd.uninstall),
-                upgrade: sub(cmd.upgrade),
-                downgrade: sub(cmd.downgrade),
-                route: cmd.route,
-                system_id,
-                detect: p.detect.clone(),
-                check: sub(p.check.clone()),
-                is_config,
-                version_regex: p.version_regex.clone(),
-                pin: p.version.clone(),
-                requires: p.requires.clone(),
-                posture: meta.posture.clone(),
-                categories: if p.category.is_empty() {
-                    vec!["misc".to_string()]
-                } else {
-                    p.category.clone()
-                },
-            });
-        }
-        log(&format!(
-            "bundle loaded: {} ({} packages) from {dir_name}",
-            meta.name,
-            b.packages.len()
-        ));
-        bundles.push(meta);
-    }
-    bundles.sort_by_key(|b| b.priority);
-    let prio: std::collections::HashMap<String, i64> =
-        bundles.iter().map(|b| (b.name.clone(), b.priority)).collect();
-    steps.sort_by_key(|s| *prio.get(&s.bundle).unwrap_or(&100));
-    Plan { bundles, steps }
 }
 
 /// FLAT-model loader (bundle-driven, spec Consolidation §6): emits EVERY catalog
@@ -410,10 +295,7 @@ pub fn load_from_catalog(
             },
         });
     }
-    Plan {
-        bundles: Vec::new(),
-        steps,
-    }
+    Plan { steps }
 }
 
 #[cfg(test)]
@@ -465,66 +347,6 @@ mod tests {
     }
 
     #[test]
-    fn category_parsed_from_yaml() {
-        let raw = r#"
-bundle: T
-packages:
-  - name: VS Code
-    brew: visual-studio-code
-    category: [editors, ide]
-"#;
-        let b: RawBundle = serde_yaml::from_str(raw).unwrap();
-        assert_eq!(b.packages[0].category, vec!["editors", "ide"]);
-    }
-
-    #[test]
-    fn category_absent_is_empty_vec() {
-        let raw = r#"
-bundle: T
-packages:
-  - name: bare
-"#;
-        let b: RawBundle = serde_yaml::from_str(raw).unwrap();
-        assert!(b.packages[0].category.is_empty());
-    }
-
-    fn write_bundle(dir: &std::path::Path, folder: &str, yaml: &str) {
-        let d = dir.join(folder);
-        std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(d.join("bundle.yaml"), yaml).unwrap();
-    }
-
-    #[test]
-    fn step_carries_categories() {
-        let root = std::env::temp_dir().join("talos-test-cat-carry");
-        let _ = std::fs::remove_dir_all(&root);
-        write_bundle(
-            &root,
-            "editors",
-            "bundle: Editors\npackages:\n  - name: VS Code\n    brew: visual-studio-code\n    category: [editors, ide]\n",
-        );
-        let plan = load_bundles(root.to_str().unwrap(), Os::Darwin, &|_| {});
-        let step = plan.steps.iter().find(|s| s.name == "VS Code").unwrap();
-        assert_eq!(step.categories, vec!["editors", "ide"]);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn step_without_category_defaults_to_misc() {
-        let root = std::env::temp_dir().join("talos-test-cat-misc");
-        let _ = std::fs::remove_dir_all(&root);
-        write_bundle(
-            &root,
-            "base",
-            "bundle: Base\npackages:\n  - name: Node.js\n    brew: node\n",
-        );
-        let plan = load_bundles(root.to_str().unwrap(), Os::Darwin, &|_| {});
-        let step = plan.steps.iter().find(|s| s.name == "Node.js").unwrap();
-        assert_eq!(step.categories, vec!["misc"]);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
     fn emits_every_catalog_package_with_empty_bundle() {
         use std::fs;
         let root = std::env::temp_dir().join("talos-test-b2-catalog");
@@ -544,7 +366,6 @@ packages:
             Os::Darwin,
             &|_| {},
         );
-        assert!(plan.bundles.is_empty());
         assert_eq!(plan.steps.len(), 2);
         let git = plan.steps.iter().find(|s| s.name == "Git").unwrap();
         assert_eq!(git.bundle, ""); // no owning bundle
@@ -553,6 +374,30 @@ packages:
         // Node has no category tag → defaults to misc.
         let node = plan.steps.iter().find(|s| s.name == "Node.js").unwrap();
         assert_eq!(node.categories, vec!["misc"]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // B5: `requires:` from catalog YAML must reach the Step (the front does the
+    // transitive pull over it — see model.js wantedNames).
+    #[test]
+    fn step_carries_requires_from_catalog() {
+        use std::fs;
+        let root = std::env::temp_dir().join("talos-test-b5-requires");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("catalog")).unwrap();
+        fs::write(
+            root.join("catalog/claude-code.yaml"),
+            "name: Claude Code\nnpm: '@anthropic-ai/claude-code'\nrequires:\n  - Node.js\n",
+        )
+        .unwrap();
+        let plan = load_from_catalog(
+            root.join("catalog").to_str().unwrap(),
+            "unused",
+            Os::Darwin,
+            &|_| {},
+        );
+        let cc = plan.steps.iter().find(|s| s.name == "Claude Code").unwrap();
+        assert_eq!(cc.requires, vec!["Node.js"]);
         let _ = fs::remove_dir_all(&root);
     }
 }
