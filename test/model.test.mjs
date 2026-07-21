@@ -87,6 +87,25 @@ test("active bundles persist + restore (with cascade)", () => {
   assert.equal(isProfileActive(m2, "Terminal"), true);
 });
 
+test("deactivating a needed bundle reverse-cascades its dependents", () => {
+  const m = createModel();
+  loadPlan(m, [], [], [
+    { name: "Base", packages: [], needs: [] },
+    { name: "Documents", packages: [], needs: ["Base"] },
+    { name: "Development", packages: [], needs: ["Documents"] },
+    { name: "Terminal", packages: [], needs: [] }, // independent
+  ]);
+  applyProfile(m, "Development"); // activates Documents + Base
+  applyProfile(m, "Terminal");
+  removeProfile(m, "Base"); // pull the socle out
+  // Everything that (transitively) needs Base goes too; the invariant holds.
+  assert.equal(isProfileActive(m, "Base"), false);
+  assert.equal(isProfileActive(m, "Documents"), false);
+  assert.equal(isProfileActive(m, "Development"), false);
+  // Independent bundle untouched.
+  assert.equal(isProfileActive(m, "Terminal"), true);
+});
+
 test("bundle cascade is cycle-guarded", () => {
   const m = createModel();
   loadPlan(m, [], [], [

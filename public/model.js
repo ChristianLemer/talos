@@ -395,12 +395,23 @@ export function applyProfile(model, name) {
   };
   activate(name);
 }
-// Remove a profile from the active set: its pull vanishes, but a package it
-// shared with another active profile or a manual "in" survives (userToggle
-// recomputes from what remains). This is the clean per-profile removal that
-// spares the user from redoing everything by hand.
+// Remove a profile from the active set. REVERSE-CASCADE: any active bundle that
+// (transitively) `needs:` this one goes too — you can't leave a dependent alive
+// without its socle (the `needs` invariant: an active dependency is always
+// satisfied). A package shared with another still-active bundle or a manual "in"
+// survives (userToggle recomputes from what remains). Cycle-guarded via `seen`.
 export function removeProfile(model, name) {
-  model.activeProfiles.delete(name);
+  const seen = new Set();
+  const deactivate = (n) => {
+    if (seen.has(n) || !model.activeProfiles.has(n)) return;
+    seen.add(n);
+    model.activeProfiles.delete(n);
+    // Drop every active bundle that needs `n` (directly or through the chain).
+    for (const other of [...model.activeProfiles]) {
+      if ((model.profiles.get(other)?.needs ?? []).includes(n)) deactivate(other);
+    }
+  };
+  deactivate(name);
 }
 export function isProfileActive(model, name) {
   return model.activeProfiles.has(name);
