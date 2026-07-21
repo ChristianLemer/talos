@@ -1,0 +1,86 @@
+# CI — keeps `main` green. Runs on every push/PR: it PROVES the code compiles,
+# the Rust logic passes, the pure JS model passes, and clippy is clean. It does
+# NOT build the GUI bundle or prove the app runs (that's release.yml, on a tag);
+# the real runtime check stays a manual smoke-test on a real machine (see the
+# porting garde-fous in docs/superpowers/TASK-tauri-migration.md).
+#
+# WHY ubuntu for the Rust jobs: the core logic is OS-agnostic and Linux runners
+# are the fastest/cheapest. But talos pulls tauri v2, whose build script links
+# WebKitGTK at COMPILE time — so even a plain `cargo build`/`test` needs the GTK
+# dev libs installed first (the `System deps` step). The frontend is static
+# `public/` (frontendDist), so — unlike a JS-framework Tauri app — there is NO
+# npm build step to run before cargo.
+#
+# DELIBERATELY OMITTED — `cargo fmt --check`: the codebase is hand-formatted with
+# intentionally longer lines than rustfmt's 100-col default (16 files, 52 diffs,
+# no rustfmt.toml). Adding the gate today would fail on push and reformatting to
+# satisfy it would bury real diffs under a cosmetic sweep. Revisit as its own
+# decision: either adopt rustfmt wholesale (one reformat commit) or add a
+# rustfmt.toml matching the house style, THEN wire the gate. Until then, fmt is
+# not enforced.
+
+name: ci
+
+on:
+  push:
+    branches: [main, tauri]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+
+jobs:
+  rust:
+    name: cargo build + test + clippy
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: System deps for tauri-build
+        # tauri v2's build script links WebKitGTK at compile time; without these
+        # dev libs even `cargo build` aborts. Plain apt-get (NOT a pinned-version
+        # cache action): a rotated transitive dep would 404 and the pinned action
+        # would silently install nothing while exiting 0. `apt-get update` keeps
+        # the index fresh so a real failure actually fails the step.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --all-targets
+
+      - name: Test
+        run: cargo test --all-targets
+
+      - name: Clippy
+        run: cargo clippy --all-targets
+
+  js:
+    name: node --test (pure model)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # No package.json / no deps: the tests are plain .mjs importing public/*.js
+      # and run under Node's built-in test runner. `node --test` auto-discovers
+      # test/*.test.mjs (do NOT pass a dir — `node --test test/` treats the path
+      # as a module and fails with MODULE_NOT_FOUND).
+      - name: Test
+        run: node --test
