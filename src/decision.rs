@@ -3,8 +3,6 @@
 // Two questions: what is the DESIRED state (posture + toggle), and what ACTION
 // an Apply would take (desire × machine reality × pin).
 
-use crate::bundles::Posture;
-
 /// Compares two dotted versions, NUMERICALLY segment by segment (2.10 > 2.9).
 /// Segment = numeric prefix (parseInt: "0-beta" → 0). Missing segment = 0.
 /// Returns -1 (a<b) / 0 (==) / 1 (a>b). Not full semver (see talos-version-pin).
@@ -32,45 +30,21 @@ pub fn compare_versions(a: &str, b: &str) -> i32 {
     0
 }
 
-// These 4 functions (posture → desire) are the "intention resolution" half of the
-// rule. Today the FRONT resolves it and sends on/off to the server; so they are
-// still uncalled on the Rust side, but tested and ready for when the server
-// carries the full resolution (path B / single source). Kept on purpose.
-#[allow(dead_code)]
-/// Where the toggle starts (author default): mandatory/opt-out → in; opt-in/forbidden → out.
-pub fn posture_default_in(posture: &Posture) -> bool {
-    matches!(posture, Posture::Mandatory | Posture::OptOut)
-}
-
-#[allow(dead_code)]
-/// Can the user move the toggle? mandatory/forbidden = locked.
-pub fn is_locked(posture: &Posture) -> bool {
-    matches!(posture, Posture::Mandatory | Posture::Forbidden)
-}
-
-/// The effective in/out state. Locked → author default (the author wins). Otherwise the
-/// user toggle (Some(true)=in, Some(false)=out), or the default if None.
-fn toggle_in(posture: &Posture, user_toggle: Option<bool>) -> bool {
-    if is_locked(posture) {
-        return posture_default_in(posture);
-    }
-    user_toggle.unwrap_or_else(|| posture_default_in(posture))
-}
+// NOTE — the "intention resolution" half (posture → desire) is NOT here anymore.
+// In the bundle-driven model the FRONT resolves the desired state (bundles pull +
+// manual toggles, see public/decision.js + model.js) and sends on/off to the
+// server, which builds `Desired` directly from those sets (server.rs). The old
+// Rust twin (`posture_default_in`/`is_locked`/`toggle_in`/`desired_state`)
+// encoded the SUPERSEDED posture-default model (mandatory locked-in, opt-in
+// default-out) and its tests blessed it → false-green. Removed 2026-07-21 (see
+// docs/superpowers/2026-07-21-windows-review-model-ux.md §2). If the server ever
+// takes over desire resolution ("path B"), re-derive it from the CURRENT model
+// (decision.js): only `forbidden` locks; nothing is wanted until pulled.
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Desired {
     Present,
     Absent,
-}
-
-#[allow(dead_code)]
-/// The DESIRED state (present|absent) from posture + user toggle.
-pub fn desired_state(posture: &Posture, user_toggle: Option<bool>) -> Desired {
-    if toggle_in(posture, user_toggle) {
-        Desired::Present
-    } else {
-        Desired::Absent
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -140,26 +114,6 @@ mod tests {
         assert_eq!(compare_versions("1.8", "1.8.0"), 0); // missing segment = 0
         assert_eq!(compare_versions("1.0", "1.0.1"), -1);
         assert_eq!(compare_versions("0-beta", "0"), 0); // pre-release suffix ignored
-    }
-
-    #[test]
-    fn posture_defaults() {
-        assert!(posture_default_in(&Posture::Mandatory));
-        assert!(posture_default_in(&Posture::OptOut));
-        assert!(!posture_default_in(&Posture::OptIn));
-        assert!(!posture_default_in(&Posture::Forbidden));
-    }
-
-    #[test]
-    fn desired_opt_in_untouched_is_absent() {
-        assert_eq!(desired_state(&Posture::OptIn, None), Desired::Absent);
-        assert_eq!(desired_state(&Posture::OptIn, Some(true)), Desired::Present);
-    }
-
-    #[test]
-    fn locked_ignores_toggle() {
-        // forbidden locked → always absent even if the user checks "in"
-        assert_eq!(desired_state(&Posture::Forbidden, Some(true)), Desired::Absent);
     }
 
     #[test]
