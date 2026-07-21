@@ -14,6 +14,16 @@ use std::path::{Path, PathBuf};
 /// Persisted intent: per-package toggle (name → "in"/"out") PLUS the personal
 /// bundle's member list (`personal`: package names the user added from the
 /// Catalog — spec §14). BTreeMap for deterministic writes / clean diffs.
+/// Pure UI preferences (display only, not intent): kept in the SAME file so all
+/// config lives in one place (spec — C: "toute la configuration au même endroit").
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UiPrefs {
+    #[serde(default)]
+    pub advanced: bool,
+    #[serde(default, rename = "showAll")]
+    pub show_all: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Selection {
     pub pkgs: BTreeMap<String, String>,
@@ -23,6 +33,9 @@ pub struct Selection {
     /// the cascade + card state survive a restart. `active_bundles` on the wire.
     #[serde(default, rename = "activeBundles")]
     pub active_bundles: Vec<String>,
+    /// Display preferences (advanced mode, show-all) — one config file for all.
+    #[serde(default)]
+    pub ui: UiPrefs,
 }
 
 /// Read a JSON field as a Vec<String>, dropping non-string entries. Absent → empty.
@@ -53,10 +66,16 @@ pub fn parse_selection(raw: &str) -> Selection {
             }
         }
     }
+    // UI prefs: parse the `ui` object with serde (missing/garbage → defaults).
+    let ui = v
+        .get("ui")
+        .and_then(|u| serde_json::from_value::<UiPrefs>(u.clone()).ok())
+        .unwrap_or_default();
     Selection {
         pkgs,
         personal: string_array(&v, "personal"),
         active_bundles: string_array(&v, "activeBundles"),
+        ui,
     }
 }
 
@@ -115,6 +134,15 @@ mod tests {
         let sel = parse_selection(r#"{"pkgs":{},"activeBundles":["Base","Data",7]}"#);
         assert_eq!(sel.active_bundles, vec!["Base".to_string(), "Data".to_string()]);
         assert!(parse_selection(r#"{"pkgs":{}}"#).active_bundles.is_empty());
+    }
+
+    #[test]
+    fn parses_ui_prefs() {
+        let sel = parse_selection(r#"{"pkgs":{},"ui":{"advanced":true,"showAll":true}}"#);
+        assert!(sel.ui.advanced && sel.ui.show_all);
+        // absent ui → default false; garbage ui → default (never sinks)
+        assert_eq!(parse_selection(r#"{"pkgs":{}}"#).ui, UiPrefs::default());
+        assert_eq!(parse_selection(r#"{"pkgs":{},"ui":42}"#).ui, UiPrefs::default());
     }
 
     #[test]

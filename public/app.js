@@ -136,6 +136,10 @@ function persistSelection() {
       pkgs: M.persistablePkgs(model),
       personal: M.persistablePersonal(model), // My setup members (spec §14)
       activeBundles: M.persistableActiveBundles(model), // which cards are on
+      ui: { // display prefs — one config file for all (§ config-unique)
+        advanced: document.body.classList.contains("advanced"),
+        showAll: document.body.classList.contains("show-all"),
+      },
     },
   }));
 }
@@ -143,6 +147,9 @@ function applySavedSelection(sel) {
   M.applySavedSelection(model, sel);
   M.applySavedPersonal(model, sel?.personal); // restore My setup members (spec §14)
   M.applySavedActiveBundles(model, sel?.activeBundles); // restore active cards + cascade
+  // UI prefs live in the same file now (not localStorage): restore them here.
+  applyAdvanced(!!sel?.ui?.advanced);
+  applyShowAll(!!sel?.ui?.showAll);
   repaintAll();
 }
 // Repaint EVERYTHING — used after a change that can move many rows at once (a
@@ -1125,26 +1132,20 @@ document.getElementById("refresh-all").onclick = () => {
   overall.textContent = "checking…";
   ws.send(JSON.stringify({ type: "rescan" }));
 };
-// "Show all" — a UI preference (like advanced mode): the Bundles tab shows only
+// "Show all" — a UI preference (like advanced): the Bundles tab shows only
 // changing rows by default (the diff); flip this to reveal everything the active
-// bundles select. Persisted in localStorage so it sticks across sessions.
+// bundles select. Persisted in selection.json's `ui` (one config file for all),
+// via persistSelection; restored by applySavedSelection from the plan.
 const showAllToggle = document.getElementById("show-all");
 function applyShowAll(on) {
   document.body.classList.toggle("show-all", on);
   showAllToggle.checked = on;
 }
 showAllToggle.onchange = (e) => {
-  const on = e.target.checked;
-  try {
-    localStorage.setItem("talos.showAll", on ? "1" : "0");
-  } catch {}
-  applyShowAll(on);
+  applyShowAll(e.target.checked);
+  persistSelection();
 };
-try {
-  applyShowAll(localStorage.getItem("talos.showAll") === "1");
-} catch {
-  applyShowAll(false);
-}
+applyShowAll(false);
 
 // --- tabs (Bundles / Catalog / Log) ---
 // Bundles and Catalog share ONE DOM (#view-bundles holds #steps); they differ
@@ -1167,26 +1168,20 @@ document.querySelectorAll(".tab").forEach((tab) => {
 // Default scope: the Bundles tab (only wanted rows) is the active tab at load.
 document.body.classList.add("tab-bundles");
 
-// --- advanced mode: a pure UI preference (per-package toggles, postures, per-
-// bundle Apply). Default OFF → simple: one on/off switch per bundle. Stored in
-// localStorage (browser-side, no server needed) so it sticks across sessions.
+// --- advanced mode: a UI preference (per-package toggles, postures, per-bundle
+// Apply). Default OFF → simple. Persisted in selection.json's `ui` (one config
+// file for all), sent via persistSelection on change; restored by
+// applySavedSelection from the plan. Boots OFF until the plan arrives.
 const advToggle = document.getElementById("advanced-toggle");
 function applyAdvanced(on) {
   document.body.classList.toggle("advanced", on);
   advToggle.checked = on;
 }
 advToggle.onchange = (e) => {
-  const on = e.target.checked;
-  try {
-    localStorage.setItem("talos.advanced", on ? "1" : "0");
-  } catch {}
-  applyAdvanced(on);
+  applyAdvanced(e.target.checked);
+  persistSelection();
 };
-try {
-  applyAdvanced(localStorage.getItem("talos.advanced") === "1");
-} catch {
-  applyAdvanced(false);
-}
+applyAdvanced(false);
 
 // --- consent dialog + settings ---
 const consentEl = document.getElementById("consent");
