@@ -137,6 +137,7 @@ function persistSelection() {
       ui: { // display prefs — one config file for all (§ config-unique)
         advanced: document.body.classList.contains("advanced"),
         showAll: document.body.classList.contains("show-all"),
+        theme: document.documentElement.dataset.theme || "",
       },
     },
   }));
@@ -148,6 +149,7 @@ function applySavedSelection(sel) {
   // UI prefs live in the same file now (not localStorage): restore them here.
   applyAdvanced(!!sel?.ui?.advanced);
   applyShowAll(!!sel?.ui?.showAll);
+  applyTheme(sel?.ui?.theme || "");
   repaintAll();
 }
 // Repaint EVERYTHING — used after a change that can move many rows at once (a
@@ -1012,6 +1014,25 @@ showAllToggle.onchange = (e) => {
   persistSelection();
 };
 applyShowAll(false);
+
+// --- theme gallery: a UI pref like advanced/show-all. Empty name = the :root
+// default (Tokyo Night); any other sets data-theme on <html>. Persisted in the
+// same selection.json ui block, restored by applySavedSelection. ---
+function applyTheme(name) {
+  const t = name || "";
+  if (t) document.documentElement.dataset.theme = t;
+  else delete document.documentElement.dataset.theme;
+  for (const pill of document.querySelectorAll(".theme-pill")) {
+    pill.classList.toggle("active", (pill.dataset.themeName || "") === t);
+  }
+}
+for (const pill of document.querySelectorAll(".theme-pill")) {
+  pill.onclick = () => {
+    applyTheme(pill.dataset.themeName || "");
+    persistSelection();
+  };
+}
+applyTheme("");
 
 // --- tabs (Bundles / Catalog / Log) ---
 // Bundles and Catalog share ONE DOM (#view-bundles holds #steps); they differ

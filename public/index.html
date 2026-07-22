@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" style="background:#1a1b26">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <title>Talos</title>
@@ -7,10 +7,26 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="stylesheet" href="/vendor/xterm.css" />
     <style>
-      :root { --bg:#1a1b26; --fg:#c0caf5; --line:#2a2e42; --dim:#565f89; }
+      /* THEME CHASSIS — a theme redefines only these (bg/fg/lines/surfaces). The
+         state colours (green=present, red=action, blue=active, gold…) stay literal
+         below: they're tuned to read on light AND dark, so a theme changes the
+         mood, not the meaning. Tokyo Night is the :root default; each gallery
+         theme is a [data-theme] override (set on <html> by applyTheme). */
+      :root { --bg:#1a1b26; --fg:#c0caf5; --line:#2a2e42; --dim:#565f89;
+              --surface:#1e2030; --surface-hi:#232842; --head:#7aa2f7; }
+      [data-theme="light"] { --bg:#e6e7ee; --fg:#2a2e42; --line:#c4c8da; --dim:#6b7089;
+              --surface:#f2f3f8; --surface-hi:#dfe2ee; --head:#3d59a1; }
+      [data-theme="catppuccin"] { --bg:#1e1e2e; --fg:#cdd6f4; --line:#313244; --dim:#6c7086;
+              --surface:#181825; --surface-hi:#292c3c; --head:#89b4fa; }
+      [data-theme="gruvbox"] { --bg:#282828; --fg:#ebdbb2; --line:#3c3836; --dim:#928374;
+              --surface:#32302f; --surface-hi:#3c3836; --head:#83a598; }
       /* App feel: no text selection or callout by default (like a native app);
          the terminal re-enables selection so you can still copy output. */
       html, body { -webkit-user-select:none; user-select:none; }
+      /* html fills the viewport and tracks the theme bg, so the area BELOW the
+         body content follows the theme instead of the hard-coded inline anti-flash
+         colour (which only serves the first paint, before CSS/JS set the theme). */
+      html { min-height:100%; background:var(--bg); }
       .xterm, .xterm * { -webkit-user-select:text; user-select:text; }
       body { margin:0; background:var(--bg); color:var(--fg); font-family:system-ui,sans-serif; }
       /* Thin theme-matched scrollbar for the whole page. */
@@ -20,7 +36,7 @@
       *::-webkit-scrollbar-thumb:hover { background:var(--dim); }
       /* Hero intro — a little welcoming, a little selling. */
       header { padding:26px 24px 22px; border-bottom:1px solid var(--line);
-               background:radial-gradient(120% 140% at 0% 0%, #24283b 0%, var(--bg) 60%);
+               background:radial-gradient(120% 140% at 0% 0%, var(--surface-hi) 0%, var(--bg) 60%);
                display:flex; align-items:flex-start; gap:24px; }
       .hero-text { flex:1; min-width:0; }
       /* Apply is the action bar at the TOP of the Setup view (not the header): it
@@ -421,6 +437,14 @@
       .switch input:checked + .slider { background:#3d59a1; }
       .switch input:checked + .slider::before { transform:translateX(18px); }
       .dangerbtn { background:none; color:var(--dim); border:1px solid var(--line); padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px; }
+      /* Theme swatches: the pill IS the theme's bg, with an accent dot; the active
+         one gets an accent ring. Clicking applies + persists (see app.js). */
+      .theme-pills { display:flex; gap:8px; flex:none; }
+      .theme-pill { width:28px; height:28px; border-radius:8px; cursor:pointer;
+        background:var(--sw); border:2px solid var(--line); position:relative; padding:0; }
+      .theme-pill::after { content:""; position:absolute; right:3px; bottom:3px;
+        width:8px; height:8px; border-radius:50%; background:var(--ac); }
+      .theme-pill.active { border-color:var(--ac); box-shadow:0 0 0 2px var(--ac); }
       .dangerbtn:hover { color:#f7768e; border-color:#f7768e; }
       #history { padding:8px 14px 16px; }
       .hist-empty { color:var(--dim); font-size:13px; padding:12px 0; }
@@ -704,6 +728,16 @@
 
     <div id="view-log" class="view">
       <div id="settings">
+        <div class="set-row">
+          <div><div class="set-title">Theme</div>
+            <div class="set-desc">The colour palette for the whole app. State colours (green = present, blue = active) stay the same across themes.</div></div>
+          <div id="theme-pills" class="theme-pills">
+            <button class="theme-pill" data-theme-name="" title="Tokyo Night" style="--sw:#1a1b26;--ac:#7aa2f7"></button>
+            <button class="theme-pill" data-theme-name="light" title="Light" style="--sw:#e6e7ee;--ac:#3d59a1"></button>
+            <button class="theme-pill" data-theme-name="catppuccin" title="Catppuccin" style="--sw:#1e1e2e;--ac:#89b4fa"></button>
+            <button class="theme-pill" data-theme-name="gruvbox" title="Gruvbox" style="--sw:#282828;--ac:#83a598"></button>
+          </div>
+        </div>
         <div class="set-row">
           <div><div class="set-title">Advanced mode</div>
             <div class="set-desc">Per-package control with in/out toggles, author postures, and per-bundle Apply. Off by default — the panel stays simple: one on/off switch per bundle.</div></div>

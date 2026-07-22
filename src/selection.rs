@@ -22,6 +22,10 @@ pub struct UiPrefs {
     pub advanced: bool,
     #[serde(default, rename = "showAll")]
     pub show_all: bool,
+    /// Gallery theme name ("" = the default Tokyo Night). Round-tripped verbatim;
+    /// the front-end owns the set of valid names (see index.html [data-theme]).
+    #[serde(default)]
+    pub theme: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -140,6 +144,12 @@ mod tests {
     fn parses_ui_prefs() {
         let sel = parse_selection(r#"{"pkgs":{},"ui":{"advanced":true,"showAll":true}}"#);
         assert!(sel.ui.advanced && sel.ui.show_all);
+        // theme round-trips verbatim; absent → "" (default, = Tokyo Night)
+        assert_eq!(
+            parse_selection(r#"{"pkgs":{},"ui":{"theme":"gruvbox"}}"#).ui.theme,
+            "gruvbox"
+        );
+        assert_eq!(sel.ui.theme, "");
         // absent ui → default false; garbage ui → default (never sinks)
         assert_eq!(parse_selection(r#"{"pkgs":{}}"#).ui, UiPrefs::default());
         assert_eq!(parse_selection(r#"{"pkgs":{},"ui":42}"#).ui, UiPrefs::default());
