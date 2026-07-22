@@ -3,6 +3,15 @@
 use crate::bundles::Step;
 use crate::managers::{managers, native_manager};
 use crate::platform::{shell_probe, Os, Probe};
+use std::sync::LazyLock;
+
+// Compiled once, not per probe: a scan runs strip_ansi + the generic version
+// fallback for every package (28+). Both patterns are constant literals, so the
+// unwrap can't fail — it runs a single time when the static is first touched.
+static ANSI_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"\x1b\[[0-9;?]*[A-Za-z]").unwrap());
+static GENERIC_VERSION_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"\d+(?:\.\d+)+(?:[-.\w]*)?").unwrap());
 
 #[derive(Debug, Clone, Default)]
 pub struct Presence {
@@ -50,10 +59,7 @@ pub fn run_probe_detailed(probe: &Probe) -> ProbeResult {
 }
 
 fn strip_ansi(s: &str) -> String {
-    regex::Regex::new(r"\x1b\[[0-9;?]*[A-Za-z]")
-        .unwrap()
-        .replace_all(s, "")
-        .into_owned()
+    ANSI_RE.replace_all(s, "").into_owned()
 }
 
 /// Extracts the version revealed by the probe's output. Regex override: bundle > manager > generic.
@@ -80,8 +86,7 @@ pub fn version_from(step: &Step, output: &str) -> String {
         }
     }
     // generic: first version-like token (no leading \b — "v26.4.0").
-    regex::Regex::new(r"\d+(?:\.\d+)+(?:[-.\w]*)?")
-        .unwrap()
+    GENERIC_VERSION_RE
         .find(&clean)
         .map(|m| m.as_str().to_string())
         .unwrap_or_default()
