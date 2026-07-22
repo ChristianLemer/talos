@@ -39,16 +39,15 @@ pub fn run_probe_detailed(probe: &Probe) -> ProbeResult {
         .args(&probe.args)
         .output()
     {
-        Ok(o) => {
-            let mut output = String::from_utf8_lossy(&o.stdout).into_owned();
-            output.push_str(&String::from_utf8_lossy(&o.stderr));
-            ProbeResult {
-                ok: o.status.success(),
-                code: o.status.code().unwrap_or(-1),
-                output,
-                cmdline,
-            }
-        }
+        Ok(o) => ProbeResult {
+            ok: o.status.success(),
+            code: o.status.code().unwrap_or(-1),
+            output: merge_streams(
+                &String::from_utf8_lossy(&o.stdout),
+                &String::from_utf8_lossy(&o.stderr),
+            ),
+            cmdline,
+        },
         Err(e) => ProbeResult {
             ok: false,
             code: -1,
@@ -56,6 +55,23 @@ pub fn run_probe_detailed(probe: &Probe) -> ProbeResult {
             cmdline,
         },
     }
+}
+
+// Join stdout + stderr for the operator's evidence AND for version parsing.
+// A newline MUST separate them: gluing them raw lets a token bleed across the
+// boundary — e.g. stdout "v9.9.9" (no trailing newline) + a shell's stderr
+// "bash: no job control" parsed to "9.9.9bash", because the generic version
+// regex's `[-.\w]*` tail swallows the adjacent letters. Seen only on a
+// tty-less Linux CI runner, never on a Mac tty — a classic porting regression.
+fn merge_streams(stdout: &str, stderr: &str) -> String {
+    if stdout.is_empty() {
+        return stderr.to_owned();
+    }
+    if stderr.is_empty() {
+        return stdout.to_owned();
+    }
+    let sep = if stdout.ends_with('\n') { "" } else { "\n" };
+    format!("{stdout}{sep}{stderr}")
 }
 
 fn strip_ansi(s: &str) -> String {
@@ -321,6 +337,25 @@ mod tests {
         assert!(diag.cmdline.contains("printf v9.9.9"), "cmdline = {}", diag.cmdline);
         assert!(diag.output.contains("v9.9.9"), "output = {}", diag.output);
         assert_eq!(p.version.as_deref(), Some("9.9.9"));
+    }
+
+    #[test]
+    fn merge_streams_separates_so_a_token_cannot_bleed() {
+        // Regression (Linux CI): stdout "v9.9.9" (no trailing \n) glued to a
+        // tty-less shell's stderr produced "9.9.9bash" once the generic regex
+        // ran. A newline between the streams keeps the version clean.
+        let merged = merge_streams("v9.9.9", "bash: no job control");
+        assert_eq!(merged, "v9.9.9\nbash: no job control");
+        let mut s = step();
+        s.detect = Some("x".into()); // generic path (no route/regex)
+        assert_eq!(version_from(&s, &merged), "9.9.9");
+    }
+
+    #[test]
+    fn merge_streams_no_double_newline_or_empty_noise() {
+        assert_eq!(merge_streams("out\n", "err"), "out\nerr"); // already newline-terminated
+        assert_eq!(merge_streams("out", ""), "out"); // stderr empty → no trailing sep
+        assert_eq!(merge_streams("", "err"), "err"); // stdout empty → stderr verbatim
     }
 
     #[test]
