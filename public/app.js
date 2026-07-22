@@ -167,13 +167,18 @@ function makeProfileCard(p) {
   const hl = (p.highlights && p.highlights.length)
     ? p.highlights.join(" · ")
     : (p.packages ?? []).slice(0, 3).join(" · ");
+  // Dependency link, stated textually now that the staircase indent is gone.
+  const needs = (p.needs ?? []).length
+    ? `<span class="pc-needs">needs ${p.needs.join(" · ")}</span>`
+    : "";
   card.innerHTML =
     `<span class="pc-head"><span class="toggle pc-switch"><span class="knob"></span></span>` +
     `<span class="pc-emoji">${p.emoji || "🎯"}</span>` +
     `<span class="pc-title">${p.name}</span>` +
     `<span class="pc-count"></span></span>` +
     `<span class="pc-usage">${p.usage || p.description || ""}</span>` +
-    `<span class="pc-highlights">${hl}</span>`;
+    `<span class="pc-highlights">${hl}</span>` +
+    needs;
   card.onclick = () => applyProfileClick(p.name);
   return card;
 }
