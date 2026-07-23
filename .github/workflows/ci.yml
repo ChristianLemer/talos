@@ -11,13 +11,9 @@
 # `public/` (frontendDist), so — unlike a JS-framework Tauri app — there is NO
 # npm build step to run before cargo.
 #
-# DELIBERATELY OMITTED — `cargo fmt --check`: the codebase is hand-formatted with
-# intentionally longer lines than rustfmt's 100-col default (16 files, 52 diffs,
-# no rustfmt.toml). Adding the gate today would fail on push and reformatting to
-# satisfy it would bury real diffs under a cosmetic sweep. Revisit as its own
-# decision: either adopt rustfmt wholesale (one reformat commit) or add a
-# rustfmt.toml matching the house style, THEN wire the gate. Until then, fmt is
-# not enforced.
+# The tree is rustfmt-clean (community default, 100 col, no rustfmt.toml), so
+# `cargo fmt --check` is enforced here. Clippy runs with `-D warnings`: any lint
+# fails the build, locking the clean state rather than merely reporting it.
 
 name: ci
 
@@ -37,11 +33,14 @@ jobs:
     name: cargo build + test + clippy
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
+
+      - name: Format check
+        run: cargo fmt --check
 
       - name: System deps for tauri-build
         # tauri v2's build script links WebKitGTK at compile time; without these
@@ -66,15 +65,15 @@ jobs:
         run: cargo test --all-targets
 
       - name: Clippy
-        run: cargo clippy --all-targets
+        run: cargo clippy --all-targets -- -D warnings
 
   js:
     name: node --test (pure model)
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "20"
 
