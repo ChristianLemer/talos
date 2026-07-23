@@ -61,10 +61,7 @@ pub fn run<F: FnMut(&[u8])>(
     let (code_tx, code_rx) = std::sync::mpsc::channel::<i32>();
     let master = pair.master;
     std::thread::spawn(move || {
-        let code = child
-            .wait()
-            .map(|s| s.exit_code() as i32)
-            .unwrap_or(-1);
+        let code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(-1);
         drop(master); // closes the pseudo-console → forces EOF on the reader side
         let _ = code_tx.send(code);
     });

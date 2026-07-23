@@ -298,7 +298,10 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
             // set-consent: records the sharing choice (marks consent decided).
             // No response — the UI already closed its dialog / flipped its toggle.
             "set-consent" => {
-                let share = parsed.get("share").and_then(|v| v.as_bool()).unwrap_or(false);
+                let share = parsed
+                    .get("share")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 write_consent(&state.consent, share);
                 println!("[consent] set: share={share}");
             }
@@ -408,7 +411,11 @@ fn probe_json(diag: &Option<crate::detect::ProbeResult>) -> serde_json::Value {
 fn json_indices(v: &serde_json::Value, key: &str) -> Vec<usize> {
     v.get(key)
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as usize)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_u64().map(|n| n as usize))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -456,7 +463,9 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
     let mut probe_tasks = Vec::with_capacity(steps.len());
     for step in steps.iter() {
         let step = step.clone();
-        probe_tasks.push(tokio::task::spawn_blocking(move || detect_present_detailed(&step, os)));
+        probe_tasks.push(tokio::task::spawn_blocking(move || {
+            detect_present_detailed(&step, os)
+        }));
     }
     let scan = scan_task.await.unwrap_or_default();
     let mut presences = Vec::with_capacity(steps.len());
@@ -481,11 +490,14 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
     for (i, p) in presences.iter().enumerate() {
         let reason = requires_reason(&nodes[i], &nodes, &idx).or_else(|| p.reason.clone());
         let _ = socket
-            .send(Message::Text(json!({
-                "type": "state", "i": i, "present": p.present, "reason": reason,
-                "version": p.version.clone().unwrap_or_default(), "external": p.external,
-                "probe": probe_json(&p.diag)
-            }).to_string()))
+            .send(Message::Text(
+                json!({
+                    "type": "state", "i": i, "present": p.present, "reason": reason,
+                    "version": p.version.clone().unwrap_or_default(), "external": p.external,
+                    "probe": probe_json(&p.diag)
+                })
+                .to_string(),
+            ))
             .await;
         if p.present == Some(true) {
             if let Some(od) = outdated_for(steps[i].system_id.as_deref(), &scan) {
@@ -525,19 +537,32 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
     // Order by dependencies (required before dependents; visual order = tie-break).
     let plan = topo_sort(&visual_plan, &nodes, &idx);
     if plan.is_empty() {
-        let _ = socket.send(Message::Text(json!({ "type": "done", "nothing": true }).to_string())).await;
+        let _ = socket
+            .send(Message::Text(
+                json!({ "type": "done", "nothing": true }).to_string(),
+            ))
+            .await;
         return;
     }
     // Announce the WHOLE plan in execution order → the front enters focus-mode and
     // REMOVES the "Plotting the gallop…" veil (shortcut #1 fixed).
-    let plan_json: Vec<_> = plan.iter().map(|(i, a)| json!({ "i": i, "action": a.as_str() })).collect();
-    let _ = socket.send(Message::Text(json!({ "type": "apply-plan", "plan": plan_json }).to_string())).await;
+    let plan_json: Vec<_> = plan
+        .iter()
+        .map(|(i, a)| json!({ "i": i, "action": a.as_str() }))
+        .collect();
+    let _ = socket
+        .send(Message::Text(
+            json!({ "type": "apply-plan", "plan": plan_json }).to_string(),
+        ))
+        .await;
 
     for (i, action) in &plan {
         do_step(socket, state, *i, *action, &steps[*i]).await;
     }
     clear_sudo_pw(state).await; // end of Apply: the cached password is cleared (model C)
-    let _ = socket.send(Message::Text(json!({ "type": "done" }).to_string())).await;
+    let _ = socket
+        .send(Message::Text(json!({ "type": "done" }).to_string()))
+        .await;
 }
 
 /// Port of runInPty (src/server.ts:266-348): streams the command into a pty,
@@ -649,12 +674,18 @@ async fn run_in_pty(
             let _ = socket.send(Message::Text(wmsg.to_string())).await;
         }
         let _ = socket
-            .send(Message::Text(json!({ "type": "wait-clear", "i": i }).to_string()))
+            .send(Message::Text(
+                json!({ "type": "wait-clear", "i": i }).to_string(),
+            ))
             .await;
     }
 
     let code = code_rx.await.unwrap_or(-1);
-    let url = if forbidden { crate::forbidden::extract_url(&buf) } else { None };
+    let url = if forbidden {
+        crate::forbidden::extract_url(&buf)
+    } else {
+        None
+    };
     (code, forbidden, url)
 }
 
@@ -683,7 +714,11 @@ async fn obtain_sudo_pw(socket: &mut WebSocket, state: &AppState, i: u32) -> Opt
         let parsed: serde_json::Value = serde_json::from_str(&txt).unwrap_or_default();
         match parsed.get("type").and_then(|t| t.as_str()) {
             Some("sudo-pw") => {
-                let pw = parsed.get("pw").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let pw = parsed
+                    .get("pw")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 *state.sudo_pw.lock().await = Some(pw.clone()); // RAM cache for the duration of the Apply
                 return Some(pw);
             }
@@ -733,7 +768,9 @@ async fn do_step(
         Action::Install => "installing",
     };
     let _ = socket
-        .send(Message::Text(json!({ "type": "step", "i": i, "status": running }).to_string()))
+        .send(Message::Text(
+            json!({ "type": "step", "i": i, "status": running }).to_string(),
+        ))
         .await;
 
     // The bare command is passed to run_in_pty, which wraps it in the native shell
@@ -742,28 +779,43 @@ async fn do_step(
     let ok = code == 0 || benign_code(code);
 
     // Diagnostic line in the row's terminal.
-    let line = format!("\r\n\x1b[2m[{}] exit {code} → {}\x1b[0m\r\n", action.as_str(), if ok { "ok" } else { "failed" });
+    let line = format!(
+        "\r\n\x1b[2m[{}] exit {code} → {}\x1b[0m\r\n",
+        action.as_str(),
+        if ok { "ok" } else { "failed" }
+    );
     {
         use base64::{engine::general_purpose::STANDARD, Engine};
         let _ = socket
-            .send(Message::Text(json!({ "type": "out", "i": i, "data": STANDARD.encode(line.as_bytes()) }).to_string()))
+            .send(Message::Text(
+                json!({ "type": "out", "i": i, "data": STANDARD.encode(line.as_bytes()) })
+                    .to_string(),
+            ))
             .await;
     }
 
     let blocked = !ok && forbidden;
     let status = if ok {
-        if action == Action::Uninstall { "absent" } else { "ok" }
+        if action == Action::Uninstall {
+            "absent"
+        } else {
+            "ok"
+        }
     } else if blocked {
         "forbidden"
     } else {
         "fail"
     };
     let _ = socket
-        .send(Message::Text(json!({ "type": "step", "i": i, "status": status }).to_string()))
+        .send(Message::Text(
+            json!({ "type": "step", "i": i, "status": status }).to_string(),
+        ))
         .await;
     if blocked {
         let _ = socket
-            .send(Message::Text(json!({ "type": "forbidden", "i": i, "url": url }).to_string()))
+            .send(Message::Text(
+                json!({ "type": "forbidden", "i": i, "url": url }).to_string(),
+            ))
             .await;
     }
 
@@ -780,11 +832,14 @@ async fn do_step(
             .unwrap_or_default();
         let v = p.version.clone().unwrap_or_default();
         let _ = socket
-            .send(Message::Text(json!({
-                "type": "state", "i": i, "present": p.present,
-                "version": v, "external": p.external,
-                "probe": probe_json(&p.diag)
-            }).to_string()))
+            .send(Message::Text(
+                json!({
+                    "type": "state", "i": i, "present": p.present,
+                    "version": v, "external": p.external,
+                    "probe": probe_json(&p.diag)
+                })
+                .to_string(),
+            ))
             .await;
         v
     } else {

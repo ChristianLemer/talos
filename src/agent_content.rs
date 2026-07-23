@@ -36,7 +36,10 @@ pub fn parse_installed_plugins(json: &str) -> Vec<Plugin> {
             .and_then(|x| x.as_str())
             .unwrap_or("")
             .to_string();
-        out.push(Plugin { id: id.clone(), version });
+        out.push(Plugin {
+            id: id.clone(),
+            version,
+        });
     }
     out
 }
@@ -79,7 +82,9 @@ pub fn skill_path(name: &str, skills: &BTreeMap<String, PathBuf>) -> Option<Path
 /// Disk paths where to read the agent content, derived from HOME. Cross-platform via HOME
 /// (Mac/Linux) / USERPROFILE (Windows). The .app/.exe runs in the user's HOME.
 pub fn plugins_json_path(home: &Path) -> PathBuf {
-    home.join(".claude").join("plugins").join("installed_plugins.json")
+    home.join(".claude")
+        .join("plugins")
+        .join("installed_plugins.json")
 }
 pub fn skill_dirs(home: &Path) -> Vec<PathBuf> {
     vec![

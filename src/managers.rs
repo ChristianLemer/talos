@@ -49,7 +49,9 @@ impl SystemManager {
     }
     pub fn presence_command(&self, id: &str) -> String {
         match self.route {
-            "winget" => format!("winget list --id {id} --exact --source winget --accept-source-agreements"),
+            "winget" => {
+                format!("winget list --id {id} --exact --source winget --accept-source-agreements")
+            }
             _ => format!("brew list --versions {id} || brew list --cask --versions {id}"),
         }
     }

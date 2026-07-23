@@ -79,10 +79,14 @@ pub struct Probe {
 pub fn local_data_dir(os: Os) -> PathBuf {
     match os {
         Os::Windows => {
-            let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(|| {
-                let up = std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_default();
-                up.join("AppData").join("Local")
-            });
+            let base = std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    let up = std::env::var_os("USERPROFILE")
+                        .map(PathBuf::from)
+                        .unwrap_or_default();
+                    up.join("AppData").join("Local")
+                });
             base.join("Talos")
         }
         Os::Darwin => home_dir()
@@ -97,7 +101,9 @@ pub fn local_data_dir(os: Os) -> PathBuf {
 }
 
 fn home_dir() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default()
 }
 
 /// The "next-to-the-exe" folder — where `bundles/` lives (hermetic boundary: the engine
@@ -237,7 +243,11 @@ mod tests {
         // not a fixed path: a login flag (-lc or -ilc) + the passed command.
         // (the -ilc vs -lc choice is covered precisely by posix_probe, pure.)
         let p = shell_probe(Os::Darwin, "brew list");
-        assert!(p.args[0] == "-lc" || p.args[0] == "-ilc", "flag login, got {}", p.args[0]);
+        assert!(
+            p.args[0] == "-lc" || p.args[0] == "-ilc",
+            "flag login, got {}",
+            p.args[0]
+        );
         assert_eq!(p.args[1], "brew list");
     }
 
@@ -269,8 +279,15 @@ mod tests {
     fn windows_shell_probe_lowers_double_ampersand() {
         // End-to-end: a `&&` command must NEVER reach powershell.exe as-is
         // (PS 5.1: "The token '&&' is not a valid statement separator").
-        let p = shell_probe(Os::Windows, "claude plugin marketplace add \"x\" && claude plugin install y --scope user");
-        assert!(!p.args.last().unwrap().contains("&&"), "&& leaked into PS: {:?}", p.args.last());
+        let p = shell_probe(
+            Os::Windows,
+            "claude plugin marketplace add \"x\" && claude plugin install y --scope user",
+        );
+        assert!(
+            !p.args.last().unwrap().contains("&&"),
+            "&& leaked into PS: {:?}",
+            p.args.last()
+        );
     }
 
     #[test]
@@ -310,9 +327,15 @@ mod tests {
         // Dev (cargo) or Windows/Linux exe: just the parent folder.
         // (POSIX paths: the test runs on Mac, where `\` is not a separator.)
         let exe = std::path::Path::new("/home/x/talos/target/release/talos");
-        assert_eq!(exe_sibling_dir(exe), PathBuf::from("/home/x/talos/target/release"));
+        assert_eq!(
+            exe_sibling_dir(exe),
+            PathBuf::from("/home/x/talos/target/release")
+        );
         let shared = std::path::Path::new("/mnt/onedrive/Talos/talos");
-        assert_eq!(exe_sibling_dir(shared), PathBuf::from("/mnt/onedrive/Talos"));
+        assert_eq!(
+            exe_sibling_dir(shared),
+            PathBuf::from("/mnt/onedrive/Talos")
+        );
     }
 
     #[test]

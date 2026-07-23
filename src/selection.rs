@@ -136,7 +136,10 @@ mod tests {
     #[test]
     fn parses_active_bundles() {
         let sel = parse_selection(r#"{"pkgs":{},"activeBundles":["Base","Data",7]}"#);
-        assert_eq!(sel.active_bundles, vec!["Base".to_string(), "Data".to_string()]);
+        assert_eq!(
+            sel.active_bundles,
+            vec!["Base".to_string(), "Data".to_string()]
+        );
         assert!(parse_selection(r#"{"pkgs":{}}"#).active_bundles.is_empty());
     }
 
@@ -146,13 +149,18 @@ mod tests {
         assert!(sel.ui.advanced && sel.ui.show_all);
         // theme round-trips verbatim; absent → "" (default, = Tokyo Night)
         assert_eq!(
-            parse_selection(r#"{"pkgs":{},"ui":{"theme":"gruvbox"}}"#).ui.theme,
+            parse_selection(r#"{"pkgs":{},"ui":{"theme":"gruvbox"}}"#)
+                .ui
+                .theme,
             "gruvbox"
         );
         assert_eq!(sel.ui.theme, "");
         // absent ui → default false; garbage ui → default (never sinks)
         assert_eq!(parse_selection(r#"{"pkgs":{}}"#).ui, UiPrefs::default());
-        assert_eq!(parse_selection(r#"{"pkgs":{},"ui":42}"#).ui, UiPrefs::default());
+        assert_eq!(
+            parse_selection(r#"{"pkgs":{},"ui":42}"#).ui,
+            UiPrefs::default()
+        );
     }
 
     #[test]

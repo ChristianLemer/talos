@@ -334,7 +334,11 @@ mod tests {
         let p = detect_present_detailed(&s, Os::Darwin);
         assert_eq!(p.present, Some(true));
         let diag = p.diag.expect("diag captured");
-        assert!(diag.cmdline.contains("printf v9.9.9"), "cmdline = {}", diag.cmdline);
+        assert!(
+            diag.cmdline.contains("printf v9.9.9"),
+            "cmdline = {}",
+            diag.cmdline
+        );
         assert!(diag.output.contains("v9.9.9"), "output = {}", diag.output);
         assert_eq!(p.version.as_deref(), Some("9.9.9"));
     }

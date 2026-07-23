@@ -52,10 +52,22 @@ pub fn parse_history(raw: &str) -> Vec<HistEntry> {
             continue;
         }
         out.push(HistEntry {
-            at: v.get("at").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            at: v
+                .get("at")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
             package: pkg.to_string(),
-            version: v.get("version").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            action: v.get("action").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            version: v
+                .get("version")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
+            action: v
+                .get("action")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
             ok: v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false),
         });
     }
@@ -67,7 +79,10 @@ pub fn parse_history(raw: &str) -> Vec<HistEntry> {
 pub fn parse_consent(raw: &str) -> Consent {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
         if let Some(share) = v.get("share").and_then(|s| s.as_bool()) {
-            return Consent { decided: true, share };
+            return Consent {
+                decided: true,
+                share,
+            };
         }
     }
     Consent::default()
@@ -76,7 +91,10 @@ pub fn parse_consent(raw: &str) -> Consent {
 /// Where a consented copy lands, next to the exe: logs/<host>/<user>.jsonl.
 /// Pure path construction (the separator follows the OS via PathBuf join).
 pub fn shared_log_path(exe_dir: &Path, host: &str, user: &str) -> PathBuf {
-    exe_dir.join("logs").join(host).join(format!("{user}.jsonl"))
+    exe_dir
+        .join("logs")
+        .join(host)
+        .join(format!("{user}.jsonl"))
 }
 
 /// Everything the IO needs, injected — so the shell is testable against
@@ -146,7 +164,11 @@ pub fn append_history(s: &ConsentStore, entry: &HistEntry) {
         if let Some(parent) = shared.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&shared) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&shared)
+        {
             let _ = f.write_all(line.as_bytes());
         }
     }
@@ -183,10 +205,34 @@ mod tests {
 
     #[test]
     fn parse_consent_defensive() {
-        assert_eq!(parse_consent("garbage"), Consent { decided: false, share: false });
-        assert_eq!(parse_consent("{}"), Consent { decided: false, share: false });
-        assert_eq!(parse_consent(r#"{"share":true}"#), Consent { decided: true, share: true });
-        assert_eq!(parse_consent(r#"{"share":false}"#), Consent { decided: true, share: false });
+        assert_eq!(
+            parse_consent("garbage"),
+            Consent {
+                decided: false,
+                share: false
+            }
+        );
+        assert_eq!(
+            parse_consent("{}"),
+            Consent {
+                decided: false,
+                share: false
+            }
+        );
+        assert_eq!(
+            parse_consent(r#"{"share":true}"#),
+            Consent {
+                decided: true,
+                share: true
+            }
+        );
+        assert_eq!(
+            parse_consent(r#"{"share":false}"#),
+            Consent {
+                decided: true,
+                share: false
+            }
+        );
     }
 
     #[test]
@@ -202,7 +248,13 @@ mod tests {
         let s = store(&dir);
         assert_eq!(read_consent(&s), Consent::default(), "absent → not decided");
         write_consent(&s, true);
-        assert_eq!(read_consent(&s), Consent { decided: true, share: true });
+        assert_eq!(
+            read_consent(&s),
+            Consent {
+                decided: true,
+                share: true
+            }
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

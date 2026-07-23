@@ -7,7 +7,14 @@ fn main() {
     // Native shell per platform (POSIX login shell -lc, or PowerShell on Windows)
     // like runInPty/ptyShell — Talos is multi-platform, so is the smoke test.
     let (program, args): (&str, Vec<&str>) = if cfg!(target_os = "windows") {
-        ("powershell", vec!["-NoProfile", "-Command", "winget list --disable-interactivity"])
+        (
+            "powershell",
+            vec![
+                "-NoProfile",
+                "-Command",
+                "winget list --disable-interactivity",
+            ],
+        )
     } else if cfg!(target_os = "macos") {
         ("/bin/zsh", vec!["-lc", "brew list --versions"])
     } else {

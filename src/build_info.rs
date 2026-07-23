@@ -39,13 +39,19 @@ mod tests {
         let j = build_json();
         assert!(j.get("change").is_some());
         assert!(j.get("sha").is_some());
-        assert!(j.get("builtAt").is_some(), "front reads builtAt (camelCase)");
+        assert!(
+            j.get("builtAt").is_some(),
+            "front reads builtAt (camelCase)"
+        );
     }
 
     #[test]
     fn built_at_ressemble_iso() {
         // Except "unknown" impossible here (build.rs always sets a timestamp),
         // the stamp must look like an ISO UTC date (…T…Z).
-        assert!(BUILT_AT.contains('T') && BUILT_AT.ends_with('Z'), "got {BUILT_AT}");
+        assert!(
+            BUILT_AT.contains('T') && BUILT_AT.ends_with('Z'),
+            "got {BUILT_AT}"
+        );
     }
 }

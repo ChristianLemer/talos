@@ -22,7 +22,11 @@ fn index_by_name(nodes: &[DepNode]) -> HashMap<String, usize> {
 /// The reason a node's requirements do not hold, or None.
 /// A requirement holds iff the required package exists in the plan AND will_be_present.
 /// First failing requirement wins the message.
-pub fn requires_reason(node: &DepNode, nodes: &[DepNode], idx: &HashMap<String, usize>) -> Option<String> {
+pub fn requires_reason(
+    node: &DepNode,
+    nodes: &[DepNode],
+    idx: &HashMap<String, usize>,
+) -> Option<String> {
     for req in &node.requires {
         match idx.get(req) {
             None => return Some(format!("requires {req} (unknown)")),
@@ -41,7 +45,11 @@ pub fn requires_reason(node: &DepNode, nodes: &[DepNode], idx: &HashMap<String, 
 /// the GIVEN order of the plan (visual order = stable tie-break). Edges to packages
 /// OUT of the plan ignored (already present). A cycle → remaining items in given order
 /// (defensive: never panics, never loses an item).
-pub fn topo_sort<T: Clone>(plan: &[(usize, T)], nodes: &[DepNode], idx: &HashMap<String, usize>) -> Vec<(usize, T)> {
+pub fn topo_sort<T: Clone>(
+    plan: &[(usize, T)],
+    nodes: &[DepNode],
+    idx: &HashMap<String, usize>,
+) -> Vec<(usize, T)> {
     let in_plan: HashSet<usize> = plan.iter().map(|(i, _)| *i).collect();
     let mut remaining: HashMap<usize, usize> = HashMap::new();
     let mut dependents: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -101,21 +109,31 @@ mod tests {
     use super::*;
 
     fn node(name: &str, requires: &[&str], present: bool) -> DepNode {
-        DepNode { name: name.into(), requires: requires.iter().map(|s| s.to_string()).collect(), will_be_present: present }
+        DepNode {
+            name: name.into(),
+            requires: requires.iter().map(|s| s.to_string()).collect(),
+            will_be_present: present,
+        }
     }
 
     #[test]
     fn reason_unmet_requirement() {
         let nodes = vec![node("a", &["b"], true), node("b", &[], false)];
         let idx = make_index(&nodes);
-        assert_eq!(requires_reason(&nodes[0], &nodes, &idx), Some("requires b".into()));
+        assert_eq!(
+            requires_reason(&nodes[0], &nodes, &idx),
+            Some("requires b".into())
+        );
     }
 
     #[test]
     fn reason_unknown_requirement() {
         let nodes = vec![node("a", &["ghost"], true)];
         let idx = make_index(&nodes);
-        assert_eq!(requires_reason(&nodes[0], &nodes, &idx), Some("requires ghost (unknown)".into()));
+        assert_eq!(
+            requires_reason(&nodes[0], &nodes, &idx),
+            Some("requires ghost (unknown)".into())
+        );
     }
 
     #[test]

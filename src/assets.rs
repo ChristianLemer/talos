@@ -52,7 +52,10 @@ mod tests {
         // The binary MUST contain the sealed front assets (the heart of shortcut #3).
         assert!(Assets::get("index.html").is_some(), "index.html not sealed");
         assert!(Assets::get("app.js").is_some(), "app.js not sealed");
-        assert!(Assets::get("vendor/xterm.js").is_some(), "vendor/ not sealed");
+        assert!(
+            Assets::get("vendor/xterm.js").is_some(),
+            "vendor/ not sealed"
+        );
     }
 
     #[test]

@@ -357,7 +357,11 @@ mod tests {
             "name: Git\nbrew: git\ncategory: [vcs]\n",
         )
         .unwrap();
-        fs::write(root.join("catalog/node.yaml"), "name: Node.js\nbrew: node\n").unwrap();
+        fs::write(
+            root.join("catalog/node.yaml"),
+            "name: Node.js\nbrew: node\n",
+        )
+        .unwrap();
         // Bundle-driven: EVERY catalog package emits once, bundle="" (bundles no
         // longer own packages). bundles_dir is unused now.
         let plan = load_from_catalog(

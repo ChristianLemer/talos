@@ -41,8 +41,28 @@ fn resolve_vcs() -> (String, String) {
 /// jj: two short templates. change_id = id stable across amends (leads, like
 /// `jj log`); commit_id = git-sha (changes on every edit snapshot).
 fn try_jj() -> Option<(String, String)> {
-    let change = run("jj", &["log", "-r", "@", "--no-graph", "-T", "change_id.shortest(8)"])?;
-    let sha = run("jj", &["log", "-r", "@", "--no-graph", "-T", "commit_id.shortest(8)"])?;
+    let change = run(
+        "jj",
+        &[
+            "log",
+            "-r",
+            "@",
+            "--no-graph",
+            "-T",
+            "change_id.shortest(8)",
+        ],
+    )?;
+    let sha = run(
+        "jj",
+        &[
+            "log",
+            "-r",
+            "@",
+            "--no-graph",
+            "-T",
+            "commit_id.shortest(8)",
+        ],
+    )?;
     let (change, sha) = (change.trim().to_string(), sha.trim().to_string());
     if change.is_empty() || sha.is_empty() {
         return None;

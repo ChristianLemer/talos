@@ -241,8 +241,11 @@ profiles:
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a-first.yaml"), "bundle: First\npackages: [Git]\n").unwrap();
-        std::fs::write(dir.join("b-second.yaml"), "bundle: Second\npackages: [Node.js]\n")
-            .unwrap();
+        std::fs::write(
+            dir.join("b-second.yaml"),
+            "bundle: Second\npackages: [Node.js]\n",
+        )
+        .unwrap();
         std::fs::write(dir.join("README.md"), "ignored").unwrap();
         let p = load_profiles(dir.to_str().unwrap());
         assert_eq!(p.items.len(), 2);

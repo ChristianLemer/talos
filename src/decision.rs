@@ -118,31 +118,79 @@ mod tests {
 
     #[test]
     fn action_install_when_absent() {
-        let f = MachineFacts { present: false, outdated: false, can_uninstall: false, pin: None, installed_version: "" };
+        let f = MachineFacts {
+            present: false,
+            outdated: false,
+            can_uninstall: false,
+            pin: None,
+            installed_version: "",
+        };
         assert_eq!(action_for(Desired::Present, &f), Some(Action::Install));
     }
 
     #[test]
     fn action_upgrade_when_stale() {
-        let f = MachineFacts { present: true, outdated: true, can_uninstall: false, pin: None, installed_version: "1.0" };
+        let f = MachineFacts {
+            present: true,
+            outdated: true,
+            can_uninstall: false,
+            pin: None,
+            installed_version: "1.0",
+        };
         assert_eq!(action_for(Desired::Present, &f), Some(Action::Upgrade));
     }
 
     #[test]
     fn action_pin_below_upgrades_above_downgrades() {
-        let below = MachineFacts { present: true, outdated: false, can_uninstall: false, pin: Some("2.0"), installed_version: "1.0" };
+        let below = MachineFacts {
+            present: true,
+            outdated: false,
+            can_uninstall: false,
+            pin: Some("2.0"),
+            installed_version: "1.0",
+        };
         assert_eq!(action_for(Desired::Present, &below), Some(Action::Upgrade));
-        let above = MachineFacts { present: true, outdated: false, can_uninstall: false, pin: Some("2.0"), installed_version: "3.0" };
-        assert_eq!(action_for(Desired::Present, &above), Some(Action::Downgrade));
-        let at = MachineFacts { present: true, outdated: false, can_uninstall: false, pin: Some("2.0"), installed_version: "2.0" };
+        let above = MachineFacts {
+            present: true,
+            outdated: false,
+            can_uninstall: false,
+            pin: Some("2.0"),
+            installed_version: "3.0",
+        };
+        assert_eq!(
+            action_for(Desired::Present, &above),
+            Some(Action::Downgrade)
+        );
+        let at = MachineFacts {
+            present: true,
+            outdated: false,
+            can_uninstall: false,
+            pin: Some("2.0"),
+            installed_version: "2.0",
+        };
         assert_eq!(action_for(Desired::Present, &at), None);
     }
 
     #[test]
     fn action_uninstall_only_when_removable() {
-        let removable = MachineFacts { present: true, outdated: false, can_uninstall: true, pin: None, installed_version: "" };
-        assert_eq!(action_for(Desired::Absent, &removable), Some(Action::Uninstall));
-        let not = MachineFacts { present: true, outdated: false, can_uninstall: false, pin: None, installed_version: "" };
+        let removable = MachineFacts {
+            present: true,
+            outdated: false,
+            can_uninstall: true,
+            pin: None,
+            installed_version: "",
+        };
+        assert_eq!(
+            action_for(Desired::Absent, &removable),
+            Some(Action::Uninstall)
+        );
+        let not = MachineFacts {
+            present: true,
+            outdated: false,
+            can_uninstall: false,
+            pin: None,
+            installed_version: "",
+        };
         assert_eq!(action_for(Desired::Absent, &not), None);
     }
 }
