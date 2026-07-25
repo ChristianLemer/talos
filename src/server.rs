@@ -22,6 +22,22 @@ use crate::platform::{current_os, local_data_dir, Os};
 use crate::profiles::{load_profiles, Profiles};
 use crate::selection::{read_selection, write_selection, Selection};
 
+/// The honest "outdated" fact for a package at apply time. Casks self-update
+/// behind brew's receipt, so their truth is `detect` (real installed version)
+/// vs the scan's available target — not mere presence in the scan. Formulae
+/// trust the scan (brew's receipt is reliable for them).
+fn is_outdated_now(od: Option<&crate::managers::Outdated>, installed_version: &str) -> bool {
+    match od {
+        None => false,
+        Some(o) if o.is_cask => {
+            // real (detect) < available target → genuinely behind
+            !installed_version.is_empty()
+                && crate::decision::compare_versions(installed_version, &o.available) < 0
+        }
+        Some(_) => true, // formula: scan presence is authoritative
+    }
+}
+
 /// The server's shared state: the Plan scanned ONCE at startup (pure data,
 /// no pty/network), plus the current OS. Cloned (Arc) into each connection.
 struct AppState {
@@ -361,20 +377,24 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
     for (i, task) in probe_tasks.into_iter().enumerate() {
         let p = task.await.unwrap_or_default();
         let sid = steps[i].system_id.clone();
+        let version = p.version.clone().unwrap_or_default();
         let state_msg = json!({
             "type": "state", "i": i,
             "present": p.present, "reason": p.reason,
-            "version": p.version.unwrap_or_default(), "external": p.external,
+            "version": version, "external": p.external,
             "probe": probe_json(&p.diag) // the proof: command + output + code
         });
         let _ = socket.send(Message::Text(state_msg.to_string())).await;
         if p.present == Some(true) {
-            if let Some(od) = outdated_for(sid.as_deref(), &scan) {
-                let _ = socket
-                    .send(Message::Text(
-                        json!({ "type": "outdated", "i": i, "current": od.current, "available": od.available }).to_string(),
-                    ))
-                    .await;
+            let od = outdated_for(sid.as_deref(), &scan);
+            if is_outdated_now(od, &version) {
+                if let Some(od) = od {
+                    let _ = socket
+                        .send(Message::Text(
+                            json!({ "type": "outdated", "i": i, "current": od.current, "available": od.available }).to_string(),
+                        ))
+                        .await;
+                }
             }
         }
     }
@@ -500,10 +520,13 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
             ))
             .await;
         if p.present == Some(true) {
-            if let Some(od) = outdated_for(steps[i].system_id.as_deref(), &scan) {
-                let _ = socket
-                    .send(Message::Text(json!({ "type": "outdated", "i": i, "current": od.current, "available": od.available }).to_string()))
-                    .await;
+            let od = outdated_for(steps[i].system_id.as_deref(), &scan);
+            if is_outdated_now(od, p.version.as_deref().unwrap_or("")) {
+                if let Some(od) = od {
+                    let _ = socket
+                        .send(Message::Text(json!({ "type": "outdated", "i": i, "current": od.current, "available": od.available }).to_string()))
+                        .await;
+                }
             }
         }
     }
@@ -519,9 +542,10 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
             None // auto → never touched
         };
         let Some(desired) = desired else { continue };
+        let od = outdated_for(step.system_id.as_deref(), &scan);
         let facts = MachineFacts {
             present: presences[i].present == Some(true),
-            outdated: outdated_for(step.system_id.as_deref(), &scan).is_some(),
+            outdated: is_outdated_now(od, presences[i].version.as_deref().unwrap_or("")),
             can_uninstall: step.uninstall.is_some(),
             pin: step.pin.as_deref(),
             installed_version: presences[i].version.as_deref().unwrap_or(""),
@@ -556,8 +580,31 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
         ))
         .await;
 
+    // Casks self-update behind brew's receipt → the precomputed formula-form
+    // upgrade would hit brew's anti-clobber guard (exit 1). Re-issue the forced
+    // cask command for cask upgrades. Single source of the brew line: managers.
+    use crate::managers::{native_manager, IdField};
+    let mut steps_run: Vec<crate::bundles::Step> = steps.clone();
+    if let Some(mgr) = native_manager(os) {
+        if mgr.route == "brew" {
+            for (i, action) in &plan {
+                if *action == Action::Upgrade {
+                    let od = outdated_for(steps[*i].system_id.as_deref(), &scan);
+                    let is_cask = od.map(|o| o.is_cask).unwrap_or(false);
+                    if is_cask {
+                        if let (Some(id), IdField::Brew) =
+                            (steps[*i].system_id.as_deref(), mgr.id_field)
+                        {
+                            steps_run[*i].upgrade = Some(mgr.upgrade(id, true));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     for (i, action) in &plan {
-        do_step(socket, state, *i, *action, &steps[*i]).await;
+        do_step(socket, state, *i, *action, &steps_run[*i]).await;
     }
     clear_sudo_pw(state).await; // end of Apply: the cached password is cleared (model C)
     let _ = socket
@@ -856,4 +903,36 @@ async fn do_step(
         },
     );
     ok
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::managers::Outdated;
+
+    #[test]
+    fn cask_outdated_uses_detect_not_receipt() {
+        // Cask: receipt would say outdated (present in scan), but the REAL
+        // installed version already meets/exceeds the target → NOT outdated.
+        let od = Outdated {
+            current: "1.127.0".into(),
+            available: "1.130.0".into(),
+            is_cask: true,
+        };
+        assert!(!is_outdated_now(Some(&od), "1.130.0")); // real == target
+        assert!(!is_outdated_now(Some(&od), "1.131.0")); // real ahead
+        assert!(is_outdated_now(Some(&od), "1.129.1")); // real behind target
+        assert!(!is_outdated_now(Some(&od), "")); // no detect → don't guess
+    }
+
+    #[test]
+    fn formula_outdated_trusts_scan() {
+        let od = Outdated {
+            current: "1.7".into(),
+            available: "1.8".into(),
+            is_cask: false,
+        };
+        assert!(is_outdated_now(Some(&od), "1.7")); // scan is authoritative
+        assert!(!is_outdated_now(None, "1.7"));
+    }
 }
