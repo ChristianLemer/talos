@@ -451,8 +451,8 @@ function isActionable(i) {
 // ghost outlines. The eye lands on what matters. Runs after any change to
 // selection or detected state.
 let applyRunning = false;
-// macOS "App Management" permission status, from the plan / check-appmgmt reply:
-// "granted" | "missing" | "na" (na = not macOS or not applicable). Drives the
+// macOS "App Management" permission status, set once at launch from the `plan`
+// message: "granted" | "missing" | "na" (na = not macOS or not applicable). Drives the
 // banner (missing only), the settings pill, and the on-focus re-check.
 let appmgmtStatus = "na";
 // True from render until `state-done`: the machine scan is still running, so the
@@ -1106,16 +1106,14 @@ const openAppmgmtSettings = () =>
 document.getElementById("appmgmt-open")?.addEventListener("click", openAppmgmtSettings);
 document.getElementById("appmgmt-banner-open")?.addEventListener("click", openAppmgmtSettings);
 document.getElementById("appmgmt-sheet-open")?.addEventListener("click", openAppmgmtSettings);
-document.getElementById("appmgmt-refresh")?.addEventListener("click", () =>
-  ws.send(JSON.stringify({ type: "check-appmgmt" })));
 document.getElementById("appmgmt-sheet-cancel")?.addEventListener("click", () => {
   document.getElementById("appmgmt-sheet")?.classList.remove("show");
 });
-// While the permission is missing, re-probe when the window regains focus — the
-// user likely just toggled it in System Settings and came back.
-window.addEventListener("focus", () => {
-  if (appmgmtStatus === "missing") ws.send(JSON.stringify({ type: "check-appmgmt" }));
-});
+// No in-app re-check: macOS caches the TCC verdict per PROCESS, so re-probing
+// from the running Talos returns the STALE answer even after the user grants the
+// permission. The system itself requires a quit-and-relaunch — that's the only
+// honest signal, and it's exactly what the startup check reads. So the status is
+// only ever set at launch (from the `plan` message); there is no Refresh button.
 
 // --- sudo password dialog (masked; local WS only, never stored) ---
 const sudoEl = document.getElementById("sudo");
@@ -1352,11 +1350,6 @@ ws.onmessage = (ev) => {
       break;
     case "wait-clear":
       hideWait();
-      break;
-    case "appmgmt-status":
-      // Reply to a check-appmgmt re-probe (settings Refresh or window focus).
-      appmgmtStatus = msg.status || "na";
-      renderAppmgmt();
       break;
     case "needs-appmgmt": {
       // The user tried to update an app in /Applications but the permission is

@@ -96,9 +96,11 @@ struct AppState {
     plan: Plan,
     profiles: Profiles,
     os: Os,
-    /// macOS App Management permission status, probed once at startup and
-    /// re-probed on `check-appmgmt`. Wire string via AppMgmtStatus::as_str().
-    appmgmt: std::sync::Mutex<crate::platform::AppMgmtStatus>,
+    /// macOS App Management permission status, probed ONCE at startup. Not
+    /// re-checked in-process: macOS caches the TCC verdict per process, so the
+    /// truthful signal after a grant is a quit-and-relaunch (which re-runs this
+    /// probe). Wire string via AppMgmtStatus::as_str().
+    appmgmt: crate::platform::AppMgmtStatus,
     /// Disk root of the front assets, IN DEV ONLY (`TALOS_PUBLIC` set):
     /// lets you edit `app.js` without recompiling. `None` in release → assets SEALED
     /// in the binary (crate::assets), independent of the cwd (shortcut #3 fixed).
@@ -191,7 +193,7 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         plan,
         profiles,
         os,
-        appmgmt: std::sync::Mutex::new(crate::platform::app_management_status(os)),
+        appmgmt: crate::platform::app_management_status(os),
         disk_root,
         data_dir,
         consent,
@@ -322,7 +324,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
         "profileColumns": state.profiles.columns,
         "consent": read_consent(&state.consent),
         "build": crate::build_info::build_json(), // exact stamp of the source snapshot (no more hardcoding)
-        "appmgmt": appmgmt_wire(*state.appmgmt.lock().unwrap())
+        "appmgmt": appmgmt_wire(state.appmgmt)
     });
     let _ = socket.send(Message::Text(plan.to_string())).await;
 
@@ -398,16 +400,6 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
             // (steps-refreshing) without ever receiving a response → "refresh forever".
             "rescan" => {
                 scan_and_emit(&mut socket, &state).await;
-            }
-            "check-appmgmt" => {
-                // Re-probe reality now (Refresh button / after the user granted).
-                let status = crate::platform::app_management_status(state.os);
-                *state.appmgmt.lock().unwrap() = status;
-                let _ = socket
-                    .send(Message::Text(
-                        json!({ "type": "appmgmt-status", "status": status.as_str() }).to_string(),
-                    ))
-                    .await;
             }
             // open-forbidden: the "Open blocked page" button of the 403 banner → opens
             // the blocked URL in the default browser, next to the panel, so the
@@ -540,7 +532,7 @@ async fn row_action(socket: &mut WebSocket, state: &AppState, i: usize, action: 
     } else {
         false
     };
-    if cask_upgrade_blocked(act, is_cask, *state.appmgmt.lock().unwrap()) {
+    if cask_upgrade_blocked(act, is_cask, state.appmgmt) {
         let _ = socket
             .send(Message::Text(
                 json!({ "type": "needs-appmgmt", "i": i }).to_string(),
@@ -674,7 +666,7 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
         let is_cask = outdated_for(steps[*i].system_id.as_deref(), &scan)
             .map(|o| o.is_cask)
             .unwrap_or(false);
-        if cask_upgrade_blocked(*action, is_cask, *state.appmgmt.lock().unwrap()) {
+        if cask_upgrade_blocked(*action, is_cask, state.appmgmt) {
             let _ = socket
                 .send(Message::Text(
                     json!({ "type": "needs-appmgmt", "i": *i }).to_string(),
