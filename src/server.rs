@@ -22,13 +22,23 @@ use crate::platform::{current_os, local_data_dir, Os};
 use crate::profiles::{load_profiles, Profiles};
 use crate::selection::{read_selection, write_selection, Selection};
 
-/// The "outdated" fact for a package at apply time: presence in the outdated
-/// scan. The scan uses `--greedy-auto-updates`, so a self-updating cask brew
-/// lists as behind counts as outdated (and gets a forced upgrade) instead of
-/// being silently left unmanaged. Applies to casks and formulae alike.
 /// The value for the `appmgmt` key sent to the front (wire string).
 fn appmgmt_wire(status: crate::platform::AppMgmtStatus) -> &'static str {
     status.as_str()
+}
+
+/// True when running this action on this step REQUIRES App Management that we
+/// don't currently have: a brew CASK upgrade on macOS with status Missing.
+/// Everything else (formulae, winget, install/uninstall, other OSes, granted or
+/// n/a) is never gated.
+fn cask_upgrade_blocked(
+    action: crate::decision::Action,
+    is_cask: bool,
+    appmgmt: crate::platform::AppMgmtStatus,
+) -> bool {
+    use crate::decision::Action;
+    use crate::platform::AppMgmtStatus;
+    action == Action::Upgrade && is_cask && appmgmt == AppMgmtStatus::Missing
 }
 
 fn is_outdated_now(od: Option<&crate::managers::Outdated>) -> bool {
@@ -522,6 +532,14 @@ async fn row_action(socket: &mut WebSocket, state: &AppState, i: usize, action: 
     } else {
         false
     };
+    if cask_upgrade_blocked(act, is_cask, *state.appmgmt.lock().unwrap()) {
+        let _ = socket
+            .send(Message::Text(
+                json!({ "type": "needs-appmgmt", "i": i }).to_string(),
+            ))
+            .await;
+        return;
+    }
     do_step(socket, state, i, act, step, is_cask).await;
     clear_sudo_pw(state).await; // row action finished: clear the cached password
     let _ = socket
@@ -648,6 +666,14 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
         let is_cask = outdated_for(steps[*i].system_id.as_deref(), &scan)
             .map(|o| o.is_cask)
             .unwrap_or(false);
+        if cask_upgrade_blocked(*action, is_cask, *state.appmgmt.lock().unwrap()) {
+            let _ = socket
+                .send(Message::Text(
+                    json!({ "type": "needs-appmgmt", "i": *i }).to_string(),
+                ))
+                .await;
+            continue;
+        }
         do_step(socket, state, *i, *action, &steps[*i], is_cask).await;
     }
     clear_sudo_pw(state).await; // end of Apply: the cached password is cleared (model C)
@@ -995,6 +1021,17 @@ mod tests {
         assert_eq!(super::appmgmt_wire(Granted), "granted");
         assert_eq!(super::appmgmt_wire(Missing), "missing");
         assert_eq!(super::appmgmt_wire(NotApplicable), "na");
+    }
+
+    #[test]
+    fn only_missing_cask_upgrade_is_blocked() {
+        use crate::decision::Action::*;
+        use crate::platform::AppMgmtStatus::*;
+        assert!(super::cask_upgrade_blocked(Upgrade, true, Missing));
+        assert!(!super::cask_upgrade_blocked(Upgrade, true, Granted));
+        assert!(!super::cask_upgrade_blocked(Upgrade, true, NotApplicable));
+        assert!(!super::cask_upgrade_blocked(Upgrade, false, Missing));
+        assert!(!super::cask_upgrade_blocked(Install, true, Missing));
     }
 
     #[test]
