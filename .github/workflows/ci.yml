@@ -75,7 +75,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "24"
 
       # No package.json / no deps: the tests are plain .mjs importing public/*.js
       # and run under Node's built-in test runner. `node --test` auto-discovers
