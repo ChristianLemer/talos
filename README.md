@@ -27,7 +27,7 @@ ship beside it.
 ### 1 — Declare your content
 
 A bundle is a **folder** with a `bundle.yaml`. It lists packages as *needs*
-satisfied by a named route (`winget`, `brew`, `cargo`, `npm`, a raw `run`, a
+satisfied by a named route (`winget`, `brew`, `cargo`, `bun`, a raw `run`, a
 Claude Code `claude-plugin`, or a cross-agent `skill`). Copy an existing one and
 edit — the full field reference (routes, postures, version pinning, config-atoms,
 profiles) lives in [`bundles/README.md`](bundles/README.md):
@@ -53,11 +53,11 @@ packages:
     detect: chiron                            # name `claude plugin list` reports
     requires: claude                          # not offered if `claude` is absent
 
-  # A cross-agent skill (SKILL.md, via npx skills):
+  # A cross-agent skill (SKILL.md, via bunx skills):
   - name: uv/ruff/ty skills
-    skill: astral-sh/claude-code-plugins      # source for `npx skills add`
-    detect: astral                            # name `npx skills list` reports
-    requires: npx
+    skill: astral-sh/claude-code-plugins      # source for `bunx skills add`
+    detect: astral                            # name `bunx skills list` reports
+    requires: Bun
 ```
 
 For `claude-plugin` and `skill`, `detect:` is the name the tool lists the item

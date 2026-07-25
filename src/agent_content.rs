@@ -1,7 +1,7 @@
 //! agent_content.rs — detection of the agent CONTENT present: Claude Code plugins
 //! (route `claude-plugin`) and standalone skills (route `skill`). Rust port of
 //! agent-content.ts, but NATIVE: disk reads + serde_json, NEVER a shell-out
-//! to `claude`/`npx` (archi decision: everything as natively-parsed JSON — see
+//! to `claude`/`bunx` (archi decision: everything as natively-parsed JSON — see
 //! memory talos-parsing-native-json). PURE and defensive parsing (a corrupted file
 //! "sees" nothing present — safe direction: never present if uncertain). The IO
 //! (reading the real paths) is a thin shell.
@@ -56,7 +56,7 @@ pub fn plugin_version(detect: &str, plugins: &[Plugin]) -> Option<String> {
 
 /// The names of installed skills: each subfolder of the skill directories is
 /// a skill (e.g. ~/.claude/skills/<name>/, ~/.agents/skills/<name>/). Pure disk
-/// read (no `npx skills list`). Deduplicated (a skill can be in 2 roots).
+/// read (no `bunx skills list`). Deduplicated (a skill can be in 2 roots).
 pub fn list_skills(dirs: &[PathBuf]) -> BTreeMap<String, PathBuf> {
     let mut out = BTreeMap::new();
     for dir in dirs {

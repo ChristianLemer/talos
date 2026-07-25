@@ -1,10 +1,12 @@
 # Claude Code — the default AI agent (opt-out via the Agents bundle).
+# Installed globally via Bun (`bun add -g`). The npm package shipped the SAME native
+# binary via a per-platform optional dependency; Bun installs it identically without
+# a Node dependency. Detection is installer-agnostic (`claude --version`).
 name: Claude Code
-description: Anthropic's official CLI agent — installed globally via npm
-npm: "@anthropic-ai/claude-code"
-npmFlags: "--allow-scripts=@anthropic-ai/claude-code"
+description: Anthropic's official CLI agent — installed globally via Bun
+bun: "@anthropic-ai/claude-code"
 detect: claude --version
 category: [agents]
 requires:
-  - Node.js # a PACKAGE name (matches Node.js), resolved against the plan —
-# satisfied if Node.js is present OR wanted
+  - Bun # a PACKAGE name (matches catalog/bun.yaml `name: Bun`), resolved against the
+# plan — satisfied if Bun is present OR wanted (transitively pulled in).

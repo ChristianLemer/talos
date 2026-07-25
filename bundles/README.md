@@ -66,16 +66,16 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
 | winget | `winget: Publisher.Id` | Windows system manager |
 | brew | `brew: formula-or-cask` | macOS/Linux system manager |
 | cargo | `cargo: crate` | cross-platform; reinstall = upgrade |
-| npm | `npm: pkg` + optional `npmFlags:` | global install |
+| bun | `bun: pkg` | global install via `bun add -g` (Anthropic-owned; no Node) |
 | run | `run:` + optional `runUninstall:` | raw command escape hatch |
 | claude-plugin | `claude-plugin: plugin@marketplace` + optional `marketplace:` | Claude Code plugin |
-| skill | `skill: source` + optional `skillName:` | cross-agent SKILL.md via `npx skills` |
+| skill | `skill: source` + optional `skillName:` | cross-agent SKILL.md via `bunx skills` |
 
 **`detect:`** — how Talos knows a package is already present.
 - A binary route: the command whose exit 0 = present, e.g. `detect: code --version`.
   Its output also yields the installed version (free, source-agnostic — the best signal).
 - `claude-plugin` / `skill`: `detect:` is the **name the tool lists the item under**
-  (not a PATH binary) — Talos parses `claude plugin list` / `npx skills list`.
+  (not a PATH binary) — Talos parses `claude plugin list` / `bunx skills list`.
 
 **`requires:`** — names a package (or a bare command) that must be present first.
 Resolved against the whole plan: a plugin that `requires: [Claude Code]` stays
@@ -105,7 +105,7 @@ installed to the pin and acts by direction:
 Downgrade is deliberately excluded from Apply: it's the only destructive path
 (uninstall + reinstall), so it's a single deliberate click on the row, never batched.
 
-**Per-route reality:** winget / cargo / npm pin natively (`--version` / `@version`).
+**Per-route reality:** winget / cargo / bun pin natively (`--version` / `@version`).
 **brew has no version flag** — a pin resolves to the versioned formula `id@version`
 (e.g. `nushell@0.113.1`), which exists *only* if the tap ships it. If it doesn't, a
 pinned install/downgrade fails at run time and the row simply stays as it was (Talos
@@ -168,7 +168,7 @@ profiles:
     highlights: [Claude Code, VS Code]   # 2-3 names to advertise the profile
     description: The minimum — an AI agent you can talk to, and a place to read it.
     packages:
-      - Node.js
+      # Bun is not listed — Claude Code pulls it in via `requires: Bun`.
       - Claude Code
       - Visual Studio Code
 ```

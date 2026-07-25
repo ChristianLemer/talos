@@ -11,3 +11,5 @@ detect: rust-best-practices
 category: [automation]
 requires:
   - Claude Code
+  - Bun # the skill installs via `bunx skills add` — needs the Bun launcher present
+

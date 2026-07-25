@@ -50,9 +50,7 @@ pub struct RawPkg {
     #[serde(default)]
     pub cargo: Option<String>,
     #[serde(default)]
-    pub npm: Option<String>,
-    #[serde(default, rename = "npmFlags")]
-    pub npm_flags: Option<String>,
+    pub bun: Option<String>,
     #[serde(default)]
     pub run: Option<String>,
     #[serde(default, rename = "runUninstall")]
@@ -113,7 +111,7 @@ pub struct Commands {
 }
 
 /// The NAMED ROUTE TABLE — port of commandsFor. Family 1 (system manager, arbitrated by
-/// OS) first, then cargo/npm/run/claude-plugin/skill.
+/// OS) first, then cargo/bun/run/claude-plugin/skill.
 fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
     let ver = pkg.version.as_deref().unwrap_or("").trim().to_string();
     let none = Commands {
@@ -167,12 +165,12 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
             },
         };
     }
-    if let Some(n) = &pkg.npm {
-        let flags = pkg
-            .npm_flags
-            .as_deref()
-            .map(|f| format!("{f} "))
-            .unwrap_or_default();
+    if let Some(n) = &pkg.bun {
+        // Global install via Bun (`bun add -g`). Replaces the old npm route:
+        // Anthropic-owned Bun is a single binary, no Node dependency, and it ships
+        // the SAME native binary as npm did (a per-platform optional dep whose `bin`
+        // Bun links natively — NOT a lifecycle postinstall, so no `--trust` needed;
+        // verified live 2026-07-26 in an isolated BUN_INSTALL prefix).
         let inst_target = if ver.is_empty() {
             n.clone()
         } else {
@@ -184,16 +182,14 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
             format!("{n}@{ver}")
         };
         return Commands {
-            route: Some("npm".into()),
-            install: Some(format!("npm install -g {flags}{inst_target}")),
-            uninstall: Some(format!("npm uninstall -g {n}")),
-            upgrade: Some(format!("npm install -g {flags}{up_target}")),
+            route: Some("bun".into()),
+            install: Some(format!("bun add -g {inst_target}")),
+            uninstall: Some(format!("bun remove -g {n}")),
+            upgrade: Some(format!("bun add -g {up_target}")),
             downgrade: if ver.is_empty() {
                 None
             } else {
-                Some(format!(
-                    "npm uninstall -g {n} && npm install -g {flags}{inst_target}"
-                ))
+                Some(format!("bun remove -g {n} && bun add -g {inst_target}"))
             },
         };
     }
@@ -224,9 +220,9 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
         let name = pkg.skill_name.clone().unwrap_or_else(|| pkg.name.clone());
         return Commands {
             route: Some("skill".into()),
-            install: Some(format!("npx skills add {src} -g -y")),
-            uninstall: Some(format!("npx skills remove {name} -y")),
-            upgrade: Some(format!("npx skills update {name} -y")),
+            install: Some(format!("bunx skills add {src} -g -y")),
+            uninstall: Some(format!("bunx skills remove {name} -y")),
+            upgrade: Some(format!("bunx skills update {name} -y")),
             downgrade: None,
         };
     }
@@ -332,6 +328,63 @@ mod tests {
     }
 
     #[test]
+    fn bun_route_global_install() {
+        let mut p = pkg("Claude Code");
+        p.bun = Some("@anthropic-ai/claude-code".into());
+        let c = commands_for(&p, Os::Darwin);
+        assert_eq!(c.route.as_deref(), Some("bun"));
+        assert_eq!(
+            c.install.as_deref(),
+            Some("bun add -g @anthropic-ai/claude-code")
+        );
+        assert_eq!(
+            c.uninstall.as_deref(),
+            Some("bun remove -g @anthropic-ai/claude-code")
+        );
+        assert_eq!(
+            c.upgrade.as_deref(),
+            Some("bun add -g @anthropic-ai/claude-code@latest")
+        );
+    }
+
+    #[test]
+    fn bun_route_pinned() {
+        let mut p = pkg("Claude Code");
+        p.bun = Some("@anthropic-ai/claude-code".into());
+        p.version = Some("2.1.220".into());
+        let c = commands_for(&p, Os::Darwin);
+        assert_eq!(
+            c.install.as_deref(),
+            Some("bun add -g @anthropic-ai/claude-code@2.1.220")
+        );
+        assert_eq!(
+            c.downgrade.as_deref(),
+            Some("bun remove -g @anthropic-ai/claude-code && bun add -g @anthropic-ai/claude-code@2.1.220")
+        );
+    }
+
+    #[test]
+    fn skill_route_uses_bunx() {
+        let mut p = pkg("Rust best practices");
+        p.skill = Some("apollographql/skills@rust-best-practices".into());
+        p.skill_name = Some("rust-best-practices".into());
+        let c = commands_for(&p, Os::Darwin);
+        assert_eq!(c.route.as_deref(), Some("skill"));
+        assert_eq!(
+            c.install.as_deref(),
+            Some("bunx skills add apollographql/skills@rust-best-practices -g -y")
+        );
+        assert_eq!(
+            c.uninstall.as_deref(),
+            Some("bunx skills remove rust-best-practices -y")
+        );
+        assert_eq!(
+            c.upgrade.as_deref(),
+            Some("bunx skills update rust-best-practices -y")
+        );
+    }
+
+    #[test]
     fn run_route() {
         let mut p = pkg("starship-cfg");
         p.run = Some("nu {dir}/patch.nu".into());
@@ -391,7 +444,7 @@ mod tests {
         fs::create_dir_all(root.join("catalog")).unwrap();
         fs::write(
             root.join("catalog/claude-code.yaml"),
-            "name: Claude Code\nnpm: '@anthropic-ai/claude-code'\nrequires:\n  - Node.js\n",
+            "name: Claude Code\nbun: '@anthropic-ai/claude-code'\nrequires:\n  - Bun\n",
         )
         .unwrap();
         let plan = load_from_catalog(
@@ -401,7 +454,7 @@ mod tests {
             &|_| {},
         );
         let cc = plan.steps.iter().find(|s| s.name == "Claude Code").unwrap();
-        assert_eq!(cc.requires, vec!["Node.js"]);
+        assert_eq!(cc.requires, vec!["Bun"]);
         let _ = fs::remove_dir_all(&root);
     }
 }

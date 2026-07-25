@@ -7,7 +7,10 @@ usage: The essentials — an AI agent, the plumbing it runs on, the method.
 highlights: [Claude Code, Chiron]
 description: The foundation every workspace stands on.
 packages:
-  - Node.js
+  # Bun is NOT listed here — it is pulled transitively by Claude Code (`requires: Bun`).
+  # Node.js is deliberately absent: nothing requires it anymore (Claude Code moved to
+  # Bun). It stays in the catalog so Talos can still detect + uninstall a stray Node,
+  # but the socle no longer pulls it in.
   - Git
   - jq
   - Nushell

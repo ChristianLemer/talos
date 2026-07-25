@@ -1,6 +1,9 @@
-# Node.js — JavaScript runtime, required by Talos itself and CLI agents.
+# Node.js — JavaScript runtime. No longer required by Talos or its agents (Claude
+# Code and skills moved to Bun). Kept in the catalog ONLY so Talos can detect and
+# uninstall a stray Node left over from earlier installs or internet tutorials —
+# nothing pulls it in, so on a clean machine it stays absent.
 name: Node.js
-description: JavaScript runtime — required by this tool itself and by CLI agents
+description: JavaScript runtime — superseded by Bun; kept only for detection/cleanup
 winget: OpenJS.NodeJS
 brew: node
 detect: node --version
