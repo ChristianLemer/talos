@@ -78,7 +78,7 @@ jobs:
         run: ditto -c -k --keepParent target/release/bundle/macos/Talos.app Talos-macos-aarch64.app.zip
 
       - name: Upload bundle(s) to the Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # A tag containing "-" (v0.1.0-beta.1) is flagged pre-release.
           prerelease: ${{ contains(github.ref_name, '-') }}
