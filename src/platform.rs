@@ -56,6 +56,83 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
     cmd.spawn().map(|_| ())
 }
 
+/// Status of the macOS "App Management" permission (TCC
+/// kTCCServiceSystemPolicyAppBundles). No public API exists — on macOS we probe
+/// reality by trying to write inside a real /Applications/*.app we don't own and
+/// reading EPERM. Reality, never TCC.db nor the toggle's appearance (survives the
+/// ad-hoc re-grant trap where the toggle looks ON but the new cdhash is denied).
+// Wired into AppState/server in the next task; unused until then, hence the allow.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppMgmtStatus {
+    Granted,
+    Missing,
+    /// Non-macOS, or no suitable bundle to probe → never blocks.
+    NotApplicable,
+}
+
+impl AppMgmtStatus {
+    #[allow(dead_code)]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AppMgmtStatus::Granted => "granted",
+            AppMgmtStatus::Missing => "missing",
+            AppMgmtStatus::NotApplicable => "na",
+        }
+    }
+}
+
+/// Probes the App Management permission. macOS only; other OSes → NotApplicable.
+#[allow(dead_code)]
+pub fn app_management_status(os: Os) -> AppMgmtStatus {
+    if os != Os::Darwin {
+        return AppMgmtStatus::NotApplicable;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        probe_app_management()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        AppMgmtStatus::NotApplicable
+    }
+}
+
+/// macOS write-probe: find a real .app in /Applications we don't own, try to
+/// create+remove a witness file inside its Contents/. PermissionDenied → Missing;
+/// success → Granted; nothing suitable to probe → NotApplicable (don't block).
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+fn probe_app_management() -> AppMgmtStatus {
+    use std::io::ErrorKind;
+    let apps = match std::fs::read_dir("/Applications") {
+        Ok(rd) => rd,
+        Err(_) => return AppMgmtStatus::NotApplicable,
+    };
+    for entry in apps.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("app") {
+            continue;
+        }
+        let contents = path.join("Contents");
+        if !contents.is_dir() {
+            continue;
+        }
+        let witness = contents.join(".talos-appmgmt-probe");
+        match std::fs::File::create(&witness) {
+            Ok(_) => {
+                let _ = std::fs::remove_file(&witness);
+                return AppMgmtStatus::Granted;
+            }
+            Err(e) if e.kind() == ErrorKind::PermissionDenied => {
+                return AppMgmtStatus::Missing;
+            }
+            Err(_) => continue,
+        }
+    }
+    AppMgmtStatus::NotApplicable
+}
+
 /// Anything not windows/darwin → linux (the shell family we support there). Never panics.
 pub fn current_os() -> Os {
     match std::env::consts::OS {
@@ -335,6 +412,25 @@ mod tests {
         assert_eq!(
             exe_sibling_dir(shared),
             PathBuf::from("/mnt/onedrive/Talos")
+        );
+    }
+
+    #[test]
+    fn appmgmt_status_variants_exist() {
+        assert_eq!(AppMgmtStatus::Granted.as_str(), "granted");
+        assert_eq!(AppMgmtStatus::Missing.as_str(), "missing");
+        assert_eq!(AppMgmtStatus::NotApplicable.as_str(), "na");
+    }
+
+    #[test]
+    fn appmgmt_non_macos_is_na() {
+        assert_eq!(
+            app_management_status(Os::Windows),
+            AppMgmtStatus::NotApplicable
+        );
+        assert_eq!(
+            app_management_status(Os::Linux),
+            AppMgmtStatus::NotApplicable
         );
     }
 
