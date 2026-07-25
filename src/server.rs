@@ -22,20 +22,18 @@ use crate::platform::{current_os, local_data_dir, Os};
 use crate::profiles::{load_profiles, Profiles};
 use crate::selection::{read_selection, write_selection, Selection};
 
-/// The honest "outdated" fact for a package at apply time. Casks self-update
-/// behind brew's receipt, so their truth is `detect` (real installed version)
-/// vs the scan's available target — not mere presence in the scan. Formulae
-/// trust the scan (brew's receipt is reliable for them).
-fn is_outdated_now(od: Option<&crate::managers::Outdated>, installed_version: &str) -> bool {
-    match od {
-        None => false,
-        Some(o) if o.is_cask => {
-            // real (detect) < available target → genuinely behind
-            !installed_version.is_empty()
-                && crate::decision::compare_versions(installed_version, &o.available) < 0
-        }
-        Some(_) => true, // formula: scan presence is authoritative
-    }
+/// The "outdated" fact for a package at apply time: presence in the outdated
+/// scan. The scan uses `--greedy-auto-updates`, so a self-updating cask brew
+/// lists as behind counts as outdated (and gets a forced upgrade) instead of
+/// being silently left unmanaged. Applies to casks and formulae alike.
+fn is_outdated_now(od: Option<&crate::managers::Outdated>) -> bool {
+    // Approach B: presence in the scan IS the outdated signal, for casks and
+    // formulae alike. The scan uses `--greedy-auto-updates`, so a self-updating
+    // cask that brew lists as behind gets a forced upgrade rather than being
+    // silently left unmanaged. brew's receipt may lag the disk (so this can flag
+    // an already-current cask), but Apply forces + reconciles, and it converges:
+    // once the receipt catches up, the cask drops out of the scan.
+    od.is_some()
 }
 
 /// For an Upgrade on a brew CASK, the forced command (`brew upgrade --cask
@@ -60,17 +58,15 @@ fn forced_cask_upgrade_cmd(
     Some(mgr.upgrade(id, true))
 }
 
-/// Emit the `outdated` pill for package `i` — but only when it is GENUINELY
-/// behind (is_outdated_now: casks compare detect vs target, formulae trust the
-/// scan). Both the connect scan and the apply repaint route through here so the
-/// two can't drift.
+/// Emit the `outdated` pill for package `i` when the greedy scan lists it
+/// (is_outdated_now). Both the connect scan and the apply repaint route through
+/// here so the two can't drift.
 async fn emit_outdated_if(
     socket: &mut WebSocket,
     i: usize,
     od: Option<&crate::managers::Outdated>,
-    installed_version: &str,
 ) {
-    if let Some(od) = od.filter(|o| is_outdated_now(Some(o), installed_version)) {
+    if let Some(od) = od.filter(|o| is_outdated_now(Some(o))) {
         let _ = socket
             .send(Message::Text(
                 json!({ "type": "outdated", "i": i, "current": od.current, "available": od.available }).to_string(),
@@ -428,7 +424,7 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
         let _ = socket.send(Message::Text(state_msg.to_string())).await;
         if p.present == Some(true) {
             let od = outdated_for(sid.as_deref(), &scan);
-            emit_outdated_if(socket, i, od, &version).await;
+            emit_outdated_if(socket, i, od).await;
         }
     }
     // state-done — unfreezes the UI (removes the scan/refresh veil).
@@ -569,7 +565,7 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
             .await;
         if p.present == Some(true) {
             let od = outdated_for(steps[i].system_id.as_deref(), &scan);
-            emit_outdated_if(socket, i, od, p.version.as_deref().unwrap_or("")).await;
+            emit_outdated_if(socket, i, od).await;
         }
     }
 
@@ -587,7 +583,7 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
         let od = outdated_for(step.system_id.as_deref(), &scan);
         let facts = MachineFacts {
             present: presences[i].present == Some(true),
-            outdated: is_outdated_now(od, presences[i].version.as_deref().unwrap_or("")),
+            outdated: is_outdated_now(od),
             can_uninstall: step.uninstall.is_some(),
             pin: step.pin.as_deref(),
             installed_version: presences[i].version.as_deref().unwrap_or(""),
@@ -985,28 +981,22 @@ mod tests {
     }
 
     #[test]
-    fn cask_outdated_uses_detect_not_receipt() {
-        // Cask: receipt would say outdated (present in scan), but the REAL
-        // installed version already meets/exceeds the target → NOT outdated.
-        let od = Outdated {
+    fn outdated_trusts_the_greedy_scan() {
+        // Approach B: presence in the scan IS the signal, for casks and
+        // formulae alike (the scan uses --greedy-auto-updates, so a lagging
+        // self-updating cask is listed and gets forced). None → not outdated.
+        let cask = Outdated {
             current: "1.127.0".into(),
             available: "1.130.0".into(),
             is_cask: true,
         };
-        assert!(!is_outdated_now(Some(&od), "1.130.0")); // real == target
-        assert!(!is_outdated_now(Some(&od), "1.131.0")); // real ahead
-        assert!(is_outdated_now(Some(&od), "1.129.1")); // real behind target
-        assert!(!is_outdated_now(Some(&od), "")); // no detect → don't guess
-    }
-
-    #[test]
-    fn formula_outdated_trusts_scan() {
-        let od = Outdated {
+        let formula = Outdated {
             current: "1.7".into(),
             available: "1.8".into(),
             is_cask: false,
         };
-        assert!(is_outdated_now(Some(&od), "1.7")); // scan is authoritative
-        assert!(!is_outdated_now(None, "1.7"));
+        assert!(is_outdated_now(Some(&cask))); // cask listed by greedy → outdated
+        assert!(is_outdated_now(Some(&formula))); // formula listed → outdated
+        assert!(!is_outdated_now(None)); // absent from scan → not outdated
     }
 }

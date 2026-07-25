@@ -66,7 +66,12 @@ impl SystemManager {
     pub fn outdated_scan_command(&self) -> String {
         match self.route {
             "winget" => "winget upgrade --accept-source-agreements --source winget".into(),
-            _ => "brew outdated --json=v2".into(),
+            // --greedy-auto-updates: without it, brew HIDES `auto_updates: true`
+            // casks (VS Code, Chrome…) from `outdated` by design, so Talos never
+            // saw them as upgrade candidates and left them silently unmanaged.
+            // In a controlled universe the version is guaranteed → we surface them
+            // and force the upgrade (the cask command already carries --force).
+            _ => "brew outdated --greedy-auto-updates --json=v2".into(),
         }
     }
     /// Extracts the version from presence_command's output.
