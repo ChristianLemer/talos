@@ -61,8 +61,6 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
 /// reality by trying to write inside a real /Applications/*.app we don't own and
 /// reading EPERM. Reality, never TCC.db nor the toggle's appearance (survives the
 /// ad-hoc re-grant trap where the toggle looks ON but the new cdhash is denied).
-// Wired into AppState/server in the next task; unused until then, hence the allow.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppMgmtStatus {
     Granted,
@@ -72,7 +70,6 @@ pub enum AppMgmtStatus {
 }
 
 impl AppMgmtStatus {
-    #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
             AppMgmtStatus::Granted => "granted",
@@ -83,7 +80,6 @@ impl AppMgmtStatus {
 }
 
 /// Probes the App Management permission. macOS only; other OSes → NotApplicable.
-#[allow(dead_code)]
 pub fn app_management_status(os: Os) -> AppMgmtStatus {
     if os != Os::Darwin {
         return AppMgmtStatus::NotApplicable;
@@ -102,7 +98,6 @@ pub fn app_management_status(os: Os) -> AppMgmtStatus {
 /// create+remove a witness file inside its Contents/. PermissionDenied → Missing;
 /// success → Granted; nothing suitable to probe → NotApplicable (don't block).
 #[cfg(target_os = "macos")]
-#[allow(dead_code)]
 fn probe_app_management() -> AppMgmtStatus {
     use std::io::ErrorKind;
     let apps = match std::fs::read_dir("/Applications") {

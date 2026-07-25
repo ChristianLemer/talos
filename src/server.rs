@@ -26,6 +26,11 @@ use crate::selection::{read_selection, write_selection, Selection};
 /// scan. The scan uses `--greedy-auto-updates`, so a self-updating cask brew
 /// lists as behind counts as outdated (and gets a forced upgrade) instead of
 /// being silently left unmanaged. Applies to casks and formulae alike.
+/// The value for the `appmgmt` key sent to the front (wire string).
+fn appmgmt_wire(status: crate::platform::AppMgmtStatus) -> &'static str {
+    status.as_str()
+}
+
 fn is_outdated_now(od: Option<&crate::managers::Outdated>) -> bool {
     // Approach B: presence in the scan IS the outdated signal, for casks and
     // formulae alike. The scan uses `--greedy-auto-updates`, so a self-updating
@@ -81,6 +86,9 @@ struct AppState {
     plan: Plan,
     profiles: Profiles,
     os: Os,
+    /// macOS App Management permission status, probed once at startup and
+    /// re-probed on `check-appmgmt`. Wire string via AppMgmtStatus::as_str().
+    appmgmt: std::sync::Mutex<crate::platform::AppMgmtStatus>,
     /// Disk root of the front assets, IN DEV ONLY (`TALOS_PUBLIC` set):
     /// lets you edit `app.js` without recompiling. `None` in release → assets SEALED
     /// in the binary (crate::assets), independent of the cwd (shortcut #3 fixed).
@@ -112,6 +120,10 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
     let os = current_os();
     // Build stamp at the top of the log — "which binary is really running?" (jj log order).
     println!("--- start: {}", crate::build_info::start_line());
+    println!(
+        "--- appmgmt: {}",
+        crate::platform::app_management_status(os).as_str()
+    );
     // The "next to the exe" folder (outside the .app if packaged): that's WHERE
     // bundles/ AND the consented shared copy live (hermetic boundary — mirror of
     // the TS compiled BUNDLES_DIR). Resolved from the REAL exe, NOT the cwd: a .app
@@ -169,6 +181,7 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         plan,
         profiles,
         os,
+        appmgmt: std::sync::Mutex::new(crate::platform::app_management_status(os)),
         disk_root,
         data_dir,
         consent,
@@ -298,7 +311,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
         "profiles": profiles_json,
         "profileColumns": state.profiles.columns,
         "consent": read_consent(&state.consent),
-        "build": crate::build_info::build_json() // exact stamp of the source snapshot (no more hardcoding)
+        "build": crate::build_info::build_json(), // exact stamp of the source snapshot (no more hardcoding)
+        "appmgmt": appmgmt_wire(*state.appmgmt.lock().unwrap())
     });
     let _ = socket.send(Message::Text(plan.to_string())).await;
 
@@ -374,6 +388,16 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
             // (steps-refreshing) without ever receiving a response → "refresh forever".
             "rescan" => {
                 scan_and_emit(&mut socket, &state).await;
+            }
+            "check-appmgmt" => {
+                // Re-probe reality now (Refresh button / after the user granted).
+                let status = crate::platform::app_management_status(state.os);
+                *state.appmgmt.lock().unwrap() = status;
+                let _ = socket
+                    .send(Message::Text(
+                        json!({ "type": "appmgmt-status", "status": status.as_str() }).to_string(),
+                    ))
+                    .await;
             }
             // open-forbidden: the "Open blocked page" button of the 403 banner → opens
             // the blocked URL in the default browser, next to the panel, so the
@@ -963,6 +987,14 @@ mod tests {
             posture: Posture::OptIn,
             categories: Vec::new(),
         }
+    }
+
+    #[test]
+    fn appmgmt_wire_strings() {
+        use crate::platform::AppMgmtStatus::*;
+        assert_eq!(super::appmgmt_wire(Granted), "granted");
+        assert_eq!(super::appmgmt_wire(Missing), "missing");
+        assert_eq!(super::appmgmt_wire(NotApplicable), "na");
     }
 
     #[test]
