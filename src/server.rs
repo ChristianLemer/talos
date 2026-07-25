@@ -422,6 +422,14 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     }
                 }
             }
+            // Deep-link straight to System Settings → Privacy & Security → App
+            // Management, so the user can grant the permission a cask upgrade needs.
+            "open-appmgmt-settings" => {
+                let url = "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AppBundles";
+                if let Err(e) = crate::platform::open_url(url) {
+                    println!("[appmgmt] failed to open settings: {e}");
+                }
+            }
             _ => {}
         }
     }
