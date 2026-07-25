@@ -144,7 +144,7 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
                 route: Some(mgr.route.into()),
                 install: Some(mgr.install(id)),
                 uninstall: Some(mgr.uninstall(id)),
-                upgrade: Some(mgr.upgrade(id, false)),
+                upgrade: Some(mgr.upgrade(id, false)), // formula form; server.rs re-forces for casks at apply
                 downgrade: None,
             };
         }
