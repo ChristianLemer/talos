@@ -78,7 +78,6 @@ MSVC on Windows, WebKit on macOS):
 ```
 cargo tauri build          # macOS → target/release/bundle/macos/Talos.app
                            # Windows → target/release/Talos.exe
-                           #           + target/release/bundle/nsis/Talos_<ver>_x64-setup.exe
 ```
 
 `public/` (the web UI) is **sealed into the binary** at compile time — the exe is
@@ -88,8 +87,8 @@ engine changes rarely, content changes often).
 
 **The deliverable** is the executable **plus** `bundles/` next to it. The retained
 distribution model is **rsync** (or any copy): drop `Talos.exe` + `bundles/` side by
-side on the target — no installer required (the NSIS `.exe` is produced but stays
-**unsigned** for now, signing is a separate step).
+side on the target — no installer required. The binaries are **unsigned** for now
+(signing/notarisation is a separate step).
 
 ### 3 — Distribute it
 

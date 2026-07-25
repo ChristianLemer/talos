@@ -31,14 +31,13 @@ jobs:
       matrix:
         include:
           - os: macos-14 # Apple Silicon runner → aarch64-apple-darwin
-            # .dmg (+ the .app inside the bundle dir)
+            # the .app (a directory) zipped — a Release asset must be a single file
             artifacts: |
-              target/release/bundle/dmg/*.dmg
+              Talos-macos-aarch64.app.zip
           - os: windows-latest # x64 runner → x86_64-pc-windows-msvc
-            # bare exe + NSIS installer
+            # bare exe only — the deliverable is exe + bundles/ rsync'd, no installer
             artifacts: |
               target/release/Talos.exe
-              target/release/bundle/nsis/*-setup.exe
 
     runs-on: ${{ matrix.os }}
 
@@ -57,6 +56,12 @@ jobs:
       # Native GUI build → produces the OS bundle(s). No cross-compile.
       - name: Build (cargo tauri build)
         run: cargo tauri build
+
+      # A .app is a directory; a Release asset must be a single file. ditto keeps
+      # the bundle's symlinks/permissions intact (plain zip would mangle them).
+      - name: Zip the .app (macOS)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent target/release/bundle/macos/Talos.app Talos-macos-aarch64.app.zip
 
       - name: Upload bundle(s) to the Release
         uses: softprops/action-gh-release@v2
