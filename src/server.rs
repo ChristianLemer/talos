@@ -38,6 +38,25 @@ fn is_outdated_now(od: Option<&crate::managers::Outdated>, installed_version: &s
     }
 }
 
+/// Emit the `outdated` pill for package `i` — but only when it is GENUINELY
+/// behind (is_outdated_now: casks compare detect vs target, formulae trust the
+/// scan). Both the connect scan and the apply repaint route through here so the
+/// two can't drift.
+async fn emit_outdated_if(
+    socket: &mut WebSocket,
+    i: usize,
+    od: Option<&crate::managers::Outdated>,
+    installed_version: &str,
+) {
+    if let Some(od) = od.filter(|o| is_outdated_now(Some(o), installed_version)) {
+        let _ = socket
+            .send(Message::Text(
+                json!({ "type": "outdated", "i": i, "current": od.current, "available": od.available }).to_string(),
+            ))
+            .await;
+    }
+}
+
 /// The server's shared state: the Plan scanned ONCE at startup (pure data,
 /// no pty/network), plus the current OS. Cloned (Arc) into each connection.
 struct AppState {
@@ -387,15 +406,7 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
         let _ = socket.send(Message::Text(state_msg.to_string())).await;
         if p.present == Some(true) {
             let od = outdated_for(sid.as_deref(), &scan);
-            if is_outdated_now(od, &version) {
-                if let Some(od) = od {
-                    let _ = socket
-                        .send(Message::Text(
-                            json!({ "type": "outdated", "i": i, "current": od.current, "available": od.available }).to_string(),
-                        ))
-                        .await;
-                }
-            }
+            emit_outdated_if(socket, i, od, &version).await;
         }
     }
     // state-done — unfreezes the UI (removes the scan/refresh veil).
@@ -521,13 +532,7 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
             .await;
         if p.present == Some(true) {
             let od = outdated_for(steps[i].system_id.as_deref(), &scan);
-            if is_outdated_now(od, p.version.as_deref().unwrap_or("")) {
-                if let Some(od) = od {
-                    let _ = socket
-                        .send(Message::Text(json!({ "type": "outdated", "i": i, "current": od.current, "available": od.available }).to_string()))
-                        .await;
-                }
-            }
+            emit_outdated_if(socket, i, od, p.version.as_deref().unwrap_or("")).await;
         }
     }
 
