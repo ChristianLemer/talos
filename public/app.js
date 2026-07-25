@@ -451,6 +451,10 @@ function isActionable(i) {
 // ghost outlines. The eye lands on what matters. Runs after any change to
 // selection or detected state.
 let applyRunning = false;
+// macOS "App Management" permission status, from the plan / check-appmgmt reply:
+// "granted" | "missing" | "na" (na = not macOS or not applicable). Drives the
+// banner (missing only), the settings pill, and the on-focus re-check.
+let appmgmtStatus = "na";
 // True from render until `state-done`: the machine scan is still running, so the
 // plan is INCOMPLETE — acting now would treat un-probed rows as absent and act on
 // a reality the user never saw. Freeze every action (general, bundle, row) until
@@ -1083,6 +1087,36 @@ document.getElementById("consent-toggle").onchange = (e) =>
 document.getElementById("clear-log").onclick = () =>
   ws.send(JSON.stringify({ type: "clear-log" }));
 
+// --- macOS App Management permission: banner + settings pill + gate sheet ---
+// Paint the settings pill (granted=green, missing=red, na=neutral) and show the
+// top-of-list banner ONLY when the permission is missing.
+function renderAppmgmt() {
+  const pill = document.getElementById("appmgmt-pill");
+  const banner = document.getElementById("appmgmt-banner");
+  const map = { granted: ["granted", "ok"], missing: ["missing", "fail"], na: ["—", ""] };
+  const [label, cls] = map[appmgmtStatus] || map.na;
+  if (pill) {
+    pill.textContent = label;
+    pill.className = "badge " + cls;
+  }
+  if (banner) banner.hidden = appmgmtStatus !== "missing";
+}
+const openAppmgmtSettings = () =>
+  ws.send(JSON.stringify({ type: "open-appmgmt-settings" }));
+document.getElementById("appmgmt-open")?.addEventListener("click", openAppmgmtSettings);
+document.getElementById("appmgmt-banner-open")?.addEventListener("click", openAppmgmtSettings);
+document.getElementById("appmgmt-sheet-open")?.addEventListener("click", openAppmgmtSettings);
+document.getElementById("appmgmt-refresh")?.addEventListener("click", () =>
+  ws.send(JSON.stringify({ type: "check-appmgmt" })));
+document.getElementById("appmgmt-sheet-cancel")?.addEventListener("click", () => {
+  document.getElementById("appmgmt-sheet")?.classList.remove("show");
+});
+// While the permission is missing, re-probe when the window regains focus — the
+// user likely just toggled it in System Settings and came back.
+window.addEventListener("focus", () => {
+  if (appmgmtStatus === "missing") ws.send(JSON.stringify({ type: "check-appmgmt" }));
+});
+
 // --- sudo password dialog (masked; local WS only, never stored) ---
 const sudoEl = document.getElementById("sudo");
 const sudoInput = document.getElementById("sudo-input");
@@ -1159,6 +1193,8 @@ ws.onmessage = (ev) => {
       applySavedSelection(msg.selection); // restore persisted decisions (yellow)
       if (msg.consent && !msg.consent.decided) consentEl.classList.add("show"); // first boot
       if (msg.build) showBuild(msg.build); // stamp the UI with the exact source snapshot
+      appmgmtStatus = msg.appmgmt || "na";
+      renderAppmgmt();
       break;
     case "log":
       renderLog(msg.consent, msg.history);
@@ -1317,6 +1353,17 @@ ws.onmessage = (ev) => {
     case "wait-clear":
       hideWait();
       break;
+    case "appmgmt-status":
+      // Reply to a check-appmgmt re-probe (settings Refresh or window focus).
+      appmgmtStatus = msg.status || "na";
+      renderAppmgmt();
+      break;
+    case "needs-appmgmt": {
+      // The user tried to update an app in /Applications but the permission is
+      // missing — the step did NOT run. Raise the gate sheet.
+      document.getElementById("appmgmt-sheet")?.classList.add("show");
+      break;
+    }
   }
 };
 ws.onclose = () => {
