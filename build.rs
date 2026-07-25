@@ -17,13 +17,38 @@ fn main() {
     tauri_build::build();
 
     let (change, sha) = resolve_vcs();
+    let tag = resolve_tag();
     // ISO 8601 UTC build timestamp (like the TS builtAt). SOURCE_DATE_EPOCH honored
     // if present (reproducible builds), otherwise the current time.
     let built_at = build_timestamp();
 
     println!("cargo:rustc-env=TALOS_BUILD_CHANGE={change}");
     println!("cargo:rustc-env=TALOS_BUILD_SHA={sha}");
+    println!("cargo:rustc-env=TALOS_BUILD_TAG={tag}");
     println!("cargo:rustc-env=TALOS_BUILD_AT={built_at}");
+}
+
+/// Resolves the RELEASE TAG this binary was built from — the human-facing version
+/// (v0.0.1-beta.4), distinct from the VCS snapshot (change/sha).
+///   1. Release CI checks out the tag itself → GITHUB_REF_NAME is authoritative.
+///   2. Local / branch build → `git describe --tags` = nearest tag, with a
+///      `-<n>-g<sha>` suffix when the working copy is ahead of it (colocated repo,
+///      so git works inside the jj tree). "untagged" if no tag is reachable.
+fn resolve_tag() -> String {
+    if std::env::var("GITHUB_REF_TYPE").as_deref() == Ok("tag") {
+        if let Ok(t) = std::env::var("GITHUB_REF_NAME") {
+            if !t.trim().is_empty() {
+                return t.trim().to_string();
+            }
+        }
+    }
+    if let Some(desc) = run("git", &["describe", "--tags"]) {
+        let desc = desc.trim().to_string();
+        if !desc.is_empty() {
+            return desc;
+        }
+    }
+    "untagged".to_string()
 }
 
 /// Queries the VCS for (change, sha). jj first (stable change_id + commit_id);

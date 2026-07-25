@@ -1114,7 +1114,11 @@ function showBuild(build) {
   document.title = `Talos · ${build.change}`;
   const el = document.getElementById("buildinfo");
   if (el) {
-    el.textContent = `build ${label} — ${build.builtAt}`;
+    // Release tag leads (the human-facing version), then the source snapshot.
+    // Older backends without a tag → fall back to the pre-tag format.
+    el.textContent = build.tag
+      ? `${build.tag} · build ${label} — ${build.builtAt}`
+      : `build ${label} — ${build.builtAt}`;
   }
 }
 
