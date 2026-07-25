@@ -45,9 +45,13 @@ impl SystemManager {
             _ => format!("brew uninstall {id}"),
         }
     }
-    pub fn upgrade(&self, id: &str) -> String {
+    pub fn upgrade(&self, id: &str, is_cask: bool) -> String {
         match self.route {
             "winget" => format!("winget upgrade --id {id} -e --source winget --accept-source-agreements --accept-package-agreements"),
+            // Casks self-update behind brew's receipt → --force overwrites the
+            // drift (fixes "already an App" exit 1). --yes stays non-interactive
+            // (memory display-only-terminal). Formulae: plain --yes upgrade.
+            _ if is_cask => format!("brew upgrade --cask --force --yes {id}"),
             _ => format!("brew upgrade --yes {id}"),
         }
     }
@@ -247,6 +251,18 @@ mod tests {
     #[test]
     fn brew_install_yes() {
         assert_eq!(BREW.install("jq"), "brew install --yes jq");
+    }
+
+    #[test]
+    fn brew_upgrade_cask_is_forced() {
+        // Formula: plain non-interactive upgrade.
+        assert_eq!(BREW.upgrade("jq", false), "brew upgrade --yes jq");
+        // Cask: --cask --force absorbs the receipt drift that self-updating
+        // apps create (else brew's anti-clobber guard → exit 1).
+        assert_eq!(
+            BREW.upgrade("visual-studio-code", true),
+            "brew upgrade --cask --force --yes visual-studio-code"
+        );
     }
 
     #[test]
