@@ -42,16 +42,30 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@v2
+      # NO rust-cache here: release runs only on tags, and Actions caches are
+      # scoped by ref — a tag build can only read caches saved on the SAME tag
+      # (or the default branch), never a sibling tag's. So every release started
+      # from an empty cache ("No cache found") regardless. Dropping it removes a
+      # step that always missed rather than pretending it helps.
 
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2" --locked
+      # tauri-cli as a PRECOMPILED binary, not `cargo install` (which recompiled
+      # it from source every release — ~6 min on macOS, more on Windows MSVC, and
+      # the ref-scoped cache never helped a tag build anyway). tauri-cli is NOT in
+      # taiki-e/install-action's native tool list, so we install cargo-binstall
+      # (which IS native) and let it fetch tauri-cli's official prebuilt binary
+      # from the tauri-apps GitHub Releases (per-platform assets exist).
+      - name: Install cargo-binstall
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-binstall
+
+      - name: Install Tauri CLI (prebuilt)
+        run: cargo binstall --no-confirm tauri-cli
 
       # Native GUI build → produces the OS bundle(s). No cross-compile.
       - name: Build (cargo tauri build)
