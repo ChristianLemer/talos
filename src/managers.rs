@@ -8,6 +8,10 @@ use crate::platform::Os;
 pub struct Outdated {
     pub current: String,
     pub available: String,
+    /// True when this entry came from the `casks` bucket of `brew outdated
+    /// --json=v2`. Casks self-update behind brew's receipt, so their version
+    /// truth comes from `detect:`, not this scan (see decision in server.rs).
+    pub is_cask: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -181,7 +185,14 @@ pub fn parse_winget_upgrade(raw: &str) -> HashMap<String, Outdated> {
         if id.is_empty() || available.is_empty() {
             continue;
         }
-        map.insert(id.to_lowercase(), Outdated { current, available });
+        map.insert(
+            id.to_lowercase(),
+            Outdated {
+                current,
+                available,
+                is_cask: false,
+            },
+        );
     }
     map
 }
@@ -193,6 +204,7 @@ fn parse_brew_outdated(output: &str) -> HashMap<String, Outdated> {
         return map;
     };
     for key in ["formulae", "casks"] {
+        let is_cask = key == "casks";
         if let Some(arr) = json.get(key).and_then(|v| v.as_array()) {
             for item in arr {
                 let name = item.get("name").and_then(|n| n.as_str()).unwrap_or("");
@@ -212,6 +224,7 @@ fn parse_brew_outdated(output: &str) -> HashMap<String, Outdated> {
                         Outdated {
                             current: current.into(),
                             available: available.into(),
+                            is_cask,
                         },
                     );
                 }
@@ -244,13 +257,22 @@ mod tests {
 
     #[test]
     fn brew_outdated_json() {
-        let j = r#"{"formulae":[{"name":"jq","installed_versions":["1.7"],"current_version":"1.8"}],"casks":[]}"#;
+        let j = r#"{"formulae":[{"name":"jq","installed_versions":["1.7"],"current_version":"1.8"}],"casks":[{"name":"visual-studio-code","installed_versions":["1.127.0"],"current_version":"1.130.0"}]}"#;
         let m = parse_brew_outdated(j);
         assert_eq!(
             m.get("jq"),
             Some(&Outdated {
                 current: "1.7".into(),
-                available: "1.8".into()
+                available: "1.8".into(),
+                is_cask: false,
+            })
+        );
+        assert_eq!(
+            m.get("visual-studio-code"),
+            Some(&Outdated {
+                current: "1.127.0".into(),
+                available: "1.130.0".into(),
+                is_cask: true,
             })
         );
     }
