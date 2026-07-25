@@ -38,6 +38,28 @@ fn is_outdated_now(od: Option<&crate::managers::Outdated>, installed_version: &s
     }
 }
 
+/// For an Upgrade on a brew CASK, the forced command (`brew upgrade --cask
+/// --force --yes`) that absorbs the receipt drift (else brew's anti-clobber
+/// guard → exit 1). Returns None for formulae, non-brew routes, and PINNED
+/// steps (a pin owns the direction — keep its precomputed install-pinned cmd).
+/// `is_cask` comes from the brew outdated scan bucket (the single source).
+fn forced_cask_upgrade_cmd(
+    step: &crate::bundles::Step,
+    os: crate::platform::Os,
+    is_cask: bool,
+) -> Option<String> {
+    use crate::managers::{native_manager, IdField};
+    if !is_cask || step.pin.is_some() {
+        return None;
+    }
+    let mgr = native_manager(os)?;
+    if mgr.route != "brew" || mgr.id_field != IdField::Brew {
+        return None;
+    }
+    let id = step.system_id.as_deref()?;
+    Some(mgr.upgrade(id, true))
+}
+
 /// Emit the `outdated` pill for package `i` — but only when it is GENUINELY
 /// behind (is_outdated_now: casks compare detect vs target, formulae trust the
 /// scan). Both the connect scan and the apply repaint route through here so the
@@ -465,7 +487,22 @@ async fn row_action(socket: &mut WebSocket, state: &AppState, i: usize, action: 
         "downgrade" => Action::Downgrade,
         _ => return,
     };
-    do_step(socket, state, i, act, step).await;
+    // A row-upgrade is only meaningful for an outdated package; determine cask-ness
+    // via a fresh outdated scan (blocking → spawn_blocking, like the other sites),
+    // ONLY for Upgrade (don't scan on install/uninstall clicks). This makes the
+    // single-row button use the SAME forced-cask path as the batch Apply.
+    let is_cask = if act == Action::Upgrade {
+        let os = state.os;
+        let scan = tokio::task::spawn_blocking(move || scan_outdated(os))
+            .await
+            .unwrap_or_default();
+        outdated_for(step.system_id.as_deref(), &scan)
+            .map(|o| o.is_cask)
+            .unwrap_or(false)
+    } else {
+        false
+    };
+    do_step(socket, state, i, act, step, is_cask).await;
     clear_sudo_pw(state).await; // row action finished: clear the cached password
     let _ = socket
         .send(Message::Text(json!({ "type": "done" }).to_string()))
@@ -585,31 +622,13 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
         ))
         .await;
 
-    // Casks self-update behind brew's receipt → the precomputed formula-form
-    // upgrade would hit brew's anti-clobber guard (exit 1). Re-issue the forced
-    // cask command for cask upgrades. Single source of the brew line: managers.
-    use crate::managers::{native_manager, IdField};
-    let mut steps_run: Vec<crate::bundles::Step> = steps.clone();
-    if let Some(mgr) = native_manager(os) {
-        if mgr.route == "brew" {
-            for (i, action) in &plan {
-                if *action == Action::Upgrade {
-                    let od = outdated_for(steps[*i].system_id.as_deref(), &scan);
-                    let is_cask = od.map(|o| o.is_cask).unwrap_or(false);
-                    if is_cask {
-                        if let (Some(id), IdField::Brew) =
-                            (steps[*i].system_id.as_deref(), mgr.id_field)
-                        {
-                            steps_run[*i].upgrade = Some(mgr.upgrade(id, true));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     for (i, action) in &plan {
-        do_step(socket, state, *i, *action, &steps_run[*i]).await;
+        // is_cask from the scan we already have → do_step re-issues the forced
+        // --cask --force command for cask upgrades (single resolution point).
+        let is_cask = outdated_for(steps[*i].system_id.as_deref(), &scan)
+            .map(|o| o.is_cask)
+            .unwrap_or(false);
+        do_step(socket, state, *i, *action, &steps[*i], is_cask).await;
     }
     clear_sudo_pw(state).await; // end of Apply: the cached password is cleared (model C)
     let _ = socket
@@ -801,13 +820,22 @@ async fn do_step(
     i: usize,
     action: crate::decision::Action,
     step: &crate::bundles::Step,
+    is_cask: bool,
 ) -> bool {
     use crate::decision::Action;
     let os = state.os;
+    // A cask Upgrade needs the forced --cask --force command (brew's receipt drift
+    // → anti-clobber exit 1 otherwise). Single resolution point for BOTH callers
+    // (batch Apply + row button); formulae, non-brew and pinned casks keep step.upgrade.
+    let forced = if action == Action::Upgrade {
+        forced_cask_upgrade_cmd(step, os, is_cask)
+    } else {
+        None
+    };
     let cmd = match action {
         Action::Install => step.install.as_deref(),
         Action::Uninstall => step.uninstall.as_deref(),
-        Action::Upgrade => step.upgrade.as_deref(),
+        Action::Upgrade => forced.as_deref().or(step.upgrade.as_deref()),
         Action::Downgrade => step.downgrade.as_deref(),
     };
     let Some(cmd) = cmd else {
@@ -913,7 +941,48 @@ async fn do_step(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bundles::{Posture, Step};
     use crate::managers::Outdated;
+    use crate::platform::Os;
+
+    /// A minimal Step for the forced-cask tests: only `system_id`/`pin`/`upgrade`
+    /// matter here, the rest are inert defaults.
+    fn brew_step(system_id: &str, pin: Option<&str>) -> Step {
+        Step {
+            bundle: String::new(),
+            name: system_id.into(),
+            description: String::new(),
+            install: None,
+            uninstall: None,
+            upgrade: Some(format!("brew upgrade --yes {system_id}")),
+            downgrade: None,
+            route: Some("brew".into()),
+            system_id: Some(system_id.into()),
+            detect: None,
+            check: None,
+            is_config: false,
+            version_regex: None,
+            pin: pin.map(|p| p.into()),
+            requires: Vec::new(),
+            posture: Posture::OptIn,
+            categories: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn forced_cask_upgrade_only_for_unpinned_casks() {
+        let s = brew_step("visual-studio-code", None);
+        // cask, no pin → forced --cask --force command
+        assert_eq!(
+            forced_cask_upgrade_cmd(&s, Os::Darwin, true),
+            Some("brew upgrade --cask --force --yes visual-studio-code".to_string())
+        );
+        // formula → None (trusts the precomputed step.upgrade)
+        assert_eq!(forced_cask_upgrade_cmd(&s, Os::Darwin, false), None);
+        // pinned cask → None (a pin owns the direction, keep install-pinned cmd)
+        let pinned = brew_step("visual-studio-code", Some("1.130.0"));
+        assert_eq!(forced_cask_upgrade_cmd(&pinned, Os::Darwin, true), None);
+    }
 
     #[test]
     fn cask_outdated_uses_detect_not_receipt() {
