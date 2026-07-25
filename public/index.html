@@ -88,6 +88,7 @@
                  display:flex; align-items:center; gap:8px; }
       #appmgmt-banner[hidden] { display:none; }
       #appmgmt-banner b { color:#c4d5fc; }
+      #appmgmt-banner .linklike { color:#c4d5fc; font-weight:600; }
       /* A button that reads as an inline link — for use inside a banner/sentence. */
       .linklike { background:none; border:none; color:#7aa2f7; font:inherit;
                  cursor:pointer; text-decoration:underline; padding:0; }
@@ -734,7 +735,8 @@
       <!-- App Management banner: some app updates need the macOS permission and
            it's missing. Shown only when appmgmtStatus === "missing". -->
       <div id="appmgmt-banner" class="appmgmt-banner" hidden>
-        Some app updates need macOS <b>App Management</b> permission.
+        <span>⚠</span>
+        <span>Some app updates need macOS <b>App Management</b> permission.</span>
         <button id="appmgmt-banner-open" class="linklike">Open Settings</button>
       </div>
       <!-- Waiting-window banner: an installer opened a window behind the panel. -->

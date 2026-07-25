@@ -100,6 +100,7 @@ pub fn app_management_status(os: Os) -> AppMgmtStatus {
 #[cfg(target_os = "macos")]
 fn probe_app_management() -> AppMgmtStatus {
     use std::io::ErrorKind;
+    use std::os::unix::fs::MetadataExt;
     let apps = match std::fs::read_dir("/Applications") {
         Ok(rd) => rd,
         Err(_) => return AppMgmtStatus::NotApplicable,
@@ -113,6 +114,16 @@ fn probe_app_management() -> AppMgmtStatus {
         if !contents.is_dir() {
             continue;
         }
+        // ONLY probe ROOT-OWNED bundles. A user-owned app is always writable by
+        // its owner regardless of App Management, so writing there proves nothing
+        // (the false-Granted bug: with the permission denied, a user-owned app
+        // still accepts the write). App Management gates modifying apps you don't
+        // own — root-owned bundles (pkg/self-updater installed, e.g. VS Code) are
+        // exactly that protected set.
+        match std::fs::metadata(&contents) {
+            Ok(m) if m.uid() == 0 => {}
+            _ => continue, // not root-owned (or unreadable) → not a valid probe target
+        }
         let witness = contents.join(".talos-appmgmt-probe");
         match std::fs::File::create(&witness) {
             Ok(_) => {
@@ -125,6 +136,7 @@ fn probe_app_management() -> AppMgmtStatus {
             Err(_) => continue,
         }
     }
+    // No root-owned bundle to probe → we can't constate; don't block.
     AppMgmtStatus::NotApplicable
 }
 
