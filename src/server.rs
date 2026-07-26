@@ -399,6 +399,27 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     row_action(&mut socket, &state, i, kind).await;
                 }
             }
+            // diff: a config-atom the user turned OFF is self-managed, so its row
+            // button INSPECTS instead of installing (model.js::buttonAction) — the atom
+            // has no install path, and re-applying would clobber the file the user chose
+            // to own. Runs the atom's `check:` (its dry-run: exit 0 = converged, 1 =
+            // drifted) through the pty so the output lands in the row's own terminal,
+            // which is the whole point: the user wants to SEE the difference.
+            //
+            // This arm was MISSING and the freeze was live: the front locks its UI
+            // before sending, so `_ => {}` left the panel dead until the window was
+            // closed. See LOCKING_CLIENT_MSGS and its test.
+            "diff" => {
+                let i = parsed.get("i").and_then(|v| v.as_u64()).map(|n| n as usize);
+                if let Some(i) = i {
+                    diff_step(&mut socket, &state, i).await;
+                }
+                // `done` unconditionally — even for a bad index or an atom with no
+                // `check:`. The front is locked and only this releases it.
+                let _ = socket
+                    .send(Message::Text(json!({ "type": "done" }).to_string()))
+                    .await;
+            }
             // retry-step: re-runs the named action on row i (after a 403 failure).
             "retry-step" => {
                 let i = parsed.get("i").and_then(|v| v.as_u64()).map(|n| n as usize);
@@ -466,9 +487,69 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     println!("[appmgmt] failed to open settings: {e}");
                 }
             }
-            _ => {}
+            // Unknown verb. If it is one the front locks its UI for, we MUST answer
+            // something or the panel stays dead — no timeout exists on that side (a real
+            // install can run for minutes, so a watchdog would fire mid-install or be
+            // useless). Belt to the LOCKING_CLIENT_MSGS test's braces: the test catches
+            // this at build time, this catches a verb someone forgot to add to the list.
+            other => {
+                println!("[ws] unhandled message type: {other}");
+                if LOCKING_CLIENT_MSGS.contains(&other) {
+                    let _ = socket
+                        .send(Message::Text(json!({ "type": "done" }).to_string()))
+                        .await;
+                }
+            }
         }
     }
+}
+
+/// Runs a config-atom's `check:` — its DRY RUN — and streams it into the row's
+/// terminal. Nothing is written to the machine: this answers "what differs?", which is
+/// what the row button offers for an atom the user turned off (it owns that file now).
+///
+/// A step with no `check:` is a no-op here rather than an error: the caller emits `done`
+/// either way, so the UI never stays locked.
+async fn diff_step(socket: &mut WebSocket, state: &AppState, i: usize) {
+    let Some(step) = state.plan.steps.get(i) else {
+        return;
+    };
+    let Some(check) = step.check.clone() else {
+        return;
+    };
+    let _ = socket
+        .send(Message::Text(
+            json!({ "type": "step", "i": i, "status": "checking" }).to_string(),
+        ))
+        .await;
+    let (code, _forbidden, _url) = run_in_pty(socket, state, i as u32, &check).await;
+    // exit 0 = converged, non-zero = drifted. Say which, in the terminal, rather than
+    // only colouring a pill: the operator asked to SEE the difference.
+    let line = format!(
+        "\r\n\x1b[2m[diff] exit {code} → {}\x1b[0m\r\n",
+        if code == 0 {
+            "matches what Talos ships"
+        } else {
+            "differs from what Talos ships (yours is kept)"
+        }
+    );
+    {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let _ = socket
+            .send(Message::Text(
+                json!({ "type": "out", "i": i, "data": STANDARD.encode(line.as_bytes()) })
+                    .to_string(),
+            ))
+            .await;
+    }
+    // Settle the row back to a TRUE state: the atom is self-managed either way — a diff
+    // never changes presence, so re-emit what we now observe rather than inventing a
+    // verdict. `self` is the row state that means "you own this".
+    let _ = socket
+        .send(Message::Text(
+            json!({ "type": "step", "i": i, "status": "self" }).to_string(),
+        ))
+        .await;
 }
 
 /// SERIAL presence SCAN, emitted as each verdict lands, then `state-done`
@@ -560,6 +641,35 @@ fn probe_json(diag: &Option<crate::detect::ProbeResult>) -> serde_json::Value {
         None => serde_json::Value::Null,
     }
 }
+
+/// Does this client message make the front OPTIMISTICALLY lock its UI, so that the
+/// server owes it a `done` to unlock again?
+///
+/// The front sets `applyRunning = true` before sending any row-button verb and any
+/// `apply` (see app.js: the row `onclick` and `applyScoped`), and `refreshLiveness()`
+/// then disables every button in the panel. Nothing but a server message clears it —
+/// there is no timeout, by design (a real install can take minutes, so a watchdog
+/// would either fire during a legitimate install or be useless).
+///
+/// ⚠️ THE FAILURE MODE THIS EXISTS TO PREVENT: a verb the front sends and the server's
+/// match does not handle falls into `_ => {}`, no `done` is ever emitted, and the panel
+/// is dead until the window is closed — no error, no recovery, indistinguishable from a
+/// hang. That happened for real with `diff` (config-atom rows): `model.js::buttonAction`
+/// returns `{type:"diff"}` for a config-atom the user turned OFF, the front sent it
+/// verbatim, and the server had no arm for it. `Starship config` ships in
+/// `bundles/terminal.yaml`, so it was reachable with the shipped catalogue.
+///
+/// Keeping this list next to the handler — and asserting the handler covers it — makes
+/// the next added verb a compile-adjacent concern rather than a silent freeze.
+const LOCKING_CLIENT_MSGS: &[&str] = &[
+    "apply",
+    "install",
+    "uninstall",
+    "upgrade",
+    "downgrade",
+    "diff",
+    "retry-step",
+];
 
 /// Extracts an array of indices from a JSON field ("on"/"off").
 fn json_indices(v: &serde_json::Value, key: &str) -> Vec<usize> {
@@ -1450,6 +1560,37 @@ mod tests {
             }
         }
         (on, off)
+    }
+
+    /// Reads the `match kind` arms of `handle_socket` out of this very source file.
+    /// Text-level on purpose: `handle_socket` needs a live socket, so the dispatch table
+    /// cannot be reached from a unit test — but the arms are a literal list, and a
+    /// missing one is exactly the defect. Same precedent as test/veil.test.mjs.
+    fn handled_client_msgs() -> String {
+        let src = include_str!("server.rs");
+        let start = src
+            .find("match kind {")
+            .expect("handle_socket dispatches on `kind`");
+        let end = src[start..]
+            .find("\n            _ => {}")
+            .expect("the dispatch match ends with a catch-all");
+        src[start..start + end].to_string()
+    }
+
+    #[test]
+    fn every_ui_locking_message_has_a_handler() {
+        // THE guard for a whole class of user-facing freezes. The front locks its UI
+        // before sending these and only a server message unlocks it, so an unhandled
+        // verb kills the panel until the window is closed. `diff` was that bug, live,
+        // with the shipped catalogue (config-atom rows in bundles/terminal.yaml).
+        let arms = handled_client_msgs();
+        for kind in LOCKING_CLIENT_MSGS {
+            assert!(
+                arms.contains(&format!("\"{kind}\"")),
+                "`{kind}` locks the front's UI but handle_socket has no arm for it → \
+                 the panel freezes on it with no error and no recovery"
+            );
+        }
     }
 
     #[test]
