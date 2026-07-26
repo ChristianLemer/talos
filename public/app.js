@@ -45,6 +45,30 @@ function splashProgress(name, n) {
   }
 }
 
+// The SAME narration for the Apply's re-scan veil (#steps-refresh). Was a frozen
+// "Plotting the gallop…" over a wait that got LONGER when the scan went serial —
+// the one mute surface left. The re-scan is now scoped to the diff, so `total` is a
+// handful, not 30: this reads as a short countdown rather than a wall.
+const refreshNow = document.getElementById("refresh-now");
+const refreshCount = document.getElementById("refresh-count");
+const refreshBar = document.getElementById("refresh-bar");
+function refreshProgress(name, nth, total) {
+  refreshNow.textContent = name ? `checking ${name}…` : "checking…";
+  if (total > 0) {
+    refreshCount.textContent = `${nth} of ${total}`;
+    refreshBar.classList.add("determinate");
+    refreshBar.firstElementChild.style.width = `${(nth / total) * 100}%`;
+  }
+}
+// Back to the resting frame, so the NEXT Apply doesn't open on the tail of the last
+// one ("12 of 12" under a bar already full would read as instantly finished).
+function resetRefreshProgress() {
+  refreshNow.textContent = "Plotting the gallop…";
+  refreshCount.textContent = "";
+  refreshBar.classList.remove("determinate");
+  refreshBar.firstElementChild.style.width = "";
+}
+
 function hideSplash() {
   if (splashDone) return;
   splashDone = true;
@@ -512,9 +536,11 @@ function applyScoped(scopeIdx) {
   applyRunning = true;
   refreshLiveness(); // lock every Apply button during the run
   overall.textContent = "applying…";
-  // The server re-scans presence before it replies with the plan — a silent gap.
-  // Dim #steps so the re-scan is VISIBLE and interaction is locked. Cleared on
-  // `apply-plan` (focus mode takes over) or `done` (nothing to do, no plan).
+  // The server re-scans presence before it replies with the plan. No longer a
+  // SILENT gap: it narrates each re-probed package (`rescan-progress`). Dim #steps
+  // so it's visible and interaction is locked. Cleared on `apply-plan` (focus mode
+  // takes over) or `done` (nothing to do, no plan).
+  resetRefreshProgress(); // open on the resting frame, not the last run's tail
   stepsEl.classList.add("steps-refreshing");
   // Focus mode engages on the server's `apply-plan` reply (it computes the plan),
   // not here — so we show the exact set of steps that will run.
@@ -1249,6 +1275,12 @@ ws.onmessage = (ev) => {
       break;
     case "log":
       renderLog(msg.consent, msg.history);
+      break;
+    case "rescan-progress":
+      // The Apply's scoped re-scan, one message per re-probed row. Distinct from
+      // `state` (which carries the verdict): this fires BEFORE the verdict is known,
+      // so the veil names what is being checked while it is being checked.
+      refreshProgress(msg.name, msg.nth, msg.total);
       break;
     case "state": // ground truth from the machine
       // Narrate the SERIAL scan: this verdict just landed, so name the package and

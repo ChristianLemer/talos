@@ -115,6 +115,48 @@ struct AppState {
     /// reused for the following steps of the same Apply, CLEARED at the end.
     /// RAM ONLY, never disk/log/journal. tokio Mutex (async access).
     sudo_pw: tokio::sync::Mutex<Option<String>>,
+    /// LAST OBSERVED presence per package, written by every scan (connect, Refresh,
+    /// Apply re-scan), parallel to `plan.steps`. `None` = never observed.
+    ///
+    /// This is NOT a cache that spares a probe (a TTL cache was rejected — memory
+    /// repaint-at-apply). It exists because the Apply re-scan is SCOPED to the diff:
+    /// the rows it doesn't touch still need a presence to feed `will_be_present`, or
+    /// every `requires` reason over them would lie. Remembering the last OBSERVATION
+    /// is honest; inventing `false` is not.
+    last_seen: tokio::sync::Mutex<Vec<Option<crate::detect::Presence>>>,
+}
+
+/// Records one observed presence in `last_seen` (grows the vector if the plan is
+/// somehow longer than it was at startup — never panics on an index).
+async fn remember_presence(state: &AppState, i: usize, p: crate::detect::Presence) {
+    let mut seen = state.last_seen.lock().await;
+    if i >= seen.len() {
+        seen.resize(i + 1, None);
+    }
+    seen[i] = Some(p);
+}
+
+/// The presence vector the Apply reasons over: the FRESH probe where we have one,
+/// otherwise the last observed verdict, otherwise unknown (`present: None`).
+///
+/// Un-probed rows must NOT read as absent. `will_be_present` feeds requires_reason
+/// and topo_sort: a `false` invented for a row nobody looked at would print
+/// "requires jj" on a machine that has jj, and could reorder the plan around a
+/// requirement that is in fact satisfied.
+fn merge_presences(
+    n: usize,
+    probed: &std::collections::HashMap<usize, crate::detect::Presence>,
+    remembered: &[Option<crate::detect::Presence>],
+) -> Vec<crate::detect::Presence> {
+    (0..n)
+        .map(|i| {
+            probed
+                .get(&i)
+                .cloned()
+                .or_else(|| remembered.get(i).cloned().flatten())
+                .unwrap_or_default() // never seen → present: None (unknown, not absent)
+        })
+        .collect()
 }
 
 /// Starts the HTTP+WS server on 127.0.0.1:1420.
@@ -189,10 +231,12 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
             .or_else(|_| std::env::var("USERNAME"))
             .unwrap_or_else(|_| "user".into()),
     };
+    let last_seen = tokio::sync::Mutex::new(vec![None; plan.steps.len()]);
     let state = Arc::new(AppState {
         plan,
         profiles,
         os,
+        last_seen,
         appmgmt: crate::platform::app_management_status(os),
         disk_root,
         data_dir,
@@ -479,6 +523,9 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
             let od = outdated_for(step.system_id.as_deref(), &scan);
             emit_outdated_if(socket, i, od).await;
         }
+        // Remember the verdict: the Apply re-scan is SCOPED to the diff, and the rows
+        // it skips read their presence from here (see `last_seen`).
+        remember_presence(state, i, p).await;
     }
     println!(
         "[scan] TOTAL {:?} for {} packages",
@@ -580,35 +627,84 @@ async fn row_action(socket: &mut WebSocket, state: &AppState, i: usize, action: 
 /// the spike fixed), then runs each step. Port of applyDiff (src/server.ts).
 async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, off: Vec<usize>) {
     use crate::decision::{action_for, Action, Desired, MachineFacts};
-    use crate::deps::{make_index, requires_reason, topo_sort, DepNode};
+    use crate::deps::{index_of_names, make_index, requires_reason, topo_sort, DepNode};
     use std::collections::HashSet;
 
     let os = state.os;
     let steps = &state.plan.steps;
-    let want_on: HashSet<usize> = on.into_iter().collect();
-    let want_off: HashSet<usize> = off.into_iter().collect();
+    let want_on: HashSet<usize> = on.iter().copied().collect();
+    let want_off: HashSet<usize> = off.iter().copied().collect();
+
+    // WHAT to re-probe: the diff (on ∪ off) plus what its `requires` pull, transitively.
+    // Not all 30. The repaint-at-apply guarantee (re-observe before acting, catch a
+    // manual removal — memory repaint-at-apply) is only MEANINGFUL for rows we are
+    // about to touch: probing Miro to install Bun buys nothing and costs a process.
+    // Requirements are in, because will_be_present decides both the `requires` reasons
+    // and the execution order. Dependents are out — untouched, unchanged.
+    let seeds: Vec<usize> = on.iter().chain(off.iter()).copied().collect();
+    let name_idx = index_of_names(steps.iter().map(|s| s.name.as_str()));
+    let requires: Vec<Vec<String>> = steps.iter().map(|s| s.requires.clone()).collect();
+    let scope = crate::deps::rescan_scope(&requires, &name_idx, &seeds);
+    // Catalogue order, so the narration counts up the screen and not at random
+    // (a HashSet iterates in whatever order it likes).
+    let mut to_probe: Vec<usize> = scope.into_iter().collect();
+    to_probe.sort_unstable();
 
     // SERIAL live re-scan (presence) + batched outdated, like at connect.
     // ⚠️ Serial on purpose — same reason as scan_and_emit: concurrent winget probes
-    // contend over winget's shared state. Do not fan this back out.
+    // contend over winget's shared state. Do not fan this back out. If the scoped
+    // scan is ever still too slow, the fix is BATCH (one list command), never threads.
     let started = std::time::Instant::now();
+    // Name the batched step too: it is ONE command for the whole machine, ~1-2 s, and
+    // it runs BEFORE the first probe — so without this the veil opens on a frozen
+    // phrase for exactly as long as the wait people complained about. No `total` yet
+    // (the count belongs to the probes), so the bar stays indeterminate here.
+    let _ = socket
+        .send(Message::Text(
+            json!({ "type": "rescan-progress", "name": "what's out of date" }).to_string(),
+        ))
+        .await;
     let scan = tokio::task::spawn_blocking(move || scan_outdated(os))
         .await
         .unwrap_or_default();
-    let mut presences = Vec::with_capacity(steps.len());
-    for step in steps.iter() {
-        let step_owned = step.clone();
-        presences.push(
-            tokio::task::spawn_blocking(move || detect_present_detailed(&step_owned, os))
-                .await
-                .unwrap_or_default(),
-        );
+    let mut probed: std::collections::HashMap<usize, crate::detect::Presence> =
+        std::collections::HashMap::with_capacity(to_probe.len());
+    for (nth, &i) in to_probe.iter().enumerate() {
+        // Narrate BEFORE probing: the veil says which package is being checked while
+        // it is being checked (`nth of total`) — the same honesty the splash got, now
+        // on the wait that outlived it. Sent first, because a probe can take seconds
+        // and a name announced after the fact describes the past.
+        let _ = socket
+            .send(Message::Text(
+                json!({
+                    "type": "rescan-progress", "i": i, "name": steps[i].name,
+                    "nth": nth + 1, "total": to_probe.len()
+                })
+                .to_string(),
+            ))
+            .await;
+        let step_owned = steps[i].clone();
+        let p = tokio::task::spawn_blocking(move || detect_present_detailed(&step_owned, os))
+            .await
+            .unwrap_or_default();
+        remember_presence(state, i, p.clone()).await;
+        probed.insert(i, p);
     }
     println!(
-        "[apply] re-scan TOTAL {:?} for {} packages",
+        "[apply] re-scan TOTAL {:?} for {}/{} packages (scoped to the diff)",
         started.elapsed(),
+        to_probe.len(),
         steps.len()
     );
+    // Un-probed rows keep their last OBSERVED presence — never an invented `false`.
+    //
+    // Note the invariant that makes this safe rather than merely better: every presence
+    // this function actually READS is fresh. `requires_reason` runs only over the probed
+    // rows, and it reads the requirements of those rows — which rescan_scope pulled in,
+    // so they are probed too. `topo_sort` only draws edges between packages IN the plan,
+    // and the plan is a subset of the diff. The remembered values fill the vector so the
+    // indices line up; they are not what the decisions rest on.
+    let presences = merge_presences(steps.len(), &probed, &state.last_seen.lock().await);
 
     // Future state per package: present now OR wanted-on, never if wanted-off.
     let nodes: Vec<DepNode> = steps
@@ -623,8 +719,12 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
         .collect();
     let idx = make_index(&nodes);
 
-    // Repaint the pills BEFORE acting (repaint-at-apply).
-    for (i, p) in presences.iter().enumerate() {
+    // Repaint the pills BEFORE acting (repaint-at-apply) — for the RE-PROBED rows only.
+    // The others were not looked at, so there is nothing new to say about them; the row
+    // the front already shows is the last thing we actually observed. (`state` is
+    // per-index and idempotent — the front applies whichever it receives, in any number.)
+    for &i in &to_probe {
+        let p = &presences[i];
         let reason = requires_reason(&nodes[i], &nodes, &idx).or_else(|| p.reason.clone());
         let _ = socket
             .send(Message::Text(
@@ -1106,6 +1206,43 @@ mod tests {
             posture: Posture::OptIn,
             categories: Vec::new(),
         }
+    }
+
+    fn seen(present: bool, version: &str) -> crate::detect::Presence {
+        crate::detect::Presence {
+            present: Some(present),
+            version: Some(version.into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn merge_prefers_the_fresh_probe() {
+        let remembered = vec![Some(seen(false, "old")), None];
+        let probed = std::collections::HashMap::from([(0usize, seen(true, "new"))]);
+        let out = merge_presences(2, &probed, &remembered);
+        assert_eq!(out[0].present, Some(true));
+        assert_eq!(out[0].version.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn merge_reuses_the_connect_scan_for_unprobed_rows() {
+        // THE point of the scoped re-scan: a row we did not re-probe must keep the
+        // verdict the connect scan gave it — inventing `false` would make every
+        // `requires` reason lie ("requires jj" on a machine that has jj).
+        let remembered = vec![Some(seen(true, "1.2.3"))];
+        let probed = std::collections::HashMap::new();
+        let out = merge_presences(1, &probed, &remembered);
+        assert_eq!(out[0].present, Some(true));
+        assert_eq!(out[0].version.as_deref(), Some("1.2.3"));
+    }
+
+    #[test]
+    fn merge_leaves_never_seen_rows_unknown() {
+        // Never probed, never remembered → present stays None (unknown), NOT Some(false):
+        // "we don't know" and "it's absent" are different claims.
+        let out = merge_presences(1, &std::collections::HashMap::new(), &[]);
+        assert_eq!(out[0].present, None);
     }
 
     #[test]

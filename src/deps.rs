@@ -104,6 +104,44 @@ pub fn make_index(nodes: &[DepNode]) -> HashMap<String, usize> {
     index_by_name(nodes)
 }
 
+/// name→pos index straight from the names, WITHOUT needing DepNodes. The scope has
+/// to be known BEFORE the probes run, and a DepNode wants `will_be_present` — which
+/// is exactly what the probes are for. Same map as make_index (a test pins that).
+pub fn index_of_names<'a>(names: impl Iterator<Item = &'a str>) -> HashMap<String, usize> {
+    names.enumerate().map(|(i, n)| (n.to_string(), i)).collect()
+}
+/// Which packages must be RE-PROBED before an Apply that touches `seeds`
+/// (= the on ∪ off indices). Answer: the seeds, plus what their `requires` pull,
+/// transitively — never less.
+///
+/// Directed ONE WAY: requirements, not dependents. Seeding `jj` pulls nothing extra,
+/// but seeding `jj skills` pulls `jj` — because the plan's shape depends on whether
+/// the requirement will be there (requires_reason, topo_sort), while a package that
+/// merely *depends* on a seed is not being touched and its own presence is unchanged.
+///
+/// `requires[i]` = the requirement names of package i (parallel to the catalogue).
+/// Unknown names are ignored (requires_reason reports them; scope can't probe a
+/// package that doesn't exist). Cycles terminate — a visited set, not recursion.
+pub fn rescan_scope(
+    requires: &[Vec<String>],
+    idx: &HashMap<String, usize>,
+    seeds: &[usize],
+) -> HashSet<usize> {
+    let mut scope: HashSet<usize> = HashSet::new();
+    let mut queue: Vec<usize> = seeds.to_vec();
+    while let Some(i) = queue.pop() {
+        if i >= requires.len() || !scope.insert(i) {
+            continue; // out of range, or already walked (this is the cycle guard)
+        }
+        for req in &requires[i] {
+            if let Some(&at) = idx.get(req) {
+                queue.push(at);
+            }
+        }
+    }
+    scope
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +179,81 @@ mod tests {
         let nodes = vec![node("a", &["b"], true), node("b", &[], true)];
         let idx = make_index(&nodes);
         assert_eq!(requires_reason(&nodes[0], &nodes, &idx), None);
+    }
+
+    #[test]
+    fn scope_is_the_seeds_when_nothing_requires() {
+        let reqs = vec![vec![], vec![], vec![]];
+        let idx = index_of_names(["a", "b", "c"].into_iter());
+        assert_eq!(rescan_scope(&reqs, &idx, &[1]), HashSet::from([1]));
+    }
+
+    #[test]
+    fn scope_pulls_requirements_transitively() {
+        // a requires b, b requires c → seeding a must pull all three.
+        let reqs = vec![vec!["b".into()], vec!["c".into()], vec![]];
+        let idx = index_of_names(["a", "b", "c"].into_iter());
+        assert_eq!(rescan_scope(&reqs, &idx, &[0]), HashSet::from([0, 1, 2]));
+    }
+
+    #[test]
+    fn scope_does_not_pull_dependents() {
+        // a requires b. Seeding b must NOT drag a in: nothing about a changed.
+        let reqs = vec![vec!["b".into()], vec![]];
+        let idx = index_of_names(["a", "b"].into_iter());
+        assert_eq!(rescan_scope(&reqs, &idx, &[1]), HashSet::from([1]));
+    }
+
+    #[test]
+    fn scope_always_contains_every_seed() {
+        // THE invariant the scoped Apply rests on: every row that gets an action is a
+        // seed, so every row whose presence the decision READS has been re-probed. A
+        // seed dropped from the scope would mean deciding on a remembered verdict.
+        let reqs = vec![vec![], vec!["a".into()], vec![]];
+        let idx = index_of_names(["a", "b", "c"].into_iter());
+        let seeds = [2usize, 0, 1];
+        let scope = rescan_scope(&reqs, &idx, &seeds);
+        for s in seeds {
+            assert!(scope.contains(&s), "seed {s} missing from the scope");
+        }
+    }
+
+    #[test]
+    fn scope_ignores_out_of_range_seeds() {
+        // A stale index from the front must not panic the Apply, nor smuggle in a row.
+        let reqs = vec![vec![]];
+        let idx = index_of_names(["a"].into_iter());
+        assert_eq!(rescan_scope(&reqs, &idx, &[0, 99]), HashSet::from([0]));
+    }
+
+    #[test]
+    fn scope_ignores_unknown_requirements() {
+        let reqs = vec![vec!["ghost".into()]];
+        let idx = index_of_names(["a"].into_iter());
+        assert_eq!(rescan_scope(&reqs, &idx, &[0]), HashSet::from([0]));
+    }
+
+    #[test]
+    fn scope_terminates_on_a_cycle() {
+        let reqs = vec![vec!["b".into()], vec!["a".into()]];
+        let idx = index_of_names(["a", "b"].into_iter());
+        assert_eq!(rescan_scope(&reqs, &idx, &[0]), HashSet::from([0, 1]));
+    }
+
+    #[test]
+    fn scope_unions_several_seeds() {
+        let reqs = vec![vec!["c".into()], vec![], vec![]];
+        let idx = index_of_names(["a", "b", "c"].into_iter());
+        assert_eq!(rescan_scope(&reqs, &idx, &[0, 1]), HashSet::from([0, 1, 2]));
+    }
+
+    #[test]
+    fn index_of_names_matches_make_index() {
+        let nodes = vec![node("a", &[], true), node("b", &[], true)];
+        assert_eq!(
+            index_of_names(nodes.iter().map(|n| n.name.as_str())),
+            make_index(&nodes)
+        );
     }
 
     #[test]

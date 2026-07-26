@@ -103,6 +103,9 @@
       /* Reuse the splash's sliding bar (same slide keyframe) so the overlay reads
          as "working", not frozen — the point of the whole overlay on slow Windows. */
       .steps-refresh-inner .splash-bar { margin-top:18px; width:200px; margin-left:auto; margin-right:auto; }
+      /* Same count line as the splash (tabular figures so "3 of 12" doesn't jitter). */
+      .steps-refresh-count { font-size:13px; color:var(--dim); margin-top:6px;
+        font-variant-numeric:tabular-nums; }
       /* Bundle accordion: header = selection card, body = package rows. */
       .bundle { border:1px solid var(--line); border-radius:10px; margin:8px 0; overflow:hidden; background:#1e2030; }
       .bundle-head { padding:11px 14px; cursor:pointer; display:flex; gap:11px; align-items:center;
@@ -772,8 +775,13 @@
         <div id="steps-refresh">
           <div class="steps-refresh-inner">
             <div class="steps-refresh-title">Talos</div>
-            <div class="steps-refresh-msg">Plotting the gallop…</div>
-            <div class="splash-bar"><span></span></div>
+            <!-- Narrated like the splash: the server emits one `rescan-progress` per
+                 re-probed row, so this names the package instead of reciting a mood.
+                 "Plotting the gallop…" is only the FIRST frame, before the first
+                 verdict lands — never the whole wait. -->
+            <div class="steps-refresh-msg" id="refresh-now">Plotting the gallop…</div>
+            <div class="steps-refresh-count" id="refresh-count"></div>
+            <div class="splash-bar" id="refresh-bar"><span></span></div>
           </div>
         </div>
       </div>
