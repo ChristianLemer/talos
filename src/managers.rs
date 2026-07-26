@@ -41,7 +41,18 @@ impl SystemManager {
     }
     pub fn uninstall(&self, id: &str) -> String {
         match self.route {
-            "winget" => format!("winget uninstall --id {id} -e --source winget"),
+            // --all-versions: with several versions of the same id installed, a
+            // bare uninstall is AMBIGUOUS — winget lists the matches and waits for
+            // a narrowing filter, which deadlocks a display-only row (memory
+            // display-only-terminal). Field-hit on Windows 2026-07-26. Removing
+            // every version is also what "uninstall" MEANS here: the desired state
+            // is absent, and detect (not a journal) is the truth afterwards — a
+            // partial removal would still probe as present, reading as a failure.
+            // --disable-interactivity: any residual ambiguity must fail loudly
+            // rather than hang.
+            "winget" => format!(
+                "winget uninstall --id {id} -e --all-versions --source winget --accept-source-agreements --disable-interactivity"
+            ),
             _ => format!("brew uninstall {id}"),
         }
     }
@@ -256,6 +267,20 @@ mod tests {
     #[test]
     fn brew_install_yes() {
         assert_eq!(BREW.install("jq"), "brew install --yes jq");
+    }
+
+    #[test]
+    fn winget_uninstall_removes_every_version_non_interactively() {
+        // Regression (Windows, 2026-07-26): a bare `winget uninstall --id X -e`
+        // is ambiguous when several versions are installed — winget lists the
+        // matches and waits, deadlocking a display-only row.
+        let cmd = WINGET.uninstall("OpenJS.NodeJS");
+        assert!(cmd.contains("--all-versions"), "must remove every version: {cmd}");
+        assert!(
+            cmd.contains("--disable-interactivity"),
+            "residual ambiguity must fail, not hang: {cmd}"
+        );
+        assert!(cmd.contains("--accept-source-agreements"), "no agreement prompt: {cmd}");
     }
 
     #[test]
