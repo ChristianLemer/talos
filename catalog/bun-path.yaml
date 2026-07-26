@@ -1,0 +1,15 @@
+# Bun PATH — a config-atom that puts ~/.bun/bin on the PATH of the shells that
+# matter (zsh, bash, Nushell on macOS/Linux; the registry User Path + Nushell on
+# Windows). Without it, a CLI installed by `bun add -g` (e.g. Claude Code) lands
+# in ~/.bun/bin — a dir nothing adds to PATH when bun came from brew/winget — so
+# it installs but stays "command not found" for the terminal, VSCode and Talos.
+# apply = converge (idempotent, sentinel block); check = dry-run (exit 0/1).
+name: Bun PATH
+description: Puts ~/.bun/bin on the shell PATH so bun-installed CLIs are found
+run: nu "{dir}/bun-path.nu" apply
+check: nu "{dir}/bun-path.nu" check
+# No uninstall: leaving the PATH entry is inert, and the sentinel block is ours to
+# remove later if we add a remove verb (same no-clobber stance as starship-config).
+category: [foundation]
+requires:
+  - Bun

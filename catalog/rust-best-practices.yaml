@@ -12,4 +12,5 @@ category: [automation]
 requires:
   - Claude Code
   - Bun # the skill installs via `bunx skills add` — needs the Bun launcher present
+  - Bun PATH # and ~/.bun/bin on PATH so `bunx` (and anything it drops) resolves
 

@@ -9,4 +9,6 @@ detect: claude --version
 category: [agents]
 requires:
   - Bun # a PACKAGE name (matches catalog/bun.yaml `name: Bun`), resolved against the
-# plan — satisfied if Bun is present OR wanted (transitively pulled in).
+  # plan — satisfied if Bun is present OR wanted (transitively pulled in).
+  - Bun PATH # pulls the config-atom that puts ~/.bun/bin on PATH, else the
+  # bun-installed `claude` binary is unreachable (command not found).
