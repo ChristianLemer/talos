@@ -1,9 +1,22 @@
-# Node.js — JavaScript runtime. No longer required by Talos or its agents (Claude
-# Code and skills moved to Bun). Kept in the catalog ONLY so Talos can detect and
-# uninstall a stray Node left over from earlier installs or internet tutorials —
-# nothing pulls it in, so on a clean machine it stays absent.
+# Node.js — JavaScript runtime. Required, and NOT by Talos itself: by the Claude
+# PLUGIN ECOSYSTEM. Published plugins run their hooks with a hardcoded `node`
+# (chiron, atlas, caveman all do). A Node-less box therefore either dies with
+# `node: command not found` or — worse, ponytail-style behind a `command -v node`
+# guard — silently does not activate.
+#
+# ⚠️ DO NOT remove this again on the grounds that "Claude Code moved to Bun". That
+# is true and beside the point: Bun replaced Node as the runtime *we* invoke, it
+# cannot satisfy the literal string `node` written into somebody else's plugin. A
+# previous revision of this file claimed Node was "superseded, kept only for
+# cleanup"; that generalised from Claude Code to the whole ecosystem, was never
+# tested on a box that actually lacked Node, and broke plugin hooks on Windows
+# (2026-07-26).
+#
+# Dropping the package did not drop the dependency — it made it implicit and
+# undetected, which is strictly worse than an assumed one. `node` on PATH IS the
+# gaussian of JS tooling: a machine without it is not minimal, it is exotic.
 name: Node.js
-description: JavaScript runtime — superseded by Bun; kept only for detection/cleanup
+description: JavaScript runtime — Claude plugin hooks invoke `node` directly
 winget: OpenJS.NodeJS
 brew: node
 detect: node --version
