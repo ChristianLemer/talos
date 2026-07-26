@@ -99,4 +99,91 @@ mod tests {
         assert_eq!(cat.get("node").unwrap().pkg.name, "Node.js");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // ---- The SHIPPED catalogue, not a fixture ----
+    //
+    // These read catalog/ and bundles/ from the repo. The Bun regression that broke
+    // plugin hooks on Windows (2026-07-26) was invisible to every unit test, because
+    // every unit test built its own fixture: a wrong PREMISE in a shipped YAML has
+    // no fixture to contradict it. So assert on the real files.
+
+    fn shipped_catalog() -> BTreeMap<String, CatalogPackage> {
+        load_catalog(concat!(env!("CARGO_MANIFEST_DIR"), "/catalog"))
+    }
+
+    fn shipped_base_packages() -> Vec<String> {
+        #[derive(serde::Deserialize)]
+        struct Bundle {
+            #[serde(default)]
+            packages: Vec<String>,
+        }
+        let raw =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/bundles/base.yaml"))
+                .expect("bundles/base.yaml is shipped");
+        serde_yaml::from_str::<Bundle>(&raw).unwrap().packages
+    }
+
+    /// Node.js must be IN the socle. Not because Talos needs it — because published
+    /// Claude plugins run their hooks with a hardcoded `node`. Removing it once made
+    /// the dependency implicit and undetected; this test is the guard against a
+    /// second time. See catalog/node.yaml for the whole argument.
+    #[test]
+    fn the_base_bundle_ships_node() {
+        assert!(
+            shipped_base_packages().iter().any(|p| p == "Node.js"),
+            "Node.js must stay in bundles/base.yaml — third-party plugin hooks invoke `node`"
+        );
+    }
+
+    /// Every `requires:` in the shipped catalogue must name a shipped package.
+    /// A dangling name does not fail loudly: requires_reason prints "requires X
+    /// (unknown)" on a row and the user is left to guess.
+    #[test]
+    fn every_shipped_requirement_names_a_shipped_package() {
+        let cat = shipped_catalog();
+        let names: Vec<&str> = cat.values().map(|c| c.pkg.name.as_str()).collect();
+        for c in cat.values() {
+            for req in &c.pkg.requires {
+                assert!(
+                    names.contains(&req.as_str()),
+                    "{}: requires \"{}\" which no catalog file declares",
+                    c.pkg.name,
+                    req
+                );
+            }
+        }
+    }
+
+    /// Same for the socle: a bundle that pulls a name nothing declares pulls nothing.
+    #[test]
+    fn every_base_package_is_in_the_catalog() {
+        let cat = shipped_catalog();
+        let names: Vec<&str> = cat.values().map(|c| c.pkg.name.as_str()).collect();
+        for p in shipped_base_packages() {
+            assert!(
+                names.contains(&p.as_str()),
+                "bundles/base.yaml pulls \"{p}\" which no catalog file declares"
+            );
+        }
+    }
+
+    /// A package installed through the Bun route must REQUIRE Bun. This is the
+    /// shape of the bug, generalised: the route said one runtime, the machine had
+    /// another, and nothing tied the two together. Route-agnostic on purpose — the
+    /// npm half of the same rule lives with the npm route (see the shipped_ tests
+    /// added alongside it), so reverting a routing decision cannot take this guard
+    /// down with it.
+    #[test]
+    fn bun_routed_packages_require_bun() {
+        for c in shipped_catalog().values() {
+            let p = &c.pkg;
+            if p.bun.is_some() {
+                assert!(
+                    p.requires.iter().any(|r| r == "Bun"),
+                    "{}: routes through bun but does not require Bun",
+                    p.name
+                );
+            }
+        }
+    }
 }
