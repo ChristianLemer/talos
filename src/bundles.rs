@@ -50,6 +50,10 @@ pub struct RawPkg {
     #[serde(default)]
     pub cargo: Option<String>,
     #[serde(default)]
+    pub npm: Option<String>,
+    #[serde(default, rename = "npmFlags")]
+    pub npm_flags: Option<String>,
+    #[serde(default)]
     pub bun: Option<String>,
     #[serde(default)]
     pub run: Option<String>,
@@ -111,7 +115,7 @@ pub struct Commands {
 }
 
 /// The NAMED ROUTE TABLE — port of commandsFor. Family 1 (system manager, arbitrated by
-/// OS) first, then cargo/bun/run/claude-plugin/skill.
+/// OS) first, then cargo/npm/bun/run/claude-plugin/skill.
 fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
     let ver = pkg.version.as_deref().unwrap_or("").trim().to_string();
     let none = Commands {
@@ -165,12 +169,43 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
             },
         };
     }
+    // npm BEFORE bun: both routes live here, but npm is the one whose runtime the
+    // socle guarantees (Node.js is in Base — third-party plugin hooks hardcode
+    // `node`). Bun installs the same binaries, yet betting the agent's own install
+    // on a runtime nothing else in the ecosystem assumes buys nothing.
+    if let Some(n) = &pkg.npm {
+        let flags = pkg
+            .npm_flags
+            .as_deref()
+            .map(|f| format!("{f} "))
+            .unwrap_or_default();
+        let inst_target = if ver.is_empty() {
+            n.clone()
+        } else {
+            format!("{n}@{ver}")
+        };
+        let up_target = if ver.is_empty() {
+            format!("{n}@latest")
+        } else {
+            format!("{n}@{ver}")
+        };
+        return Commands {
+            route: Some("npm".into()),
+            install: Some(format!("npm install -g {flags}{inst_target}")),
+            uninstall: Some(format!("npm uninstall -g {n}")),
+            upgrade: Some(format!("npm install -g {flags}{up_target}")),
+            downgrade: if ver.is_empty() {
+                None
+            } else {
+                Some(format!(
+                    "npm uninstall -g {n} && npm install -g {flags}{inst_target}"
+                ))
+            },
+        };
+    }
+    // Bun route KEPT and working: Bun stays in the catalogue (installable on its own,
+    // nothing pulls it), so a package may still route through it deliberately.
     if let Some(n) = &pkg.bun {
-        // Global install via Bun (`bun add -g`). Replaces the old npm route:
-        // Anthropic-owned Bun is a single binary, no Node dependency, and it ships
-        // the SAME native binary as npm did (a per-platform optional dep whose `bin`
-        // Bun links natively — NOT a lifecycle postinstall, so no `--trust` needed;
-        // verified live 2026-07-26 in an isolated BUN_INSTALL prefix).
         let inst_target = if ver.is_empty() {
             n.clone()
         } else {
@@ -218,11 +253,13 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
     }
     if let Some(src) = &pkg.skill {
         let name = pkg.skill_name.clone().unwrap_or_else(|| pkg.name.clone());
+        // `npx`, not `bunx`. The skills CLI is third-party JS, and third-party JS is
+        // precisely what cannot be assumed to run on a non-Node runtime.
         return Commands {
             route: Some("skill".into()),
-            install: Some(format!("bunx skills add {src} -g -y")),
-            uninstall: Some(format!("bunx skills remove {name} -y")),
-            upgrade: Some(format!("bunx skills update {name} -y")),
+            install: Some(format!("npx skills add {src} -g -y")),
+            uninstall: Some(format!("npx skills remove {name} -y")),
+            upgrade: Some(format!("npx skills update {name} -y")),
             downgrade: None,
         };
     }
@@ -328,6 +365,53 @@ mod tests {
     }
 
     #[test]
+    fn npm_route_global_install() {
+        let mut p = pkg("Claude Code");
+        p.npm = Some("@anthropic-ai/claude-code".into());
+        let c = commands_for(&p, Os::Darwin);
+        assert_eq!(c.route.as_deref(), Some("npm"));
+        assert_eq!(
+            c.install.as_deref(),
+            Some("npm install -g @anthropic-ai/claude-code")
+        );
+        assert_eq!(
+            c.uninstall.as_deref(),
+            Some("npm uninstall -g @anthropic-ai/claude-code")
+        );
+        assert_eq!(
+            c.upgrade.as_deref(),
+            Some("npm install -g @anthropic-ai/claude-code@latest")
+        );
+    }
+
+    #[test]
+    fn npm_route_pinned() {
+        let mut p = pkg("Claude Code");
+        p.npm = Some("@anthropic-ai/claude-code".into());
+        p.version = Some("2.1.220".into());
+        let c = commands_for(&p, Os::Darwin);
+        assert_eq!(
+            c.install.as_deref(),
+            Some("npm install -g @anthropic-ai/claude-code@2.1.220")
+        );
+        assert_eq!(
+            c.downgrade.as_deref(),
+            Some("npm uninstall -g @anthropic-ai/claude-code && npm install -g @anthropic-ai/claude-code@2.1.220")
+        );
+    }
+
+    // Both JS routes stay in the table: Bun remains in the catalogue (nothing pulls
+    // it), so a package may still declare `bun:`. npm wins when both are declared —
+    // it is the route whose runtime the socle guarantees.
+    #[test]
+    fn npm_wins_over_bun_when_both_declared() {
+        let mut p = pkg("Ambiguous");
+        p.npm = Some("thing".into());
+        p.bun = Some("thing".into());
+        assert_eq!(commands_for(&p, Os::Darwin).route.as_deref(), Some("npm"));
+    }
+
+    #[test]
     fn bun_route_global_install() {
         let mut p = pkg("Claude Code");
         p.bun = Some("@anthropic-ai/claude-code".into());
@@ -364,7 +448,9 @@ mod tests {
     }
 
     #[test]
-    fn skill_route_uses_bunx() {
+    // `npx`, not `bunx`: the skills CLI is third-party code, and third-party JS is
+    // exactly what cannot be assumed to run on a non-Node runtime.
+    fn skill_route_uses_npx() {
         let mut p = pkg("Rust best practices");
         p.skill = Some("apollographql/skills@rust-best-practices".into());
         p.skill_name = Some("rust-best-practices".into());
@@ -372,16 +458,37 @@ mod tests {
         assert_eq!(c.route.as_deref(), Some("skill"));
         assert_eq!(
             c.install.as_deref(),
-            Some("bunx skills add apollographql/skills@rust-best-practices -g -y")
+            Some("npx skills add apollographql/skills@rust-best-practices -g -y")
         );
         assert_eq!(
             c.uninstall.as_deref(),
-            Some("bunx skills remove rust-best-practices -y")
+            Some("npx skills remove rust-best-practices -y")
         );
         assert_eq!(
             c.upgrade.as_deref(),
-            Some("bunx skills update rust-best-practices -y")
+            Some("npx skills update rust-best-practices -y")
         );
+    }
+
+    /// The SHIPPED catalogue, not a fixture: a package routed through npm/npx must
+    /// REQUIRE Node.js. This is the bug's shape generalised — the route named one
+    /// runtime, the machine had another, and nothing tied the two together. It lives
+    /// here, beside the npm route, so reverting the routing decision takes its guard
+    /// with it and nothing dangles. Its Bun twin is in catalog.rs.
+    #[test]
+    fn shipped_npm_routed_packages_require_node() {
+        let cat = crate::catalog::load_catalog(concat!(env!("CARGO_MANIFEST_DIR"), "/catalog"));
+        for c in cat.values() {
+            let p = &c.pkg;
+            // `skill:` installs through `npx`, which ships with Node (see commands_for).
+            if p.npm.is_some() || p.skill.is_some() {
+                assert!(
+                    p.requires.iter().any(|r| r == "Node.js"),
+                    "{}: routes through npm/npx but does not require Node.js",
+                    p.name
+                );
+            }
+        }
     }
 
     #[test]

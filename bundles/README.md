@@ -66,16 +66,17 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
 | winget | `winget: Publisher.Id` | Windows system manager |
 | brew | `brew: formula-or-cask` | macOS/Linux system manager |
 | cargo | `cargo: crate` | cross-platform; reinstall = upgrade |
-| bun | `bun: pkg` | global install via `bun add -g` (Anthropic-owned; no Node) |
+| npm | `npm: pkg` + optional `npmFlags:` | global install via `npm install -g` (ships with Node) |
+| bun | `bun: pkg` | global install via `bun add -g`; declared by nothing today (npm wins if both) |
 | run | `run:` + optional `runUninstall:` | raw command escape hatch |
 | claude-plugin | `claude-plugin: plugin@marketplace` + optional `marketplace:` | Claude Code plugin |
-| skill | `skill: source` + optional `skillName:` | cross-agent SKILL.md via `bunx skills` |
+| skill | `skill: source` + optional `skillName:` | cross-agent SKILL.md via `npx skills` |
 
 **`detect:`** — how Talos knows a package is already present.
 - A binary route: the command whose exit 0 = present, e.g. `detect: code --version`.
   Its output also yields the installed version (free, source-agnostic — the best signal).
 - `claude-plugin` / `skill`: `detect:` is the **name the tool lists the item under**
-  (not a PATH binary) — Talos parses `claude plugin list` / `bunx skills list`.
+  (not a PATH binary) — Talos parses `claude plugin list` / `npx skills list`.
 
 **`requires:`** — names a package (or a bare command) that must be present first.
 Resolved against the whole plan: a plugin that `requires: [Claude Code]` stays

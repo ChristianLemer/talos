@@ -1,14 +1,18 @@
 # Claude Code — the default AI agent (opt-out via the Agents bundle).
-# Installed globally via Bun (`bun add -g`). The npm package shipped the SAME native
-# binary via a per-platform optional dependency; Bun installs it identically without
-# a Node dependency. Detection is installer-agnostic (`claude --version`).
+# Installed globally via npm (`npm install -g`). Bun installs the SAME native binary
+# and works fine, but the agent routes through npm because Node.js is what the socle
+# guarantees: published Claude plugins run their hooks with a hardcoded `node` (see
+# catalog/node.yaml), so a Node-less box was never actually viable. Routing the agent
+# through a second runtime bought an extra dependency and no independence.
+# Detection is installer-agnostic (`claude --version`), so a bun-installed `claude`
+# from an earlier Talos revision is still detected.
 name: Claude Code
-description: Anthropic's official CLI agent — installed globally via Bun
-bun: "@anthropic-ai/claude-code"
+description: Anthropic's official CLI agent — installed globally via npm
+npm: "@anthropic-ai/claude-code"
 detect: claude --version
 category: [agents]
 requires:
-  - Bun # a PACKAGE name (matches catalog/bun.yaml `name: Bun`), resolved against the
-  # plan — satisfied if Bun is present OR wanted (transitively pulled in).
-  - Bun PATH # pulls the config-atom that puts ~/.bun/bin on PATH, else the
-  # bun-installed `claude` binary is unreachable (command not found).
+  - Node.js # a PACKAGE name (matches catalog/node.yaml `name: Node.js`), resolved
+  # against the plan — satisfied if Node is present OR wanted (transitively pulled
+  # in). npm ships with Node, so there is no separate npm package to require, and
+  # no PATH config-atom either: both installers put their global bin on PATH.
