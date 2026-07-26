@@ -618,6 +618,58 @@ async fn row_action(socket: &mut WebSocket, state: &AppState, i: usize, action: 
         .await;
 }
 
+/// WHICH rows the Apply re-scan must actually probe — the seeds, before `requires`
+/// pulls transitively.
+///
+/// The front sends EVERY index (model A: every package has a desired state, so
+/// `on ∪ off` is the whole catalogue on every Apply — see applyScoped in app.js).
+/// That contract is right: "send every desired state, the server converges" is what
+/// makes the model declarative. So the NARROWING belongs here, not in the UI.
+///
+/// A row is a seed when something could actually happen to it:
+///   · its desired state differs from the presence we last observed
+///   · we have NEVER observed it (`None`, or past the end of the vector) — unknown
+///     is not "satisfied"; nobody looked
+///   · its observed presence is indeterminate (`present: None`) — same reason
+///   · it is flagged OUTDATED by the batched scan — desired present + observed
+///     present is still an Upgrade, which is an action
+///
+/// ⚠️ The trade-off, stated rather than hidden: a row that is present, wanted
+/// present and current is no longer re-probed, so a MANUAL UNINSTALL between the
+/// connect scan and the Apply stops being caught for that row. That is the literal
+/// price of "check only what needs doing". Refresh still re-scans everything, and
+/// the row's own button re-probes after acting. The real answer is BATCH (one
+/// `winget list`/`brew list` for the whole machine, parsed in memory): then
+/// re-probing everything costs ~2 s and the trade-off dissolves. Do NOT
+/// re-parallelise the probes — that rule is unchanged.
+fn seeds_for_rescan(
+    on: &[usize],
+    off: &[usize],
+    last_seen: &[Option<crate::detect::Presence>],
+    outdated: &dyn Fn(usize) -> bool,
+) -> Vec<usize> {
+    let could_act = |i: usize, want_present: bool| -> bool {
+        match last_seen.get(i).and_then(|p| p.as_ref()) {
+            // Never observed, or observed indeterminate → we don't know, so look.
+            None => true,
+            Some(p) => match p.present {
+                None => true,
+                // Presence already matches the desire: only an upgrade is left to do.
+                Some(present) => present != want_present || (want_present && outdated(i)),
+            },
+        }
+    };
+    let mut seeds: Vec<usize> = on
+        .iter()
+        .filter(|&&i| could_act(i, true))
+        .chain(off.iter().filter(|&&i| could_act(i, false)))
+        .copied()
+        .collect();
+    seeds.sort_unstable();
+    seeds.dedup();
+    seeds
+}
+
 /// The heart: applies the tri-state decision against the machine reality.
 ///   on  = indices wanted PRESENT; off = indices wanted ABSENT.
 /// Re-detects presence NOW (repaint-at-apply: re-observes before acting,
@@ -635,30 +687,13 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
     let want_on: HashSet<usize> = on.iter().copied().collect();
     let want_off: HashSet<usize> = off.iter().copied().collect();
 
-    // WHAT to re-probe: the diff (on ∪ off) plus what its `requires` pull, transitively.
-    // Not all 30. The repaint-at-apply guarantee (re-observe before acting, catch a
-    // manual removal — memory repaint-at-apply) is only MEANINGFUL for rows we are
-    // about to touch: probing Miro to install Bun buys nothing and costs a process.
-    // Requirements are in, because will_be_present decides both the `requires` reasons
-    // and the execution order. Dependents are out — untouched, unchanged.
-    let seeds: Vec<usize> = on.iter().chain(off.iter()).copied().collect();
-    let name_idx = index_of_names(steps.iter().map(|s| s.name.as_str()));
-    let requires: Vec<Vec<String>> = steps.iter().map(|s| s.requires.clone()).collect();
-    let scope = crate::deps::rescan_scope(&requires, &name_idx, &seeds);
-    // Catalogue order, so the narration counts up the screen and not at random
-    // (a HashSet iterates in whatever order it likes).
-    let mut to_probe: Vec<usize> = scope.into_iter().collect();
-    to_probe.sort_unstable();
-
-    // SERIAL live re-scan (presence) + batched outdated, like at connect.
-    // ⚠️ Serial on purpose — same reason as scan_and_emit: concurrent winget probes
-    // contend over winget's shared state. Do not fan this back out. If the scoped
-    // scan is ever still too slow, the fix is BATCH (one list command), never threads.
+    // The batched outdated scan runs FIRST, because the seed selection needs it: a
+    // row that is present and wanted present is still an ACTION when it is behind.
+    // It is ONE command for the whole machine (~1-2 s), and naming it matters — the
+    // veil would otherwise open on a frozen phrase for exactly as long as the wait
+    // people complained about. No `total` yet (the count belongs to the probes), so
+    // the bar stays indeterminate here.
     let started = std::time::Instant::now();
-    // Name the batched step too: it is ONE command for the whole machine, ~1-2 s, and
-    // it runs BEFORE the first probe — so without this the veil opens on a frozen
-    // phrase for exactly as long as the wait people complained about. No `total` yet
-    // (the count belongs to the probes), so the bar stays indeterminate here.
     let _ = socket
         .send(Message::Text(
             json!({ "type": "rescan-progress", "name": "what's out of date" }).to_string(),
@@ -667,6 +702,41 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
     let scan = tokio::task::spawn_blocking(move || scan_outdated(os))
         .await
         .unwrap_or_default();
+
+    // WHAT to re-probe: the rows where something COULD happen, plus what their
+    // `requires` pull, transitively. Not all 30.
+    //
+    // ⚠️ The subtlety that made the first version of this a no-op in production: the
+    // front sends EVERY index (model A — every package has a desired state), so
+    // `on ∪ off` IS the whole catalogue and using it directly as the seeds scoped
+    // nothing at all. seeds_for_rescan does the narrowing here, server-side, against
+    // `last_seen` + the outdated scan; the front's "send everything, the server
+    // converges" contract stays untouched, because that contract is what makes the
+    // model declarative.
+    //
+    // The repaint-at-apply guarantee (re-observe before acting) is only MEANINGFUL
+    // for rows we are about to touch: probing Miro to install Bun buys nothing and
+    // costs a process. Requirements are in, because will_be_present decides both the
+    // `requires` reasons and the execution order. Dependents are out — untouched.
+    let is_outdated_row = |i: usize| -> bool {
+        steps
+            .get(i)
+            .map(|s| is_outdated_now(outdated_for(s.system_id.as_deref(), &scan)))
+            .unwrap_or(false)
+    };
+    let seeds = seeds_for_rescan(&on, &off, &state.last_seen.lock().await, &is_outdated_row);
+    let name_idx = index_of_names(steps.iter().map(|s| s.name.as_str()));
+    let requires: Vec<Vec<String>> = steps.iter().map(|s| s.requires.clone()).collect();
+    let scope = crate::deps::rescan_scope(&requires, &name_idx, &seeds);
+    // Catalogue order, so the narration counts up the screen and not at random
+    // (a HashSet iterates in whatever order it likes).
+    let mut to_probe: Vec<usize> = scope.into_iter().collect();
+    to_probe.sort_unstable();
+
+    // SERIAL live re-scan (presence).
+    // ⚠️ Serial on purpose — same reason as scan_and_emit: concurrent winget probes
+    // contend over winget's shared state. Do not fan this back out. If the scoped
+    // scan is ever still too slow, the fix is BATCH (one list command), never threads.
     let mut probed: std::collections::HashMap<usize, crate::detect::Presence> =
         std::collections::HashMap::with_capacity(to_probe.len());
     for (nth, &i) in to_probe.iter().enumerate() {
@@ -1350,6 +1420,115 @@ mod tests {
         // pinned cask → None (a pin owns the direction, keep install-pinned cmd)
         let pinned = brew_step("visual-studio-code", Some("1.130.0"));
         assert_eq!(forced_cask_upgrade_cmd(&pinned, Os::Darwin, true), None);
+    }
+
+    /// The shape the UI ACTUALLY sends: every index carries a desired state, so
+    /// `on ∪ off` is the whole catalogue on every Apply. Building the seeds from
+    /// that directly is why "scoped to the diff" scoped nothing in production.
+    fn ui_shaped_apply(desired: &[bool]) -> (Vec<usize>, Vec<usize>) {
+        let mut on = Vec::new();
+        let mut off = Vec::new();
+        for (i, &want) in desired.iter().enumerate() {
+            if want {
+                on.push(i)
+            } else {
+                off.push(i)
+            }
+        }
+        (on, off)
+    }
+
+    #[test]
+    fn a_fully_converged_plan_needs_no_probes_at_all() {
+        // THE regression guard. 30 packages, every one already in its desired state,
+        // fed in the shape the UI really sends (all 30 split across on/off). The
+        // scope must COLLAPSE. Before this fix it was all 30 — the "scoped re-scan"
+        // was a no-op in production, and my 5/30 measurement came from a hand-driven
+        // WS probe with a single index, a message shape the UI never sends.
+        let n = 30;
+        let desired: Vec<bool> = (0..n).map(|i| i % 2 == 0).collect();
+        let (on, off) = ui_shaped_apply(&desired);
+        assert_eq!(on.len() + off.len(), n, "the UI sends every index");
+        let last_seen: Vec<Option<crate::detect::Presence>> = desired
+            .iter()
+            .map(|&want| Some(seen(want, "1.0"))) // machine already matches
+            .collect();
+        let seeds = seeds_for_rescan(&on, &off, &last_seen, &|_| false);
+        assert!(
+            seeds.is_empty(),
+            "nothing to do → nothing to probe, got {seeds:?}"
+        );
+    }
+
+    #[test]
+    fn a_row_whose_desire_differs_from_what_we_saw_is_a_seed() {
+        // want present + seen absent → install pending; want absent + seen present
+        // → uninstall pending. Both must be re-probed before acting.
+        let last_seen = vec![Some(seen(false, "")), Some(seen(true, "1.0"))];
+        assert_eq!(
+            seeds_for_rescan(&[0], &[1], &last_seen, &|_| false),
+            vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn an_outdated_row_is_a_seed_even_though_presence_matches() {
+        // desired present + seen present is NOT "nothing to do" when the row is
+        // behind: an upgrade IS an action. The batched outdated scan runs first, so
+        // this is known before the seeds are chosen.
+        let last_seen = vec![Some(seen(true, "1.0"))];
+        assert!(seeds_for_rescan(&[0], &[], &last_seen, &|_| false).is_empty());
+        assert_eq!(
+            seeds_for_rescan(&[0], &[], &last_seen, &|i| i == 0),
+            vec![0]
+        );
+    }
+
+    #[test]
+    fn a_never_observed_row_is_a_seed_unknown_is_not_satisfied() {
+        // `last_seen == None` means nobody looked. "We don't know" and "nothing to
+        // do" are different claims — probe it.
+        let last_seen = vec![None, None];
+        assert_eq!(
+            seeds_for_rescan(&[0], &[1], &last_seen, &|_| false),
+            vec![0, 1]
+        );
+        // Also when the vector is simply SHORTER than the plan (a row past its end
+        // has never been observed either).
+        assert_eq!(seeds_for_rescan(&[5], &[], &[], &|_| false), vec![5]);
+    }
+
+    #[test]
+    fn an_unknown_presence_is_a_seed_too() {
+        // Probed once but indeterminate (`present: None` — e.g. no practicable route
+        // on this OS). Not a match with any desire, so it stays in.
+        let last_seen = vec![Some(crate::detect::Presence::default())];
+        assert_eq!(seeds_for_rescan(&[0], &[], &last_seen, &|_| false), vec![0]);
+    }
+
+    #[test]
+    fn requirements_of_a_surviving_seed_come_along() {
+        // Integration with rescan_scope: only row 1 has an action, but it requires
+        // row 0, whose presence feeds will_be_present / topo_sort. Row 2 is settled
+        // and unrelated → stays out.
+        let requires = vec![vec![], vec!["dep".to_string()], vec![]];
+        let name_idx = crate::deps::index_of_names(["dep", "app", "other"].into_iter());
+        let last_seen = vec![
+            Some(seen(true, "1.0")),
+            Some(seen(false, "")),
+            Some(seen(true, "1.0")),
+        ];
+        let seeds = seeds_for_rescan(&[0, 1, 2], &[], &last_seen, &|_| false);
+        assert_eq!(seeds, vec![1], "only the pending install seeds");
+        let mut scope: Vec<usize> = crate::deps::rescan_scope(&requires, &name_idx, &seeds)
+            .into_iter()
+            .collect();
+        scope.sort_unstable();
+        assert_eq!(
+            scope,
+            vec![0, 1],
+            "the requirement is pulled in, `other` is not"
+        );
     }
 
     #[test]
