@@ -705,7 +705,20 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
                 .await;
             continue;
         }
-        do_step(socket, state, *i, *action, &steps[*i], is_cask).await;
+        let outcome = do_step(socket, state, *i, *action, &steps[*i], is_cask).await;
+        // A 403 is REPAIRABLE, not a plain failure: the user opens the blocked page
+        // and unblocks it. So we do NOT run on — carrying on would (a) make them read
+        // a page while installs scroll past behind, and (b) burn every FOLLOWING
+        // package that goes through the same blocked source, when one unblock up front
+        // would have saved them all. Instead: the action that was running FINISHES
+        // (never kill a pty mid-flight — a half-installed package is the worst case;
+        // the exit code is the truth), and THEN we wait for the user.
+        //
+        // Resuming is gated on a DECISION, not on success: they may fail to unblock.
+        // Either way it's their call — nothing restarts until they say so.
+        if outcome.blocked && !await_forbidden_decision(socket, *i).await {
+            break; // "stop everything" → abandon the rest of the plan
+        }
     }
     clear_sudo_pw(state).await; // end of Apply: the cached password is cleared (model C)
     let _ = socket
@@ -882,15 +895,64 @@ async fn clear_sudo_pw(state: &AppState) {
     *state.sudo_pw.lock().await = None;
 }
 
+/// A step was blocked by the firewall (403). PAUSE the Apply and wait for the user
+/// to decide — they go unblock the page, then tell us to carry on. Same shape as
+/// obtain_sudo_pw: send a prompt, block on THIS socket until the answer arrives.
+///
+/// Returns true to keep going with the rest of the plan, false to stop everything.
+/// A closed socket (window shut mid-pause) reads as "stop" — nothing should run on
+/// with nobody watching.
+async fn await_forbidden_decision(socket: &mut WebSocket, i: usize) -> bool {
+    let _ = socket
+        .send(Message::Text(
+            json!({ "type": "forbidden-pause", "i": i }).to_string(),
+        ))
+        .await;
+    while let Some(Ok(msg)) = socket.recv().await {
+        let Message::Text(txt) = msg else { continue };
+        let parsed: serde_json::Value = serde_json::from_str(&txt).unwrap_or_default();
+        match parsed.get("type").and_then(|t| t.as_str()) {
+            // The user dealt with it (unblocked or gave up — their call either way).
+            Some("forbidden-continue") => return true,
+            Some("forbidden-stop") => return false,
+            // "Open blocked page" MUST keep working while we hold: it is the very
+            // gesture the pause exists for. Served here too, because the main
+            // handler loop isn't reading the socket while we own it.
+            Some("open-forbidden") => {
+                if let Some(url) = parsed.get("url").and_then(|v| v.as_str()) {
+                    if let Err(e) = crate::platform::open_url(url) {
+                        println!("[forbidden] failed to open {url}: {e}");
+                    } else {
+                        println!("[forbidden] opening browser: {url}");
+                    }
+                }
+            }
+            _ => {} // anything else is ignored while paused — nothing advances
+        }
+    }
+    false
+}
+
 // Benign exit codes (winget: "already installed / no applicable upgrade").
 // A non-zero exit in this list = success anyway. Port of BENIGN_CODES.
 fn benign_code(code: i32) -> bool {
     matches!(code, -1978335189 | -1978335212)
 }
 
+/// The outcome of one step. `ok` = it succeeded (kept for callers that will want it;
+/// the front already learns it from the `step` event). `blocked` = it failed BECAUSE
+/// the corporate firewall answered 403 — the distinction the Apply loop needs: a plain
+/// failure moves on, a 403 is REPAIRABLE by the user, so the loop pauses and waits.
+#[derive(Default, Clone, Copy)]
+struct StepOutcome {
+    #[allow(dead_code)]
+    ok: bool,
+    blocked: bool,
+}
+
 /// Runs ONE step (install/upgrade/uninstall): streams the command, reads the exit
 /// code, emits `step` (running → ok/absent/fail/forbidden) and the 403 verdict.
-/// Port of doStep (src/server.ts:400-460). Returns true if the step succeeded.
+/// Port of doStep (src/server.ts:400-460).
 async fn do_step(
     socket: &mut WebSocket,
     state: &AppState,
@@ -898,7 +960,7 @@ async fn do_step(
     action: crate::decision::Action,
     step: &crate::bundles::Step,
     is_cask: bool,
-) -> bool {
+) -> StepOutcome {
     use crate::decision::Action;
     let os = state.os;
     // A cask Upgrade needs the forced --cask --force command (brew's receipt drift
@@ -916,7 +978,7 @@ async fn do_step(
         Action::Downgrade => step.downgrade.as_deref(),
     };
     let Some(cmd) = cmd else {
-        return false; // no command for this route → skip
+        return StepOutcome::default(); // no command for this route → skip
     };
     let running = match action {
         Action::Uninstall => "uninstalling",
@@ -1012,7 +1074,7 @@ async fn do_step(
             ok,
         },
     );
-    ok
+    StepOutcome { ok, blocked }
 }
 
 #[cfg(test)]

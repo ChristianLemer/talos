@@ -765,6 +765,16 @@ setInterval(() => {
 // fold; failures stay visible AND open. On done, everything reappears — the
 // failures already open, standing out. The plan comes from the server's
 // `apply-plan` message (it's the server that computes install/uninstall).
+// While focus mode holds, the rows of the plan are also REORDERED to the order they
+// will actually run in (topo_sort put the required before its dependents, so `jj`
+// comes before `jj skills` even if the catalogue lists them the other way). Read
+// top-to-bottom, the screen then IS the running order.
+//
+// Only for the duration of the Apply: at rest the list keeps its catalogue order —
+// that's the map (stable, the same every time you open it), and the map must not
+// move. During the Apply the screen is a story instead, and the story follows time.
+// `planOrigin` remembers where each moved row came from, to put it back on done.
+let planOrigin = null;
 function enterFocusMode(planIndices) {
   document.body.classList.add("applying");
   const inPlan = new Set(planIndices);
@@ -772,9 +782,28 @@ function enterFocusMode(planIndices) {
     // focus-show = this row is part of the plan → stays visible throughout.
     rows[i].details.classList.toggle("focus-show", inPlan.has(i));
   }
+  // Remember each planned row's original slot (parent + the node it sat before),
+  // then re-append them in plan order. Only planned rows move; the hidden ones
+  // stay where they are, so restoring is exact.
+  planOrigin = planIndices
+    .map((i) => rows[i]?.details)
+    .filter(Boolean)
+    .map((el) => ({ el, parent: el.parentNode, before: el.nextSibling }));
+  for (const i of planIndices) {
+    const el = rows[i]?.details;
+    if (el) el.parentNode.appendChild(el); // re-append = move to the end, in plan order
+  }
 }
 function exitFocusMode() {
   document.body.classList.remove("applying");
+  // Put the moved rows back where the catalogue had them (reverse order, so each
+  // `before` anchor is still valid when its turn comes).
+  if (planOrigin) {
+    for (const { el, parent, before } of planOrigin.slice().reverse()) {
+      parent.insertBefore(el, before);
+    }
+    planOrigin = null;
+  }
   // Reveal everything again; leave the per-row open/fold state as setStatus left
   // it (failures open, successes folded) — the failures thus stand out on return.
   for (const i of Object.keys(rows).map(Number)) {
@@ -879,7 +908,32 @@ function clearForbidden(i) {
   }
 }
 
+// True while the server holds the Apply on a 403, waiting for us to decide. The
+// blocked step has ALREADY finished (its exit code is in); nothing else starts
+// until we answer, so the user can go unblock the page without installs scrolling
+// past behind them — and without the following packages burning on the same
+// blocked source.
+let fbPaused = false;
+
+// Answer the server's `forbidden-pause` and let the Apply move on (or stop it).
+// Resuming is gated on a DECISION, not on success: the user may have failed to
+// unblock, and that is still their call.
+function resumeApply(go) {
+  if (!fbPaused) return;
+  fbPaused = false;
+  ws.send(JSON.stringify({ type: go ? "forbidden-continue" : "forbidden-stop" }));
+  overall.textContent = go ? "applying…" : "stopping…";
+}
+
 function retryStep(i) {
+  // Paused mid-Apply: the loop is holding for us. Ask it to carry on — the
+  // remaining packages run, and this row keeps its `forbidden` mark (the user
+  // re-runs it alone afterwards if the unblock worked).
+  if (fbPaused) {
+    clearForbidden(i);
+    resumeApply(true);
+    return;
+  }
   if (applyRunning) return;
   const act = buttonAction(i); // recomputed from current model → the original action
   if (!act) return;
@@ -895,6 +949,9 @@ function giveUp(i) {
   // to send: the step already exited; this just drops the recovery UI.
   clearForbidden(i);
   setStatus(i, "fail");
+  // Paused mid-Apply: giving up on THIS row doesn't mean abandoning the run, so
+  // release the loop and let the rest of the plan through.
+  if (fbPaused) resumeApply(true);
 }
 
 // "More info…" reveals the raw blocked URL and hides its own prompt — for the
@@ -1289,9 +1346,17 @@ ws.onmessage = (ev) => {
       break;
     case "forbidden":
       // Live: a download was blocked by the firewall. Show the row banner (durable)
-      // and the transient modal. The server already opened the blocked page beside
-      // the panel; url may be null (nothing extractable → link-less message).
+      // and the transient modal. The page is NOT opened for them — they click
+      // "Open blocked page" (the server only opens on that message). url may be
+      // null (nothing extractable → link-less message).
       showForbidden(msg.i, msg.url || null);
+      break;
+    case "forbidden-pause":
+      // The Apply is HELD on this row. The blocked step already finished; nothing
+      // else will start until we answer. Say so, so the user knows they have the
+      // time to go unblock the page — the whole point of pausing.
+      fbPaused = true;
+      overall.textContent = "waiting for you";
       break;
     case "sudo-prompt":
       // A step hit a sudo "Password:" prompt (e.g. removing a GUI app). Show the
@@ -1319,6 +1384,7 @@ ws.onmessage = (ev) => {
     case "done":
       overall.textContent = msg.nothing ? "nothing to do" : "done";
       applyRunning = false;
+      fbPaused = false; // the loop is over — no pause left to release
       stepsEl.classList.remove("steps-refreshing"); // net: scan found nothing → no apply-plan
       exitFocusMode(); // everything reappears — failures already open, stand out
       refreshLiveness(); // unlock; re-light what's still useful
