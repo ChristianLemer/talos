@@ -6,12 +6,34 @@ import {
   actionFor,
   desiredState,
   effectiveToggle,
+  forbiddenMessage,
   isDeviation,
   isLockedPosture,
   postureDefault,
   profileState,
   toggleState,
 } from "../public/decision.js";
+
+test("403 recovery: Retry while paused RETRIES — it does not just continue", () => {
+  // The bug this pins: the button labelled "Retry" (and the modal step that says
+  // "Talos downloads it for you") used to send `forbidden-continue`, which moves
+  // the Apply on to the NEXT package and leaves this row `forbidden`. The word lied.
+  assert.equal(forbiddenMessage("retry", true), "forbidden-retry");
+});
+
+test("403 recovery: three gestures, three distinct messages — no synonyms", () => {
+  assert.equal(forbiddenMessage("continue", true), "forbidden-continue");
+  // `stop` was unreachable from the UI: the server implements "abandon the rest of
+  // the plan" but nothing ever sent it. A third outcome needs a third control.
+  assert.equal(forbiddenMessage("stop", true), "forbidden-stop");
+});
+
+test("403 recovery: not paused → no loop to answer (caller uses retry-step)", () => {
+  // Retrying a row when the Apply is NOT holding is a plain row action; sending a
+  // `forbidden-*` decision into a server that isn't waiting would be ignored.
+  assert.equal(forbiddenMessage("retry", false), null);
+  assert.equal(forbiddenMessage("stop", false), null);
+});
 
 test("postureDefault: which side the toggle starts on", () => {
   assert.equal(postureDefault("mandatory"), "in");

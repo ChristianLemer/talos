@@ -1,6 +1,9 @@
 // app.js — the Talos panel UI. Pure decision logic lives in decision.js
 // (imported below), shared with the server so the rule can never drift.
-import { postureDefault as _postureDefault } from "./decision.js";
+import {
+  forbiddenMessage,
+  postureDefault as _postureDefault,
+} from "./decision.js";
 import * as M from "./model.js";
 const model = M.createModel();
 
@@ -859,12 +862,15 @@ const fbLink = document.getElementById("fb-link");
 const fbMoreInfo = document.getElementById("fb-moreinfo");
 const fbStepOpen = document.getElementById("fb-open");
 const fbStepRetry = document.getElementById("fb-retry");
+const fbAttemptEl = document.getElementById("fb-attempt");
+const fbStopBtn = document.getElementById("fb-stop");
 let fbActive = null;
 let fbActiveUrl = null; // url the modal's "Open blocked page" step acts on
 
 // The stepper's amber highlight rides the CURRENT step, so the primary action is
 // never stale. "open" → step 1 lit; "retry" → step 1 done (green ✓), step 3 lit.
-// The passive step 2 never lights (nothing to click in Talos).
+// The passive step 2 never lights (nothing to click in Talos). `null` lights
+// nothing — used when retries run out and the stepper has no action left to offer.
 function setFbStep(current) {
   const done = current === "retry"; // step 1 is done once we've opened the page
   fbStepOpen.classList.toggle("active", current === "open");
@@ -891,20 +897,25 @@ function showForbidden(i, url) {
   // Row banner (durable) — guidance + Retry/Give-up, built once. No raw link by
   // default (it's under "More info…" in the modal); the guidance says approve
   // access, don't download — Talos re-runs the download on Retry.
+  // "Stop the whole Apply" only appears while the Apply is actually held — outside
+  // a run there is no plan to abandon. Three outcomes, three controls, no synonyms.
   r.fbBanner.innerHTML =
     `<b>⚠ A download was blocked by the corporate firewall (403).</b><br>` +
     `Open the blocked page and approve the access request — you don't need to ` +
     `download anything. Then Retry and Talos fetches it for you.` +
+    `<div class="fb-attempt" data-fb="attempt" hidden></div>` +
     `<div class="fb-banner-actions">` +
     (url ? `<button data-fb="open">Open blocked page</button>` : "") +
     `<button data-fb="retry">Retry</button>` +
-    `<button data-fb="giveup">Give up</button></div>`;
+    `<button data-fb="giveup">Skip this one</button>` +
+    `<button data-fb="stop" hidden>Stop the whole Apply</button></div>`;
   r.fbBanner.classList.add("show");
   r.details.open = true;
   const openBtn = r.fbBanner.querySelector('[data-fb="open"]');
   if (openBtn) openBtn.onclick = () => openForbidden(url);
   r.fbBanner.querySelector('[data-fb="retry"]').onclick = () => retryStep(i);
   r.fbBanner.querySelector('[data-fb="giveup"]').onclick = () => giveUp(i);
+  r.fbBanner.querySelector('[data-fb="stop"]').onclick = () => stopApply(i);
   // Transient modal — the guided stepper for the active block.
   fbActive = i;
   fbActiveUrl = url;
@@ -914,11 +925,60 @@ function showForbidden(i, url) {
   // Retry (the user clears access however they can, then retries).
   fbStepOpen.disabled = !url;
   setFbStep(url ? "open" : "retry");
+  // Fresh block → fresh attempt state. `forbidden-pause` refines both a beat later
+  // (it carries the count and whether retries remain); a `forbidden` outside a run
+  // never pauses, so Stop stays hidden until a pause says a run is held.
+  fbAttemptEl.hidden = true;
+  fbAttemptEl.textContent = "";
+  fbStepRetry.hidden = false;
+  fbStopBtn.hidden = true;
   // Reset the "More info…" disclosure each time: link hidden, prompt shown (only
   // if there's a URL to reveal).
   fbLinkWrap.hidden = true;
   fbMoreInfo.classList.toggle("empty", !url);
   fbEl.classList.add("show");
+}
+
+// Says WHICH attempt just failed, and withdraws Retry once the server stops
+// offering it. Without the count, a second identical banner reads as "my click did
+// nothing" — the retry ran, it just hit the same wall. Only shown from attempt 2:
+// on the first one there is no history to report.
+function paintFbAttempt(i, attempt, canRetry) {
+  const r = rows[i];
+  const note =
+    attempt < 2
+      ? ""
+      : canRetry
+        ? `Attempt ${attempt} was blocked too — the approval may not have gone through yet.`
+        : `Attempt ${attempt} was blocked too. No more retries for this one: skip it, or stop the Apply.`;
+  if (r && r.fbBanner) {
+    const el = r.fbBanner.querySelector('[data-fb="attempt"]');
+    if (el) {
+      el.textContent = note;
+      el.hidden = !note;
+    }
+    const retryBtn = r.fbBanner.querySelector('[data-fb="retry"]');
+    if (retryBtn) retryBtn.hidden = !canRetry;
+    // Abandoning the run is only meaningful while a run is held.
+    const stopBtn = r.fbBanner.querySelector('[data-fb="stop"]');
+    if (stopBtn) stopBtn.hidden = false;
+  }
+  if (fbActive === i) {
+    fbAttemptEl.textContent = note;
+    fbAttemptEl.hidden = !note;
+    fbStepRetry.hidden = !canRetry;
+    fbStopBtn.hidden = false;
+    if (!canRetry) setFbStep(null); // nothing left to light — the primary action is gone
+  }
+}
+
+// Drops the TRANSIENT modal only. The row banner is the durable surface, so it
+// stays: a retry that is still running has not settled anything yet, and if it is
+// blocked again the banner is where the next attempt is reported.
+function dismissFbModal() {
+  fbEl.classList.remove("show");
+  fbActive = null;
+  fbActiveUrl = null;
 }
 
 function clearForbidden(i) {
@@ -927,11 +987,7 @@ function clearForbidden(i) {
     r.fbBanner.classList.remove("show");
     r.fbBanner.innerHTML = "";
   }
-  if (fbActive === i) {
-    fbEl.classList.remove("show");
-    fbActive = null;
-    fbActiveUrl = null;
-  }
+  if (fbActive === i) dismissFbModal();
 }
 
 // True while the server holds the Apply on a 403, waiting for us to decide. The
@@ -940,24 +996,39 @@ function clearForbidden(i) {
 // past behind them — and without the following packages burning on the same
 // blocked source.
 let fbPaused = false;
+// Whether the server still offers a retry for the held row (it caps them, so a
+// user cannot hang the Apply forever against a firewall that will not budge).
+let fbCanRetry = true;
 
-// Answer the server's `forbidden-pause` and let the Apply move on (or stop it).
-// Resuming is gated on a DECISION, not on success: the user may have failed to
+// Answer the server's `forbidden-pause`. THREE outcomes, three distinct messages
+// (decision.js owns the mapping so the words and the wire cannot drift):
+//   retry    → the SAME action runs again on this row, then the plan carries on
+//   continue → skip this row, run the rest
+//   stop     → abandon everything still to do
+// Answering is gated on a DECISION, not on success: the user may have failed to
 // unblock, and that is still their call.
-function resumeApply(go) {
-  if (!fbPaused) return;
+function decideForbidden(gesture) {
+  const type = forbiddenMessage(gesture, fbPaused);
+  if (!type) return false;
   fbPaused = false;
-  ws.send(JSON.stringify({ type: go ? "forbidden-continue" : "forbidden-stop" }));
-  overall.textContent = go ? "applying…" : "stopping…";
+  ws.send(JSON.stringify({ type }));
+  overall.textContent =
+    gesture === "retry" ? "retrying…" : gesture === "stop" ? "stopping…" : "applying…";
+  return true;
 }
 
 function retryStep(i) {
-  // Paused mid-Apply: the loop is holding for us. Ask it to carry on — the
-  // remaining packages run, and this row keeps its `forbidden` mark (the user
-  // re-runs it alone afterwards if the unblock worked).
+  // Paused mid-Apply: the loop is holding for us, so ask it to RE-RUN this row.
+  // The banner stays until the retry's own verdict lands (a `step` event settles
+  // it) — clearing it now would claim success we don't have yet.
   if (fbPaused) {
-    clearForbidden(i);
-    resumeApply(true);
+    if (!fbCanRetry) return; // cap reached: only continue/stop remain
+    // The row's live status comes from the server's `step` event, which lands as
+    // soon as the retry starts — painting one here would only risk disagreeing.
+    // The modal goes (it would cover the run it just started); the row banner
+    // stays, because nothing has been settled yet.
+    if (fbActive === i) dismissFbModal();
+    decideForbidden("retry");
     return;
   }
   if (applyRunning) return;
@@ -971,13 +1042,21 @@ function retryStep(i) {
 }
 
 function giveUp(i) {
-  // Settle the row as a plain failure locally — the user chose to stop. Nothing
-  // to send: the step already exited; this just drops the recovery UI.
+  // "Give up on THIS row" — not on the run. Paused mid-Apply: release the loop so
+  // the rest of the plan goes through. Either way the row KEEPS the status the
+  // server gave it (`forbidden` → "blocked by firewall"): we used to paint `fail`
+  // locally, which the journal and any later `state` disagreed with. Giving up
+  // drops the recovery UI, it does not rewrite what happened.
   clearForbidden(i);
-  setStatus(i, "fail");
-  // Paused mid-Apply: giving up on THIS row doesn't mean abandoning the run, so
-  // release the loop and let the rest of the plan through.
-  if (fbPaused) resumeApply(true);
+  decideForbidden("continue");
+}
+
+// Abandon the whole Apply. The server has always implemented this; until now
+// nothing in the UI could reach it, so "abandon the rest of the plan" was a
+// promise made only in a comment.
+function stopApply(i) {
+  clearForbidden(i);
+  decideForbidden("stop");
 }
 
 // "More info…" reveals the raw blocked URL and hides its own prompt — for the
@@ -1000,6 +1079,9 @@ fbStepRetry.onclick = () => {
 };
 document.getElementById("fb-giveup").onclick = () => {
   if (fbActive !== null) giveUp(fbActive);
+};
+document.getElementById("fb-stop").onclick = () => {
+  if (fbActive !== null) stopApply(fbActive);
 };
 
 function setStatus(i, status) {
@@ -1388,6 +1470,10 @@ ws.onmessage = (ev) => {
       // else will start until we answer. Say so, so the user knows they have the
       // time to go unblock the page — the whole point of pausing.
       fbPaused = true;
+      fbCanRetry = msg.canRetry !== false;
+      // A second identical banner reads as "nothing happened" — name the attempt,
+      // and when the server stops offering retries, stop offering the button.
+      paintFbAttempt(msg.i, msg.attempt || 1, fbCanRetry);
       overall.textContent = "waiting for you";
       break;
     case "sudo-prompt":

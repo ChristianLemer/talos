@@ -527,6 +527,10 @@
       .fb-step:disabled { opacity:.4; cursor:default; }
       .fb-step:disabled .fb-arrow { display:none; }
       /* Footer: quiet secondary escapes, side by side, well below the steps. */
+      /* Repeat-block note (modal + row banner): amber, because it reports a fact
+         that changes what to do next, not a decoration. */
+      .fb-attempt { margin:0 0 10px; font-size:12.5px; line-height:1.45; color:#e0af68; text-align:center; }
+      .fb-banner .fb-attempt { text-align:left; margin:8px 0 0; }
       .fb-footer { text-align:center; margin-top:4px; }
       .fb-linkbtn { background:none; border:none; color:var(--dim); font-size:12px;
                     cursor:pointer; text-decoration:underline; padding:2px 4px; }
@@ -664,10 +668,18 @@
           <span class="fb-arrow">→</span>
         </button>
       </div>
+      <!-- Named by paintFbAttempt on a repeat block: a second identical modal with
+           no count reads as "my click did nothing". -->
+      <p id="fb-attempt" class="fb-attempt" hidden></p>
+      <!-- Three outcomes, three controls: retry (step 3 above), skip this one, stop
+           the whole run. `fb-stop` was the missing third — the server always
+           implemented it, nothing could reach it. -->
       <div class="fb-footer">
         <button id="fb-moreinfo" class="fb-linkbtn">More info…</button>
         <span class="fb-sep">·</span>
-        <button id="fb-giveup" class="fb-linkbtn">Give up</button>
+        <button id="fb-giveup" class="fb-linkbtn">Skip this one</button>
+        <span class="fb-sep">·</span>
+        <button id="fb-stop" class="fb-linkbtn" hidden>Stop the whole Apply</button>
       </div>
       <p class="fb-link-wrap muted" hidden>Blocked page: <a id="fb-link" href="#" target="_blank" rel="noopener"></a></p>
     </div></div>

@@ -805,7 +805,6 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
                 .await;
             continue;
         }
-        let outcome = do_step(socket, state, *i, *action, &steps[*i], is_cask).await;
         // A 403 is REPAIRABLE, not a plain failure: the user opens the blocked page
         // and unblocks it. So we do NOT run on — carrying on would (a) make them read
         // a page while installs scroll past behind, and (b) burn every FOLLOWING
@@ -815,8 +814,24 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
         // the exit code is the truth), and THEN we wait for the user.
         //
         // Resuming is gated on a DECISION, not on success: they may fail to unblock.
-        // Either way it's their call — nothing restarts until they say so.
-        if outcome.blocked && !await_forbidden_decision(socket, *i).await {
+        // Either way it's their call — nothing restarts until they say so. And Retry
+        // means RETRY: the same action runs again HERE, in place, before the plan
+        // moves on. (It used to mean "continue", which left the user to hunt the row
+        // down afterwards — the word on the button lied.)
+        let mut attempt: u32 = 0;
+        let stop_all = loop {
+            attempt += 1;
+            let outcome = do_step(socket, state, *i, *action, &steps[*i], is_cask).await;
+            if !outcome.blocked {
+                break false;
+            }
+            match await_forbidden_decision(socket, *i, attempt).await {
+                ForbiddenChoice::Retry => continue, // same row, same action, again
+                ForbiddenChoice::Continue => break false,
+                ForbiddenChoice::Stop => break true,
+            }
+        };
+        if stop_all {
             break; // "stop everything" → abandon the rest of the plan
         }
     }
@@ -995,42 +1010,100 @@ async fn clear_sudo_pw(state: &AppState) {
     *state.sudo_pw.lock().await = None;
 }
 
+/// What the user chose when a 403 held the Apply. THREE outcomes, because three
+/// things can honestly be wanted — and the UI now offers exactly three controls.
+/// (It used to offer two words for one message: "Retry" sent `forbidden-continue`,
+/// so it retried nothing, and `forbidden-stop` was unreachable dead code.)
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ForbiddenChoice {
+    /// Re-run the SAME action on the SAME row, then carry on with the rest.
+    Retry,
+    /// Skip this row (it keeps its `forbidden` mark) and run the rest of the plan.
+    Continue,
+    /// Abandon everything still to do.
+    Stop,
+}
+
+/// How many times ONE row may be retried inside a single Apply. Each retry is
+/// user-initiated so it cannot spin on its own, but an unbounded loop lets a user
+/// hang the Apply forever against a firewall that will not budge. Past the cap the
+/// pause offers only Continue/Stop.
+const MAX_FORBIDDEN_ATTEMPTS: u32 = 3;
+
+/// The wire word → the decision. Anything else is NOT an answer: the pause keeps
+/// holding (notably `open-forbidden`, which we serve while we hold).
+fn forbidden_choice(kind: &str) -> Option<ForbiddenChoice> {
+    match kind {
+        "forbidden-retry" => Some(ForbiddenChoice::Retry),
+        "forbidden-continue" => Some(ForbiddenChoice::Continue),
+        "forbidden-stop" => Some(ForbiddenChoice::Stop),
+        _ => None,
+    }
+}
+
+/// Is Retry still on the table after `attempt` tries? (`attempt` counts tries
+/// already made: 1 = the first run just failed.)
+fn retry_offered(attempt: u32) -> bool {
+    attempt < MAX_FORBIDDEN_ATTEMPTS
+}
+
+/// Defence in depth: a stale front could send `forbidden-retry` past the cap. Do
+/// not re-run the step then — move on rather than risk hanging the Apply.
+fn honour_choice(choice: ForbiddenChoice, attempt: u32) -> ForbiddenChoice {
+    if choice == ForbiddenChoice::Retry && !retry_offered(attempt) {
+        return ForbiddenChoice::Continue;
+    }
+    choice
+}
+
 /// A step was blocked by the firewall (403). PAUSE the Apply and wait for the user
-/// to decide — they go unblock the page, then tell us to carry on. Same shape as
+/// to decide — they go unblock the page, then tell us what to do. Same shape as
 /// obtain_sudo_pw: send a prompt, block on THIS socket until the answer arrives.
 ///
-/// Returns true to keep going with the rest of the plan, false to stop everything.
-/// A closed socket (window shut mid-pause) reads as "stop" — nothing should run on
+/// `attempt` = how many times this row has already run (1 after the first failure).
+/// It rides the pause message so the front can SAY which attempt this is — a second
+/// identical banner with no count reads as "nothing happened" — and so it can drop
+/// the Retry control once the cap is reached.
+///
+/// A closed socket (window shut mid-pause) reads as `Stop` — nothing should run on
 /// with nobody watching.
-async fn await_forbidden_decision(socket: &mut WebSocket, i: usize) -> bool {
+async fn await_forbidden_decision(
+    socket: &mut WebSocket,
+    i: usize,
+    attempt: u32,
+) -> ForbiddenChoice {
     let _ = socket
         .send(Message::Text(
-            json!({ "type": "forbidden-pause", "i": i }).to_string(),
+            json!({
+                "type": "forbidden-pause", "i": i,
+                "attempt": attempt, "canRetry": retry_offered(attempt)
+            })
+            .to_string(),
         ))
         .await;
     while let Some(Ok(msg)) = socket.recv().await {
         let Message::Text(txt) = msg else { continue };
         let parsed: serde_json::Value = serde_json::from_str(&txt).unwrap_or_default();
-        match parsed.get("type").and_then(|t| t.as_str()) {
-            // The user dealt with it (unblocked or gave up — their call either way).
-            Some("forbidden-continue") => return true,
-            Some("forbidden-stop") => return false,
-            // "Open blocked page" MUST keep working while we hold: it is the very
-            // gesture the pause exists for. Served here too, because the main
-            // handler loop isn't reading the socket while we own it.
-            Some("open-forbidden") => {
-                if let Some(url) = parsed.get("url").and_then(|v| v.as_str()) {
-                    if let Err(e) = crate::platform::open_url(url) {
-                        println!("[forbidden] failed to open {url}: {e}");
-                    } else {
-                        println!("[forbidden] opening browser: {url}");
-                    }
+        let kind = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        // The user dealt with it — retry it, skip it, or abandon the run. Their call.
+        if let Some(choice) = forbidden_choice(kind) {
+            return honour_choice(choice, attempt);
+        }
+        // "Open blocked page" MUST keep working while we hold: it is the very
+        // gesture the pause exists for. Served here too, because the main
+        // handler loop isn't reading the socket while we own it.
+        if kind == "open-forbidden" {
+            if let Some(url) = parsed.get("url").and_then(|v| v.as_str()) {
+                if let Err(e) = crate::platform::open_url(url) {
+                    println!("[forbidden] failed to open {url}: {e}");
+                } else {
+                    println!("[forbidden] opening browser: {url}");
                 }
             }
-            _ => {} // anything else is ignored while paused — nothing advances
         }
+        // Anything else is ignored while paused — nothing advances.
     }
-    false
+    ForbiddenChoice::Stop
 }
 
 // Benign exit codes (winget: "already installed / no applicable upgrade").
@@ -1277,6 +1350,39 @@ mod tests {
         // pinned cask → None (a pin owns the direction, keep install-pinned cmd)
         let pinned = brew_step("visual-studio-code", Some("1.130.0"));
         assert_eq!(forced_cask_upgrade_cmd(&pinned, Os::Darwin, true), None);
+    }
+
+    #[test]
+    fn forbidden_choice_parses_the_three_wire_words() {
+        use ForbiddenChoice::*;
+        assert_eq!(forbidden_choice("forbidden-retry"), Some(Retry));
+        assert_eq!(forbidden_choice("forbidden-continue"), Some(Continue));
+        assert_eq!(forbidden_choice("forbidden-stop"), Some(Stop));
+        // Anything else is NOT a decision — the pause keeps holding (`open-forbidden`
+        // is served while we hold, and must not be read as an answer).
+        assert_eq!(forbidden_choice("open-forbidden"), None);
+        assert_eq!(forbidden_choice("apply"), None);
+    }
+
+    #[test]
+    fn retry_is_offered_until_the_attempt_cap_then_only_continue_or_stop() {
+        // Each retry is user-initiated so it cannot spin on its own, but an
+        // unbounded loop lets a user hang the Apply forever against a firewall that
+        // will not budge. After MAX_FORBIDDEN_ATTEMPTS the pause stops offering it.
+        assert!(retry_offered(1));
+        assert!(retry_offered(MAX_FORBIDDEN_ATTEMPTS - 1));
+        assert!(!retry_offered(MAX_FORBIDDEN_ATTEMPTS));
+        assert!(!retry_offered(MAX_FORBIDDEN_ATTEMPTS + 1));
+    }
+
+    #[test]
+    fn a_retry_past_the_cap_degrades_to_continue() {
+        // Defence in depth: even if a stale front sends `forbidden-retry` after the
+        // cap, the loop must not re-run the step — it moves on instead of hanging.
+        use ForbiddenChoice::*;
+        assert_eq!(honour_choice(Retry, 1), Retry);
+        assert_eq!(honour_choice(Retry, MAX_FORBIDDEN_ATTEMPTS), Continue);
+        assert_eq!(honour_choice(Stop, MAX_FORBIDDEN_ATTEMPTS), Stop);
     }
 
     #[test]

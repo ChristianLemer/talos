@@ -93,6 +93,31 @@ export function profileState(profile, _active, isIn) {
   return "off";
 }
 
+// --- 403 recovery: which message a user gesture must send ---------------------
+//
+// Three OUTCOMES exist for a step the firewall blocked, and the server implements
+// all three. This maps a gesture to the wire message, so the words on the buttons
+// and the messages they send cannot drift apart (they DID: "Retry" used to send
+// `forbidden-continue`, which retries nothing — the row kept its `forbidden` mark
+// and the user had to hunt it down afterwards).
+//
+//   retry    → re-run the SAME action on the SAME row, then carry on   (paused only)
+//   continue → skip this row (keeps its `forbidden` mark), run the rest
+//   stop     → abandon the remaining plan
+//
+// `paused` = the server is holding the Apply loop on this row (`forbidden-pause`
+// arrived). When it is NOT holding, there is no loop to answer: a Retry is then a
+// plain row action, so this returns null and the caller sends `retry-step`.
+export const FORBIDDEN_GESTURES = ["retry", "continue", "stop"];
+
+export function forbiddenMessage(gesture, paused) {
+  if (!paused) return null; // no loop to answer → caller's own row-action path
+  if (gesture === "retry") return "forbidden-retry";
+  if (gesture === "continue") return "forbidden-continue";
+  if (gesture === "stop") return "forbidden-stop";
+  return null;
+}
+
 // Given a DESIRED state and the machine reality, the action a plain Apply would
 // take — or null if nothing to do. THIS is the rule the server executes and the
 // front previews; they must agree, so they call the same function.
