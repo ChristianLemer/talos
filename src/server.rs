@@ -1281,18 +1281,27 @@ async fn do_step(
             .await;
     }
 
-    // Re-detect presence AFTER a successful install/upgrade (like captureVersion) —
-    // and RE-EMIT a `state` to the front, so the fresh version shows RIGHT
-    // AWAY (before, it was only computed for the journal → the front kept
-    // "absent/no version" until a manual refresh). The front's `state` handler
-    // does setInstalledVersion + paintVersion, so nothing to change on the UI side.
-    let version = if ok && action != Action::Uninstall {
+    // Re-detect presence AFTER any successful action — and RE-EMIT a `state` to the
+    // front, so the fresh version shows RIGHT AWAY (before, it was only computed for
+    // the journal → the front kept "absent/no version" until a manual refresh). The
+    // front's `state` handler does setInstalledVersion + paintVersion.
+    //
+    // ⚠️ An uninstall is included, and `remember_presence` is NOT optional — both
+    // because the Apply re-scan is now SCOPED against `last_seen` (seeds_for_rescan).
+    // A row we acted on but never re-recorded keeps the presence the CONNECT scan saw,
+    // and the next Apply then reads desire == observation, skips the probe, and decides
+    // "nothing to do" against a state that no longer exists: uncheck + Apply (removes
+    // it), re-check + Apply → the install silently never happens. Every site that
+    // OBSERVES a presence must write it. There are three: scan_and_emit, the apply
+    // re-scan, and here.
+    let version = if ok {
         let step_c = step.clone();
         let p = tokio::task::spawn_blocking(move || detect_present_detailed(&step_c, os))
             .await
             .ok()
             .unwrap_or_default();
         let v = p.version.clone().unwrap_or_default();
+        remember_presence(state, i, p.clone()).await;
         let _ = socket
             .send(Message::Text(
                 json!({
@@ -1303,7 +1312,12 @@ async fn do_step(
                 .to_string(),
             ))
             .await;
-        v
+        // The journal records what an INSTALL/UPGRADE landed; a removal has no version.
+        if action == Action::Uninstall {
+            String::new()
+        } else {
+            v
+        }
     } else {
         String::new()
     };
@@ -1436,6 +1450,34 @@ mod tests {
             }
         }
         (on, off)
+    }
+
+    #[test]
+    fn a_stale_last_seen_makes_the_next_apply_skip_a_real_action() {
+        // THE invariant that makes the scoping safe over TIME, not just once.
+        //
+        // Scenario: the user unchecks a package and Applies. It uninstalls fine. Then
+        // they re-check it and Apply again. If `last_seen` still says "present" from
+        // the connect scan, this row reads as desire==observation → NOT a seed → never
+        // probed → `merge_presences` feeds the stale `present: true` to action_for,
+        // which answers "nothing to do". The install silently never happens.
+        //
+        // So: every site that OBSERVES a presence must write it to `last_seen`. This
+        // test pins the consequence rather than the call site, so it still bites if
+        // someone adds a fourth probe site later.
+        let after_uninstall = seen(false, "");
+        let stale = seen(true, "1.0");
+        // Fresh observation recorded → wanting it present again IS a seed.
+        assert_eq!(
+            seeds_for_rescan(&[0], &[], &[Some(after_uninstall)], &|_| false),
+            vec![0],
+            "a row observed absent must be re-probed when wanted present"
+        );
+        // Stale observation → the action is invisible. This is the failure mode.
+        assert!(
+            seeds_for_rescan(&[0], &[], &[Some(stale)], &|_| false).is_empty(),
+            "sanity: a stale `present` really does hide the install (hence the rule above)"
+        );
     }
 
     #[test]
