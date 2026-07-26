@@ -63,6 +63,11 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
 /// ad-hoc re-grant trap where the toggle looks ON but the new cdhash is denied).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppMgmtStatus {
+    /// Only ever CONSTRUCTED by the macOS write-probe, so on any other target the
+    /// variant is dead code in the bin — hence the cfg'd allow (CI runs clippy
+    /// `-D warnings` on Linux). It stays in the enum for all targets because
+    /// `as_str` and the wire protocol are cross-platform.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Granted,
     Missing,
     /// Non-macOS, or no suitable bundle to probe → never blocks.
