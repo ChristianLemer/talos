@@ -1,4 +1,4 @@
-// Port of platform.ts — Os + the shell wrapping (shell_probe / pty_shell).
+// Os + the shell wrapping (shell_probe / pty_shell).
 // The single source of "which OS and how to act on it".
 
 use std::path::PathBuf;
@@ -250,8 +250,9 @@ fn user_shell() -> String {
 /// Builds the POSIX Probe for a given shell (PURE — the shell path is injected).
 /// zsh/bash → `-ilc` (interactive + login): sources /etc/profile (system PATH via
 /// path_helper: /opt/homebrew) AND the user rc (.zshrc/.bashrc: ~/.local/bin,
-/// where claude, uv, pip --user… live). The Deno fix `/bin/sh -lc` captured ONLY the
-/// system PATH — hence the false "absent" on a tool installed in ~/.local/bin.
+/// where claude, uv, pip --user… live). ⚠️ `-lc` ALONE captures only the system PATH —
+/// that is what produced a false "absent" on a tool installed in ~/.local/bin. The
+/// interactive flag is what sources the user rc; do not drop it to "simplify".
 /// A bare /bin/sh (neither zsh nor bash) → `-lc` alone (sh does not read the zsh/bash rc).
 fn posix_probe(shell: &str, command: &str) -> Probe {
     let is_rc_shell = shell.ends_with("zsh") || shell.ends_with("bash");

@@ -315,7 +315,7 @@ async fn no_cache(req: axum::extract::Request, next: axum::middleware::Next) -> 
 
 // app.js does `new WebSocket(ws://location.host)` → root path "/". We tell
 // a WS upgrade apart from a normal HTML request by the presence of the Upgrade header
-// (like src/server.ts:909 which upgrades on the header, not on a fixed pathname).
+// (upgrade on the Upgrade header, not on a fixed pathname).
 async fn root_or_ws(ws: Option<WebSocketUpgrade>, state: Arc<AppState>) -> Response {
     match ws {
         Some(ws) => ws.on_upgrade(move |socket| handle_socket(socket, state)),
@@ -468,8 +468,9 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
             }
             // open-forbidden: the "Open blocked page" button of the 403 banner → opens
             // the blocked URL in the default browser, next to the panel, so the
-            // user approves the firewall access then Retry. Handler MISSING in the
-            // Deno→Rust port → the click fell into _ => {} and did nothing.
+            // user approves the firewall access then Retry. ⚠️ This handler was once
+            // absent, and the click fell into `_ => {}` and did nothing, silently —
+            // the same class of defect as the `diff` freeze. See LOCKING_CLIENT_MSGS.
             "open-forbidden" => {
                 if let Some(url) = parsed.get("url").and_then(|v| v.as_str()) {
                     if let Err(e) = crate::platform::open_url(url) {
@@ -786,7 +787,7 @@ fn seeds_for_rescan(
 /// does not trust the connection scan), repaints the pills, asks the
 /// SHARED rule action_for what to do, orders by dependencies (topo_sort), emits
 /// `apply-plan` (⚠️ which REMOVES the "Plotting the gallop…" veil — shortcut #1 from
-/// the spike fixed), then runs each step. Port of applyDiff (src/server.ts).
+/// the spike fixed), then runs each step.
 async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, off: Vec<usize>) {
     use crate::decision::{action_for, Action, Desired, MachineFacts};
     use crate::deps::{index_of_names, make_index, requires_reason, topo_sort, DepNode};
@@ -1021,7 +1022,7 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
         .await;
 }
 
-/// Port of runInPty (src/server.ts:266-348): streams the command into a pty,
+/// Streams the command into a pty,
 /// scans the 403 as it streams, ticks the watcher (Windows). The pty runs in a
 /// blocking thread; mpsc channel → async. RETURNS (code, forbidden, url) — the
 /// verdict (done/step/overlay) is left to the caller (do_step), like the TS.
@@ -1045,7 +1046,7 @@ async fn run_in_pty(
     };
 
     // Watcher (Windows only): tick 1200ms → looks for an installer window
-    // surfaced behind the panel, dedup by title. Root = our pid (like Deno.pid).
+    // surfaced behind the panel, dedup by title. Root = our own pid.
     #[cfg(target_os = "windows")]
     let (watch_stop, mut watch_rx) = {
         let (wtx, wrx) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
@@ -1305,7 +1306,6 @@ struct StepOutcome {
 
 /// Runs ONE step (install/upgrade/uninstall): streams the command, reads the exit
 /// code, emits `step` (running → ok/absent/fail/forbidden) and the 403 verdict.
-/// Port of doStep (src/server.ts:400-460).
 async fn do_step(
     socket: &mut WebSocket,
     state: &AppState,

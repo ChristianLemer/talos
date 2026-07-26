@@ -1,5 +1,5 @@
 //! selection.rs — the user's INTENT (the packages they toggled in/out
-//! by hand), persisted locally to the machine. Port of src/selection.ts.
+//! by hand), persisted locally to the machine.
 //!
 //! Distinct from machine presence, always re-detected live ("detect, don't
 //! remember" governs PRESENCE, NOT intent: a choice cannot be re-observed,

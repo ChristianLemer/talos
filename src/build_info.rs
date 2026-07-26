@@ -1,5 +1,5 @@
 //! build_info.rs — reads the STAMP baked by build.rs (compile-time env variables)
-//! and exposes it to the front. Rust counterpart of build-info.ts: {tag, change, sha, builtAt}.
+//! and exposes it to the front. Shape sent to the front: {tag, change, sha, builtAt}.
 //! The front (app.js showBuild) turns it into the title `Talos · <change>` and the footer
 //! `<tag> · build <change> · <sha> — <builtAt>`. Answers "which binary is really running?".
 

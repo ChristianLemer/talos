@@ -1,4 +1,4 @@
-// Port of detect.ts — tri-state presence (Some(true)/Some(false)/None). ASK the
+// Tri-state presence (Some(true)/Some(false)/None). ASK the
 // machine, never a journal. Never panics: a failed spawn → absent/undetermined.
 use crate::bundles::Step;
 use crate::managers::{managers, native_manager};

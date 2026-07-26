@@ -5,7 +5,7 @@
 //! is NOT the project root → `public/` not found → `<h1>index.html introuvable</h1>`.
 //!
 //! Here we embed `public/` INTO the binary at compile time (like
-//! `deno compile --include public`), relative to the crate root — thus independent of the
+//! relative to the crate root — thus independent of the
 //! cwd at runtime. `TALOS_PUBLIC` survives as a DEV escape hatch: present → we read the
 //! disk (live editing of `app.js` without recompiling); absent → sealed assets (release).
 

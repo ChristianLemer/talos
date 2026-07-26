@@ -1,5 +1,4 @@
 //! consent.rs — the install journal + the "share" consent, local to the machine.
-//! Port of src/consent.ts.
 //!
 //! Two facts live in the LOCAL per-machine data-dir (%LOCALAPPDATA%\Talos on
 //! Windows, ~/Library/Application Support/Talos on Mac — NEVER the shared exe

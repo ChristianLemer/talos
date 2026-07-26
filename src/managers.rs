@@ -1,4 +1,4 @@
-// Port of managers.ts — SystemManager: winget & brew = 1 route, 2 incarnations.
+// SystemManager: winget & brew = 1 route, 2 incarnations.
 // Commands = String (the pty/shell_probe runs them). PURE, testable parsers.
 use std::collections::HashMap;
 

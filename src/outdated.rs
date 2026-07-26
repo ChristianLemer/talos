@@ -1,4 +1,4 @@
-// Port of outdated.ts — a machine-wide scan via the native manager. Best-effort:
+// A machine-wide scan via the native manager. Best-effort:
 // no manager / any failure → empty map (safe direction "nothing outdated").
 use std::collections::HashMap;
 

@@ -1,4 +1,4 @@
-// Port of src/watch-window.ts — spots a foreign window (installer/UAC) that
+// Spots a foreign window (installer/UAC) that
 // pops up BEHIND the panel during an install. The Win32 P/Invoke lives ENTIRELY in
 // SCAN_SCRIPT (PowerShell); Rust only spawns + parses the output JSON.
 use serde::Deserialize;
@@ -25,8 +25,8 @@ pub fn parse_scan(stdout: &str) -> Scan {
     }
 }
 
-/// The PowerShell script — VERBATIM COPY of watch-window.ts (SCAN_SCRIPT, lines
-/// 53-120). Enumerates the visible windows of the process tree rooted at {ROOT_PID},
+/// The PowerShell script. Enumerates the visible windows of the process tree rooted
+/// at {ROOT_PID},
 /// excludes msedge/chrome/msedgewebview2/Talos + itself, and on the 1st foreign
 /// window: FlashWindowEx + ForceForeground. Emits a JSON line {found,title?,pushed}.
 pub const SCAN_SCRIPT: &str = r#"

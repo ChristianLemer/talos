@@ -1,6 +1,6 @@
 //! agent_content.rs — detection of the agent CONTENT present: Claude Code plugins
 //! (route `claude-plugin`) and standalone skills (route `skill`). Rust port of
-//! agent-content.ts, but NATIVE: disk reads + serde_json, NEVER a shell-out
+//! NATIVE: disk reads + serde_json, NEVER a shell-out
 //! to `claude`/`npx` (archi decision: everything as natively-parsed JSON — see
 //! memory talos-parsing-native-json). PURE and defensive parsing (a corrupted file
 //! "sees" nothing present — safe direction: never present if uncertain). The IO

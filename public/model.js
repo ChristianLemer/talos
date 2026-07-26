@@ -1,6 +1,6 @@
 // model.js — the Talos panel STATE, with ZERO DOM. The single source of truth
 // the view (app.js) projects from. Pure and importable, so it is unit-tested by
-// deno test just like decision.js. Rules live in decision.js; this module holds
+// tested under node --test just like decision.js. Rules live in decision.js; this module holds
 // the state and applies those rules to it.
 import {
   actionFor,

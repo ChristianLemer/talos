@@ -1,4 +1,4 @@
-// Port of bundles.ts — scan bundles/ → { bundles, steps }. Pure (serde_yaml), no
+// Scans bundles/ → { bundles, steps }. Pure (serde_yaml), no
 // pty/network. The route table: a package = a NEED satisfied by a named route.
 use serde::Deserialize;
 

@@ -1,4 +1,4 @@
-// Port of deps.ts — package dependencies (`requires:`) over the FUTURE state.
+// Package dependencies (`requires:`) over the FUTURE state.
 // A requirement is not "is X here now?" but "will X be here after the Apply?".
 // GLOBAL view (all packages) that per-step detection cannot have.
 use std::collections::{HashMap, HashSet};

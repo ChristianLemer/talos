@@ -1,4 +1,4 @@
-// Port of src/forbidden.ts — 403 firewall detector, PURE, manager-agnostic.
+// 403 firewall detector, PURE, manager-agnostic.
 use regex::Regex;
 
 /// 403 corporate-firewall in the output (streamed chunk or whole buffer).
