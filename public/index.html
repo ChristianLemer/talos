@@ -56,14 +56,21 @@
       #globalhint { font-size:12px; color:var(--dim); max-width:28ch; line-height:1.4; }
       #overall { font-size:12px; color:var(--dim); }
       #steps { padding:8px 12px; position:relative; min-height:180px; }
-      /* Refresh overlay: shown while the server re-scans presence BEFORE the plan
-         arrives (the silent gap). Covers the whole modifiable zone — the region
-         that will change is unknown until the scan produces the plan. Sober: dim
-         + centred title/message, NOT the full boot splash (which would read as a
-         restart). Hidden until .steps-refreshing lands on #steps. */
-      #steps-refresh { display:none; position:absolute; inset:0; z-index:20;
+      /* Re-scan veil: shown while the server re-scans presence BEFORE the plan
+         arrives (the silent gap). Covers EVERYTHING — `position:fixed` on a
+         top-level element, so it is not trapped in #steps' containing block the way
+         the first version was (which left the Apply bar, the bundle cards, the tabs
+         and the header crisp and clickable during the scan). The region that will
+         change is unknown until the plan arrives, and a crisp button invites a click
+         that cannot be honoured.
+         z-index sits above the sticky Apply bar (10) and the row copy buttons (2),
+         and BELOW the dialogs (50/60) and the boot splash (80) — a sudo prompt or a
+         403 modal raised during a scan must still be readable and answerable.
+         Sober on purpose: dim + blur + centred narration, NOT the boot splash, which
+         would read as a restart. Only the extent changed. */
+      #steps-refresh { display:none; position:fixed; inset:0; z-index:40;
         align-items:center; justify-content:center;
-        background:rgba(26,27,38,.82); backdrop-filter:blur(2px); border-radius:10px; }
+        background:rgba(26,27,38,.82); backdrop-filter:blur(2px); }
       .steps-refreshing #steps-refresh { display:flex; }
       .steps-refresh-inner { text-align:center; padding:24px; }
       /* Same accent-gradient title as the hero/splash — keeps the family. */
@@ -616,6 +623,26 @@
       <div class="splash-bar" id="splash-bar"><span></span></div>
     </div></div>
 
+    <!-- Re-scan veil: shown while the server re-scans presence BEFORE the plan
+         arrives (the silent gap after Apply). A TOP-LEVEL sibling on purpose — it
+         used to be an absolutely-positioned child of #steps, so `inset:0` resolved
+         to the package list alone and the sticky Apply bar, the bundle cards, the
+         tab strip and the header all stayed crisp AND CLICKABLE while the server
+         worked. The region that will change is unknown until the plan arrives, and
+         a crisp button INVITES a click that cannot be honoured. -->
+    <div id="steps-refresh">
+      <div class="steps-refresh-inner">
+        <div class="steps-refresh-title">Talos</div>
+        <!-- Narrated like the splash: the server emits one `rescan-progress` per
+             re-probed row, so this names the package instead of reciting a mood.
+             "Plotting the gallop…" is only the FIRST frame, before the first
+             verdict lands — never the whole wait. -->
+        <div class="steps-refresh-msg" id="refresh-now">Plotting the gallop…</div>
+        <div class="steps-refresh-count" id="refresh-count"></div>
+        <div class="splash-bar" id="refresh-bar"><span></span></div>
+      </div>
+    </div>
+
     <div id="overlay"><div class="overlay-card">
       <div class="spin">⏳</div>
       <h2 id="overlay-title"></h2>
@@ -781,22 +808,7 @@
           <span class="switch"><input type="checkbox" id="show-all"><span class="slider"></span></span>
         </label>
       </div>
-      <div id="steps">
-        <!-- Refresh overlay: fixed child of #steps, shown via .steps-refreshing on
-             the parent. render() appends bundles after it, so it survives. -->
-        <div id="steps-refresh">
-          <div class="steps-refresh-inner">
-            <div class="steps-refresh-title">Talos</div>
-            <!-- Narrated like the splash: the server emits one `rescan-progress` per
-                 re-probed row, so this names the package instead of reciting a mood.
-                 "Plotting the gallop…" is only the FIRST frame, before the first
-                 verdict lands — never the whole wait. -->
-            <div class="steps-refresh-msg" id="refresh-now">Plotting the gallop…</div>
-            <div class="steps-refresh-count" id="refresh-count"></div>
-            <div class="splash-bar" id="refresh-bar"><span></span></div>
-          </div>
-        </div>
-      </div>
+      <div id="steps"></div>
     </div>
 
     <div id="view-log" class="view">

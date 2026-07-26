@@ -522,6 +522,23 @@ function refreshLiveness() {
   if (refresh) refresh.disabled = busy;
 }
 
+// The re-scan veil covers the WHOLE window (position:fixed, top-level), so the
+// class rides <body> — not #steps, whose containing block used to trap it over the
+// package list while the Apply bar, bundle cards, tabs and header stayed crisp and
+// clickable during the scan.
+//
+// ⚠️ ONE pair of functions for every site, because a full-screen veil that STICKS is
+// far worse than a partial one: the window would be unusable, not just misleading.
+// Every clear path (apply-plan · done · socket close) calls hideRescanVeil().
+// `applyRunning` + refreshLiveness() still disable the buttons independently — the
+// veil communicates, the disable enforces. Keep both.
+function showRescanVeil() {
+  document.body.classList.add("steps-refreshing");
+}
+function hideRescanVeil() {
+  document.body.classList.remove("steps-refreshing");
+}
+
 // Apply. We send the DECIDED packages only, split into `on` (want present)
 // and `off` (want absent), using each package's EFFECTIVE decision (its own,
 // or inherited from its bundle). Everything else is auto → the server never
@@ -540,11 +557,12 @@ function applyScoped(scopeIdx) {
   refreshLiveness(); // lock every Apply button during the run
   overall.textContent = "applying…";
   // The server re-scans presence before it replies with the plan. No longer a
-  // SILENT gap: it narrates each re-probed package (`rescan-progress`). Dim #steps
-  // so it's visible and interaction is locked. Cleared on `apply-plan` (focus mode
-  // takes over) or `done` (nothing to do, no plan).
+  // SILENT gap: it narrates each re-probed package (`rescan-progress`). The veil
+  // covers the WHOLE window so nothing crisp invites a click we can't honour.
+  // Cleared on `apply-plan` (focus mode takes over), `done` (nothing to do, no
+  // plan) or a dropped socket.
   resetRefreshProgress(); // open on the resting frame, not the last run's tail
-  stepsEl.classList.add("steps-refreshing");
+  showRescanVeil();
   // Focus mode engages on the server's `apply-plan` reply (it computes the plan),
   // not here — so we show the exact set of steps that will run.
   ws.send(JSON.stringify({ type: "apply", on, off, scope: scopeIdx }));
@@ -1496,14 +1514,14 @@ ws.onmessage = (ev) => {
       // The server's full plan, in execution order. Narrow the screen to exactly
       // these steps — all of them stay visible throughout, so the whole to-do
       // list shows and progress follows down it.
-      stepsEl.classList.remove("steps-refreshing"); // scan done, plan is here
+      hideRescanVeil(); // scan done, plan is here
       enterFocusMode((msg.plan || []).map((p) => p.i));
       break;
     case "done":
       overall.textContent = msg.nothing ? "nothing to do" : "done";
       applyRunning = false;
       fbPaused = false; // the loop is over — no pause left to release
-      stepsEl.classList.remove("steps-refreshing"); // net: scan found nothing → no apply-plan
+      hideRescanVeil(); // net: scan found nothing → no apply-plan
       exitFocusMode(); // everything reappears — failures already open, stand out
       refreshLiveness(); // unlock; re-light what's still useful
       break;
@@ -1546,6 +1564,6 @@ ws.onmessage = (ev) => {
 };
 ws.onclose = () => {
   overall.textContent = "disconnected";
-  stepsEl.classList.remove("steps-refreshing"); // don't leave the dim stuck on
+  hideRescanVeil(); // don't leave the veil stuck on
   hideWait(); // don't leave the banner stuck on
 };
