@@ -53,14 +53,28 @@ fn main() {
         // Size/position persistence (see Cargo.toml). Registered BEFORE setup: the
         // plugin restores the saved state at the moment the "main" window is created.
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        // NATIVE window title = "Talos · <change>" (like the old Deno). On
-        // path A (WS, no IPC), the front does not drive the native window — the
-        // document.title from app.js does NOT propagate to the OS title bar. So we set it
-        // here, on the Rust side, with the build stamp (answers "which binary is running?").
+        // NATIVE window title = "Talos · <tag> · <change>". On path A (WS, no IPC), the
+        // front does not drive the native window — the document.title from app.js does NOT
+        // propagate to the OS title bar. So we set it here, on the Rust side, from the
+        // build stamp (answers "which binary is really running?").
+        //
+        // The TAG leads because it is the human-facing version. It used to be the change
+        // id alone, which read "Talos · git" on every released build: a release is built
+        // from a GIT clone on the CI runner, jj is absent, so build.rs falls back to
+        // change="git" — the title showed the name of the fallback instead of a version.
+        // The tag is authoritative there (GITHUB_REF_NAME). The change id still earns its
+        // place locally (it moves between two betas of the same tag), so keep it when it
+        // says something; drop the placeholders rather than print a word that means nothing.
         .setup(|app| {
             use tauri::Manager;
             if let Some(win) = app.get_webview_window("main") {
-                let _ = win.set_title(&format!("Talos · {}", build_info::CHANGE));
+                let change = build_info::CHANGE;
+                let vcs = if matches!(change, "git" | "unknown" | "") {
+                    String::new()
+                } else {
+                    format!(" · {change}")
+                };
+                let _ = win.set_title(&format!("Talos · {}{vcs}", build_info::TAG));
             }
             Ok(())
         })

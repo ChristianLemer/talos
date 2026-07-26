@@ -191,14 +191,19 @@ function makeProfileCard(p) {
   const needs = (p.needs ?? []).length
     ? `<span class="pc-needs">needs ${p.needs.join(" · ")}</span>`
     : "";
+  // TWO lines, not four. The examples ride on the title line (they qualify the
+  // name — "Base, i.e. Claude Code · Chiron" reads as one thought), and the `needs`
+  // sits at the right end of the explanation. Halving the card height matters when
+  // a dozen of them share the screen: less scrolling, more bundles seen at once.
   card.innerHTML =
     `<span class="pc-head"><span class="toggle pc-switch"><span class="knob"></span></span>` +
     `<span class="pc-emoji">${p.emoji || "🎯"}</span>` +
     `<span class="pc-title">${p.name}</span>` +
-    `<span class="pc-count"></span></span>` +
-    `<span class="pc-usage">${p.usage || p.description || ""}</span>` +
     `<span class="pc-highlights">${hl}</span>` +
-    needs;
+    `<span class="pc-count"></span></span>` +
+    `<span class="pc-body"><span class="pc-usage">${p.usage || p.description || ""}</span>` +
+    needs +
+    `</span>`;
   card.onclick = () => applyProfileClick(p.name);
   return card;
 }
