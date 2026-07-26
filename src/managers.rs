@@ -275,12 +275,18 @@ mod tests {
         // is ambiguous when several versions are installed — winget lists the
         // matches and waits, deadlocking a display-only row.
         let cmd = WINGET.uninstall("OpenJS.NodeJS");
-        assert!(cmd.contains("--all-versions"), "must remove every version: {cmd}");
+        assert!(
+            cmd.contains("--all-versions"),
+            "must remove every version: {cmd}"
+        );
         assert!(
             cmd.contains("--disable-interactivity"),
             "residual ambiguity must fail, not hang: {cmd}"
         );
-        assert!(cmd.contains("--accept-source-agreements"), "no agreement prompt: {cmd}");
+        assert!(
+            cmd.contains("--accept-source-agreements"),
+            "no agreement prompt: {cmd}"
+        );
     }
 
     #[test]

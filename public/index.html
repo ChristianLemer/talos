@@ -579,22 +579,34 @@
         background:linear-gradient(90deg,#7aa2f7,#bb9af7); -webkit-background-clip:text;
         background-clip:text; color:transparent; }
       .splash-subtitle { font-size:15px; color:var(--dim); margin:8px 0 20px; letter-spacing:.3px; }
-      .splash-quip { font-size:16px; color:#c0caf5; min-height:2.6em; line-height:1.4; transition:opacity .3s; }
+      /* The narration line: the package being probed RIGHT NOW. Fixed height so a
+         long name never shifts the bar below it. */
+      .splash-now { font-size:16px; color:#c0caf5; min-height:1.4em; line-height:1.4;
+                    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .splash-count { font-size:13px; color:var(--dim); margin-top:6px; font-variant-numeric:tabular-nums; }
       .splash-bar { margin-top:22px; height:3px; background:var(--line); border-radius:3px; overflow:hidden; }
+      /* INDETERMINATE (pre-scan): the sliding shuttle. Dropped the moment we know
+         the count — see .splash-bar.determinate. */
       .splash-bar span { display:block; height:100%; width:40%; border-radius:3px;
                          background:linear-gradient(90deg,#7aa2f7,#bb9af7); animation:slide 1.1s ease-in-out infinite; }
+      /* DETERMINATE: width = real progress, no animation. A bar that shuttles
+         forever says "unknown"; a bar that fills says "i of n". */
+      .splash-bar.determinate span { animation:none; width:0; transition:width .25s ease-out; }
       @keyframes slide { 0%{ transform:translateX(-100%) } 100%{ transform:translateX(280%) } }
     </style>
   </head>
   <body>
-    <!-- Startup splash with rotating quips, shown while we check the machine -->
+    <!-- Startup splash: NARRATES the scan (the package being checked now + i/n).
+         It does NOT entertain — the scan is serial and the server emits one event
+         per package, so the truth is available and gets shown. -->
     <div id="splash"><div class="splash-inner">
       <!-- Title placeholder until we have a good centaur logo. "Talos preparing
            the Centaur": the bronze guardian readies the mount (carbon+silicon). -->
       <div class="splash-title">Talos</div>
-      <div class="splash-subtitle">preparing the Centaur</div>
-      <div class="splash-quip" id="splash-quip"></div>
-      <div class="splash-bar"><span></span></div>
+      <div class="splash-subtitle">checking what's already on your machine</div>
+      <div class="splash-now" id="splash-now">starting up…</div>
+      <div class="splash-count" id="splash-count"></div>
+      <div class="splash-bar" id="splash-bar"><span></span></div>
     </div></div>
 
     <div id="overlay"><div class="overlay-card">

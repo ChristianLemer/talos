@@ -427,40 +427,64 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     }
 }
 
-/// CONCURRENT presence SCAN + emission to the front. Each probe launches a login shell
-/// (slow: sources /etc/profile + user rc), so we do NOT SERIALIZE (spawn_blocking);
-/// the machine-wide outdated (BATCHED, one command) runs in parallel. We collect
-/// everything, then emit `state` (+ `outdated` if present) in order, then `state-done`
-/// (unfreezes the UI). Called at connect AND on `rescan` (Refresh button — without this
-/// handler, the message fell into the void → the UI stayed veiled "forever").
+/// SERIAL presence SCAN, emitted as each verdict lands, then `state-done`
+/// (unfreezes the UI). Called at connect AND on `rescan` (Refresh button — without
+/// this handler, the message fell into the void → the UI stayed veiled "forever").
+///
+/// ⚠️ STRICTLY SERIAL, ON PURPOSE — do not "optimise" this back into a fan-out.
+/// The previous version spawn_blocking'd every probe at once. On Windows that is
+/// ~2 probes × 22 winget-routed packages = ~44 concurrent `powershell.exe`, of which
+/// ~22 are `winget list` fighting over winget's shared temp/cache — the very
+/// contention a "serial lock" had fixed pre-Tauri and that the Rust port silently
+/// dropped (memory windows-porting-regressions). Concurrency there bought latency,
+/// not speed.
+///
+/// Serial also makes the SCREEN honest: one probe runs at a time and its row is
+/// painted the moment it answers, so the accordion fills visibly instead of showing
+/// a frozen wall of "checking…" (which the old code made worse by awaiting the
+/// batched outdated BEFORE emitting anything, holding back verdicts already in hand).
+///
+/// The batched machine-wide outdated stays ONE command for the whole machine
+/// ("fewer processes, not more threads") — it runs first, serially, then the probes.
 async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
     let os = state.os;
     let steps = &state.plan.steps;
-    let scan_task = tokio::task::spawn_blocking(move || scan_outdated(os));
-    let mut probe_tasks = Vec::with_capacity(steps.len());
-    for step in steps.iter() {
-        let step = step.clone();
-        probe_tasks.push(tokio::task::spawn_blocking(move || {
-            detect_present_detailed(&step, os)
-        }));
-    }
-    let scan = scan_task.await.unwrap_or_default();
-    for (i, task) in probe_tasks.into_iter().enumerate() {
-        let p = task.await.unwrap_or_default();
-        let sid = steps[i].system_id.clone();
-        let version = p.version.clone().unwrap_or_default();
+    let started = std::time::Instant::now();
+    let scan = tokio::task::spawn_blocking(move || scan_outdated(os))
+        .await
+        .unwrap_or_default();
+    println!("[scan] outdated (batched) in {:?}", started.elapsed());
+    for (i, step) in steps.iter().enumerate() {
+        let step_owned = step.clone();
+        let probe_started = std::time::Instant::now();
+        let p = tokio::task::spawn_blocking(move || detect_present_detailed(&step_owned, os))
+            .await
+            .unwrap_or_default();
+        // Timing per package: this is the evidence for "is serial bearable?".
+        println!(
+            "[scan] {}/{} {} in {:?}",
+            i + 1,
+            steps.len(),
+            step.name,
+            probe_started.elapsed()
+        );
         let state_msg = json!({
             "type": "state", "i": i,
             "present": p.present, "reason": p.reason,
-            "version": version, "external": p.external,
+            "version": p.version.clone().unwrap_or_default(), "external": p.external,
             "probe": probe_json(&p.diag) // the proof: command + output + code
         });
         let _ = socket.send(Message::Text(state_msg.to_string())).await;
         if p.present == Some(true) {
-            let od = outdated_for(sid.as_deref(), &scan);
+            let od = outdated_for(step.system_id.as_deref(), &scan);
             emit_outdated_if(socket, i, od).await;
         }
     }
+    println!(
+        "[scan] TOTAL {:?} for {} packages",
+        started.elapsed(),
+        steps.len()
+    );
     // state-done — unfreezes the UI (removes the scan/refresh veil).
     let _ = socket
         .send(Message::Text(json!({ "type": "state-done" }).to_string()))
@@ -564,20 +588,27 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
     let want_on: HashSet<usize> = on.into_iter().collect();
     let want_off: HashSet<usize> = off.into_iter().collect();
 
-    // CONCURRENT live re-scan (presence) + batched outdated, like at connect.
-    let scan_task = tokio::task::spawn_blocking(move || scan_outdated(os));
-    let mut probe_tasks = Vec::with_capacity(steps.len());
-    for step in steps.iter() {
-        let step = step.clone();
-        probe_tasks.push(tokio::task::spawn_blocking(move || {
-            detect_present_detailed(&step, os)
-        }));
-    }
-    let scan = scan_task.await.unwrap_or_default();
+    // SERIAL live re-scan (presence) + batched outdated, like at connect.
+    // ⚠️ Serial on purpose — same reason as scan_and_emit: concurrent winget probes
+    // contend over winget's shared state. Do not fan this back out.
+    let started = std::time::Instant::now();
+    let scan = tokio::task::spawn_blocking(move || scan_outdated(os))
+        .await
+        .unwrap_or_default();
     let mut presences = Vec::with_capacity(steps.len());
-    for task in probe_tasks {
-        presences.push(task.await.unwrap_or_default());
+    for step in steps.iter() {
+        let step_owned = step.clone();
+        presences.push(
+            tokio::task::spawn_blocking(move || detect_present_detailed(&step_owned, os))
+                .await
+                .unwrap_or_default(),
+        );
     }
+    println!(
+        "[apply] re-scan TOTAL {:?} for {} packages",
+        started.elapsed(),
+        steps.len()
+    );
 
     // Future state per package: present now OR wanted-on, never if wanted-off.
     let nodes: Vec<DepNode> = steps

@@ -10,57 +10,48 @@ const b64dec = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 const dec = new TextDecoder();
 const rows = {}; // i → { details, badge, statusLabel, host, term }
 
-// --- startup splash: rotating quips while we check the machine ---
-const QUIPS = [
-  "Saddling up the centaur…",
-  "Half human, half horse, all business.",
-  "Teaching your machine to talk to the AI…",
-  "Counting hooves… four, good.",
-  "Polishing the bronze guardian…",
-  "Checking what's already on board…",
-  "Bow drawn, aiming at the dependencies…",
-  "No terminals were harmed in this setup.",
-  "Galloping through your PATH…",
-  "Brewing something better than coffee…",
-  // geekier batch
-  "sudo make me a sandwich…",
-  "Resolving dependencies (it's npm all the way down)…",
-  "Reticulating splines… wait, wrong installer.",
-  "git blame says it was working yesterday.",
-  "Spawning a pty, fork() and pray…",
-  "rm -rf /doubts…",
-  "Compiling… perfect time for a swordfight.",
-  "It's not a bug, it's an undocumented hoof.",
-  "while (!asleep) { installDependencies(); }",
-  "Exit code 0 — the sweetest two characters.",
-];
-// The splash lives STRICTLY for the duration of the scan: it appears when the
-// analysis starts and is dismissed the instant `state-done` fires (hideSplash).
-// No floor, no padding — the scan is often near-instant, so the splash may only
-// flash. That honesty is the point (splash work · step 1). The 12s timer is
-// a pure safety net (never fires if the scan answers first). The fade-out (~450ms)
+// --- startup splash: NARRATES the scan instead of entertaining during it ---
+// The scan is SERIAL (server.rs scan_and_emit) and the server emits one `state`
+// per package as its verdict lands. So "what is Talos doing right now?" has a
+// true answer at every instant — we show it. This replaced a carousel of rotating
+// quips, which was an admission that we could not describe the wait: on a slow
+// Windows box the scan runs ~25s, and 25s of jokes with no visible progress reads
+// as "it hung". Naming the package + i/n turns the same duration into a story.
+// DO NOT reintroduce filler here: if a wait cannot be described, describe THAT.
+//
+// The splash lives STRICTLY for the duration of the scan: it appears at load and
+// is dismissed when `state-done` fires (hideSplash). No floor, no padding — a fast
+// scan means it only flashes, and that honesty is the point. The safety-net timer
+// must outlast a realistic slow scan, else it lifts mid-scan and exposes the
+// half-painted accordion (the "second wait" people reported). The fade-out (~450ms)
 // is the disappearance itself, not added wait.
+const SPLASH_SAFETY_MS = 120000; // never fires if state-done answers first
 const splash = document.getElementById("splash");
-const quipEl = document.getElementById("splash-quip");
+const splashNow = document.getElementById("splash-now");
+const splashCount = document.getElementById("splash-count");
+const splashBar = document.getElementById("splash-bar");
 let splashDone = false;
-let qi = Math.floor(Date.now() % QUIPS.length);
-quipEl.textContent = QUIPS[qi];
-const quipTimer = setInterval(() => {
-  quipEl.style.opacity = "0";
-  setTimeout(() => {
-    qi = (qi + 1) % QUIPS.length;
-    quipEl.textContent = QUIPS[qi];
-    quipEl.style.opacity = "1";
-  }, 300);
-}, 2200);
+let scanTotal = 0; // package count, known once the plan is rendered
+let scanSeen = 0; // verdicts received so far
+
+// Announce the package about to be probed. `n` is the 1-based position.
+function splashProgress(name, n) {
+  if (splashDone) return;
+  splashNow.textContent = name ? `checking ${name}…` : "checking…";
+  if (scanTotal > 0) {
+    splashCount.textContent = `${n} of ${scanTotal}`;
+    splashBar.classList.add("determinate");
+    splashBar.firstElementChild.style.width = `${(n / scanTotal) * 100}%`;
+  }
+}
+
 function hideSplash() {
   if (splashDone) return;
   splashDone = true;
-  clearInterval(quipTimer);
   splash.classList.add("hide");
   setTimeout(() => splash.remove(), 450);
 }
-setTimeout(hideSplash, 12000); // safety net only — state-done normally hides it first
+setTimeout(hideSplash, SPLASH_SAFETY_MS); // safety net only — state-done normally hides it first
 
 // Shorter terminals (10 rows) — they scroll, and tall fixed boxes waste
 // vertical space on small screens. Smaller font on short viewports.
@@ -1183,6 +1174,11 @@ ws.onmessage = (ev) => {
   const msg = JSON.parse(ev.data);
   switch (msg.type) {
     case "plan":
+      // The plan is what makes the progress bar DETERMINATE: before it, we don't
+      // know how many packages there are, so the bar shuttles.
+      scanTotal = (msg.steps || []).length;
+      scanSeen = 0;
+      splashProgress(null, 0);
       render(
         msg.steps,
         msg.profiles || [],
@@ -1198,6 +1194,11 @@ ws.onmessage = (ev) => {
       renderLog(msg.consent, msg.history);
       break;
     case "state": // ground truth from the machine
+      // Narrate the SERIAL scan: this verdict just landed, so name the package and
+      // advance i/n. Serial is what makes this honest — with a fan-out there would
+      // be no single "current" package to name.
+      scanSeen += 1;
+      splashProgress(model.pkgs.get(msg.i)?.name, scanSeen);
       // Detection feeds PRESENCE only (the badge/label), never the decision —
       // your yellow choices are yours. Blue auto rows just reflect the machine.
       // present: true → present, false → absent, null → indeterminate (no route
