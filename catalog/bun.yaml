@@ -1,9 +1,16 @@
 # Bun — JavaScript runtime & package manager (Anthropic-owned, single binary).
-# Talos uses it as the JS launcher: `bun add -g` for global CLIs (Claude Code) and
-# `bunx` for the cross-agent skills CLI. Replaces the old Node.js/npm dependency —
-# one binary, no graphical installer, upgraded with a single command.
+# In NO bundle: nothing pulls it in, so on a clean machine it stays absent. Kept in
+# the catalogue for two real uses — someone who WANTS bun installs it in one click,
+# and a bun left behind by an earlier Talos revision (which routed Claude Code
+# through `bun add -g`) is still detected, upgradable and uninstallable.
+#
+# Why it stopped being the socle's JS launcher: Node.js has to be present anyway,
+# because published Claude plugins invoke a hardcoded `node` (see catalog/node.yaml).
+# Bun cannot satisfy that, so keeping it as the agent's installer meant carrying two
+# runtimes to gain nothing. The `bun:` route in src/bundles.rs still works and is
+# still tested — this is a routing decision, not a removal.
 name: Bun
-description: All-in-one JS runtime & package manager — the launcher for CLI agents and skills
+description: All-in-one JS runtime & package manager — optional, pulled by nothing
 brew: bun
 winget: Oven-sh.Bun # UNVERIFIED — confirm with `winget show` on Windows before release
 detect: bun --version

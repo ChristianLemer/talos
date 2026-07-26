@@ -4,6 +4,11 @@
 # in ~/.bun/bin — a dir nothing adds to PATH when bun came from brew/winget — so
 # it installs but stays "command not found" for the terminal, VSCode and Talos.
 # apply = converge (idempotent, sentinel block); check = dry-run (exit 0/1).
+#
+# Pulled by NOTHING now that Claude Code and the skills route through npm (npm's
+# global bin is already on PATH). It stays because it is exactly what someone who
+# opts into Bun needs next, and because a machine that took the bun route in an
+# earlier Talos revision may still be missing the PATH entry.
 name: Bun PATH
 description: Puts ~/.bun/bin on the shell PATH so bun-installed CLIs are found
 run: nu "{dir}/bun-path.nu" apply
