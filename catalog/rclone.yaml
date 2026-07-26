@@ -1,0 +1,14 @@
+# rclone — rsync for cloud storage: moves data between a machine and ~70 providers
+# (OneDrive, S3, Drive, SFTP…) under one grammar.
+#
+# category `cloud` (with the AWS CLI), NOT a new `data` one: the category is the
+# Catalog tab's grouping, so minting one for a single member buys a header and an
+# orphan. It ships in the DATA bundle — that's the work it serves (getting a dataset
+# where the tooling can reach it); the bundle says what it's for, the category says
+# what it is.
+name: rclone
+description: Rsync for cloud storage — sync data across OneDrive, S3, Drive and ~70 more
+winget: Rclone.Rclone
+brew: rclone
+detect: rclone --version
+category: [cloud]

@@ -3,9 +3,10 @@
 bundle: Data
 emoji: 📊
 usage: Work with data — Python tooling.
-highlights: [uv, astral]
+highlights: [uv, astral, rclone]
 description: Python package manager and AI tooling for data.
 needs: [Documents]
 packages:
   - uv
   - astral
+  - rclone
