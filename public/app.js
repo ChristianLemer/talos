@@ -63,6 +63,19 @@ function refreshProgress(name, nth, total) {
     refreshBar.firstElementChild.style.width = `${(nth / total) * 100}%`;
   }
 }
+// Refresh narrates through the same veil, but from a DIFFERENT source: the Apply
+// re-scan sends explicit `rescan-progress` messages, while a plain scan sends one
+// `state` per row in catalogue order. So we count those instead of adding a second
+// wire message for the same fact. `rescanTotal > 0` is the "a Refresh is narrating"
+// flag — the Apply path leaves it 0 and keeps its own explicit narration.
+let rescanSeen = 0;
+let rescanTotal = 0;
+function rescanProgress(i) {
+  if (rescanTotal <= 0) return; // not a Refresh → the Apply narrates itself
+  rescanSeen++;
+  refreshProgress(model.pkgs.get(i)?.name, rescanSeen, rescanTotal);
+}
+
 // Back to the resting frame, so the NEXT Apply doesn't open on the tail of the last
 // one ("12 of 12" under a bar already full would read as instantly finished).
 function resetRefreshProgress() {
@@ -1204,6 +1217,21 @@ document.getElementById("refresh-all").onclick = () => {
   refreshLiveness();
   paintProfiles();
   overall.textContent = "checking…";
+  // Refresh is the LONGEST wait in the app — it re-probes everything (the Apply
+  // re-scan is scoped, this is not, on purpose: it is the mitigation for what the
+  // scoping gives up). It used to get only a dim over #steps while the Apply got a
+  // narrated full-window veil, so the slower path was the less explained one. Same
+  // veil, same narration: the server emits one `state` per row in order, which
+  // rescanProgress counts (no new wire message needed).
+  rescanSeen = 0;
+  rescanTotal = Object.keys(rows).length;
+  resetRefreshProgress();
+  // Name the batched `outdated` step too. It runs BEFORE the first probe and costs
+  // ~1-2 s, so without this the veil opens on a frozen phrase for exactly as long as
+  // the wait people complained about. Measured at the click: 1.8 s of "Plotting the
+  // gallop…" before the first package name landed. Same line the Apply already shows.
+  refreshProgress("what's out of date", 0, 0);
+  showRescanVeil();
   ws.send(JSON.stringify({ type: "rescan" }));
 };
 // "Show all" — a UI preference (like advanced): the Bundles tab shows only
@@ -1416,6 +1444,7 @@ ws.onmessage = (ev) => {
       // be no single "current" package to name.
       scanSeen += 1;
       splashProgress(model.pkgs.get(msg.i)?.name, scanSeen);
+      rescanProgress(msg.i); // no-op unless a Refresh is narrating through the veil
       // Detection feeds PRESENCE only (the badge/label), never the decision —
       // your yellow choices are yours. Blue auto rows just reflect the machine.
       // present: true → present, false → absent, null → indeterminate (no route
@@ -1474,6 +1503,8 @@ ws.onmessage = (ev) => {
       // and un-dim — the general/bundle/row buttons come alive via refreshLiveness.
       scanning = false;
       stepsEl.classList.remove("scanning");
+      rescanTotal = 0; // stop counting; the Apply path narrates itself
+      hideRescanVeil(); // no-op at boot (the splash covers that), clears a Refresh
       refreshLiveness();
       paintProfiles();
       overall.textContent = "ready";
