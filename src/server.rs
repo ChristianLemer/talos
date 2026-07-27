@@ -744,6 +744,17 @@ async fn row_action(socket: &mut WebSocket, state: &AppState, i: usize, action: 
 ///   · its observed presence is indeterminate (`present: None`) — same reason
 ///   · it is flagged OUTDATED by the batched scan — desired present + observed
 ///     present is still an Upgrade, which is an action
+///   · it is PINNED and wanted present — see below
+///
+/// A pinned row is always a seed, and that needs saying because it is the one case
+/// presence cannot answer. A pin REPLACES "latest" as the reference, so `action_for`
+/// ignores the machine-wide `outdated` flag entirely when a pin is set. What decides
+/// is the installed VERSION against the pin. The pin cannot go stale (it is a literal
+/// in the YAML); the remembered version can. Upgrade a pinned package by hand between
+/// the connect scan and an Apply and we would answer "satisfied" against the old
+/// number — and in the other direction a remembered version above the pin yields
+/// Downgrade, the only destructive path (uninstall + reinstall), decided on data
+/// nobody re-checked.
 ///
 /// ⚠️ The trade-off, stated rather than hidden: a row that is present, wanted
 /// present and current is no longer re-probed, so a MANUAL UNINSTALL between the
@@ -758,8 +769,15 @@ fn seeds_for_rescan(
     off: &[usize],
     last_seen: &[Option<crate::detect::Presence>],
     outdated: &dyn Fn(usize) -> bool,
+    pinned: &dyn Fn(usize) -> bool,
 ) -> Vec<usize> {
     let could_act = |i: usize, want_present: bool| -> bool {
+        // A pin is decided by the installed VERSION, which presence cannot report.
+        // Only for want_present: an uninstall does not care what version is there,
+        // and that case is already a seed via the desire mismatch.
+        if want_present && pinned(i) {
+            return true;
+        }
         match last_seen.get(i).and_then(|p| p.as_ref()) {
             // Never observed, or observed indeterminate → we don't know, so look.
             None => true,
@@ -835,7 +853,22 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
             .map(|s| is_outdated_now(outdated_for(s.system_id.as_deref(), &scan)))
             .unwrap_or(false)
     };
-    let seeds = seeds_for_rescan(&on, &off, &state.last_seen.lock().await, &is_outdated_row);
+    // A pin makes the installed VERSION the deciding fact, and presence cannot report
+    // it — so a pinned row is always probed. `trim` because the pin is author-written
+    // YAML: `version: "0.113.1 "` is one keystroke away.
+    let is_pinned_row = |i: usize| -> bool {
+        steps
+            .get(i)
+            .and_then(|s| s.pin.as_deref())
+            .is_some_and(|p| !p.trim().is_empty())
+    };
+    // The guard is BOUND, not passed as a temporary: a temporary would live to the end
+    // of the statement while the closures run, which is one refactor away from a
+    // self-deadlock if a closure ever needs `state`.
+    let seeds = {
+        let seen = state.last_seen.lock().await;
+        seeds_for_rescan(&on, &off, &seen, &is_outdated_row, &is_pinned_row)
+    };
     let name_idx = index_of_names(steps.iter().map(|s| s.name.as_str()));
     let requires: Vec<Vec<String>> = steps.iter().map(|s| s.requires.clone()).collect();
     let scope = crate::deps::rescan_scope(&requires, &name_idx, &seeds);
@@ -879,12 +912,19 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
     );
     // Un-probed rows keep their last OBSERVED presence — never an invented `false`.
     //
-    // Note the invariant that makes this safe rather than merely better: every presence
-    // this function actually READS is fresh. `requires_reason` runs only over the probed
-    // rows, and it reads the requirements of those rows — which rescan_scope pulled in,
-    // so they are probed too. `topo_sort` only draws edges between packages IN the plan,
-    // and the plan is a subset of the diff. The remembered values fill the vector so the
-    // indices line up; they are not what the decisions rest on.
+    // Note the invariant that makes this safe rather than merely better: every fact a
+    // DECISION rests on is fresh. `requires_reason` runs only over the probed rows, and
+    // it reads the requirements of those rows — which rescan_scope pulled in, so they
+    // are probed too. `topo_sort` only draws edges between packages IN the plan, and the
+    // plan is a subset of the diff. The remembered values fill the vector so the indices
+    // line up; they are not what the decisions rest on.
+    //
+    // ⚠️ That claim held only because seeds_for_rescan covers every fact `action_for`
+    // reads — and it once did NOT: a PINNED row reads the installed VERSION, which
+    // presence cannot report, and was excluded when its presence matched the desire. So
+    // an upgrade/downgrade against the pin was decided on a remembered version. Fixed by
+    // the pin clause in seeds_for_rescan. If a future fact joins MachineFacts, it must
+    // join the seed predicate too, or this invariant quietly becomes false again.
     let presences = merge_presences(steps.len(), &probed, &state.last_seen.lock().await);
 
     // Future state per package: present now OR wanted-on, never if wanted-off.
@@ -1594,6 +1634,38 @@ mod tests {
     }
 
     #[test]
+    fn a_pinned_row_is_always_a_seed() {
+        // A pin REPLACES "latest" as the reference, so `action_for` ignores the
+        // machine-wide `outdated` flag when a pin is set. Consequence: a pinned row
+        // that is present and wanted present looks converged to a presence-only test
+        // and was never re-probed — while the thing that actually decides is its
+        // installed VERSION, read from `last_seen`.
+        //
+        // The pin itself cannot go stale (it is a literal in the YAML). The remembered
+        // version can. Upgrade Nushell by hand between the connect scan and an Apply
+        // and Talos answers "satisfied" against the old number. The reverse is worse:
+        // a remembered version ABOVE the pin yields Downgrade — the only destructive
+        // path, uninstall+reinstall — decided on data nobody re-checked.
+        let last_seen = vec![Some(seen(true, "0.113.0"))];
+        assert_eq!(
+            seeds_for_rescan(&[0], &[], &last_seen, &|_| false, &|i| i == 0),
+            vec![0],
+            "a pinned row must be re-probed even when presence matches and it is not outdated"
+        );
+        // Unpinned, present, wanted, not outdated → still excluded. The pin clause
+        // must not widen the scoping back into probing everything.
+        assert!(seeds_for_rescan(&[0], &[], &last_seen, &|_| false, &|_| false).is_empty());
+        // A pinned row wanted ABSENT is governed by presence, not by the pin: it is
+        // already a seed via the desire mismatch, and the pin is irrelevant to an
+        // uninstall. No special case needed — assert it stays out of double-counting.
+        let present = vec![Some(seen(true, "0.113.0"))];
+        assert_eq!(
+            seeds_for_rescan(&[], &[0], &present, &|_| false, &|i| i == 0),
+            vec![0]
+        );
+    }
+
+    #[test]
     fn a_stale_last_seen_makes_the_next_apply_skip_a_real_action() {
         // THE invariant that makes the scoping safe over TIME, not just once.
         //
@@ -1613,13 +1685,13 @@ mod tests {
         let stale = seen(true, "1.0");
         // Fresh observation recorded → wanting it present again IS a seed.
         assert_eq!(
-            seeds_for_rescan(&[0], &[], &[Some(after_uninstall)], &|_| false),
+            seeds_for_rescan(&[0], &[], &[Some(after_uninstall)], &|_| false, &|_| false),
             vec![0],
             "a row observed absent must be re-probed when wanted present"
         );
         // Stale observation → the action is invisible. This is the failure mode.
         assert!(
-            seeds_for_rescan(&[0], &[], &[Some(stale)], &|_| false).is_empty(),
+            seeds_for_rescan(&[0], &[], &[Some(stale)], &|_| false, &|_| false).is_empty(),
             "a stale `present` really does hide the install — hence the rule above"
         );
     }
@@ -1678,7 +1750,7 @@ mod tests {
             .iter()
             .map(|&want| Some(seen(want, "1.0"))) // machine already matches
             .collect();
-        let seeds = seeds_for_rescan(&on, &off, &last_seen, &|_| false);
+        let seeds = seeds_for_rescan(&on, &off, &last_seen, &|_| false, &|_| false);
         assert!(
             seeds.is_empty(),
             "nothing to do → nothing to probe, got {seeds:?}"
@@ -1691,7 +1763,7 @@ mod tests {
         // → uninstall pending. Both must be re-probed before acting.
         let last_seen = vec![Some(seen(false, "")), Some(seen(true, "1.0"))];
         assert_eq!(
-            seeds_for_rescan(&[0], &[1], &last_seen, &|_| false),
+            seeds_for_rescan(&[0], &[1], &last_seen, &|_| false, &|_| false),
             vec![0, 1]
         );
     }
@@ -1702,9 +1774,9 @@ mod tests {
         // behind: an upgrade IS an action. The batched outdated scan runs first, so
         // this is known before the seeds are chosen.
         let last_seen = vec![Some(seen(true, "1.0"))];
-        assert!(seeds_for_rescan(&[0], &[], &last_seen, &|_| false).is_empty());
+        assert!(seeds_for_rescan(&[0], &[], &last_seen, &|_| false, &|_| false).is_empty());
         assert_eq!(
-            seeds_for_rescan(&[0], &[], &last_seen, &|i| i == 0),
+            seeds_for_rescan(&[0], &[], &last_seen, &|i| i == 0, &|_| false),
             vec![0]
         );
     }
@@ -1715,12 +1787,15 @@ mod tests {
         // do" are different claims — probe it.
         let last_seen = vec![None, None];
         assert_eq!(
-            seeds_for_rescan(&[0], &[1], &last_seen, &|_| false),
+            seeds_for_rescan(&[0], &[1], &last_seen, &|_| false, &|_| false),
             vec![0, 1]
         );
         // Also when the vector is simply SHORTER than the plan (a row past its end
         // has never been observed either).
-        assert_eq!(seeds_for_rescan(&[5], &[], &[], &|_| false), vec![5]);
+        assert_eq!(
+            seeds_for_rescan(&[5], &[], &[], &|_| false, &|_| false),
+            vec![5]
+        );
     }
 
     #[test]
@@ -1728,7 +1803,10 @@ mod tests {
         // Probed once but indeterminate (`present: None` — e.g. no practicable route
         // on this OS). Not a match with any desire, so it stays in.
         let last_seen = vec![Some(crate::detect::Presence::default())];
-        assert_eq!(seeds_for_rescan(&[0], &[], &last_seen, &|_| false), vec![0]);
+        assert_eq!(
+            seeds_for_rescan(&[0], &[], &last_seen, &|_| false, &|_| false),
+            vec![0]
+        );
     }
 
     #[test]
@@ -1743,7 +1821,7 @@ mod tests {
             Some(seen(false, "")),
             Some(seen(true, "1.0")),
         ];
-        let seeds = seeds_for_rescan(&[0, 1, 2], &[], &last_seen, &|_| false);
+        let seeds = seeds_for_rescan(&[0, 1, 2], &[], &last_seen, &|_| false, &|_| false);
         assert_eq!(seeds, vec![1], "only the pending install seeds");
         let mut scope: Vec<usize> = crate::deps::rescan_scope(&requires, &name_idx, &seeds)
             .into_iter()
