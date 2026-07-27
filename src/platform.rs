@@ -99,13 +99,45 @@ pub fn app_management_status(os: Os) -> AppMgmtStatus {
     }
 }
 
-/// macOS write-probe: find a real .app in /Applications we don't own, try to
-/// create+remove a witness file inside its Contents/. PermissionDenied → Missing;
-/// success → Granted; nothing suitable to probe → NotApplicable (don't block).
+/// What one write attempt inside an app bundle told us. The distinction that
+/// matters is WHICH refusal we got, and Rust's `ErrorKind::PermissionDenied` hides
+/// it: EACCES and EPERM both land there.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AppMgmtProbe {
+    /// The witness file was created (and removed) → we may modify this bundle.
+    Wrote,
+    /// EACCES — an ordinary POSIX refusal: the directory's mode/owner exclude us.
+    /// Says NOTHING about App Management; a root:wheel 755 bundle refuses this way
+    /// whether the permission is granted or not.
+    PosixRefused,
+    /// EPERM on a path POSIX would have allowed → the refusal came from TCC, i.e.
+    /// App Management is missing. This is the only real signal.
+    TccRefused,
+    /// Anything else (read-only volume, transient IO, unreadable metadata).
+    Inconclusive,
+}
+
+/// The verdict ONE probe supports, or `None` when it is not evidence and the caller
+/// must keep looking. Pure, so the rule is testable without touching /Applications.
+///
+/// ⚠️ `PosixRefused` must NOT answer Missing. That was the bug: with 38 of 41
+/// root-owned bundles refusing by plain POSIX, and the probe returning on the first
+/// one it met, the answer was Missing forever — grant the permission, reboot, and the
+/// banner stayed. A refusal is only meaningful when POSIX would have said yes.
+pub fn appmgmt_verdict(p: AppMgmtProbe) -> Option<AppMgmtStatus> {
+    match p {
+        AppMgmtProbe::Wrote => Some(AppMgmtStatus::Granted),
+        AppMgmtProbe::TccRefused => Some(AppMgmtStatus::Missing),
+        AppMgmtProbe::PosixRefused | AppMgmtProbe::Inconclusive => None,
+    }
+}
+
+/// macOS write-probe: try to create+remove a witness file inside a bundle's
+/// `Contents/` that POSIX says we may write, and read WHICH error comes back.
+/// EPERM → TCC refused → Missing; success → Granted; EACCES → not evidence, keep
+/// looking; nothing conclusive anywhere → NotApplicable (never block on a guess).
 #[cfg(target_os = "macos")]
 fn probe_app_management() -> AppMgmtStatus {
-    use std::io::ErrorKind;
-    use std::os::unix::fs::MetadataExt;
     let apps = match std::fs::read_dir("/Applications") {
         Ok(rd) => rd,
         Err(_) => return AppMgmtStatus::NotApplicable,
@@ -119,30 +151,99 @@ fn probe_app_management() -> AppMgmtStatus {
         if !contents.is_dir() {
             continue;
         }
-        // ONLY probe ROOT-OWNED bundles. A user-owned app is always writable by
-        // its owner regardless of App Management, so writing there proves nothing
-        // (the false-Granted bug: with the permission denied, a user-owned app
-        // still accepts the write). App Management gates modifying apps you don't
-        // own — root-owned bundles (pkg/self-updater installed, e.g. VS Code) are
-        // exactly that protected set.
-        match std::fs::metadata(&contents) {
-            Ok(m) if m.uid() == 0 => {}
-            _ => continue, // not root-owned (or unreadable) → not a valid probe target
+        // Probe a bundle POSIX says we MAY write, and read WHICH refusal comes back.
+        //
+        // ⚠️ The previous rule — "only probe root-owned bundles" — looked right and was
+        // the bug. On a real Mac, 38 of 41 root-owned bundles are root:wheel mode 755,
+        // so the write is refused by plain POSIX (EACCES) no matter what TCC says. The
+        // probe returned on the first one it met (read_dir order is arbitrary) and
+        // answered Missing forever: grant App Management, reboot, banner still there.
+        // Confirmed against TCC.db, which said auth_value=2 (granted) at the time.
+        //
+        // Note also why /Applications is a MIXTURE of owners, which is normal: brew or
+        // a .pkg lays the outer .app down as root, then an app's own updater rewrites
+        // `Contents/` as the logged-in user and becomes its owner. So ownership tells
+        // you who wrote last, not whether the bundle is protected.
+        //
+        // What DOES mean something: a refusal on a path our uid+mode allow. That can
+        // only come from TCC → EPERM. So skip anything POSIX would refuse anyway.
+        let Ok(meta) = std::fs::metadata(&contents) else {
+            continue; // unreadable → no evidence
+        };
+        // A valid target needs BOTH conditions, and each one rules out a real false
+        // verdict measured on this machine:
+        //   · POSIX must ALLOW us — else the refusal is EACCES noise (38 of 41
+        //     root-owned bundles are root:wheel 755) and we would read "not the owner"
+        //     as "permission missing". This was the reported bug.
+        //   · the bundle must NOT be ours — a bundle we own accepts the write even when
+        //     App Management is DENIED (verified: a client with TCC auth_value=0 wrote
+        //     into a user-owned bundle without complaint), so it would answer Granted
+        //     while the permission is refused. That is the older false-Granted bug the
+        //     previous comment warned about, and it was right to.
+        // Both together, the write can only be refused by TCC — which is the signal.
+        if !posix_writable(&meta) || is_ours(&meta) {
+            continue;
         }
         let witness = contents.join(".talos-appmgmt-probe");
-        match std::fs::File::create(&witness) {
+        let outcome = match std::fs::File::create(&witness) {
             Ok(_) => {
                 let _ = std::fs::remove_file(&witness);
-                return AppMgmtStatus::Granted;
+                AppMgmtProbe::Wrote
             }
-            Err(e) if e.kind() == ErrorKind::PermissionDenied => {
-                return AppMgmtStatus::Missing;
-            }
-            Err(_) => continue,
+            Err(e) => classify_write_error(&e),
+        };
+        if let Some(verdict) = appmgmt_verdict(outcome) {
+            return verdict;
         }
     }
-    // No root-owned bundle to probe → we can't constate; don't block.
+    // Nothing conclusive anywhere → we cannot constate; never block on a guess.
     AppMgmtStatus::NotApplicable
+}
+
+/// Would POSIX alone let US write into this directory? Owner-writable and ours, or
+/// group-writable and we are in the group, or world-writable. Used to skip probe
+/// targets whose refusal would say nothing about App Management.
+#[cfg(target_os = "macos")]
+fn posix_writable(m: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let mode = m.mode();
+    if mode & 0o002 != 0 {
+        return true; // world-writable
+    }
+    // Our own uid/gid, without a direct `libc` dependency: compare against a file we
+    // certainly own. $HOME's metadata gives both, and if it is unreadable we fall back
+    // to "not writable", which only makes the probe skip this target — never a wrong
+    // verdict.
+    let Some(me) = std::env::var_os("HOME").and_then(|h| std::fs::metadata(h).ok()) else {
+        return mode & 0o002 != 0;
+    };
+    (m.uid() == me.uid() && mode & 0o200 != 0) || (m.gid() == me.gid() && mode & 0o020 != 0)
+}
+
+/// Do WE own this directory? A bundle we own accepts the write regardless of App
+/// Management, so it can never prove the permission is granted.
+#[cfg(target_os = "macos")]
+fn is_ours(m: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match std::env::var_os("HOME").and_then(|h| std::fs::metadata(h).ok()) {
+        Some(me) => m.uid() == me.uid(),
+        None => false, // cannot tell → treat as not ours; the write outcome still decides
+    }
+}
+
+/// EPERM vs EACCES — the distinction `ErrorKind::PermissionDenied` erases. EPERM on a
+/// POSIX-writable path is TCC saying no; EACCES is the filesystem saying no.
+#[cfg(target_os = "macos")]
+fn classify_write_error(e: &std::io::Error) -> AppMgmtProbe {
+    // Numeric on purpose: EPERM=1 and EACCES=13 are fixed by POSIX and identical on
+    // every Darwin, and hardcoding them avoids a direct `libc` dependency for two ints.
+    const EPERM: i32 = 1;
+    const EACCES: i32 = 13;
+    match e.raw_os_error() {
+        Some(EPERM) => AppMgmtProbe::TccRefused,
+        Some(EACCES) => AppMgmtProbe::PosixRefused,
+        _ => AppMgmtProbe::Inconclusive,
+    }
 }
 
 /// Anything not windows/darwin → linux (the shell family we support there). Never panics.
@@ -436,6 +537,28 @@ mod tests {
     }
 
     #[test]
+    fn appmgmt_verdict_ignores_a_plain_posix_refusal() {
+        // THE bug this pins, measured on a real Mac: of 41 root-owned bundles in
+        // /Applications, 38 refuse the write with EACCES — an ordinary POSIX refusal
+        // (root:wheel, mode 755, we are not root). No App Management grant can ever
+        // change that. Only 2 refuse with EPERM, which IS the TCC signal.
+        //
+        // Rust maps BOTH errnos to ErrorKind::PermissionDenied, so the old probe read
+        // "I am not the owner" as "the permission is missing" — and since it returned
+        // on the FIRST root-owned bundle it met (read_dir order is arbitrary), it
+        // answered Missing forever, whatever the user configured. Exactly the reported
+        // symptom: grant it, reboot, banner still there.
+        use AppMgmtProbe::*;
+        // Not writable by us anyway → the probe proves nothing about TCC. Keep looking.
+        assert_eq!(appmgmt_verdict(PosixRefused), None);
+        // Writable per POSIX, yet refused → that refusal can only be TCC.
+        assert_eq!(appmgmt_verdict(TccRefused), Some(AppMgmtStatus::Missing));
+        assert_eq!(appmgmt_verdict(Wrote), Some(AppMgmtStatus::Granted));
+        // Anything else (transient IO, read-only volume…) is not evidence either.
+        assert_eq!(appmgmt_verdict(Inconclusive), None);
+    }
+
+    #[test]
     fn appmgmt_non_macos_is_na() {
         assert_eq!(
             app_management_status(Os::Windows),
@@ -452,5 +575,19 @@ mod tests {
         // A "MacOS" folder that is NOT inside a .app → no magic climb-out.
         let exe = std::path::Path::new("/random/MacOS/talos");
         assert_eq!(exe_sibling_dir(exe), PathBuf::from("/random/MacOS"));
+    }
+}
+
+#[cfg(test)]
+mod appmgmt_live {
+    /// LIVE probe on this machine — ignored by default because the answer depends on
+    /// the operator's own TCC state, so it must never gate CI. Run it deliberately:
+    ///   cargo test --bins appmgmt_live -- --ignored --nocapture
+    /// and compare with what TCC.db says for be.lemer.talos.
+    #[test]
+    #[ignore]
+    fn what_does_this_machine_say() {
+        let v = super::app_management_status(super::current_os());
+        println!("app_management_status() = {}", v.as_str());
     }
 }
