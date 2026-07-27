@@ -1603,9 +1603,12 @@ mod tests {
         // probed → `merge_presences` feeds the stale `present: true` to action_for,
         // which answers "nothing to do". The install silently never happens.
         //
-        // So: every site that OBSERVES a presence must write it to `last_seen`. This
-        // test pins the consequence rather than the call site, so it still bites if
-        // someone adds a fourth probe site later.
+        // ⚠️ SCOPE OF THIS TEST, stated plainly: it DOCUMENTS why the invariant
+        // matters, it does not enforce it. `seeds_for_rescan` was never the faulty
+        // part — the missing `remember_presence` call in `do_step` was. Deleting that
+        // call leaves this test green (checked, by deleting it). The enforcement lives
+        // in `every_presence_observation_is_recorded` below, which reads the call
+        // sites; keep the two together.
         let after_uninstall = seen(false, "");
         let stale = seen(true, "1.0");
         // Fresh observation recorded → wanting it present again IS a seed.
@@ -1617,8 +1620,47 @@ mod tests {
         // Stale observation → the action is invisible. This is the failure mode.
         assert!(
             seeds_for_rescan(&[0], &[], &[Some(stale)], &|_| false).is_empty(),
-            "sanity: a stale `present` really does hide the install (hence the rule above)"
+            "a stale `present` really does hide the install — hence the rule above"
         );
+    }
+
+    #[test]
+    fn every_presence_observation_is_recorded() {
+        // THE enforcing guard. Three sites call `detect_present_detailed`; every one
+        // of them MUST hand the verdict to `remember_presence`, because the Apply
+        // re-scan now narrows against `last_seen` and a site that observes without
+        // recording makes a real action invisible (uncheck+Apply removes it,
+        // re-check+Apply answers "nothing to do" against a state that is gone).
+        //
+        // Text-level, deliberately: `do_step` and `scan_and_emit` need a live socket
+        // and a live pty, so no unit test can reach them — but the defect is the
+        // ABSENCE OF A CALL, which the source shows exactly. Same technique as
+        // test/veil.test.mjs. Verified to bite: deleting `do_step`'s call fails this.
+        let src = include_str!("server.rs");
+        // Ignore this test module, or its own mentions would satisfy the assertions.
+        let code = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+
+        // Assert PER SITE rather than by counting: a raw count is satisfied by any
+        // four mentions anywhere, which is how a guard ends up not guarding. Each
+        // probe site is named by the comment that introduces it, and the recording
+        // call must appear in the block that follows.
+        for (site, anchor) in [
+            ("the connect / Refresh scan", "// Remember the verdict:"),
+            ("the Apply re-scan", "// Narrate BEFORE probing:"),
+            (
+                "do_step's post-action re-probe",
+                "// Re-detect presence AFTER any successful action",
+            ),
+        ] {
+            let at = code
+                .find(anchor)
+                .unwrap_or_else(|| panic!("{site}: anchor comment gone — re-point this test"));
+            assert!(
+                code[at..(at + 1600).min(code.len())].contains("remember_presence(state"),
+                "{site} observes a presence but does not record it → the next Apply \
+                 narrows against a stale `last_seen` and a real action becomes invisible"
+            );
+        }
     }
 
     #[test]

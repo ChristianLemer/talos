@@ -980,6 +980,8 @@ function paintFbAttempt(i, attempt, canRetry) {
       el.textContent = note;
       el.hidden = !note;
     }
+    // The server is holding again → the controls mean something again.
+    setFbControlsEnabled(i, true);
     const retryBtn = r.fbBanner.querySelector('[data-fb="retry"]');
     if (retryBtn) retryBtn.hidden = !canRetry;
     // Abandoning the run is only meaningful while a run is held.
@@ -1002,6 +1004,18 @@ function dismissFbModal() {
   fbEl.classList.remove("show");
   fbActive = null;
   fbActiveUrl = null;
+}
+
+// The row banner's three controls only mean something while the server is HOLDING
+// for a decision. During the retry it started they have nothing to answer, so they
+// are disabled rather than left clickable-and-inert. Re-enabled by the next
+// `forbidden-pause` (paintFbAttempt), or moot once the banner is cleared.
+function setFbControlsEnabled(i, on) {
+  const r = rows[i];
+  if (!r || !r.fbBanner) return;
+  for (const b of r.fbBanner.querySelectorAll(".fb-banner-actions button")) {
+    b.disabled = !on;
+  }
 }
 
 function clearForbidden(i) {
@@ -1052,6 +1066,10 @@ function retryStep(i) {
     // stays, because nothing has been settled yet.
     if (fbActive === i) dismissFbModal();
     decideForbidden("retry");
+    // The banner stays (nothing is settled) but its controls are now INERT: the
+    // server is running, not waiting, so none of the three has anything to answer.
+    // Say that visually instead of letting a click land on nothing.
+    setFbControlsEnabled(i, false);
     return;
   }
   if (applyRunning) return;
@@ -1070,16 +1088,21 @@ function giveUp(i) {
   // server gave it (`forbidden` → "blocked by firewall"): we used to paint `fail`
   // locally, which the journal and any later `state` disagreed with. Giving up
   // drops the recovery UI, it does not rewrite what happened.
+  //
+  // ⚠️ Decide FIRST, clear second. Clearing before checking made this a silent lie
+  // while a retry was running (fbPaused false → nothing sent, banner gone anyway):
+  // the click LOOKED like it worked. A control that appears to act and does not is
+  // worse than one that is plainly unavailable.
+  if (!decideForbidden("continue")) return; // nobody is waiting → keep the banner
   clearForbidden(i);
-  decideForbidden("continue");
 }
 
 // Abandon the whole Apply. The server has always implemented this; until now
 // nothing in the UI could reach it, so "abandon the rest of the plan" was a
 // promise made only in a comment.
 function stopApply(i) {
+  if (!decideForbidden("stop")) return; // same rule as giveUp: never clear on a no-op
   clearForbidden(i);
-  decideForbidden("stop");
 }
 
 // "More info…" reveals the raw blocked URL and hides its own prompt — for the

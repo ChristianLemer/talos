@@ -25,6 +25,15 @@
               --surface:#181825; --surface-hi:#292c3c; --head:#89b4fa; --on-accent:#b8c6f0; }
       [data-theme="gruvbox"] { --bg:#282828; --fg:#ebdbb2; --line:#3c3836; --dim:#928374;
               --surface:#32302f; --surface-hi:#3c3836; --head:#83a598; --on-accent:#bdd4c8; }
+      /* `hidden` must WIN. The attribute's `display:none` comes from the UA
+         stylesheet, so ANY author `display` rule beats it — and that is not a
+         theoretical hazard: `#fb-retry` carries `.fb-step { display:flex }`, so
+         `fbStepRetry.hidden = true` left the "Come back and retry — Talos downloads
+         it for you" card VISIBLE and CLICKABLE at the retry cap, while retryStep
+         refused to act. A card that promises a download and does nothing is exactly
+         the dishonesty the 403 work set out to remove.
+         One rule, at the top, so the next `.hidden = ` cannot reintroduce it. */
+      [hidden] { display:none !important; }
       /* App feel: no text selection or callout by default (like a native app);
          the terminal re-enables selection so you can still copy output. */
       html, body { -webkit-user-select:none; user-select:none; }
@@ -578,7 +587,11 @@
       .fb-banner-actions { display:flex; gap:8px; margin-top:8px; }
       .fb-banner-actions button { background:none; border:1px solid #33436b; color:#a9c2fb;
                    padding:5px 12px; border-radius:6px; font-size:12px; cursor:pointer; }
-      .fb-banner-actions button:hover { background:#2a3350; }
+      .fb-banner-actions button:hover:not(:disabled) { background:#2a3350; }
+      /* Inert while the retry we just asked for is running: the server is working,
+         not waiting, so there is no decision to answer. Shown as unavailable rather
+         than left clickable — a control that swallows a click reads as a bug. */
+      .fb-banner-actions button:disabled { opacity:.4; cursor:default; }
       .consent-card { max-width:48ch; }
       .consent-card h2 { font-size:19px; margin:0 0 12px; }
       .consent-card p { color:#a9b1d6; font-size:14px; line-height:1.55; margin:0 0 10px; }
