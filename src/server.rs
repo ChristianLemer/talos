@@ -1245,11 +1245,17 @@ enum ForbiddenChoice {
     Stop,
 }
 
-/// How many times ONE row may be retried inside a single Apply. Each retry is
-/// user-initiated so it cannot spin on its own, but an unbounded loop lets a user
-/// hang the Apply forever against a firewall that will not budge. Past the cap the
-/// pause offers only Continue/Stop.
-const MAX_FORBIDDEN_ATTEMPTS: u32 = 3;
+/// How many times ONE row may RUN inside a single Apply — so this many minus one
+/// is the number of retries offered (3 runs = the first attempt + 2 retries). Named
+/// for runs rather than retries because `attempt` is incremented BEFORE do_step, and
+/// the earlier "attempts"/"retries" wording described the same constant two
+/// different ways — the handoff said "retries are capped at 3", which was one too
+/// many.
+///
+/// Each retry is user-initiated so it cannot spin on its own, but an unbounded loop
+/// lets a user hang the Apply forever against a firewall that will not budge. Past
+/// the cap the pause offers only Continue/Stop.
+const MAX_FORBIDDEN_RUNS: u32 = 3;
 
 /// The wire word → the decision. Anything else is NOT an answer: the pause keeps
 /// holding (notably `open-forbidden`, which we serve while we hold).
@@ -1262,10 +1268,10 @@ fn forbidden_choice(kind: &str) -> Option<ForbiddenChoice> {
     }
 }
 
-/// Is Retry still on the table after `attempt` tries? (`attempt` counts tries
-/// already made: 1 = the first run just failed.)
+/// Is Retry still on the table? `attempt` counts runs already made — 1 means the
+/// first run just failed, so a retry would be run 2.
 fn retry_offered(attempt: u32) -> bool {
-    attempt < MAX_FORBIDDEN_ATTEMPTS
+    attempt < MAX_FORBIDDEN_RUNS
 }
 
 /// Defence in depth: a stale front could send `forbidden-retry` past the cap. Do
@@ -1850,11 +1856,11 @@ mod tests {
     fn retry_is_offered_until_the_attempt_cap_then_only_continue_or_stop() {
         // Each retry is user-initiated so it cannot spin on its own, but an
         // unbounded loop lets a user hang the Apply forever against a firewall that
-        // will not budge. After MAX_FORBIDDEN_ATTEMPTS the pause stops offering it.
+        // will not budge. The cap counts RUNS, so 3 means first attempt + 2 retries.
         assert!(retry_offered(1));
-        assert!(retry_offered(MAX_FORBIDDEN_ATTEMPTS - 1));
-        assert!(!retry_offered(MAX_FORBIDDEN_ATTEMPTS));
-        assert!(!retry_offered(MAX_FORBIDDEN_ATTEMPTS + 1));
+        assert!(retry_offered(MAX_FORBIDDEN_RUNS - 1));
+        assert!(!retry_offered(MAX_FORBIDDEN_RUNS));
+        assert!(!retry_offered(MAX_FORBIDDEN_RUNS + 1));
     }
 
     #[test]
@@ -1863,8 +1869,8 @@ mod tests {
         // cap, the loop must not re-run the step — it moves on instead of hanging.
         use ForbiddenChoice::*;
         assert_eq!(honour_choice(Retry, 1), Retry);
-        assert_eq!(honour_choice(Retry, MAX_FORBIDDEN_ATTEMPTS), Continue);
-        assert_eq!(honour_choice(Stop, MAX_FORBIDDEN_ATTEMPTS), Stop);
+        assert_eq!(honour_choice(Retry, MAX_FORBIDDEN_RUNS), Continue);
+        assert_eq!(honour_choice(Stop, MAX_FORBIDDEN_RUNS), Stop);
     }
 
     #[test]
