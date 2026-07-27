@@ -1019,10 +1019,16 @@ function dismissFbModal() {
   fbActiveUrl = null;
 }
 
-// The row banner's three controls only mean something while the server is HOLDING
-// for a decision. During the retry it started they have nothing to answer, so they
-// are disabled rather than left clickable-and-inert. Re-enabled by the next
+// The row banner's controls only mean something while the server is HOLDING for a
+// decision. During the retry it started they have nothing to answer, so they are
+// disabled rather than left clickable-and-inert. Re-enabled by the next
 // `forbidden-pause` (paintFbAttempt), or moot once the banner is cleared.
+//
+// "Open blocked page" is disabled too, which looks like it contradicts the server's
+// "open-forbidden MUST keep working while we hold" — it does not. The server serves
+// that message from INSIDE await_forbidden_decision; during a retry it is in
+// do_step and nobody is reading the socket, so the click could not be honoured.
+// Disabling it states that, instead of dropping the message on the floor.
 function setFbControlsEnabled(i, on) {
   const r = rows[i];
   if (!r || !r.fbBanner) return;
