@@ -102,6 +102,12 @@ pub fn app_management_status(os: Os) -> AppMgmtStatus {
 /// What one write attempt inside an app bundle told us. The distinction that
 /// matters is WHICH refusal we got, and Rust's `ErrorKind::PermissionDenied` hides
 /// it: EACCES and EPERM both land there.
+/// macOS-only in practice: only `probe_app_management` (cfg'd to macOS) constructs
+/// these, so on Linux/Windows the enum and its verdict function have no caller. CI
+/// runs clippy `-D warnings` on Linux — hence the cfg'd allow rather than a cfg on
+/// the items, which would take their unit test out of the build on the dev machine
+/// too. Same pattern as `AppMgmtStatus::Granted` above.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppMgmtProbe {
     /// The witness file was created (and removed) → we may modify this bundle.
@@ -124,6 +130,7 @@ pub enum AppMgmtProbe {
 /// root-owned bundles refusing by plain POSIX, and the probe returning on the first
 /// one it met, the answer was Missing forever — grant the permission, reboot, and the
 /// banner stayed. A refusal is only meaningful when POSIX would have said yes.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn appmgmt_verdict(p: AppMgmtProbe) -> Option<AppMgmtStatus> {
     match p {
         AppMgmtProbe::Wrote => Some(AppMgmtStatus::Granted),
