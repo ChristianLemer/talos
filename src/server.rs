@@ -1182,7 +1182,16 @@ async fn run_in_pty(
     // current buffer. Once answered, we don't re-ask for this step.
     let mut buf = String::new();
     let mut forbidden = false;
-    let mut sudo_answered = false;
+    // How many times we have answered a password prompt in THIS step. sudo grants
+    // three attempts, so answering only once was a hang waiting to happen: a wrong
+    // password (very often a STALE CACHED one — model C reuses it across the whole
+    // Apply) gets "Sorry, try again." and a second "Password:", which the old
+    // answer-once guard refused to serve. The pty then sat forever on a prompt
+    // nobody would ever type into, with no way to cancel the row.
+    let mut sudo_tries = 0u8;
+    const SUDO_MAX_TRIES: u8 = 3; // sudo's own budget — past it, sudo gives up by itself
+                                  // Where the last answer came from, so a refusal can invalidate the right thing.
+    let mut last_from_cache = false;
     while let Some(chunk) = rx.recv().await {
         // Always accumulate (the sudo prompt may be split across several chunks,
         // or "Password:" arrive in a separate piece → testing the chunk alone misses it).
@@ -1194,17 +1203,31 @@ async fn run_in_pty(
         if socket.send(Message::Text(out.to_string())).await.is_err() {
             return (-1, forbidden, None);
         }
-        // Sudo prompt? sudo writes "Password:" (or "Password for X:") WITHOUT a final
-        // newline — the fix that matters is to test the ACCUMULATED BUFFER (the prompt may
-        // arrive in a separate chunk), not to multiply patterns. Answers ONCE
-        // per step; password from the cache (model C) or asked to the front.
         let tail = buf.trim_end().to_lowercase();
-        if !sudo_answered && tail.ends_with(':') && tail.contains("password") {
-            if let Some(pw) = obtain_sudo_pw(socket, state, i).await {
+        // A REFUSAL invalidates whatever we just sent. If it came from the cache, drop
+        // it: the whole Apply would otherwise keep replaying the same wrong secret,
+        // every sudo row hanging in turn. Clearing makes the next prompt ask the user.
+        if tail.ends_with("try again.") && last_from_cache {
+            clear_sudo_pw(state).await;
+            last_from_cache = false;
+        }
+        // sudo writes "Password:" (or "Password for X:") WITHOUT a final newline, so we
+        // test the ACCUMULATED BUFFER (the prompt may arrive in its own chunk). We answer
+        // EACH prompt up to sudo's own budget — a re-prompt means the last answer was
+        // refused, and leaving it unanswered is a permanent hang, not a safeguard.
+        // The buffer is TRUNCATED (not cleared) after answering, so the SAME prompt is
+        // not re-detected on the next chunk — its tail would still end with ':' and we
+        // would answer a question already answered, burning the attempt budget on
+        // nothing. A tail is kept because `is403` reads this buffer too: wiping it whole
+        // could split a "Forbidden (403)" across the cut and lose it.
+        if sudo_tries < SUDO_MAX_TRIES && tail.ends_with(':') && tail.contains("password") {
+            if let Some((pw, from_cache)) = obtain_sudo_pw(socket, state, i).await {
                 let mut line = pw.into_bytes();
                 line.push(b'\n');
                 let _ = in_tx.send(line);
-                sudo_answered = true;
+                sudo_tries += 1;
+                last_from_cache = from_cache;
+                buf.push_str("\n[answered]\n"); // breaks the ':' tail without dropping context
             }
         }
         // Relay the watcher signals (non-blocking) as they stream.
@@ -1242,12 +1265,20 @@ async fn run_in_pty(
 /// front (message `sudo-prompt`), wait for its response (`sudo-pw`), cache it.
 /// The password NEVER touches disk/log/journal. Cleared by clear_sudo_pw
 /// at the end of the Apply. None if the front cancels (closes the modal → `sudo-cancel`).
-async fn obtain_sudo_pw(socket: &mut WebSocket, state: &AppState, i: u32) -> Option<String> {
+/// Returns `(password, came_from_cache)`. The caller needs the provenance: when sudo
+/// answers "Sorry, try again.", a CACHED password must be dropped before re-asking,
+/// or we would hand sudo the same wrong secret until it gives up — and the row would
+/// look stuck for reasons the user cannot see.
+async fn obtain_sudo_pw(
+    socket: &mut WebSocket,
+    state: &AppState,
+    i: u32,
+) -> Option<(String, bool)> {
     // 1) cache?
     {
         let guard = state.sudo_pw.lock().await;
         if let Some(pw) = guard.as_ref() {
-            return Some(pw.clone());
+            return Some((pw.clone(), true));
         }
     }
     // 2) ask the front (masked field).
@@ -1268,7 +1299,7 @@ async fn obtain_sudo_pw(socket: &mut WebSocket, state: &AppState, i: u32) -> Opt
                     .unwrap_or("")
                     .to_string();
                 *state.sudo_pw.lock().await = Some(pw.clone()); // RAM cache for the duration of the Apply
-                return Some(pw);
+                return Some((pw, false)); // freshly typed, not from the cache
             }
             Some("sudo-cancel") => return None,
             _ => {} // ignore any other message while waiting for the password

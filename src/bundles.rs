@@ -255,11 +255,22 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
         let name = pkg.skill_name.clone().unwrap_or_else(|| pkg.name.clone());
         // `npx`, not `bunx`. The skills CLI is third-party JS, and third-party JS is
         // precisely what cannot be assumed to run on a non-Node runtime.
+        //
+        // TWO consents, not one, and only the second used to be answered. The trailing
+        // `-y` goes to `skills`; before that ever runs, NPX asks its own question —
+        // "Need to install the following packages: skills@1.5.21 / Ok to proceed? (y)"
+        // — because the CLI is not installed locally. Nothing types into that pty, so
+        // the row sat on "installing…" for good, with no way to cancel it. `npx --yes`
+        // answers the fetch prompt (npm docs: "skip this prompt with the -y or --yes
+        // option"); the tool's own `-y` still answers the tool's.
+        //
+        // Not paranoia about interactivity in general: a pty with nobody at the keyboard
+        // must never be handed a question. Any prompt we cannot pre-answer is a hang.
         return Commands {
             route: Some("skill".into()),
-            install: Some(format!("npx skills add {src} -g -y")),
-            uninstall: Some(format!("npx skills remove {name} -y")),
-            upgrade: Some(format!("npx skills update {name} -y")),
+            install: Some(format!("npx --yes skills add {src} -g -y")),
+            uninstall: Some(format!("npx --yes skills remove {name} -y")),
+            upgrade: Some(format!("npx --yes skills update {name} -y")),
             downgrade: None,
         };
     }
@@ -458,15 +469,15 @@ mod tests {
         assert_eq!(c.route.as_deref(), Some("skill"));
         assert_eq!(
             c.install.as_deref(),
-            Some("npx skills add apollographql/skills@rust-best-practices -g -y")
+            Some("npx --yes skills add apollographql/skills@rust-best-practices -g -y")
         );
         assert_eq!(
             c.uninstall.as_deref(),
-            Some("npx skills remove rust-best-practices -y")
+            Some("npx --yes skills remove rust-best-practices -y")
         );
         assert_eq!(
             c.upgrade.as_deref(),
-            Some("npx skills update rust-best-practices -y")
+            Some("npx --yes skills update rust-best-practices -y")
         );
     }
 
