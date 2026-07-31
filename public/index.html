@@ -516,8 +516,18 @@
          toggle adds body.show-all → the wider view: wanted rows + members of an
          active bundle you un-checked (so you SEE it become incomplete) + removals.
          During an Apply, focus mode above wins. */
-      body.tab-bundles:not(.applying):not(.show-all) #steps > details:not(.will-change) { display:none; }
-      body.tab-bundles.show-all:not(.applying) #steps > details:not(.want):not(.bundle-member):not(.will-remove) { display:none; }
+      /* `.touched` = you ACTED on this row in this session, so it stays visible even
+         when the action nets out to nothing. A row that vanishes under the hand is
+         disorienting, and worst of all when the gesture was a MISTAKE: undoing it
+         used to erase the evidence you had undone it. A gesture must leave a trace. */
+      body.tab-bundles:not(.applying):not(.show-all) #steps > details:not(.will-change):not(.touched) { display:none; }
+      body.tab-bundles.show-all:not(.applying) #steps > details:not(.want):not(.bundle-member):not(.will-remove):not(.touched) { display:none; }
+      /* A touched row that will NOT act says so in words. Without the word, a calm row
+         among coloured ones reads as "something is missing here" — the row must state
+         that it is a witness, not a pending change. No left bar: bars mean action. */
+      .untouched-note { display:none; }
+      details.touched:not(.will-change) .untouched-note {
+        display:inline; font-size:10px; color:var(--dim); margin-left:8px; }
       /* A member you turned out: visible but clearly deactivated (dim + struck
          name), so "the bundle is now incomplete" reads at a glance. */
       body.tab-bundles #steps > details.bundle-member.row-out .name { opacity:.5; text-decoration:line-through; }
@@ -885,7 +895,13 @@
       </div>
     </header>
     <nav>
-      <button class="tab active" data-view="bundles">Bundles</button>
+      <!-- "Changes", not "Bundles": this view's own CSS already called itself "the
+           ACTION view". The bundle cards live here as a MEANS of composing changes —
+           they are furniture, and furniture should not name the room. Not "Apply"
+           (the button of that name lives inside), not "My setup" (already the name of
+           the personal bundle). The internal id/class stay `bundles` — renaming them
+           would touch ~40 selectors for no gain. -->
+      <button class="tab active" data-view="bundles">Changes</button>
       <button class="tab" data-view="catalog">Catalog</button>
       <button class="tab" data-view="log">Log &amp; settings</button>
     </nav>

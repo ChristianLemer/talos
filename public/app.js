@@ -420,6 +420,11 @@ function paintPkg(i) {
   // Drives the Bundles-tab "diff only" mode: by default show only what changes,
   // with a toggle to reveal everything.
   r.details.classList.toggle("will-change", M.isActionable(model, i));
+  // `.touched` = acted on this session → the row STAYS in the Changes view even when
+  // the action nets out to nothing, so a gesture always leaves a trace. Session-only
+  // (model.touched is never persisted); the CSS adds the "unchanged" word when the
+  // row is touched but not actionable.
+  r.details.classList.toggle("touched", M.isTouched(model, i));
   // --- SCOPE: the second axis ------------------------------------------------
   // The scope switch's own position, plus the DEAD desire track when out. The
   // switch never carries green/red (that is the diff language, actClass above).
@@ -778,6 +783,13 @@ function render(steps, profiles = [], columns = 2) {
     swScope.className = "statewords sw-scope";
     const swDesire = document.createElement("span");
     swDesire.className = "statewords sw-desire";
+    // The witness word: shown by CSS only when this row is `.touched` but not
+    // `.will-change` — i.e. you acted on it and the net effect is nothing. It says so
+    // rather than leaving a calm row to be read as an oversight.
+    const note = document.createElement("span");
+    note.className = "untouched-note";
+    note.textContent = "unchanged";
+    note.title = "You changed this in this session — nothing will happen to it";
     const badge = document.createElement("span");
     badge.className = "badge checking";
     badge.textContent = "⠹"; // pre-scan spinner, not a verdict yet
@@ -817,7 +829,7 @@ function render(steps, profiles = [], columns = 2) {
     // Add button. "My extras" = the packages set to ✓ (manualToggle "in").
     // Each state word sits immediately AFTER the control it describes, so the pairing
     // is spatial and needs no legend: [scope switch][its word] │ [desire][its word].
-    sum.append(sc, swScope, chk, swDesire, badge, name, delta, st, apply);
+    sum.append(sc, swScope, chk, swDesire, badge, name, note, delta, st, apply);
     const panel = document.createElement("div");
     panel.className = "panel";
     const copy = document.createElement("button");

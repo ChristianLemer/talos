@@ -20,6 +20,7 @@ import {
   isInPersonal,
   isLocked,
   isProfileActive,
+  isTouched,
   loadPlan,
   PERSONAL_BUNDLE,
   persistableActiveBundles,
@@ -719,4 +720,59 @@ test("scope: unmanagedIndices lists exactly what the server must refuse", () => 
   assert.deepEqual(unmanagedIndices(m), [0, 2]);
   setScope(m, 2, "in"); // pulled back in → drops off the list
   assert.deepEqual(unmanagedIndices(m), [0]);
+});
+
+// --- touched: a gesture must leave a trace ----------------------------------
+// C's report: a row that vanishes the moment you act on it is "bizarre et ennuyeux…
+// surtout si c'est une erreur" — undoing a mistake destroyed the evidence you had
+// undone it, because the Changes tab only shows actionable rows.
+
+test("touched: a row is marked by any gesture, including a no-op one", () => {
+  const m = createModel();
+  loadPlan(m, [{ i: 0, name: "Miro", canUninstall: true }]);
+  assert.equal(isTouched(m, 0), false, "untouched by default");
+  setDecision(m, 0, "in");
+  assert.equal(isTouched(m, 0), true);
+  // Back to auto — the row is no longer actionable, but the trace REMAINS. This is
+  // the whole point: correcting an error must not erase the correction.
+  setDecision(m, 0, null);
+  assert.equal(actionOf(m, 0), null, "no action left…");
+  assert.equal(isTouched(m, 0), true, "…yet the row still testifies");
+});
+
+test("touched: a scope gesture leaves a trace too", () => {
+  const m = createModel();
+  loadPlan(m, [{ i: 0, name: "Nushell", canUninstall: true }]);
+  setScope(m, 0, "out");
+  assert.equal(isTouched(m, 0), true);
+  setScope(m, 0, null); // back to the derivation
+  assert.equal(isTouched(m, 0), true, "the trace survives the undo");
+});
+
+test("touched: NEVER persisted — it is interface history, not intent", () => {
+  const m = createModel();
+  loadPlan(m, [{ i: 0, name: "Miro", canUninstall: true }]);
+  setDecision(m, 0, "in");
+  setDecision(m, 0, null); // net effect: nothing
+  assert.deepEqual(persistablePkgs(m), {}, "a no-op writes no intent");
+  assert.deepEqual(persistableScope(m), {}, "…and no scope either");
+  assert.equal(isTouched(m, 0), true, "but the session still remembers the gesture");
+});
+
+test("touched: a fresh plan clears the traces", () => {
+  const m = createModel();
+  loadPlan(m, [{ i: 0, name: "Miro", canUninstall: true }]);
+  setDecision(m, 0, "in");
+  assert.equal(isTouched(m, 0), true);
+  loadPlan(m, [{ i: 0, name: "Miro", canUninstall: true }]);
+  assert.equal(isTouched(m, 0), false, "a new plan is a new slate");
+});
+
+test("touched: Reset clears the traces — it is the 'forget my choices' gesture", () => {
+  const m = createModel();
+  loadPlan(m, [{ i: 0, name: "Miro", canUninstall: true }]);
+  setDecision(m, 0, "in");
+  assert.equal(isTouched(m, 0), true);
+  clearAllDecisions(m);
+  assert.equal(isTouched(m, 0), false, "witnesses to discarded choices go with them");
 });

@@ -25,6 +25,9 @@ export function createModel() {
     pkgs: new Map(), // i -> PkgRecord
     decision: new Map(), // i -> "in" | "out"  (absence = auto)
     scope: new Map(), // i -> "in" | "out"  (absence = follow the derivation)
+    // Rows the user acted on THIS SESSION. Never persisted (interface history, not
+    // intent) — it exists so a gesture leaves a trace even when it changes nothing.
+    touched: new Set(),
     profiles: new Map(), // name -> ProfileRecord {name, emoji, description, packages}
     activeProfiles: new Set(), // names of profiles the user has applied
     detectedAt: null, // ms of the last full presence scan (future TTL home)
@@ -37,6 +40,8 @@ export function loadPlan(model, steps, profiles = []) {
   model.profiles.clear();
   model.activeProfiles.clear();
   model.scope.clear();
+  // A new plan is a new session's worth of rows: the traces of the old one are moot.
+  model.touched.clear();
   for (const p of profiles) {
     model.profiles.set(p.name, {
       name: p.name,
@@ -172,6 +177,7 @@ export function scopeReason(model, i) {
 export function setScope(model, i, state) {
   if (state === "in" || state === "out") model.scope.set(i, state);
   else model.scope.delete(i);
+  markTouched(model, i); // a scope gesture is a gesture: it leaves its trace too
 }
 // Would pulling row i INTO scope be the risky direction? True only for a row we
 // did not install: managing it means Talos may remove a binary it never put
@@ -363,11 +369,35 @@ export function buttonAction(model, i) {
   return { verb: "install", dir: "add", type: "install" };
 }
 
+// --- touched: a gesture must leave a trace ----------------------------------
+//
+// A row the user acted on stays VISIBLE for the rest of the session, even when the
+// action turns out to be a no-op. C's report: "quand un utilisateur agit sur une
+// entrée et qu'elle disparaît sous ses yeux c'est bizarre et ennuyeux… surtout si
+// c'est une erreur". Exactly so — the Changes tab shows only `.will-change` rows, so
+// UNDOING a mistake made the row vanish, which means correcting an error destroyed
+// the evidence that you had corrected it. There was no way to check your own work.
+//
+// SESSION-ONLY, never persisted. This is interface history, not intent: writing it to
+// selection.json would resurrect rows on the next launch with no visible cause, and
+// `pkgs`/`scope` are sparse precisely so that only real intent is stored.
+//
+// The codebase already had this intuition for ONE case (a bundle member you turned
+// out stays visible, struck through, so the bundle reads incomplete — index.html:523).
+// This generalises it: that was not a special case, it was the rule.
+export function markTouched(model, i) {
+  model.touched.add(i);
+}
+export function isTouched(model, i) {
+  return model.touched.has(i);
+}
+
 // --- mutations --------------------------------------------------------------
 export function setDecision(model, i, state) {
   if (isLocked(model, i)) return false; // author's posture wins
   if (state === "in" || state === "out") model.decision.set(i, state);
   else model.decision.delete(i); // anything else clears to auto
+  markTouched(model, i); // returning to auto IS a gesture — it must leave its trace
   return true;
 }
 // The scan's verdict on provenance: present, but installed outside our manager.
@@ -381,6 +411,10 @@ export function setExternal(model, i, external) {
 export function clearAllDecisions(model) {
   model.decision.clear();
   model.activeProfiles.clear();
+  // Reset clears the TRACES too. Everywhere else a gesture must leave one, but Reset
+  // is the gesture that says "forget my choices" — keeping witnesses to choices that
+  // no longer exist would fill the view with rows the user just asked to be rid of.
+  model.touched.clear();
   // The personal bundle is always-on and emptied by a reset (not removed): clear
   // its members, then re-activate it so "My setup" stays present but blank.
   const personal = model.profiles.get(PERSONAL_BUNDLE);
