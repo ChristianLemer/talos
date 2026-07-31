@@ -201,6 +201,23 @@
       .scope.forced::before { content:"⚠"; position:absolute; left:-14px; top:-2px;
                               font-size:10px; opacity:.8; }
 
+      /* --- STATE WORDS: each control says its own state, in words -------------
+         There is no ICON for managed/unmanaged — no established glyph means it, and
+         the ones that come to mind lie (🔒 says "prevented from moving"; we mean
+         "not mine to touch"). So the representation is a WORD. It also fixes an
+         older readability debt the reframe spec named and never closed: a 3-state
+         control "must READ unambiguously", and ✕/●/✓ does not — position alone
+         never said which detent you were on.
+         Fixed width so the words form a COLUMN: a ragged left edge on the package
+         names would cost more than the words buy. Quiet by default, and the scope
+         word brightens when it is the exception (`ignored`) — the majority state
+         should not shout. */
+      .statewords { display:inline-flex; align-items:center; flex:none;
+                    font-size:10px; color:var(--dim); letter-spacing:.02em; }
+      .sw-scope  { width:52px; }
+      .sw-desire { width:50px; margin-left:6px; }
+      .sw-scope.off { color:var(--fg); opacity:.75; }  /* the exception, legible */
+
       /* The DEAD desire track: out of scope, the 3-detent control does not merely
          grey — it loses its knob entirely. Position becomes unreadable BECAUSE
          there is nothing to read; a greyed-but-positioned knob would invite
@@ -218,6 +235,15 @@
       body:not(.advanced) .bundle-body .toggle { display:none; }   /* no per-package toggles */
       body:not(.advanced) .bundle-head .applybtn,
       body:not(.advanced) .rerun { display:none; }                 /* only the hero Apply */
+      /* The SCOPE switch and the two state words are ADVANCED-ONLY. Measured on this
+         machine: 25 of 31 rows are in scope, so a switch on every row announces "yes,
+         mine" 25 times to say "no" 6 times — the majority state must stay silent (the
+         same defect that disqualified a padlock: 🔓 on 29 rows of 31 is noise). In
+         simple mode the derivation already puts config-atoms, `external` and
+         no-route rows out of scope, and there is nothing for a normal user to decide;
+         the DEAD TRACK plus the word on the right still say so. */
+      body:not(.advanced) .scope,
+      body:not(.advanced) .statewords { display:none; }
 
       .bundle-head .ico { font-size:20px; line-height:1; }
       .bundle-head .ct { flex:1; display:flex; flex-direction:column; }

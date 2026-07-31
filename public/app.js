@@ -152,6 +152,16 @@ const SCOPE_LABEL = {
   "not-managed": "not managed", // manageable, but you pushed it out
 };
 
+// The DESIRE detent, in words. Closes a readability debt the reframe spec named and
+// never paid: "a 3-state must READ unambiguously (a cycling toggle hides direction)"
+// — the segmented control shows which detent is CURRENT, but position alone never
+// said what the detent MEANT. Keyed by the raw manual toggle, "auto" for null.
+const DESIRE_WORD = {
+  in: "wanted", // ✓ I want it, whatever the bundles say
+  auto: "auto", // ● follow the bundles
+  out: "refused", // ✕ I refuse it, whatever the bundles say
+};
+
 // TWO LAYERS (chezmoi convention).
 //  1. POSTURE — the author's policy, declared in bundle.yaml, per package:
 //       mandatory  → always present, user CANNOT decline (locked pill)
@@ -429,6 +439,19 @@ function paintPkg(i) {
   if (!inScope) {
     el.style.cursor = "default";
     el.title = "Out of scope — nothing to want here";
+  }
+  // THE STATE WORDS — each control says its own state, because there is no icon for
+  // managed/unmanaged and the plausible glyphs lie. `ignored` is deliberately the
+  // brighter of the two: it is the exception on this list (25 of 31 rows are tracked),
+  // and the majority state should not shout. The desire word goes BLANK out of scope —
+  // there is genuinely nothing wanted there, and repeating a stale desire beside a
+  // dead track would be the same lie the dead track exists to avoid.
+  if (r.swScope) {
+    r.swScope.textContent = inScope ? "tracked" : "ignored";
+    r.swScope.classList.toggle("off", !inScope);
+  }
+  if (r.swDesire) {
+    r.swDesire.textContent = inScope ? DESIRE_WORD[M.manualToggle(model, i) ?? "auto"] : "";
   }
   // The right-hand word, for an out-of-scope row: WHY, not just "off". Retires
   // `self-managed`, which over-promised — it said the user had done something
@@ -746,6 +769,15 @@ function render(steps, profiles = [], columns = 2) {
       }
       setScope(s.i, goingIn ? "in" : "out");
     };
+    // The two STATE WORDS. There is no icon for managed/unmanaged — no glyph means
+    // it, and the plausible ones lie — so the representation is a word, one per
+    // control, each naming ITS OWN state. Advanced-only (see index.html): on this
+    // machine 25 of 31 rows are in scope, so words on every row in simple mode
+    // would announce the majority state 25 times to flag 6 exceptions.
+    const swScope = document.createElement("span");
+    swScope.className = "statewords sw-scope";
+    const swDesire = document.createElement("span");
+    swDesire.className = "statewords sw-desire";
     const badge = document.createElement("span");
     badge.className = "badge checking";
     badge.textContent = "⠹"; // pre-scan spinner, not a verdict yet
@@ -783,7 +815,9 @@ function render(steps, profiles = [], columns = 2) {
     };
     // Wanting is now the ✓ cell of the segmented toggle (spec §20) — no separate
     // Add button. "My extras" = the packages set to ✓ (manualToggle "in").
-    sum.append(sc, chk, badge, name, delta, st, apply);
+    // Each state word sits immediately AFTER the control it describes, so the pairing
+    // is spatial and needs no legend: [scope switch][its word] │ [desire][its word].
+    sum.append(sc, swScope, chk, swDesire, badge, name, delta, st, apply);
     const panel = document.createElement("div");
     panel.className = "panel";
     const copy = document.createElement("button");
@@ -818,6 +852,8 @@ function render(steps, profiles = [], columns = 2) {
       details: d,
       chk,
       scope: sc,
+      swScope,
+      swDesire,
       badge,
       statusLabel: st,
       delta,
