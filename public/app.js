@@ -1497,6 +1497,7 @@ document.getElementById("clear-log").onclick = () =>
 function renderAppmgmt() {
   const pill = document.getElementById("appmgmt-pill");
   const banner = document.getElementById("appmgmt-banner");
+  const row = document.getElementById("appmgmt-row");
   const map = { granted: ["granted", "ok"], missing: ["missing", "fail"], na: ["—", ""] };
   const [label, cls] = map[appmgmtStatus] || map.na;
   if (pill) {
@@ -1504,6 +1505,12 @@ function renderAppmgmt() {
     pill.className = "badge " + cls;
   }
   if (banner) banner.hidden = appmgmtStatus !== "missing";
+  // "na" = the server said this machine has no such permission (anything but macOS,
+  // where app_management_status returns NotApplicable). Drop the whole SETTINGS ROW,
+  // not just its pill: a Windows user was shown "App Management permission — · Open
+  // Settings", a control that cannot act and a state that cannot exist. Absent beats
+  // greyed out for a setting that does not apply.
+  if (row) row.hidden = appmgmtStatus === "na";
 }
 const openAppmgmtSettings = () =>
   ws.send(JSON.stringify({ type: "open-appmgmt-settings" }));

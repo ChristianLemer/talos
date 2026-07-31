@@ -967,7 +967,12 @@
             <div class="set-desc">When on, the install history is saved next to the tool (visible to your team if the disk is shared). When off, it stays private to this machine. <b>Sharing is strongly recommended</b> so your team can help you stay up to date.</div></div>
           <label class="switch"><input type="checkbox" id="consent-toggle"><span class="slider"></span></label>
         </div>
-        <div class="set-row">
+        <!-- macOS ONLY. Hidden by default and revealed by renderAppmgmt when the
+             permission actually applies: on Windows the whole row is meaningless
+             (App Management is a macOS TCC service) and its "Open Settings" would
+             fire an inert x-apple.systempreferences: URL. A setting that cannot
+             act on this machine is noise, so it is absent, not greyed out. -->
+        <div class="set-row" id="appmgmt-row" hidden>
           <div>
             <div class="set-title">App Management permission</div>
             <div class="set-desc">Lets Talos update apps in /Applications (e.g. VS Code). After granting it in System Settings, quit and relaunch Talos for the change to take effect.</div>
