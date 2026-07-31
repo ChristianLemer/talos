@@ -181,13 +181,19 @@
                border-radius:999px; background:var(--line); cursor:pointer;
                transition:background .15s; flex:none; margin-right:10px;
                padding-right:0; }
+      /* The divider must be VISIBLE — measured at a real click, `var(--line)` on an
+         almost-`--line` track was 1px of nothing, so the "two questions" signal was
+         not actually being sent. `--dim` reads as a separator in every theme and is
+         still quieter than any content. */
       .scope::after { content:""; position:absolute; right:-6px; top:-4px;
-                      height:20px; border-left:1px solid var(--line); }
+                      height:20px; border-left:1px solid var(--dim); opacity:.5; }
       .scope .dot { position:absolute; top:2px; width:8px; height:8px;
                     border-radius:50%; background:#c0caf5; transition:left .15s; }
       .scope.in  .dot { left:14px; }
       .scope.out .dot { left:2px; background:var(--dim); }
-      .scope.in  { background:#2a2e42; }
+      /* Theme-aware, not the hardcoded #2a2e42 the first pass used — that WAS
+         --line's dark value, so the switch vanished into the divider in light. */
+      .scope.in  { background:var(--line); }
       .scope.out { background:transparent; box-shadow:inset 0 0 0 1px var(--line); }
       .scope:hover { filter:brightness(1.3); }
       /* A row the user PULLED IN against the derivation keeps a visible mark: they

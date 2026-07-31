@@ -572,7 +572,14 @@ function refreshLiveness() {
   // hover for a manual re-run, but disabled while a run is on.
   for (const i of ids) {
     const r = rows[i];
-    const act = buttonAction(i); // always the invert action (label)
+    // Out of scope → NO row action either. Found at a real click: in advanced mode
+    // the per-row button stayed live and read "update" on an out-of-scope row, and
+    // the server (correctly) refused it — an inert-but-clickable control, exactly
+    // the fault the 403 work removed once already. `buttonAction` answers "what
+    // would invert this row", which is a different question from "may we act", so
+    // the gate belongs here rather than in the model.
+    const inScope = M.scopeOf(model, i) === "in";
+    const act = inScope ? buttonAction(i) : null; // always the invert action (label)
     const inPlan = isActionable(i); // would a plain Apply act here?
     const show = !!act && !busy;
     // Colour follows the PLAN: directional green/red only if Apply will act
