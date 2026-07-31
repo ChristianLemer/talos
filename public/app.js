@@ -560,9 +560,8 @@ function hideRescanVeil() {
 // Apply. We send the DECIDED packages only, split into `on` (want present)
 // and `off` (want absent), using each package's EFFECTIVE decision (its own,
 // or inherited from its bundle). Everything else is auto → the server never
-// touches it. `scope` (a per-bundle Apply) further restricts which indices
-// may act. auto is the safety: no decision, no action.
-function applyScoped(scopeIdx) {
+// touches it. auto is the safety: no decision, no action.
+function applyAll() {
   if (applyRunning) return;
   // Model A: EVERY package has a desired state (posture + override). Send it
   // all — on = want present, off = want absent. The server converges.
@@ -583,7 +582,7 @@ function applyScoped(scopeIdx) {
   showRescanVeil();
   // Focus mode engages on the server's `apply-plan` reply (it computes the plan),
   // not here — so we show the exact set of steps that will run.
-  ws.send(JSON.stringify({ type: "apply", on, off, scope: scopeIdx }));
+  ws.send(JSON.stringify({ type: "apply", on, off }));
 }
 
 function render(steps, profiles = [], columns = 2) {
@@ -1188,8 +1187,8 @@ function setStatus(i, status) {
 const ws = new WebSocket(`ws://${location.host}`);
 
 // Apply = enact your decisions (on/off) against the machine; auto is left
-// alone. Server acts only on the difference. No scope → all decided packages.
-document.getElementById("install-all").onclick = () => applyScoped(undefined);
+// alone. Server acts only on the difference — every decided package, in one go.
+document.getElementById("install-all").onclick = () => applyAll();
 
 // Reset = drop every user toggle AND active profile back to the author's
 // defaults (clearAllDecisions clears both). repaintAll refreshes chips too.
