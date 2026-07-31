@@ -129,12 +129,27 @@ const LABEL = {
   upgrading: "updating…",
   ok: "present",
   absent: "removed",
-  self: "self-managed",
+  // The server's `self` step-status: a config-atom that settled without acting.
+  // The WORD "self-managed" is retired (it over-promised — it implied the user had
+  // taken the file over even when nobody had ever asked for the row). paintPkg now
+  // says WHY, via SCOPE_LABEL; this is the fallback when only a step status lands.
+  self: "yours",
   fail: "failed",
   forbidden: "blocked by firewall",
   // indeterminate: no practicable route to constate presence on this machine
   // (e.g. a winget-only package on Mac). NOT "absent" — we genuinely can't know.
   unknown: "—",
+};
+
+// Why a row is out of scope — the word it shows on the right. Replaces the single
+// `self-managed`, which covered two situations that do not mean the same thing:
+// "you took this file over" (true) and "nobody ever asked for this" (it suggested
+// the user had acted when they had not).
+const SCOPE_LABEL = {
+  yours: "yours", // a config-atom in play: you own that file now
+  available: "available", // in the catalogue, no bundle pulls it
+  "no-route": "—", // no practicable route on this machine
+  "not-managed": "not managed", // manageable, but you pushed it out
 };
 
 // TWO LAYERS (chezmoi convention).
@@ -163,6 +178,7 @@ function persistSelection() {
     type: "set-selection",
     selection: {
       pkgs: M.persistablePkgs(model),
+      scope: M.persistableScope(model), // the second axis (spec 2026-07-30)
       personal: M.persistablePersonal(model), // My setup members (spec §14)
       activeBundles: M.persistableActiveBundles(model), // which cards are on
       ui: { // display prefs — one config file for all (§ config-unique)
@@ -175,6 +191,7 @@ function persistSelection() {
 }
 function applySavedSelection(sel) {
   M.applySavedSelection(model, sel);
+  M.applySavedScope(model, sel); // scope overrides — the second axis
   M.applySavedPersonal(model, sel?.personal); // restore My setup members (spec §14)
   M.applySavedActiveBundles(model, sel?.activeBundles); // restore active cards + cascade
   // UI prefs live in the same file now (not localStorage): restore them here.
@@ -393,17 +410,41 @@ function paintPkg(i) {
   // Drives the Bundles-tab "diff only" mode: by default show only what changes,
   // with a toggle to reveal everything.
   r.details.classList.toggle("will-change", M.isActionable(model, i));
-  // Keep self-managed labelling live when the user toggles a config-atom off:
-  // paintPkg/refreshLiveness (the toggle path) never touch statusLabel — only
-  // setStatus does, on scan/step messages — so without this the label would
-  // stay stale ("present") until the next scan. Toggling back IN restores
-  // normal behaviour on the next scan/refresh (setStatus repaints it).
-  const p = model.pkgs.get(i);
-  if (p?.isConfig && M.desiredOf(model, i) === "absent") {
-    r.statusLabel.textContent = "self-managed";
+  // --- SCOPE: the second axis ------------------------------------------------
+  // The scope switch's own position, plus the DEAD desire track when out. The
+  // switch never carries green/red (that is the diff language, actClass above).
+  const inScope = M.scopeOf(model, i) === "in";
+  if (r.scope) {
+    // `forced` = pulled IN against the derivation: the user took responsibility
+    // for something Talos did not install, and the row says so from then on.
+    const forced = inScope && M.scopeInNeedsConfirm(model, i);
+    r.scope.className = "scope " + (inScope ? "in" : "out") + (forced ? " forced" : "");
+    r.scope.title = inScope
+      ? "Talos manages this row — click to leave it alone"
+      : "Not managed by Talos — click to take it over";
+  }
+  // Out of scope: the desire control loses its knob (position becomes unreadable
+  // because there is nothing to read) and stops responding.
+  el.classList.toggle("dead", !inScope);
+  if (!inScope) {
+    el.style.cursor = "default";
+    el.title = "Out of scope — nothing to want here";
+  }
+  // The right-hand word, for an out-of-scope row: WHY, not just "off". Retires
+  // `self-managed`, which over-promised — it said the user had done something
+  // even when nobody had ever asked for the row. paintPkg/refreshLiveness never
+  // touch statusLabel otherwise (only setStatus does, on scan/step messages), so
+  // without this the label would stay stale until the next scan.
+  const reason = M.scopeReason(model, i);
+  if (reason && reason !== "external") {
+    // `external` is NOT written here: setStatus already appends " · external"
+    // beside the real presence, and presence is the more useful fact.
+    r.statusLabel.textContent = SCOPE_LABEL[reason];
     r.statusLabel.className = "statusLabel self";
-    r.badge.textContent = "·";
-    r.badge.className = "badge self";
+    if (reason === "yours" || reason === "available") {
+      r.badge.textContent = "·";
+      r.badge.className = "badge self";
+    }
   }
 }
 // Render the row's version display — the SINGLE place numbers appear (the delta
@@ -465,6 +506,34 @@ function setToggle(i, state, opts = {}) {
   refreshLiveness();
   if (!opts.silent) persistSelection();
 }
+
+// Set the scope override and repaint. Persists like every other intention.
+function setScope(i, state) {
+  M.setScope(model, i, state);
+  paintPkg(i);
+  paintProfiles(); // the card counters read what is actionable
+  refreshLiveness();
+  persistSelection();
+}
+
+// The guarded door. One modal, class-gated (never `hidden` — it loses to
+// display:flex, and that shipped as a bug once: the 403 retry cap, a7199c25).
+let scopeConfirmFor = null;
+function askScopeConfirm(i, name) {
+  scopeConfirmFor = i;
+  document.getElementById("sc-name").textContent = name;
+  document.getElementById("scope-confirm").classList.add("show");
+}
+function closeScopeConfirm() {
+  scopeConfirmFor = null;
+  document.getElementById("scope-confirm").classList.remove("show");
+}
+document.getElementById("sc-cancel").onclick = () => closeScopeConfirm();
+document.getElementById("sc-ok").onclick = () => {
+  const i = scopeConfirmFor;
+  closeScopeConfirm();
+  if (i != null) setScope(i, "in");
+};
 
 // Would applying package `i` actually DO something, given its EFFECTIVE
 // decision? on & absent → install; on & present & outdated → upgrade;
@@ -582,7 +651,15 @@ function applyAll() {
   showRescanVeil();
   // Focus mode engages on the server's `apply-plan` reply (it computes the plan),
   // not here — so we show the exact set of steps that will run.
-  ws.send(JSON.stringify({ type: "apply", on, off }));
+  // `unmanaged` is a THIRD list, not an omission from on/off: an omitted index is
+  // indistinguishable from `auto` server-side, and `row_action` never sees these
+  // lists at all — so the server needs to be told, not left to infer.
+  ws.send(JSON.stringify({
+    type: "apply",
+    on,
+    off,
+    unmanaged: M.unmanagedIndices(model),
+  }));
 }
 
 function render(steps, profiles = [], columns = 2) {
@@ -638,7 +715,29 @@ function render(steps, profiles = [], columns = 2) {
     chk.onclick = (e) => {
       e.preventDefault();
       e.stopPropagation();
+      // Out of scope → there is nothing to want here, so the dead track must not
+      // move a state the operator cannot see. The model already gates the ACTION
+      // (actionOf returns null), so nothing could be applied either way — but a
+      // control that silently changes an invisible value is a control that lies.
+      if (M.scopeOf(model, s.i) === "out") return;
       setToggle(s.i, nextToggleState(M.manualToggle(model, s.i))); // cycle out→auto→in
+    };
+    // SCOPE switch — the second axis, in front of the desire toggle. Its own
+    // gesture: "is this mine to manage?" answered before "what do I want?".
+    const sc = document.createElement("span");
+    sc.className = "scope in";
+    sc.innerHTML = '<span class="dot"></span>';
+    sc.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (scanning || applyRunning) return; // nothing moves during a run
+      const goingIn = M.scopeOf(model, s.i) === "out";
+      // The ONE risky direction: taking over something we did not install.
+      if (goingIn && M.scopeInNeedsConfirm(model, s.i)) {
+        askScopeConfirm(s.i, s.name);
+        return;
+      }
+      setScope(s.i, goingIn ? "in" : "out");
     };
     const badge = document.createElement("span");
     badge.className = "badge checking";
@@ -677,7 +776,7 @@ function render(steps, profiles = [], columns = 2) {
     };
     // Wanting is now the ✓ cell of the segmented toggle (spec §20) — no separate
     // Add button. "My extras" = the packages set to ✓ (manualToggle "in").
-    sum.append(chk, badge, name, delta, st, apply);
+    sum.append(sc, chk, badge, name, delta, st, apply);
     const panel = document.createElement("div");
     panel.className = "panel";
     const copy = document.createElement("button");
@@ -711,6 +810,7 @@ function render(steps, profiles = [], columns = 2) {
     rows[s.i] = {
       details: d,
       chk,
+      scope: sc,
       badge,
       statusLabel: st,
       delta,
@@ -1459,9 +1559,9 @@ ws.onmessage = (ev) => {
         // comparison in actionOf/buttonAction sees it when liveness refreshes.
         // "" when the probe found no version (absent, or a route with no version).
         M.setInstalledVersion(model, msg.i, msg.version || "");
-        // A config-atom the user turned OFF is self-managed: neutral, not
+        // A config-atom the user turned OFF is out of scope: neutral, not
         // "absent". Talos won't touch the file, so we don't judge it — the row
-        // says "self-managed" and its button offers a diff (see buttonAction).
+        // says "yours" and its button offers a diff (see buttonAction).
         if (model.pkgs.get(msg.i)?.isConfig && M.desiredOf(model, msg.i) === "absent") {
           setStatus(msg.i, "self");
           break;
@@ -1488,8 +1588,14 @@ ws.onmessage = (ev) => {
         // Installed OUTSIDE winget → append the provenance flag (winget can't
         // upgrade/uninstall it). Present stays present; this just says HOW.
         if (msg.present === true && msg.external) {
+          M.setExternal(model, msg.i, true);
           rows[msg.i].statusLabel.textContent += " · external";
           rows[msg.i].statusLabel.classList.add("external");
+          // The derivation just changed: this row is not ours to manage. Repaint
+          // the switch and the (now dead) desire track. The scan-time flip is
+          // correct — a switch that pre-guessed `out` before probing would be
+          // the bug.
+          paintPkg(msg.i);
         }
         // Stash the DETECTION EVIDENCE (command + output + verdict). Written into the
         // row's terminal when it's first opened — so a doubted result can be checked

@@ -170,6 +170,41 @@
       .toggle.locked::before { content:"🔒"; position:absolute; left:44px; top:2px; font-size:11px; }
       .toggle:not(.locked):hover { filter:brightness(1.2); }
 
+      /* --- SCOPE switch: the SECOND axis — "is this mine to manage?" ---------
+         Deliberately a DIFFERENT silhouette from .toggle, because two switches
+         side by side otherwise read as ONE control with five positions (the exact
+         "trop de boutons" fault that collapsed toggle+Add+apply into one control).
+         Smaller, no detent marks, and a divider after it. It NEVER goes green or
+         red: those belong to the diff language (act-add/act-remove). Scope is not
+         a diff, so it does not speak that language. */
+      .scope { position:relative; display:inline-block; width:24px; height:12px;
+               border-radius:999px; background:var(--line); cursor:pointer;
+               transition:background .15s; flex:none; margin-right:10px;
+               padding-right:0; }
+      .scope::after { content:""; position:absolute; right:-6px; top:-4px;
+                      height:20px; border-left:1px solid var(--line); }
+      .scope .dot { position:absolute; top:2px; width:8px; height:8px;
+                    border-radius:50%; background:#c0caf5; transition:left .15s; }
+      .scope.in  .dot { left:14px; }
+      .scope.out .dot { left:2px; background:var(--dim); }
+      .scope.in  { background:#2a2e42; }
+      .scope.out { background:transparent; box-shadow:inset 0 0 0 1px var(--line); }
+      .scope:hover { filter:brightness(1.3); }
+      /* A row the user PULLED IN against the derivation keeps a visible mark: they
+         took responsibility for something we did not install. */
+      .scope.forced::before { content:"⚠"; position:absolute; left:-14px; top:-2px;
+                              font-size:10px; opacity:.8; }
+
+      /* The DEAD desire track: out of scope, the 3-detent control does not merely
+         grey — it loses its knob entirely. Position becomes unreadable BECAUSE
+         there is nothing to read; a greyed-but-positioned knob would invite
+         "which of the five is it on?". */
+      .toggle.dead { background:none; border-top:1px dashed var(--line);
+                     border-radius:0; height:0; margin-top:9px; cursor:default;
+                     opacity:.5; }
+      .toggle.dead .knob { display:none; }
+      .toggle.dead:hover { filter:none; }
+
       /* --- SIMPLE vs ADVANCED: only GRANULARITY differs, not the switch's meaning.
          Simple = one switch per bundle. Advanced adds per-package toggles, per-
          bundle & per-row Apply, and the default-side dot. The colour rule above is
@@ -242,8 +277,9 @@
       .verdelta .v-remove { color:#f7768e; }
       .verdelta .v-muted  { color:var(--dim); }
       .absent       { color:var(--dim); }
-      /* A config-atom the user turned off: self-managed, neutral dim — Talos
-         won't touch it, so the row doesn't read as "removed". */
+      /* An out-of-scope row (a config-atom the user turned off, an external
+         binary, a route with no way back): neutral dim — Talos won't touch it, so
+         the row doesn't read as "removed". Reused by the SCOPE_LABEL words. */
       .badge.self       { color:var(--dim); }
       .statusLabel.self { color:var(--dim); }
       .fail         { color:#f7768e; font-weight:700; }
@@ -516,9 +552,9 @@
       .hist-row .h-ver { color:var(--dim); font-family:"JetBrains Mono",monospace; font-size:12px; }
       .hist-row .h-act.ok { color:#9ece6a; } .hist-row .h-act.fail { color:#f7768e; }
       /* Consent + reset-confirm + forbidden dialogs reuse the overlay box */
-      #consent, #reset-confirm, #forbidden, #sudo, #appmgmt-sheet { position:fixed; inset:0; z-index:60; display:none; align-items:center; justify-content:center;
+      #consent, #reset-confirm, #forbidden, #sudo, #appmgmt-sheet, #scope-confirm { position:fixed; inset:0; z-index:60; display:none; align-items:center; justify-content:center;
                  background:rgba(16,17,24,.94); backdrop-filter:blur(3px); padding:40px; }
-      #consent.show, #reset-confirm.show, #forbidden.show, #sudo.show, #appmgmt-sheet.show { display:flex; }
+      #consent.show, #reset-confirm.show, #forbidden.show, #sudo.show, #appmgmt-sheet.show, #scope-confirm.show { display:flex; }
       .sudo-input { width:100%; box-sizing:border-box; margin:14px 0 4px; padding:10px 12px;
                  font-size:15px; border-radius:8px; border:1px solid #414868;
                  background:#1a1b26; color:#c0caf5; }
@@ -692,6 +728,22 @@
              the destructive reset is secondary + soft red. -->
         <button id="reset-confirm-yes" class="dlgbtn-danger">Yes, reset to standard</button>
         <button id="reset-confirm-no" class="globalbtn">No — keep my settings</button>
+      </div>
+    </div></div>
+
+    <!-- Guarded door: pulling an EXTERNAL row INTO scope is the one risky gesture
+         in the scope feature — it re-arms an uninstall on a binary Talos never
+         installed. Same overlay grammar as #reset-confirm; shown via the `.show`
+         class (NEVER the `hidden` attribute: `hidden` loses to `display:flex`, and
+         that already shipped as a bug once — the 403 retry cap, a7199c25). -->
+    <div id="scope-confirm"><div class="overlay-card consent-card">
+      <h2>Let Talos manage <span id="sc-name"></span>?</h2>
+      <p>It is installed on this machine, but <b>not by Talos</b> — it came from somewhere else.</p>
+      <p class="muted">Taking it over means Talos may later <b>remove or replace a binary it did not install</b>, for example one that came with the system.</p>
+      <div class="consent-actions">
+        <!-- Safe choice is PRIMARY (right/default position), like #reset-confirm. -->
+        <button id="sc-ok" class="dlgbtn-danger">Yes, manage it</button>
+        <button id="sc-cancel" class="globalbtn">No — leave it alone</button>
       </div>
     </div></div>
 
