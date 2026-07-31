@@ -41,6 +41,21 @@ fn cask_upgrade_blocked(
     action == Action::Upgrade && is_cask && appmgmt == AppMgmtStatus::Missing
 }
 
+/// True when this row is OUT OF SCOPE by the user's explicit hand, so no action may
+/// run on it. Reads the persisted overrides only: the DERIVED half (!canUninstall /
+/// external) is the front's to compute and it already declines to offer the action,
+/// so refusing on it here would break every ordinary row (the map is sparse — an
+/// absent entry means "follow the derivation", not "out").
+///
+/// WHY the server checks at all, when the front already filters: `row_action` is a
+/// SEPARATE path that never sees the `on`/`off` lists, and it is the path the
+/// per-row button uses. Git declares `brew: git`, so `canUninstall` is true and the
+/// button would happily run `brew uninstall git` on an Xcode-CLT binary. A
+/// front-only guard is a cosmetic guard (talos-measure-from-the-ui-not-the-socket).
+fn scope_refuses(sel: &Selection, name: &str) -> bool {
+    sel.scope.get(name).map(|s| s.as_str()) == Some("out")
+}
+
 fn is_outdated_now(od: Option<&crate::managers::Outdated>) -> bool {
     // Approach B: presence in the scan IS the outdated signal, for casks and
     // formulae alike. The scan uses `--greedy-auto-updates`, so a self-updating
@@ -392,7 +407,12 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
             "apply" => {
                 let on = json_indices(&parsed, "on");
                 let off = json_indices(&parsed, "off");
-                apply_diff(&mut socket, &state, on, off).await;
+                // Rows the front computed as out of scope. A THIRD list is needed,
+                // not merely an omission from on/off: an omitted index is
+                // indistinguishable from `auto` (see the desire match in
+                // apply_diff), so the server would have no way to know.
+                let unmanaged = json_indices(&parsed, "unmanaged");
+                apply_diff(&mut socket, &state, on, off, unmanaged).await;
             }
             "install" | "uninstall" | "upgrade" | "downgrade" => {
                 if let Some(i) = parsed.get("i").and_then(|v| v.as_u64()).map(|n| n as usize) {
@@ -692,6 +712,17 @@ async fn row_action(socket: &mut WebSocket, state: &AppState, i: usize, action: 
     let Some(step) = state.plan.steps.get(i) else {
         return;
     };
+    // THE TEETH. A row the user put out of scope is not ours to touch — and this
+    // path is the one the per-row button uses, so without this check the button
+    // stays live on a row the panel already greyed out.
+    let sel = read_selection(&state.data_dir);
+    if scope_refuses(&sel, &step.name) {
+        println!("[scope] refused {} on {} (out of scope)", action, step.name);
+        let _ = socket
+            .send(Message::Text(json!({ "type": "done" }).to_string()))
+            .await;
+        return;
+    }
     let act = match action {
         "install" => Action::Install,
         "uninstall" => Action::Uninstall,
@@ -806,7 +837,13 @@ fn seeds_for_rescan(
 /// SHARED rule action_for what to do, orders by dependencies (topo_sort), emits
 /// `apply-plan` (⚠️ which REMOVES the "Plotting the gallop…" veil — shortcut #1 from
 /// the spike fixed), then runs each step.
-async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, off: Vec<usize>) {
+async fn apply_diff(
+    socket: &mut WebSocket,
+    state: &AppState,
+    on: Vec<usize>,
+    off: Vec<usize>,
+    unmanaged: Vec<usize>,
+) {
     use crate::decision::{action_for, Action, Desired, MachineFacts};
     use crate::deps::{index_of_names, make_index, requires_reason, topo_sort, DepNode};
     use std::collections::HashSet;
@@ -815,6 +852,7 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
     let steps = &state.plan.steps;
     let want_on: HashSet<usize> = on.iter().copied().collect();
     let want_off: HashSet<usize> = off.iter().copied().collect();
+    let out_of_scope: HashSet<usize> = unmanaged.iter().copied().collect();
 
     // The batched outdated scan runs FIRST, because the seed selection needs it: a
     // row that is present and wanted present is still an ACTION when it is behind.
@@ -965,7 +1003,20 @@ async fn apply_diff(socket: &mut WebSocket, state: &AppState, on: Vec<usize>, of
 
     // Action per package: desire (on→present, off→absent, neither→auto=None).
     let mut visual_plan: Vec<(usize, Action)> = Vec::new();
+    let sel = read_selection(&state.data_dir);
     for (i, step) in steps.iter().enumerate() {
+        // Out of scope → never an action. TWO sources, deliberately, because they
+        // know different halves of the rule:
+        //   · the front's `unmanaged` list carries the DERIVED half (`external`,
+        //     `!canUninstall`) — live facts the server does not hold;
+        //   · the persisted overrides carry the user's EXPLICIT half, and reading
+        //     them here gives the batch path the same teeth `row_action` has.
+        // Without the second, a client that simply omitted the list would still get
+        // its uninstall: the batch path would trust the wire where the row path does
+        // not. Same predicate, same disk, one asymmetry closed.
+        if out_of_scope.contains(&i) || scope_refuses(&sel, &step.name) {
+            continue;
+        }
         let desired = if want_on.contains(&i) {
             Some(Desired::Present)
         } else if want_off.contains(&i) {
@@ -1891,5 +1942,54 @@ mod tests {
         assert!(is_outdated_now(Some(&cask))); // cask listed by greedy → outdated
         assert!(is_outdated_now(Some(&formula))); // formula listed → outdated
         assert!(!is_outdated_now(None)); // absent from scan → not outdated
+    }
+
+    #[test]
+    fn scope_refuses_only_rows_the_user_put_out_of_scope() {
+        let mut sel = Selection::default();
+        sel.scope.insert("Git".into(), "out".into());
+        sel.scope.insert("Nushell".into(), "in".into());
+        // Out of scope by the user's own hand → refused.
+        assert!(super::scope_refuses(&sel, "Git"));
+        // Explicitly pulled IN → allowed, even though it is external. The user
+        // was warned at the click; the server does not second-guess them.
+        assert!(!super::scope_refuses(&sel, "Nushell"));
+        // Absent from the map → the front's derivation governs, and the front
+        // already refused to offer the action. The server allows it: refusing
+        // here would break every ordinary row.
+        assert!(!super::scope_refuses(&sel, "Obsidian"));
+    }
+
+    /// The BATCH path must refuse on the same evidence as the row path, from disk —
+    /// not only on the list the client chose to send. This asserts the predicate over
+    /// a round-tripped file, which is what `apply_diff` actually reads: a client that
+    /// omits `unmanaged` entirely still cannot get an action on an explicit `out`.
+    #[test]
+    fn scope_refuses_from_disk_so_omitting_the_wire_list_is_not_a_bypass() {
+        let dir = std::env::temp_dir().join("talos-test-scope-batch-teeth");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut written = Selection::default();
+        written.scope.insert("Git".into(), "out".into());
+        write_selection(&dir, &written);
+        // Exactly what apply_diff does — read the persisted overrides, then ask.
+        let sel = read_selection(&dir);
+        assert!(
+            super::scope_refuses(&sel, "Git"),
+            "explicit out survives the file"
+        );
+        assert!(
+            !super::scope_refuses(&sel, "Nushell"),
+            "an untouched row still acts"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scope_refuses_survives_a_garbage_value() {
+        let mut sel = Selection::default();
+        sel.scope.insert("Git".into(), "sideways".into());
+        // parse_selection would have dropped this, but a direct construction
+        // must not become a silent refusal either: only "out" refuses.
+        assert!(!super::scope_refuses(&sel, "Git"));
     }
 }
