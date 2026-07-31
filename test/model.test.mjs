@@ -7,6 +7,8 @@ import {
   actionOf,
   addToPersonal,
   applyProfile,
+  applySavedActiveBundles,
+  applySavedScope,
   applySavedSelection,
   buttonAction,
   canReset,
@@ -18,21 +20,25 @@ import {
   isInPersonal,
   isLocked,
   isProfileActive,
-  applySavedActiveBundles,
   loadPlan,
   PERSONAL_BUNDLE,
   persistableActiveBundles,
   persistablePkgs,
+  persistableScope,
   profileProgress,
   profilesForPkg,
   profileStateOf,
   removeFromPersonal,
   removeProfile,
+  scopeOf,
   setDecision,
+  setExternal,
   setInstalledVersion,
   setOutdated,
+  setScope,
   setStatusData,
   toggleOf,
+  unmanagedIndices,
   versionSummary,
 } from "../public/model.js";
 
@@ -613,4 +619,104 @@ test("requires pull: a bundle pulling a package also pulls that package's requir
   applyProfile(m, "Base"); // bundle pulls Claude Code
   assert.deepEqual(toggleOf(m, 0), "in"); // pulled by bundle
   assert.deepEqual(toggleOf(m, 1), "in"); // Node.js pulled via Claude Code's requires
+});
+
+test("scope: an out-of-scope row yields NO action, whatever the machine says", () => {
+  const m = createModel();
+  loadPlan(m, [
+    // canUninstall:false → derived out of scope (a config-atom, no way back)
+    { i: 0, name: "Starship config", canUninstall: false, isConfig: true },
+    // a normal row, for contrast
+    { i: 1, name: "Nushell", canUninstall: true },
+  ]);
+  // Both are wanted, both absent → row 1 would install, row 0 must not.
+  setDecision(m, 0, "in");
+  setDecision(m, 1, "in");
+  assert.equal(scopeOf(m, 0), "out", "no way back → derived out");
+  assert.equal(scopeOf(m, 1), "in");
+  assert.equal(actionOf(m, 0), null, "out of scope → no action, ever");
+  assert.equal(actionOf(m, 1), "install");
+  assert.equal(isActionable(m, 0), false);
+  assert.equal(isActionable(m, 1), true);
+});
+
+test("scope: gates ACTION but never OBSERVATION", () => {
+  const m = createModel();
+  loadPlan(m, [{ i: 0, name: "Git", canUninstall: true }]);
+  setExternal(m, 0, true); // the probe found it installed outside our manager
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "2.51.0");
+  setOutdated(m, 0, true, "2.52.0");
+  assert.equal(scopeOf(m, 0), "out", "external → derived out");
+  assert.equal(actionOf(m, 0), null, "never acted on");
+  // …yet everything observed is still there, and still true.
+  assert.equal(m.pkgs.get(0).present, true);
+  assert.equal(m.pkgs.get(0).installedVersion, "2.51.0");
+  assert.equal(m.pkgs.get(0).outdated, true);
+  assert.equal(versionSummary(m, 0).from, "2.51.0");
+});
+
+test("scope: an uninstall is refused for an out-of-scope row (the Git hazard)", () => {
+  const m = createModel();
+  // Git declares `brew: git`, so canUninstall is TRUE — the hazard is that Talos
+  // would happily run `brew uninstall git` on a binary brew never installed.
+  loadPlan(m, [{ i: 0, name: "Git", canUninstall: true }]);
+  setExternal(m, 0, true);
+  setStatusData(m, 0, "ok");
+  setDecision(m, 0, "out"); // the user asks for it gone
+  assert.equal(desiredOf(m, 0), "absent", "the desire is real and preserved");
+  assert.equal(actionOf(m, 0), null, "but scope refuses to act on it");
+});
+
+test("scope: the manual override wins in both directions", () => {
+  const m = createModel();
+  loadPlan(m, [{ i: 0, name: "Git", canUninstall: true }, { i: 1, name: "Nushell", canUninstall: true }]);
+  setExternal(m, 0, true);
+  setStatusData(m, 0, "ok");
+  setDecision(m, 0, "out");
+  // Pull the derived-out row back IN → the action returns.
+  setScope(m, 0, "in");
+  assert.equal(scopeOf(m, 0), "in");
+  assert.equal(actionOf(m, 0), "uninstall", "in scope again → the action is live");
+  // Push a normal row OUT → its action goes.
+  setDecision(m, 1, "in");
+  assert.equal(actionOf(m, 1), "install");
+  setScope(m, 1, "out");
+  assert.equal(actionOf(m, 1), null);
+  // Clearing the override returns to the derivation.
+  setScope(m, 1, null);
+  assert.equal(scopeOf(m, 1), "in");
+  assert.equal(actionOf(m, 1), "install");
+});
+
+test("scope: persisted sparsely, by name, and restored", () => {
+  const m = createModel();
+  loadPlan(m, [{ i: 0, name: "Git", canUninstall: true }, { i: 1, name: "Nushell", canUninstall: true }]);
+  assert.deepEqual(persistableScope(m), {}, "untouched → nothing written");
+  setScope(m, 0, "in");
+  setScope(m, 1, "out");
+  assert.deepEqual(persistableScope(m), { Git: "in", Nushell: "out" });
+  // Restore into a fresh model.
+  const m2 = createModel();
+  loadPlan(m2, [{ i: 0, name: "Git", canUninstall: true }, { i: 1, name: "Nushell", canUninstall: true }]);
+  applySavedScope(m2, { scope: { Git: "in", Nushell: "out" } });
+  assert.equal(scopeOf(m2, 0), "in");
+  assert.equal(scopeOf(m2, 1), "out");
+  // Garbage and unknown names are ignored, not fatal.
+  applySavedScope(m2, { scope: { Ghost: "in", Git: "maybe" } });
+  assert.equal(scopeOf(m2, 0), "in", "a bad value leaves the good one alone");
+});
+
+test("scope: unmanagedIndices lists exactly what the server must refuse", () => {
+  const m = createModel();
+  loadPlan(m, [
+    { i: 0, name: "Starship config", canUninstall: false, isConfig: true },
+    { i: 1, name: "Nushell", canUninstall: true },
+    { i: 2, name: "Git", canUninstall: true },
+  ]);
+  setExternal(m, 2, true);
+  setStatusData(m, 2, "ok");
+  assert.deepEqual(unmanagedIndices(m), [0, 2]);
+  setScope(m, 2, "in"); // pulled back in → drops off the list
+  assert.deepEqual(unmanagedIndices(m), [0]);
 });

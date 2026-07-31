@@ -11,6 +11,7 @@ import {
   profileState,
   toggleState,
 } from "./decision.js";
+import { scopeOf as scopeRule, scopeReason as scopeReasonRule } from "./scope.js";
 import { compareVersions } from "./version.js";
 
 // The user's own editable bundle — always active, promotes what the user ADDED
@@ -23,6 +24,7 @@ export function createModel() {
   return {
     pkgs: new Map(), // i -> PkgRecord
     decision: new Map(), // i -> "in" | "out"  (absence = auto)
+    scope: new Map(), // i -> "in" | "out"  (absence = follow the derivation)
     profiles: new Map(), // name -> ProfileRecord {name, emoji, description, packages}
     activeProfiles: new Set(), // names of profiles the user has applied
     detectedAt: null, // ms of the last full presence scan (future TTL home)
@@ -34,6 +36,7 @@ export function loadPlan(model, steps, profiles = []) {
   model.pkgs.clear();
   model.profiles.clear();
   model.activeProfiles.clear();
+  model.scope.clear();
   for (const p of profiles) {
     model.profiles.set(p.name, {
       name: p.name,
@@ -54,6 +57,10 @@ export function loadPlan(model, steps, profiles = []) {
       posture: s.posture || "mandatory",
       canUninstall: !!s.canUninstall,
       isConfig: !!s.isConfig,
+      // Installed outside our manager (Xcode-CLT Git, say). Arrives with the
+      // per-row `state` message, NOT with the plan — so it starts false and the
+      // scan flips it. A switch that pre-guessed would be the bug.
+      external: false,
       requires: s.requires ?? [], // package names this one needs (transitive pull, §8)
       present: null,
       outdated: false,
@@ -129,6 +136,58 @@ export function userToggle(model, i) {
 export function isLocked(model, i) {
   return isLockedPosture(postureOf(model, i));
 }
+
+// --- scope: the SECOND axis — "is this mine to manage?" ---------------------
+//
+// Rule lives in scope.js; this composes it with the model's facts. Two layers:
+// the DERIVATION (no way back, or installed elsewhere) and the user's manual
+// override, which is sparse — absence means "follow the derivation".
+
+// The raw manual override, or null. Same defensive shape as manualToggle.
+export function manualScope(model, i) {
+  const s = model.scope.get(i);
+  return s === "in" || s === "out" ? s : null;
+}
+// The facts scope.js needs, gathered in one place so the rule stays pure.
+function scopeFacts(model, i) {
+  const p = model.pkgs.get(i);
+  return {
+    canUninstall: !!p?.canUninstall,
+    external: p?.external === true,
+    isConfig: !!p?.isConfig,
+    pulled: isPulled(model, i),
+    manual: manualScope(model, i),
+  };
+}
+// "in" | "out" — the effective scope of row i.
+export function scopeOf(model, i) {
+  return scopeRule(scopeFacts(model, i));
+}
+// WHY it is out of scope, for the row's right-hand label; null when in scope.
+export function scopeReason(model, i) {
+  return scopeReasonRule(scopeFacts(model, i));
+}
+// Set (or clear, with null) the user's override. Unlike setDecision there is no
+// posture to refuse it: scope is the user's question, always theirs to answer.
+export function setScope(model, i, state) {
+  if (state === "in" || state === "out") model.scope.set(i, state);
+  else model.scope.delete(i);
+}
+// Would pulling row i INTO scope be the risky direction? True only for a row we
+// did not install: managing it means Talos may remove a binary it never put
+// there. This is the one gesture that asks for confirmation (app.js).
+export function scopeInNeedsConfirm(model, i) {
+  return model.pkgs.get(i)?.external === true;
+}
+// Every out-of-scope index, in catalogue order — exactly what the `apply` message
+// must carry so the SERVER can refuse them too (a front-only guard is cosmetic).
+export function unmanagedIndices(model) {
+  const out = [];
+  for (const i of [...model.pkgs.keys()].sort((a, b) => a - b)) {
+    if (scopeOf(model, i) === "out") out.push(i);
+  }
+  return out;
+}
 // A package REFUSES to be wanted if the author forbade it or the user vetoed it by
 // hand. Such a package never installs, so it also can't propagate its `requires`.
 function refuses(model, i) {
@@ -185,9 +244,16 @@ export function isDeviated(model, i) {
 }
 // The action a plain Apply would take here, or null. present:null → treated as
 // "not known present" (false), the safe direction for install.
+//
+// SCOPE IS A GATE IN FRONT OF THE RULE (spec 2026-07-30 §1). An out-of-scope row
+// yields no action, whatever the desire and whatever the machine — one line here,
+// and every downstream consumer goes quiet for free: actClass, isActionable,
+// .will-change, .will-remove, the plan count. Note this gates ACTION only; the row
+// is still probed and still reports presence, version and outdated.
 export function actionOf(model, i) {
   const p = model.pkgs.get(i);
   if (!p) return null;
+  if (scopeOf(model, i) === "out") return null;
   return actionFor(desiredOf(model, i), {
     present: p.present === true,
     outdated: p.outdated,
@@ -303,6 +369,12 @@ export function setDecision(model, i, state) {
   if (state === "in" || state === "out") model.decision.set(i, state);
   else model.decision.delete(i); // anything else clears to auto
   return true;
+}
+// The scan's verdict on provenance: present, but installed outside our manager.
+// Set by the `state` handler, per row, as each probe lands.
+export function setExternal(model, i, external) {
+  const p = model.pkgs.get(i);
+  if (p) p.external = external === true;
 }
 // Reset: back to posture defaults — clears BOTH manual toggles AND active
 // profiles (profiles are additive intention; a true reset drops them too).
@@ -488,6 +560,25 @@ export function applySavedSelection(model, sel) {
     if (i != null && (state === "in" || state === "out")) {
       setDecision(model, i, state);
     }
+  }
+}
+// Scope overrides — sparse, keyed by NAME like pkgs, so only rows the user
+// actually moved are written and the file survives catalogue reordering.
+export function persistableScope(model) {
+  const scope = {};
+  for (const [i, state] of model.scope) {
+    const p = model.pkgs.get(i);
+    if ((state === "in" || state === "out") && p) scope[p.key] = state;
+  }
+  return scope;
+}
+export function applySavedScope(model, sel) {
+  if (!sel) return;
+  const byKey = new Map();
+  for (const [i, p] of model.pkgs) byKey.set(p.key, i);
+  for (const [key, state] of Object.entries(sel.scope || {})) {
+    const i = byKey.get(key);
+    if (i != null && (state === "in" || state === "out")) setScope(model, i, state);
   }
 }
 // Personal bundle members — the package NAMES the user added from the Catalog.
