@@ -31,6 +31,12 @@ pub struct UiPrefs {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Selection {
     pub pkgs: BTreeMap<String, String>,
+    /// The user's SCOPE overrides — "is this row mine to manage?" (the second
+    /// axis, spec 2026-07-30). Sparse: only rows the user actually moved appear;
+    /// absence means "follow the derivation" (!canUninstall / external), which is
+    /// computed live and so is never stored. Keyed by NAME, like `pkgs`.
+    #[serde(default)]
+    pub scope: BTreeMap<String, String>,
     #[serde(default)]
     pub personal: Vec<String>,
     /// Names of the bundles the user has activated (the top cards). Restored so
@@ -54,22 +60,31 @@ fn string_array(v: &serde_json::Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Read a JSON object as a NAME → "in"/"out" map. Anything else — a non-object, a
+/// non-string value, a value outside in/out — is dropped, never an error: this file
+/// is user-editable and a corrupt one must never sink a session.
+fn in_out_map(v: &serde_json::Value, key: &str) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    if let Some(src) = v.get(key).and_then(|p| p.as_object()) {
+        for (k, val) in src {
+            if let Some(s) = val.as_str() {
+                if s == "in" || s == "out" {
+                    out.insert(k.clone(), s.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Pure, defensive: anything not well-formed → dropped. `pkgs` keeps only "in"/
 /// "out" values; `personal` + `activeBundles` keep only string entries.
 pub fn parse_selection(raw: &str) -> Selection {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
         return Selection::default();
     };
-    let mut pkgs = BTreeMap::new();
-    if let Some(src) = v.get("pkgs").and_then(|p| p.as_object()) {
-        for (k, val) in src {
-            if let Some(s) = val.as_str() {
-                if s == "in" || s == "out" {
-                    pkgs.insert(k.clone(), s.to_string());
-                }
-            }
-        }
-    }
+    let pkgs = in_out_map(&v, "pkgs");
+    let scope = in_out_map(&v, "scope");
     // UI prefs: parse the `ui` object with serde (missing/garbage → defaults).
     let ui = v
         .get("ui")
@@ -77,6 +92,7 @@ pub fn parse_selection(raw: &str) -> Selection {
         .unwrap_or_default();
     Selection {
         pkgs,
+        scope,
         personal: string_array(&v, "personal"),
         active_bundles: string_array(&v, "activeBundles"),
         ui,
@@ -180,6 +196,41 @@ mod tests {
         write_selection(&dir, &sel);
         let back = read_selection(&dir);
         assert_eq!(back, sel);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_scope_keeps_only_in_out() {
+        let sel = parse_selection(
+            r#"{"pkgs":{},"scope":{"Git":"in","Obsidian":"out","Bad":"maybe","N":7}}"#,
+        );
+        assert_eq!(sel.scope.get("Git"), Some(&"in".to_string()));
+        assert_eq!(sel.scope.get("Obsidian"), Some(&"out".to_string()));
+        assert_eq!(sel.scope.get("Bad"), None, "value outside in/out rejected");
+        assert_eq!(sel.scope.get("N"), None, "non-string rejected");
+    }
+
+    #[test]
+    fn parse_scope_defensive_on_garbage() {
+        // A hand-edited selection.json must never sink a session.
+        assert!(parse_selection(r#"{"pkgs":{},"scope":42}"#)
+            .scope
+            .is_empty());
+        assert!(parse_selection(r#"{"pkgs":{},"scope":"nope"}"#)
+            .scope
+            .is_empty());
+        assert!(parse_selection(r#"{"pkgs":{}}"#).scope.is_empty());
+    }
+
+    #[test]
+    fn scope_survives_a_write_read_roundtrip() {
+        let dir = std::env::temp_dir().join("talos-test-sel-scope");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut sel = Selection::default();
+        sel.scope.insert("Git".into(), "in".into());
+        sel.scope.insert("Obsidian".into(), "out".into());
+        write_selection(&dir, &sel);
+        assert_eq!(read_selection(&dir), sel);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
