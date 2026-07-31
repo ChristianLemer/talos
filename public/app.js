@@ -473,6 +473,20 @@ function paintPkg(i) {
       r.badge.textContent = "·";
       r.badge.className = "badge self";
     }
+  } else if (r.statusLabel.classList.contains("self")) {
+    const p = model.pkgs.get(i);
+    // ⚠️ CLEAR IT when the reason is gone. Writing without clearing left a row that
+    // came BACK into scope still reading `not managed` beside a switch saying
+    // `tracked` — a self-contradicting row, and the same disease as a vanishing one:
+    // a label outliving the state it described. Only reclaim a label WE wrote (the
+    // `self` class is the marker), so setStatus's own words are never stolen; then
+    // restore from the machine state, which setStatus owns.
+    r.statusLabel.className = "statusLabel " + (p?.status || "waiting");
+    r.statusLabel.textContent = p?.status === "ok"
+      ? ""
+      : (LABEL[p?.status] || LABEL.waiting);
+    r.badge.className = "badge " + (p?.status || "waiting");
+    r.badge.textContent = GLYPH[p?.status] || "·";
   }
 }
 // Render the row's version display — the SINGLE place numbers appear (the delta
