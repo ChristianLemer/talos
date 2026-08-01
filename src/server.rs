@@ -61,7 +61,6 @@ fn scope_refuses(sel: &Selection, name: &str) -> bool {
 /// The index check is the whole point. A Stop click can land JUST as its step finishes —
 /// the message is then read while the NEXT step is streaming, and killing on the verb
 /// alone would murder an innocent row. Pure, so it is tested without a pty.
-#[allow(dead_code)]
 fn cancel_targets(txt: &str, running: u32) -> bool {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(txt) else {
         return false;
@@ -538,6 +537,11 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 println!("[quit] asked by the panel — exiting");
                 std::process::exit(0);
             }
+            // A cancel that arrives with no step running has nothing to kill: the step
+            // that would have handled it is already over. Silently fine — the front may
+            // legitimately send it as the row finishes. Listed explicitly so it does not
+            // read as an unhandled verb in the log.
+            "cancel-step" => {}
             // Deep-link straight to System Settings → Privacy & Security → App
             // Management, so the user can grant the permission a cask upgrade needs.
             "open-appmgmt-settings" => {
@@ -581,7 +585,7 @@ async fn diff_step(socket: &mut WebSocket, state: &AppState, i: usize) {
             json!({ "type": "step", "i": i, "status": "checking" }).to_string(),
         ))
         .await;
-    let (code, _forbidden, _url) = run_in_pty(socket, state, i as u32, &check).await;
+    let (code, _forbidden, _url, _cancelled) = run_in_pty(socket, state, i as u32, &check).await;
     // exit 0 = converged, non-zero = drifted. Say which, in the terminal, rather than
     // only colouring a pill: the operator asked to SEE the difference.
     let line = format!(
@@ -1153,14 +1157,14 @@ async fn apply_diff(
 
 /// Streams the command into a pty,
 /// scans the 403 as it streams, ticks the watcher (Windows). The pty runs in a
-/// blocking thread; mpsc channel → async. RETURNS (code, forbidden, url) — the
+/// blocking thread; mpsc channel → async. RETURNS (code, forbidden, url, cancelled) — the
 /// verdict (done/step/overlay) is left to the caller (do_step), like the TS.
 async fn run_in_pty(
     socket: &mut WebSocket,
     state: &AppState,
     i: u32,
     cmdline: &str,
-) -> (i32, bool, Option<String>) {
+) -> (i32, bool, Option<String>, bool) {
     use base64::{engine::general_purpose::STANDARD, Engine};
 
     // pty_shell is THE single source of the shell wrapping: Windows → powershell + PATH
@@ -1206,13 +1210,24 @@ async fn run_in_pty(
     // INPUT channel to the pty (std::sync::mpsc: the pty thread drains it
     // blocking). This is where the sudo password is injected.
     let (in_tx, in_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    // The killer for THIS step's child, shared with the select! loop below. A plain
+    // Mutex (not tokio's): the lock is held for the duration of a `kill()` syscall and
+    // never across an await, so an async mutex would buy nothing.
+    let killer: std::sync::Arc<
+        std::sync::Mutex<Option<Box<dyn portable_pty::ChildKiller + Send + Sync>>>,
+    > = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let killer_slot = killer.clone();
     std::thread::spawn(move || {
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let code = crate::pty::run(
             &program,
             &arg_refs,
             Some(in_rx),
-            |_killer| {},
+            |k| {
+                if let Ok(mut slot) = killer_slot.lock() {
+                    *slot = Some(k);
+                }
+            },
             |bytes| {
                 let _ = tx.send(bytes.to_vec());
             },
@@ -1226,6 +1241,12 @@ async fn run_in_pty(
     // current buffer. Once answered, we don't re-ask for this step.
     let mut buf = String::new();
     let mut forbidden = false;
+    // Set when the USER killed this step. Distinct from `forbidden` and from a plain
+    // non-zero exit: the caller must be able to tell "I stopped this" from "this broke".
+    let mut cancelled = false;
+    // Gates the socket arm of the select below. A dropped socket yields None forever, so
+    // polling it after that is a hot loop; this turns the branch off once and for all.
+    let mut socket_open = true;
     // How many times we have answered a password prompt in THIS step. sudo grants
     // three attempts, so answering only once was a hang waiting to happen: a wrong
     // password (very often a STALE CACHED one — model C reuses it across the whole
@@ -1236,7 +1257,53 @@ async fn run_in_pty(
     const SUDO_MAX_TRIES: u8 = 3; // sudo's own budget — past it, sudo gives up by itself
                                   // Where the last answer came from, so a refusal can invalidate the right thing.
     let mut last_from_cache = false;
-    while let Some(chunk) = rx.recv().await {
+    loop {
+        // TWO sources, because a Stop must be readable WHILE output flows. The sudo
+        // prompt and the 403 pause also read this socket mid-step, but they BLOCK on it;
+        // a cancel cannot block, or the row's terminal would freeze while we waited for
+        // a message that may never come.
+        let chunk = tokio::select! {
+            // Biased: drain output first, so a chatty command cannot starve the cancel
+            // check AND a cancel cannot swallow bytes already queued. Deterministic
+            // beats fair here — the pending-output path is the common one.
+            biased;
+            maybe = rx.recv() => match maybe {
+                Some(c) => c,
+                None => break, // pty closed → step over
+            },
+            msg = socket.recv(), if socket_open => {
+                // ⚠️ A CLOSED socket returns None IMMEDIATELY and forever. Without this
+                // arm the `continue` below would spin a hot loop — burning a core until
+                // the pty happened to close, which for a long install is minutes. So we
+                // stop polling the socket once it is gone: `socket_open = false` removes
+                // this branch from the select and the loop goes back to draining output
+                // only, which is exactly right — nobody is left to send a cancel, but the
+                // step must still finish and be reaped.
+                if msg.is_none() {
+                    socket_open = false;
+                    continue;
+                }
+                // Only a cancel aimed at THIS step acts. Anything else is ignored here
+                // and NOT consumed elsewhere — sudo-pw and forbidden-* are read by their
+                // own blocking loops, which run at moments this select is not active.
+                if let Some(Ok(Message::Text(txt))) = msg {
+                    if cancel_targets(&txt, i) {
+                        if let Ok(mut slot) = killer.lock() {
+                            if let Some(k) = slot.as_mut() {
+                                let _ = k.kill();
+                            }
+                        }
+                        cancelled = true;
+                        // No break: the kill makes the child exit, the master is dropped,
+                        // the reader hits EOF and `rx.recv()` returns None on its own. We
+                        // leave through the SAME door as a normal finish, so the exit code
+                        // and the Windows watcher teardown below still happen.
+                        println!("[cancel] killed step {i} at the user's request");
+                    }
+                }
+                continue;
+            }
+        };
         // Always accumulate (the sudo prompt may be split across several chunks,
         // or "Password:" arrive in a separate piece → testing the chunk alone misses it).
         buf.push_str(&String::from_utf8_lossy(&chunk));
@@ -1245,7 +1312,7 @@ async fn run_in_pty(
         }
         let out = json!({ "type": "out", "i": i, "data": STANDARD.encode(&chunk) });
         if socket.send(Message::Text(out.to_string())).await.is_err() {
-            return (-1, forbidden, None);
+            return (-1, forbidden, None, cancelled);
         }
         let tail = buf.trim_end().to_lowercase();
         // A REFUSAL invalidates whatever we just sent. If it came from the cache, drop
@@ -1301,7 +1368,7 @@ async fn run_in_pty(
     } else {
         None
     };
-    (code, forbidden, url)
+    (code, forbidden, url, cancelled)
 }
 
 /// Obtains the sudo password — MODEL C. If the RAM cache already holds it (entered
@@ -1519,14 +1586,20 @@ async fn do_step(
 
     // The bare command is passed to run_in_pty, which wraps it in the native shell
     // (POSIX: user shell in -ilc via pty_shell; Windows: powershell + PATH refresh).
-    let (code, forbidden, url) = run_in_pty(socket, state, i as u32, cmd).await;
+    let (code, forbidden, url, cancelled) = run_in_pty(socket, state, i as u32, cmd).await;
     let ok = code == 0 || benign_code(code);
 
     // Diagnostic line in the row's terminal.
     let line = format!(
         "\r\n\x1b[2m[{}] exit {code} → {}\x1b[0m\r\n",
         action.as_str(),
-        if ok { "ok" } else { "failed" }
+        if cancelled {
+            "cancelled"
+        } else if ok {
+            "ok"
+        } else {
+            "failed"
+        }
     );
     {
         use base64::{engine::general_purpose::STANDARD, Engine};
@@ -1539,7 +1612,12 @@ async fn do_step(
     }
 
     let blocked = !ok && forbidden;
-    let status = if ok {
+    let status = if cancelled {
+        // The user's own decision outranks every other reading of this exit code. A
+        // killed process exits non-zero, which would otherwise print `fail` and send
+        // them hunting a cause that does not exist.
+        "cancelled"
+    } else if ok {
         if action == Action::Uninstall {
             "absent"
         } else {
