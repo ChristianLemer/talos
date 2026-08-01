@@ -915,6 +915,54 @@ slow: true
         );
     }
 
+    #[test]
+    fn the_shipped_seed_reaches_overrides() {
+        // The walk above proves every file still PARSES, which already catches a bad VALUE:
+        // `uac: ture` is not a bool, so `parse_catalog_entry` returns None and the walk
+        // trips (measured, both ways). What it does NOT catch is a bad KEY — `uacc: true`
+        // parses fine, because serde ignores an unknown field in silence, leaving the
+        // declaration inert and a fresh machine's first Apply uncalibrated. That one hole is
+        // why this test exists: it pins the VALUES that ship, through the same lift the
+        // resolution uses.
+        //
+        // Names the five stems on purpose rather than walking for whatever declares `uac`.
+        // The fixed set is the stronger guard — DELETING a seed turns it red, which a
+        // "some file declares something" check would sail past — and adding a sixth
+        // observation still will not, since nothing here asserts a total.
+        let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/catalog"));
+        let declared = |stem: &str| {
+            let raw = std::fs::read_to_string(dir.join(format!("{stem}.yaml"))).unwrap();
+            crate::catalog::parse_catalog_entry(&raw, stem)
+                .expect("parses")
+                .pkg
+                .overrides()
+        };
+
+        // C observed these four elevating on Windows via winget.
+        for stem in ["7-zip", "aws-cli", "node", "visual-studio-code"] {
+            let o = declared(stem);
+            assert_eq!(o.uac, Some(true), "{stem} must declare uac: true");
+            // ⚠️ A LATENT false red: if any of these four is ever observed hitting a 403 at
+            // a corporate network, declaring it here turns this line red. That is the tripwire working —
+            // update the line, do not delete the assertion.
+            assert_eq!(o.forbidden, None, "{stem} says nothing about the firewall");
+        }
+
+        // And rclone meeting a corporate firewall, which pins the `rename = "403"` bridge.
+        // (Measured: serde_yaml accepts a BARE `403:` here too — it matches the renamed
+        // field on the key's text, integer-looking or not. The shipped file quotes it for
+        // the reader, not out of necessity.)
+        let o = declared("rclone");
+        assert_eq!(o.forbidden, Some(true), "rclone must declare 403: true");
+        assert_eq!(o.uac, None, "rclone says nothing about elevation");
+
+        // A package with no declaration must stay silent — otherwise the seed is not a
+        // seed but a default, and "no opinion" would have collapsed into "false".
+        assert_eq!(declared("jq").uac, None);
+        assert_eq!(declared("jq").forbidden, None);
+        assert_eq!(declared("jq").slow, None);
+    }
+
     // B5: `requires:` from catalog YAML must reach the Step (the front does the
     // transitive pull over it — see model.js wantedNames).
     #[test]

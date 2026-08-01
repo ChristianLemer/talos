@@ -12,3 +12,15 @@ winget: Rclone.Rclone
 brew: rclone
 detect: rclone --version
 category: [cloud]
+# Observed on a corporate network (C, 2026-08-01): the corporate firewall answers 403 on this
+# one. A SEED for a fresh machine, extended by the shared behaviour file as the fleet meets
+# the same wall.
+#
+# Quoted for the reader, not out of necessity — serde matches the renamed field on the key's
+# text, so a bare `403:` parses identically (measured). The Rust field behind it is
+# `forbidden`, since an identifier cannot start with a digit.
+#
+# ⚠️ If the firewall ever opens, this is ALSO the escape hatch — change it to `false` here
+# rather than emptying the shared file. An observation can only ratchet a fact ON; the
+# catalogue is the one place that can turn it off, and it leaves a diff saying who decided.
+"403": true

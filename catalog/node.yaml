@@ -21,3 +21,13 @@ winget: OpenJS.NodeJS
 brew: node
 detect: node --version
 category: [foundation]
+# Observed on Windows via winget (C, 2026-08-01): demands elevation, so an unattended
+# Apply must not schedule it. This is a SEED, not a substitute for the telemetry: a fresh
+# machine has collected nothing, and without this line its first Apply would promise
+# "nothing will interrupt you" and then hit a UAC prompt. The shared behaviour file
+# confirms and extends it from the fleet; the catalogue speaks first.
+#
+# It is also an OVERRIDE: an explicit value here beats what was collected, which is the
+# only way a monotone fact ever goes back to false. Scoped to (winget, windows) by the
+# observation, not by this file — the same package via brew on macOS does not elevate.
+uac: true
