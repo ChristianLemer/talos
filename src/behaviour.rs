@@ -12,8 +12,11 @@
 //! produce a conflict copy instead of either version).
 //!
 //! What monotonicity buys is that **no write can ever produce a WRONG value, and a lost
-//! fact is recoverable by re-observation**: the next machine to touch this file merges
-//! again, and `∨`/`max` bring the fact back. The worst case is a delay, never a wrong
+//! fact is recoverable by RE-OBSERVATION**: the next machine that OBSERVES that fact merges
+//! it in, and `∨`/`max` put it back. Merging alone recovers nothing — after the overwrite no
+//! machine still holds the lost value, so a machine that merely touches the file has nothing
+//! to contribute. What makes that acceptable is that these facts are observed rather than
+//! authored: the next Apply produces them again. The worst case is a delay, never a wrong
 //! answer. A counter ("seen 7 times") would not have that safety — the same interleaving
 //! loses an increment permanently and leaves a plausible-looking but simply false number,
 //! which no later merge can detect or repair.
@@ -31,25 +34,23 @@
 //! needs no gate, because there is no person in it to publish.
 //!
 //! Pure and total (parse/merge/serialise): no IO here, deliberately, so the properties
-//! above can be tested directly. The IO shell will be behaviour_io.rs — not written yet.
+//! above can be tested directly. The IO shell is behaviour_io.rs, which reads and writes
+//! the shared files and holds every disk decision.
 
 use crate::platform::Os;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-// Nothing in the binary calls this module yet: it is the pure half, landed on its own so
-// the properties the design rests on could be tested before any IO existed. The allows
-// below are per-item on purpose, so each disappears the moment its item gets a real caller.
+// The allows below are per-item on purpose, so each disappears the moment its item gets a
+// real caller. There used to be FOUR of them, when this module was the only thing landed:
+// the IO shell now calls `parse_behaviour`, `parse_failed`, `to_yaml` and `merge_into`, so
+// three are gone and `key` is the ONE that remains — it goes when the Apply path starts
+// recording observations, which is what will finally call it.
 //
-// There are only FOUR of them for nine items, because an allowed item counts as a live
-// root and keeps whatever it calls alive: `merge_into` covers `merge`, `Facts` and
-// `Record`, and `to_yaml` covers `Facts`'s `Serialize` and so the two skip-helpers. Adding
-// allows to those would be decoration — silently redundant, and redundant allows are
-// exactly what turns into permanent noise.
-//
-// Three of the four go when the IO shell (behaviour_io.rs) calls parse/serialise/
-// merge_into. `key` is the one that survives it, and goes when the Apply path starts
-// recording observations.
+// One allow for ten items is not an oversight: an allowed item counts as a live root and
+// keeps whatever it calls alive, and a REACHED item needs nothing at all. Adding more here
+// would be silently redundant, and redundant allows are exactly what turns into permanent
+// noise. Measured by stripping one at a time under `-D warnings`, not guessed.
 
 /// What was observed for ONE (route, os) of one package.
 /// `Default` = nothing observed, which is distinct from "observed as false" only in
@@ -116,7 +117,6 @@ pub fn merge(a: &Facts, b: &Facts) -> Facts {
 
 /// Merge a fresh observation into a whole record, under one key. (`at`, not `key`, so it
 /// does not shadow the `key()` function.)
-#[allow(dead_code)] // called by the IO shell (behaviour_io.rs) and the Apply path
 pub fn merge_into(rec: &mut Record, at: &str, obs: &Facts) {
     let entry = rec.entry(at.to_string()).or_default();
     *entry = merge(entry, obs);
@@ -136,16 +136,29 @@ pub fn merge_into(rec: &mut Record, at: &str, obs: &Facts) {
 /// accepted here, dropped from `Facts`, and therefore absent from `to_yaml`. So the first
 /// time an older build merges and writes back, a newer build's fourth fact is gone from
 /// the shared file. Adding a fact is safe; removing or renaming one is not.
-#[allow(dead_code)] // called by the IO shell (behaviour_io.rs)
 pub fn parse_behaviour(raw: &str) -> Record {
     serde_yaml::from_str::<Record>(raw).unwrap_or_default()
+}
+
+/// Did the document fail to parse AT ALL? The companion signal to `parse_behaviour`, which
+/// is total by design and therefore cannot distinguish "nothing was there" from "everything
+/// was thrown away". Same bytes, same parser; this keeps only whether it errored.
+///
+/// It lives HERE rather than in the IO shell because knowing what YAML accepts is this
+/// module's business, and the shell must stay YAML-ignorant. That is not a purity
+/// preference: the obvious shell-side heuristic — "bytes were non-empty but the record is
+/// empty" — is WRONG for six shapes that parse cleanly and lose nothing. `{}`, `{ }`,
+/// `--- {}`, `---`, a comment-only file, and `{}` followed by a comment (which is not
+/// hypothetical: an otherwise-empty file is allowed to carry a date comment). Only a real
+/// error answers true: a malformed entry, unbalanced brackets, or a `null` document.
+pub fn parse_failed(raw: &str) -> bool {
+    serde_yaml::from_str::<Record>(raw).is_err()
 }
 
 /// Serialise for writing. An empty record is `"{}\n"`, so the empty string means only one
 /// thing: serialisation failed. It is not reachable for `BTreeMap<String, Facts>` (no
 /// non-string keys, no failing Serialize impl) — it exists so this stays total, and so the
 /// IO shell has an unambiguous "do not write" signal if the type ever grows a fallible field.
-#[allow(dead_code)] // called by the IO shell (behaviour_io.rs)
 pub fn to_yaml(rec: &Record) -> String {
     serde_yaml::to_string(rec).unwrap_or_default()
 }
@@ -306,6 +319,45 @@ brew/darwin:
             "one malformed entry must discard the file entirely, valid siblings included \
              — a partial record here would mean the documented cost no longer holds"
         );
+    }
+
+    #[test]
+    fn parse_failed_separates_a_real_error_from_a_legitimately_empty_document() {
+        // Exists so the IO shell can log a whole-file loss WITHOUT knowing any YAML. Every
+        // input below was measured against serde_yaml 0.9, not assumed — the five "empty but
+        // valid" shapes are exactly the false alarms that sank the shell-side heuristic
+        // ("non-empty bytes, empty record") this replaced.
+        for empty_but_valid in [
+            "",             // absent/truncated
+            "   \n",        // whitespace
+            "{}",           // what to_yaml writes for an empty record
+            "{}\n",         // ditto, as written to disk
+            "{ }",          // a human's spacing
+            "--- {}",       // an explicit document marker
+            "---\n",        // a document with no content
+            "# comment\n",  // comment-only
+            "{}\n# note\n", // empty PLUS a date comment, which the format allows
+        ] {
+            assert!(
+                !parse_failed(empty_but_valid),
+                "{empty_but_valid:?} parses fine and loses nothing — reporting it would cry wolf"
+            );
+            assert!(parse_behaviour(empty_but_valid).is_empty());
+        }
+        for really_broken in [
+            "null",                                      // a document that is not a map
+            "this: [is: not",                            // unbalanced
+            "winget/windows: 42",                        // a scalar where Facts belongs
+            "good/darwin:\n  uac: true\nbad/darwin: 42", // ONE bad entry discards the rest
+        ] {
+            assert!(
+                parse_failed(really_broken),
+                "{really_broken:?} is a real failure and must be reportable"
+            );
+            assert!(parse_behaviour(really_broken).is_empty());
+        }
+        // And a document that yields facts never counts as a failure.
+        assert!(!parse_failed("winget/windows:\n  uac: true\n"));
     }
 
     #[test]
