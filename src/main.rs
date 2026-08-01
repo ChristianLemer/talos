@@ -5,6 +5,7 @@
 
 mod agent_content;
 mod assets;
+mod behaviour;
 mod build_info;
 mod bundles;
 mod catalog;
