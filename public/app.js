@@ -862,6 +862,13 @@ function render(steps, profiles = [], columns = 2) {
     apply.title = "Apply this one now";
     apply.onclick = (e) => {
       e.preventDefault();
+      // Pressing this button is a GESTURE, so the row must stay visible for the rest of
+      // the session even when the outcome changes nothing (a cancel leaves the machine
+      // as it was). Found at a real click: without this, a cancelled row VANISHED from
+      // the Changes view the instant it settled — the exact disappearing-row fault the
+      // `touched` set exists to prevent, reappearing on a path that did not go through
+      // setDecision/setScope.
+      M.markTouched(model, s.i);
       // While this row is RUNNING the button means Stop — send the cancel and return.
       // `i` is carried so the server can refuse a stale click: the message may land
       // just as the step finishes, and killing the NEXT row would be the bug.
