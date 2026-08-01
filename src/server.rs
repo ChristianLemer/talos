@@ -1194,9 +1194,15 @@ async fn run_in_pty(
     let (in_tx, in_rx) = std::sync::mpsc::channel::<Vec<u8>>();
     std::thread::spawn(move || {
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let code = crate::pty::run(&program, &arg_refs, Some(in_rx), |bytes| {
-            let _ = tx.send(bytes.to_vec());
-        })
+        let code = crate::pty::run(
+            &program,
+            &arg_refs,
+            Some(in_rx),
+            |_killer| {},
+            |bytes| {
+                let _ = tx.send(bytes.to_vec());
+            },
+        )
         .unwrap_or(-1);
         let _ = code_tx.send(code);
     });

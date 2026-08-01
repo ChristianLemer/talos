@@ -20,10 +20,16 @@ fn main() {
     } else {
         ("/bin/bash", vec!["-lc", "ls -la /usr/bin | head -40"])
     };
-    let code = pty::run(program, &args, None, |bytes| {
-        print!("{}", String::from_utf8_lossy(bytes));
-        std::io::stdout().flush().ok();
-    })
+    let code = pty::run(
+        program,
+        &args,
+        None,
+        |_killer| {},
+        |bytes| {
+            print!("{}", String::from_utf8_lossy(bytes));
+            std::io::stdout().flush().ok();
+        },
+    )
     .expect("pty run failed");
     eprintln!("\n[pty-smoke] exit code = {code}");
 }
