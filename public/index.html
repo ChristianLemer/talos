@@ -49,9 +49,16 @@
       *::-webkit-scrollbar-thumb { background:var(--line); border-radius:8px; }
       *::-webkit-scrollbar-thumb:hover { background:var(--dim); }
       /* Hero intro — a little welcoming, a little selling. */
-      header { padding:26px 24px 22px; border-bottom:1px solid var(--line);
+      /* Compact by intent: the height above the list is a permanent cost paid on every
+         launch, and it was buying a five-line sales paragraph. `align-items:center`
+         (not flex-start) so the mark sits with the two text lines rather than above
+         them. Keeps the gradient — the mood was never the problem, the height was. */
+      header { padding:12px 20px; border-bottom:1px solid var(--line);
                background:radial-gradient(120% 140% at 0% 0%, var(--surface-hi) 0%, var(--bg) 60%);
-               display:flex; align-items:flex-start; gap:24px; }
+               display:flex; align-items:center; gap:14px; }
+      /* The mark: rounded to echo the app icon's own card, and NOT stretched — the
+         source is square, so any other aspect would distort the face. */
+      .hero-mark { flex:none; width:40px; height:40px; border-radius:9px; display:block; }
       .hero-text { flex:1; min-width:0; }
       /* Apply is the action bar at the TOP of the Setup view (not the header): it
          acts on the list below it. Sticky so it stays reachable while the bundle
@@ -63,9 +70,9 @@
       .hero-apply #globalhint { flex:1; order:0; text-align:left; max-width:none; }
       .hero-apply #overall { order:1; }
       .hero-apply .hero-buttons { order:2; }
-      h1 { font-size:22px; margin:0 0 6px; font-weight:700; letter-spacing:-0.2px; }
+      h1 { font-size:17px; margin:0 0 2px; font-weight:700; letter-spacing:-0.2px; }
       h1 .accent { background:linear-gradient(90deg,#7aa2f7,#bb9af7); -webkit-background-clip:text; background-clip:text; color:transparent; }
-      .tagline { font-size:14px; color:#a9b1d6; margin:0; max-width:62ch; line-height:1.5; }
+      .tagline { font-size:12.5px; color:#a9b1d6; margin:0; max-width:80ch; line-height:1.4; }
       .tagline b { color:var(--fg); font-weight:600; }
       #globalhint { font-size:12px; color:var(--dim); max-width:28ch; line-height:1.4; }
       #overall { font-size:12px; color:var(--dim); }
@@ -887,11 +894,16 @@
       </div>
     </div></div>
 
+    <!-- The mark carries the identity so the WORDS don't have to. Before, five lines
+         of pitch cost ~110px of permanent height on every launch, above the list
+         people actually came to read — a sales paragraph is worth its space once, not
+         every time. Title + one subtitle line, icon at left: same identity, ~70px back
+         to the list. Same image as the app icon (icons/icon.png), one mark everywhere. -->
     <header>
+      <img class="hero-mark" src="/talos-mark.png" alt="" width="40" height="40" />
       <div class="hero-text">
-        <h1><span class="accent">Your workspace</span>, ready in one click.</h1>
-        <p class="tagline">Everything your <b>AI coding agent</b> needs — installed, kept current, and shown
-          to you as it happens. No terminal know-how required: check what you want and press <b>Apply</b>.</p>
+        <h1><span class="accent">Talos</span> — your workspace, ready in one click.</h1>
+        <p class="tagline">Everything your <b>AI coding agent</b> needs, installed and kept current.</p>
       </div>
     </header>
     <nav>
