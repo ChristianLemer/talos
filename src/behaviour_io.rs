@@ -19,17 +19,14 @@ use crate::behaviour::{merge_into, parse_behaviour, parse_failed, to_yaml, Recor
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-// Nothing in the binary calls this shell yet, so the allows are per-item as in behaviour.rs,
-// and there are only TWO for the seven functions below: an allowed item is a live ROOT and
-// keeps its callees alive, so `merge_and_write` covers `read_one`, `write_one` and
-// `behaviour_path` — while `behaviour_dir` and `note_if_whole_file_loss` sit under BOTH
-// roots and are attributable to neither in particular.
+// ONE `allow(dead_code)` is left below, on `read_all`. The other one went when the Apply
+// path started flushing its observations through `merge_and_write` — which, being reached,
+// now keeps `read_one`, `write_one`, `behaviour_path`, `behaviour_dir` and
+// `note_if_whole_file_loss` alive without any allow of their own.
 //
-// The two do NOT leave together. Task 5 calls `merge_and_write` when the Apply path flushes
-// its observations, and that allow goes then. Nothing in this plan calls `read_all` at all —
-// its first caller is the ladder's own plan, which reads the facts at startup — so that one
-// outlives the plan that introduced it. Measured by stripping one at a time under
-// `-D warnings`: dropping either brings warnings back.
+// `read_all` outlives this plan on purpose: nothing in it reads the facts back. Its first
+// caller is the ladder's own plan, which loads them at startup beside the catalogue.
+// Measured by stripping it under `-D warnings`: without it, one warning returns.
 
 /// The folder holding every package's facts. Single-sourced here so `behaviour_path` and
 /// `read_all` cannot drift apart about where the layout lives.
@@ -164,7 +161,6 @@ pub fn write_one(exe_dir: &Path, id: &str, rec: &Record) {
 /// What monotonicity actually buys is therefore narrower than convergence, and enough: no
 /// write can ever produce a WRONG value, and every loss is temporary. A counter would fail
 /// both — a dropped increment is permanently and plausibly false, and nothing can detect it.
-#[allow(dead_code)] // called by Task 5, when the Apply path flushes its observations
 pub fn merge_and_write(exe_dir: &Path, id: &str, observed: &Record) {
     let mut on_disk = read_one(exe_dir, id);
     for (k, obs) in observed {

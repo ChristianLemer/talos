@@ -279,6 +279,7 @@ mod tests {
 
     fn step() -> Step {
         Step {
+            id: "n".into(),
             bundle: "t".into(),
             name: "n".into(),
             description: String::new(),

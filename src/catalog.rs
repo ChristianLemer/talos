@@ -13,8 +13,8 @@ pub struct CatalogPackage {
     pub pkg: RawPkg,
 }
 
-/// Parse ONE catalog file's text, given its file stem (used as id when the file
-/// declares no explicit `id:`). Returns None on unparseable YAML.
+/// Parse ONE catalog file's text, given its file stem (used as id when the file declares
+/// no explicit `id:`, or declares an empty one). Returns None on unparseable YAML.
 pub fn parse_catalog_entry(raw: &str, stem: &str) -> Option<CatalogPackage> {
     // A catalog file may carry an explicit `id:`; if absent, the file stem is the id.
     #[derive(serde::Deserialize)]
@@ -23,9 +23,15 @@ pub fn parse_catalog_entry(raw: &str, stem: &str) -> Option<CatalogPackage> {
         id: Option<String>,
     }
     let pkg: RawPkg = serde_yaml::from_str(raw).ok()?;
+    // ⚠️ A BLANK `id:` falls back to the stem too, not just an absent one. The id is no
+    // longer merely a map key: it NAMES a file (`behaviour/<id>.yaml`, beside
+    // `catalog/<id>.yaml`), so an empty one would write `behaviour/.yaml` — a hidden file
+    // on a shared folder that every package with a blank id would then overwrite in turn.
+    // No shipped catalog file declares `id:` at all, so this is a guard, not a fix.
     let id = serde_yaml::from_str::<IdProbe>(raw)
         .ok()
         .and_then(|p| p.id)
+        .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| stem.to_string());
     Some(CatalogPackage { id, pkg })
 }
@@ -71,6 +77,25 @@ mod tests {
     fn explicit_id_wins_over_stem() {
         let cp = parse_catalog_entry("id: git-scm\nname: Git\nbrew: git\n", "git").unwrap();
         assert_eq!(cp.id, "git-scm");
+    }
+
+    #[test]
+    fn a_blank_id_falls_back_to_the_stem() {
+        // The id NAMES a file now (behaviour/<id>.yaml), so an empty one would write
+        // `behaviour/.yaml` — hidden, and shared by every package with a blank id. An
+        // explicit-but-empty `id:` is indistinguishable from a typo, and the stem is
+        // always available, so the stem wins.
+        for blank in [
+            "id:\nname: Git\nbrew: git\n",
+            "id: \"\"\nname: Git\n",
+            "id: \"   \"\nname: Git\n",
+        ] {
+            let cp = parse_catalog_entry(blank, "git").unwrap();
+            assert_eq!(
+                cp.id, "git",
+                "blank id must fall back to the stem: {blank:?}"
+            );
+        }
     }
 
     #[test]

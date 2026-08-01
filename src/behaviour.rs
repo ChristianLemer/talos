@@ -51,16 +51,17 @@ use crate::platform::Os;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-// The allows below are per-item on purpose, so each disappears the moment its item gets a
-// real caller. There used to be FOUR of them, when this module was the only thing landed:
-// the IO shell now calls `parse_behaviour`, `parse_failed`, `to_yaml` and `merge_into`, so
-// three are gone and `key` is the ONE that remains — it goes when the Apply path starts
-// recording observations, which is what will finally call it.
+// There are NO `allow(dead_code)` left in this module. There were four when it was the only
+// thing landed, one after the IO shell reached `parse_behaviour`/`parse_failed`/`to_yaml`/
+// `merge_into`, and now none: the Apply path calls `key` and `merge_into` when a step
+// records what it observed, which — with the flush going through the IO shell — reaches
+// everything else transitively (`key`/`merge_into` reach `merge`; the parse/serialise trio
+// is reached via `merge_and_write`). Nothing here is waiting for a consumer any more: the
+// allows that remain in this plan are `read_all`
+// (behaviour_io.rs) and `resolve_facts`/`overrides` (bundles.rs), all on the READING side,
+// whose first caller is the ladder's own plan.
 //
-// One allow for ten items is not an oversight: an allowed item counts as a live root and
-// keeps whatever it calls alive, and a REACHED item needs nothing at all. Adding more here
-// would be silently redundant, and redundant allows are exactly what turns into permanent
-// noise. Measured by stripping one at a time under `-D warnings`, not guessed.
+// Measured by stripping one at a time under `-D warnings`, not guessed.
 
 /// What was observed for ONE (route, os) of one package.
 /// `Default` = nothing observed, which is distinct from "observed as false" only in
@@ -101,7 +102,6 @@ pub type Record = BTreeMap<String, Facts>;
 /// ⚠️ These os strings are the FILE FORMAT, not Rust's: macOS is `darwin` here, whereas
 /// `std::env::consts::OS` says `macos`. It comes from the spec's `brew/darwin`. Do not
 /// "correct" it to match Rust — that would orphan the facts in every file already written.
-#[allow(dead_code)] // called once the Apply path records observations
 pub fn key(route: &str, os: Os) -> String {
     let os = match os {
         Os::Windows => "windows",

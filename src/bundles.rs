@@ -166,9 +166,10 @@ pub struct Overrides {
 // Neither attribute subsumes the other all the same: dropping `overrides`'s leaves the three
 // fields unread (reported as one warning), dropping this one leaves `resolve_facts` unused.
 //
-// Both leave together, and NOT in Task 5 — that task only WRITES observations and never
-// resolves them. The first caller is whatever reads a package's facts to DECIDE something:
-// the ladder, in its own plan.
+// Both leave together, and they did NOT leave when the Apply path started collecting facts:
+// that wiring only WRITES observations, and feeding a RESOLVED fact back into it is the one
+// thing the design forbids (see behaviour.rs). The first caller is whatever reads a
+// package's facts to DECIDE something: the ladder, in its own plan.
 #[allow(dead_code)] // no consumer until something reads a package's facts to decide
 pub fn resolve_facts(
     collected: &crate::behaviour::Facts,
@@ -198,6 +199,11 @@ pub fn resolve_facts(
 
 #[derive(Debug, Clone)]
 pub struct Step {
+    /// The catalogue id (the yaml file's stem, unless the file declares an explicit
+    /// `id:`) — what names this package's behaviour file, so `behaviour/<id>.yaml` sits
+    /// beside `catalog/<id>.yaml`. Distinct from `name`, which is the human label shown
+    /// on the row and is free to change without orphaning any collected fact.
+    pub id: String,
     pub bundle: String,
     pub name: String,
     pub description: String,
@@ -429,6 +435,7 @@ pub fn load_from_catalog(
         let is_config =
             p.check.is_some() && (cmd.route.is_none() || cmd.route.as_deref() == Some("run"));
         steps.push(Step {
+            id: cp.id.clone(),
             bundle: String::new(), // bundles don't own packages anymore
             name: p.name.clone(),
             description: p.description.clone().unwrap_or_default(),

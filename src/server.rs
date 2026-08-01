@@ -152,6 +152,12 @@ struct AppState {
     /// every `requires` reason over them would lie. Remembering the last OBSERVATION
     /// is honest; inventing `false` is not.
     last_seen: tokio::sync::Mutex<Vec<Option<crate::detect::Presence>>>,
+    /// Behaviour facts observed during the CURRENT Apply, keyed by package id then
+    /// `route/os`. Flushed to the share ONCE when the Apply ends, for the packages it
+    /// touched only — a per-step write would be 30 chances to collide with another
+    /// machine on a synchronised folder, and a cancelled Apply would leave half-formed
+    /// facts behind.
+    observed: tokio::sync::Mutex<std::collections::BTreeMap<String, crate::behaviour::Record>>,
 }
 
 /// Records one observed presence in `last_seen` (grows the vector if the plan is
@@ -162,6 +168,56 @@ async fn remember_presence(state: &AppState, i: usize, p: crate::detect::Presenc
         seen.resize(i + 1, None);
     }
     seen[i] = Some(p);
+}
+
+/// Records what ONE step observed, into the in-memory accumulator. Nothing touches the
+/// share here — see `flush_behaviour`, called once when the Apply ends.
+///
+/// `id` is the catalogue id (the yaml file's stem), which is what names the behaviour
+/// file, so `behaviour/<id>.yaml` sits beside `catalog/<id>.yaml`.
+async fn remember_behaviour(
+    state: &AppState,
+    id: &str,
+    route: &str,
+    facts: crate::behaviour::Facts,
+) {
+    let k = crate::behaviour::key(route, state.os);
+    let mut obs = state.observed.lock().await;
+    let rec = obs.entry(id.to_string()).or_default();
+    crate::behaviour::merge_into(rec, &k, &facts);
+}
+
+/// Writes everything the Apply observed to the share, then clears the accumulator.
+/// Best-effort by construction (behaviour_io swallows IO errors): an offline share
+/// costs us the update, never the Apply.
+///
+/// Clearing matters as much as writing: the state outlives one Apply, and a second Apply
+/// in the same session must not re-write the first one's facts — the ratchet makes that
+/// harmless to the VALUES, but it is a write to files this Apply never touched, which is
+/// exactly the collision window one-file-per-package exists to narrow.
+///
+/// The empty guard below buys ONLY the log line: an empty map writes nothing either way
+/// (measured — removing the guard breaks no test and creates no file), so it is there to
+/// avoid printing "flushed 0 package(s)" after every Apply that did nothing.
+///
+/// ⚠️ A package whose entry has NO facts is still written, as `route/os: {}`. That is not
+/// a loss and not a bug to diagnose: it means "we acted on this and nothing was notable —
+/// no elevation, no 403, under a second". Skipping such records would need a rule about
+/// what counts as empty, and that rule would have to be revisited every time a fourth
+/// fact lands with a meaningful default.
+async fn flush_behaviour(state: &AppState) {
+    let mut obs = state.observed.lock().await;
+    if obs.is_empty() {
+        return;
+    }
+    for (id, rec) in obs.iter() {
+        crate::behaviour_io::merge_and_write(&state.consent.exe_dir, id, rec);
+    }
+    // "flushed", not "wrote": `write_one` swallows every IO error, so on an offline or
+    // read-only share this line prints after writing nothing at all. Claiming the write
+    // succeeded would make the log lie exactly where someone is debugging a missing file.
+    println!("[behaviour] flushed facts for {} package(s)", obs.len());
+    obs.clear();
 }
 
 /// The presence vector the Apply reasons over: the FRESH probe where we have one,
@@ -270,6 +326,7 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         data_dir,
         consent,
         sudo_pw: tokio::sync::Mutex::new(None),
+        observed: tokio::sync::Mutex::new(std::collections::BTreeMap::new()),
     });
 
     let state_for_root = state.clone();
@@ -585,7 +642,9 @@ async fn diff_step(socket: &mut WebSocket, state: &AppState, i: usize) {
             json!({ "type": "step", "i": i, "status": "checking" }).to_string(),
         ))
         .await;
-    let (code, _forbidden, _url, _cancelled) = run_in_pty(socket, state, i as u32, &check).await;
+    // A dry run's only verdict is its exit code: a `check:` reports drift, it does not
+    // install, so there is no 403 to surface and nothing to record as behaviour.
+    let code = run_in_pty(socket, state, i as u32, &check).await.code;
     // exit 0 = converged, non-zero = drifted. Say which, in the terminal, rather than
     // only colouring a pill: the operator asked to SEE the difference.
     let line = format!(
@@ -796,6 +855,17 @@ async fn row_action(socket: &mut WebSocket, state: &AppState, i: usize, action: 
         return;
     }
     do_step(socket, state, i, act, step, is_cask).await;
+    // A row action is an Apply of ONE step, and what it observed is just as real. So the
+    // flush belongs on THIS ending as much as on the batch one.
+    //
+    // There are two other endings, and neither flushes. `run_in_pty`'s sudo refusal is
+    // not an ending at all — the step is still running there and its duration would be
+    // wrong. The `quit` handler is a real one, and the omission is safe for a reason
+    // worth stating: while an Apply runs, the handler loop is blocked inside `apply_diff`
+    // or here, so a `quit` message is consumed by `run_in_pty`'s own `select!` and never
+    // reaches that handler. `quit` is therefore only ever HANDLED between Applies, when
+    // the accumulator is already empty and there is nothing to flush.
+    flush_behaviour(state).await;
     clear_sudo_pw(state).await; // row action finished: clear the cached password
     let _ = socket
         .send(Message::Text(json!({ "type": "done" }).to_string()))
@@ -1149,22 +1219,51 @@ async fn apply_diff(
             break; // "stop everything" → abandon the rest of the plan
         }
     }
+    // ONE write per Apply, here at the end, for the packages it touched. Reached on every
+    // way out of the loop above — a normal finish, a "stop everything", and a run whose
+    // rows were all cancelled: those `break`s leave the loop, not this function.
+    //
+    // The `done/nothing` early return above DOES skip it, and so do all four of
+    // row_action's guards: unknown index, out of scope, an unknown action verb (reachable
+    // — `retry-step` forwards an arbitrary wire string), and needs-appmgmt. Every one of
+    // them returns BEFORE any do_step, so there is nothing accumulated to lose — but that
+    // is WHY they are safe, not an accident to rely on: a future early exit placed AFTER a
+    // do_step would drop that step's facts silently.
+    flush_behaviour(state).await;
     clear_sudo_pw(state).await; // end of Apply: the cached password is cleared (model C)
     let _ = socket
         .send(Message::Text(json!({ "type": "done" }).to_string()))
         .await;
 }
 
+/// What ONE pty run produced. NAMED rather than a tuple because three of its five fields
+/// are `bool`: as a `(i32, bool, Option<String>, bool, bool)` — which this was — swapping
+/// `cancelled` and `saw_window` at the return or at either destructure compiled silently,
+/// mislabelled the row as cancelled, and recorded an elevation from a user's Stop. No test
+/// can catch that (both callers destructure positionally and `run_in_pty` needs a live
+/// socket), so the type is what has to.
+struct PtyRun {
+    /// The child's exit code, or -1 if it could not be reaped.
+    code: i32,
+    /// `forbidden::is403` matched the streamed bytes. RAW — not "the step failed with a
+    /// 403"; see the observation site in `do_step` for why that distinction is kept.
+    forbidden: bool,
+    /// The first URL in the output, extracted only when `forbidden` — what the modal
+    /// offers to open.
+    url: Option<String>,
+    /// The USER killed this step. Distinct from a plain non-zero exit: the caller must be
+    /// able to tell "I stopped this" from "this broke".
+    cancelled: bool,
+    /// The Windows watcher saw a foreign window during this step — our only elevation
+    /// signal, imprecise by nature (see behaviour.rs). Always false on macOS/Linux.
+    saw_window: bool,
+}
+
 /// Streams the command into a pty,
 /// scans the 403 as it streams, ticks the watcher (Windows). The pty runs in a
-/// blocking thread; mpsc channel → async. RETURNS (code, forbidden, url, cancelled) — the
-/// verdict (done/step/overlay) is left to the caller (do_step), like the TS.
-async fn run_in_pty(
-    socket: &mut WebSocket,
-    state: &AppState,
-    i: u32,
-    cmdline: &str,
-) -> (i32, bool, Option<String>, bool) {
+/// blocking thread; mpsc channel → async. The verdict (done/step/overlay) is left to
+/// the caller (do_step), like the TS.
+async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &str) -> PtyRun {
     use base64::{engine::general_purpose::STANDARD, Engine};
 
     // pty_shell is THE single source of the shell wrapping: Windows → powershell + PATH
@@ -1244,6 +1343,12 @@ async fn run_in_pty(
     // Set when the USER killed this step. Distinct from `forbidden` and from a plain
     // non-zero exit: the caller must be able to tell "I stopped this" from "this broke".
     let mut cancelled = false;
+    // Did the Windows watcher see a foreign window during this step? That is our only
+    // elevation signal, and it is imprecise by nature (see behaviour.rs). Always false
+    // on macOS/Linux, where no equivalent observation exists yet — hence the cfg'd
+    // allow: nothing assigns it on those targets.
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    let mut saw_window = false;
     // Gates the socket arm of the select below. A dropped socket yields None forever, so
     // polling it after that is a hot loop; this turns the branch off once and for all.
     let mut socket_open = true;
@@ -1312,7 +1417,13 @@ async fn run_in_pty(
         }
         let out = json!({ "type": "out", "i": i, "data": STANDARD.encode(&chunk) });
         if socket.send(Message::Text(out.to_string())).await.is_err() {
-            return (-1, forbidden, None, cancelled);
+            return PtyRun {
+                code: -1,
+                forbidden,
+                url: None,
+                cancelled,
+                saw_window,
+            };
         }
         let tail = buf.trim_end().to_lowercase();
         // A REFUSAL invalidates whatever we just sent. If it came from the cache, drop
@@ -1341,9 +1452,12 @@ async fn run_in_pty(
                 buf.push_str("\n[answered]\n"); // breaks the ':' tail without dropping context
             }
         }
-        // Relay the watcher signals (non-blocking) as they stream.
+        // Relay the watcher signals (non-blocking) as they stream. A relayed message is
+        // also what `saw_window` records: the two must not drift, so the flag is set
+        // HERE rather than in the watcher thread.
         #[cfg(target_os = "windows")]
         while let Ok(wmsg) = watch_rx.try_recv() {
+            saw_window = true;
             let _ = socket.send(Message::Text(wmsg.to_string())).await;
         }
     }
@@ -1353,6 +1467,7 @@ async fn run_in_pty(
     {
         watch_stop.store(true, std::sync::atomic::Ordering::Relaxed);
         while let Ok(wmsg) = watch_rx.try_recv() {
+            saw_window = true;
             let _ = socket.send(Message::Text(wmsg.to_string())).await;
         }
         let _ = socket
@@ -1368,7 +1483,13 @@ async fn run_in_pty(
     } else {
         None
     };
-    (code, forbidden, url, cancelled)
+    PtyRun {
+        code,
+        forbidden,
+        url,
+        cancelled,
+        saw_window,
+    }
 }
 
 /// Obtains the sudo password — MODEL C. If the RAM cache already holds it (entered
@@ -1593,7 +1714,13 @@ async fn do_step(
 
     // The bare command is passed to run_in_pty, which wraps it in the native shell
     // (POSIX: user shell in -ilc via pty_shell; Windows: powershell + PATH refresh).
-    let (code, forbidden, url, cancelled) = run_in_pty(socket, state, i as u32, cmd).await;
+    let PtyRun {
+        code,
+        forbidden,
+        url,
+        cancelled,
+        saw_window,
+    } = run_in_pty(socket, state, i as u32, cmd).await;
     let ok = code == 0 || benign_code(code);
 
     // Diagnostic line in the row's terminal.
@@ -1688,6 +1815,42 @@ async fn do_step(
     } else {
         String::new()
     };
+    // What this step OBSERVED, for the shared behaviour file. Accumulated in memory
+    // only; the write happens once, when the Apply ends.
+    //
+    // `uac` is Windows-only and comes from the watcher (a foreign window appeared during
+    // the step) — a signal that cannot distinguish an elevation prompt from an
+    // installer's own window, which the monotone design tolerates: a false positive
+    // costs one rung of caution, never a wrong promise.
+    //
+    // `forbidden` is `run_in_pty`'s raw signal: `forbidden::is403` matched the streamed
+    // bytes. It is deliberately NOT the `blocked` computed above — that one is
+    // `!ok && forbidden`, the UI verdict, which is right for a modal ("offer Retry") and
+    // wrong for a fact ("this package's source is blocked here"). A tool that prints a 403
+    // for one mirror and then succeeds from another still met the firewall, and the ladder
+    // wants to know. The cost is is403's own imprecision — a `\b403\b` near a
+    // download-failure phrase — which the same monotone tolerance covers.
+    //
+    // Merged unconditionally, including on a failure or a cancel: a step that hit a 403
+    // FAILED, and that is exactly the observation worth keeping. `slow_secs` from a
+    // cancelled step under-states the real duration, which the ratchet absorbs — a max
+    // never goes down, so a short cancelled run cannot lower anything.
+    //
+    // A 403 that the user Retries runs do_step AGAIN, so this site is reached once per
+    // ATTEMPT. Nothing double-counts (there is no counter, only `∨`) and nothing is lost
+    // (a successful retry's `forbidden: false` cannot clear the first attempt's `true`) —
+    // both directly because the accumulator ratchets.
+    remember_behaviour(
+        state,
+        &step.id,
+        step.route.as_deref().unwrap_or(""),
+        crate::behaviour::Facts {
+            uac: saw_window,
+            forbidden,
+            slow_secs: started.elapsed().as_secs(),
+        },
+    )
+    .await;
     append_history(
         &state.consent,
         &HistEntry {
@@ -1713,6 +1876,7 @@ mod tests {
     /// matter here, the rest are inert defaults.
     fn brew_step(system_id: &str, pin: Option<&str>) -> Step {
         Step {
+            id: system_id.into(),
             bundle: String::new(),
             name: system_id.into(),
             description: String::new(),
@@ -2174,5 +2338,255 @@ mod tests {
             r#"{"type":"cancel-step","i":"3"}"#,
             3
         )); // string, not number
+    }
+
+    // ---- the behaviour accumulator -------------------------------------------------
+    //
+    // `do_step` and `run_in_pty` need a live WebSocket, so the OBSERVATION SITE inside
+    // do_step is not reachable from a unit test — what it passes (`saw_window`,
+    // `forbidden`, `started.elapsed()`) is verified by reading, and Task 6 verifies it at
+    // a real click. `remember_behaviour` and `flush_behaviour` take only `&AppState`
+    // though, so the accumulator itself IS testable, and it holds the two properties this
+    // task's design rests on: the in-Apply ratchet, and the clear that keeps one Apply's
+    // facts out of the next one's write.
+
+    /// An AppState with nothing in it but a share directory. Every field is plain data —
+    /// no socket, no pty — so the accumulator can be exercised for real.
+    fn state_with_share(share: &std::path::Path) -> super::AppState {
+        super::AppState {
+            plan: crate::bundles::Plan { steps: Vec::new() },
+            profiles: crate::profiles::Profiles::default(),
+            os: Os::Darwin,
+            appmgmt: crate::platform::AppMgmtStatus::NotApplicable,
+            disk_root: None,
+            data_dir: share.join("local"),
+            consent: crate::consent::ConsentStore {
+                local_dir: share.join("local"),
+                exe_dir: share.to_path_buf(),
+                host: "test-host".into(),
+                user: "test-user".into(),
+            },
+            sudo_pw: tokio::sync::Mutex::new(None),
+            last_seen: tokio::sync::Mutex::new(Vec::new()),
+            observed: tokio::sync::Mutex::new(std::collections::BTreeMap::new()),
+        }
+    }
+
+    fn share(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    #[tokio::test]
+    async fn two_observations_of_one_package_ratchet_within_the_same_apply() {
+        // A row can run twice in ONE Apply: a 403 with Retry re-runs the same action in
+        // place. The second run must not REPLACE the first's facts — a retry that
+        // succeeds quickly would otherwise erase the 403 that made the user unblock the
+        // firewall, which is the single most useful fact of the run.
+        let dir = share("talos-test-observed-ratchet");
+        let state = state_with_share(&dir);
+        super::remember_behaviour(
+            &state,
+            "aws-cli",
+            "brew",
+            crate::behaviour::Facts {
+                uac: false,
+                forbidden: true,
+                slow_secs: 120,
+            },
+        )
+        .await;
+        super::remember_behaviour(
+            &state,
+            "aws-cli",
+            "brew",
+            crate::behaviour::Facts {
+                uac: true,
+                forbidden: false,
+                slow_secs: 7,
+            },
+        )
+        .await;
+        let obs = state.observed.lock().await;
+        let f = obs["aws-cli"]["brew/darwin"];
+        assert!(f.forbidden, "the first run's 403 survived the quick retry");
+        assert!(f.uac, "and the second run's elevation was added");
+        assert_eq!(f.slow_secs, 120, "the WORST duration is what is kept");
+    }
+
+    #[tokio::test]
+    async fn the_key_is_the_route_and_os_of_the_running_machine() {
+        // A behaviour belongs to the (route, os) couple, not the package. And a package
+        // with no route on this platform must still land somewhere stable rather than
+        // under an empty key.
+        let dir = share("talos-test-observed-key");
+        let state = state_with_share(&dir);
+        // Real catalogue ids, since that is what the file is named after.
+        super::remember_behaviour(
+            &state,
+            "visual-studio-code",
+            "brew",
+            crate::behaviour::Facts::default(),
+        )
+        .await;
+        super::remember_behaviour(
+            &state,
+            "starship-config",
+            "",
+            crate::behaviour::Facts::default(),
+        )
+        .await;
+        let obs = state.observed.lock().await;
+        assert!(
+            obs["visual-studio-code"].contains_key("brew/darwin"),
+            "{obs:?}"
+        );
+        assert!(
+            obs["starship-config"].contains_key("none/darwin"),
+            "{obs:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn flush_writes_every_observed_package_then_empties_the_accumulator() {
+        // The whole shape of this task in one test: accumulate during the Apply, write
+        // ONCE at the end, and leave nothing behind. If the clear were forgotten, a
+        // second Apply in the same session would re-write the first Apply's packages —
+        // harmless to the values (the ratchet is idempotent) but a write to files it
+        // never touched, which is exactly the collision window the design narrows.
+        let dir = share("talos-test-observed-flush");
+        let state = state_with_share(&dir);
+        super::remember_behaviour(
+            &state,
+            "nushell",
+            "brew",
+            crate::behaviour::Facts {
+                uac: false,
+                forbidden: false,
+                slow_secs: 41,
+            },
+        )
+        .await;
+        super::remember_behaviour(
+            &state,
+            "rclone",
+            "brew",
+            crate::behaviour::Facts {
+                uac: false,
+                forbidden: true,
+                slow_secs: 3,
+            },
+        )
+        .await;
+        super::flush_behaviour(&state).await;
+
+        assert_eq!(
+            crate::behaviour_io::read_one(&dir, "nushell")["brew/darwin"].slow_secs,
+            41
+        );
+        assert!(crate::behaviour_io::read_one(&dir, "rclone")["brew/darwin"].forbidden);
+        assert!(
+            state.observed.lock().await.is_empty(),
+            "the accumulator must be empty after the flush, or the next Apply rewrites this one"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn flushing_nothing_creates_no_folder_at_all() {
+        // An Apply that ran no step (or a `done/nothing` one) reaches the flush too. It
+        // must not conjure a `behaviour/` folder on the share — an empty directory
+        // appearing next to the exe is a thing someone has to explain.
+        //
+        // ⚠️ This does NOT pin flush's `is_empty()` early return: measured by removing it,
+        // the whole suite stays green, because the loop over an empty map writes nothing
+        // regardless. What it pins is the OUTCOME — that `write_one`'s create_dir_all is
+        // never reached on an empty flush, which would change the day someone made the
+        // folder eagerly. The guard itself only silences a "0 package(s)" log line.
+        let dir = share("talos-test-observed-empty");
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = state_with_share(&dir);
+        super::flush_behaviour(&state).await;
+        assert!(
+            !dir.join("behaviour").exists(),
+            "an empty flush wrote something"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_second_apply_ratchets_onto_what_the_first_one_wrote() {
+        // Across two Applies the file is the only memory, so the merge has to happen
+        // against the DISK. Asserted end to end through flush, because the in-memory
+        // ratchet passing proves nothing about the read-modify-write behind it.
+        let dir = share("talos-test-observed-two-applies");
+        let state = state_with_share(&dir);
+        super::remember_behaviour(
+            &state,
+            "uv",
+            "brew",
+            crate::behaviour::Facts {
+                uac: false,
+                forbidden: true,
+                slow_secs: 300,
+            },
+        )
+        .await;
+        super::flush_behaviour(&state).await;
+        // Second Apply, same machine: a quick clean run. Nothing may be un-learned.
+        super::remember_behaviour(
+            &state,
+            "uv",
+            "brew",
+            crate::behaviour::Facts {
+                uac: false,
+                forbidden: false,
+                slow_secs: 9,
+            },
+        )
+        .await;
+        super::flush_behaviour(&state).await;
+        let f = crate::behaviour_io::read_one(&dir, "uv")["brew/darwin"];
+        assert!(f.forbidden, "the first Apply's 403 is still on the share");
+        assert_eq!(f.slow_secs, 300, "and so is the worst duration");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn the_written_file_names_no_host_no_user_no_time() {
+        // ⭐ The subject-less promise, asserted on the BYTES. `state_with_share` puts a
+        // recognisable host and user in the consent store — the same struct the write
+        // path is handed — so if either ever leaked into this file, this fails.
+        //
+        // The date check looks for the ISO SEPARATORS an rfc3339 stamp cannot avoid
+        // (`append_history` writes `2026-08-01T21:17:32...`) rather than for a year: a bare
+        // `202` would false-fail the day a legitimate `slow_secs: 202` or `2024` was
+        // measured, which would make this test a trap rather than a guard.
+        let dir = share("talos-test-observed-subjectless");
+        let state = state_with_share(&dir);
+        super::remember_behaviour(
+            &state,
+            "git",
+            "brew",
+            crate::behaviour::Facts {
+                uac: true,
+                forbidden: true,
+                slow_secs: 12,
+            },
+        )
+        .await;
+        super::flush_behaviour(&state).await;
+        let raw =
+            std::fs::read_to_string(crate::behaviour_io::behaviour_path(&dir, "git")).unwrap();
+        assert!(!raw.contains("test-host"), "a host leaked: {raw}");
+        assert!(!raw.contains("test-user"), "a user leaked: {raw}");
+        let date = regex::Regex::new(r"\d{4}-\d{2}-\d{2}").unwrap();
+        assert!(!date.is_match(&raw), "a date leaked: {raw}");
+        assert!(
+            raw.contains("403"),
+            "and the facts themselves are there: {raw}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
