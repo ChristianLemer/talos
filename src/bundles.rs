@@ -79,6 +79,121 @@ pub struct RawPkg {
     pub requires: Vec<String>,
     #[serde(default)]
     pub category: Vec<String>,
+    /// Behaviour OVERRIDES — an author's statement that beats what the fleet observed.
+    /// `None` = no opinion (the collected fact stands); `Some(false)` = explicitly
+    /// contradicting a collected `true`, which is the only way to un-ratchet a fact.
+    ///
+    /// These are also the SEED: a fresh machine has collected nothing, so the
+    /// hand-written ones are what calibrate its first Apply.
+    ///
+    /// Read via `RawPkg::overrides`, never field-by-field, so the three-slot mapping
+    /// lives in ONE place and stays pinned by one test.
+    #[serde(default)]
+    pub uac: Option<bool>,
+    /// The YAML key is `403`. The Rust field cannot be, so serde renames it.
+    #[serde(default, rename = "403")]
+    pub forbidden: Option<bool>,
+    /// A boolean, not a duration: the author says "this one is slow", while the
+    /// MEASURED seconds come from the behaviour file. Declaring a number by hand
+    /// would invite it to drift from what the machine actually observes.
+    #[serde(default)]
+    pub slow: Option<bool>,
+}
+
+impl RawPkg {
+    /// What this package DECLARES about its behaviour. The one bridge from the parsed
+    /// YAML to `resolve_facts`, so the three same-typed `Option<bool>` slots are
+    /// transposed in at most one place — and that place has a test.
+    ///
+    /// This allow covers the three `RawPkg` fields as well: an allowed item is a live
+    /// ROOT, so reading them here keeps them alive. Three field-level allows were measured
+    /// first and are strictly redundant — the noise that becomes permanent. See
+    /// `resolve_facts` for what removes both of the mechanism's allows.
+    #[allow(dead_code)] // no consumer until something reads a package's facts to decide
+    pub fn overrides(&self) -> Overrides {
+        Overrides {
+            uac: self.uac,
+            forbidden: self.forbidden,
+            slow: self.slow,
+        }
+    }
+}
+
+/// The three override slots, lifted out of RawPkg so the resolution is a pure
+/// function of (collected, declared) and can be tested without building a package.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Overrides {
+    pub uac: Option<bool>,
+    pub forbidden: Option<bool>,
+    pub slow: Option<bool>,
+}
+
+/// What the app should BELIEVE about a package: the fleet's observation, with the
+/// catalogue's explicit statement taking precedence.
+///
+/// This is the escape hatch that makes a monotone ratchet safe. Facts only ever go
+/// false→true from observation, so without a declared override a wrong `uac` (an
+/// installer's own window mistaken for an elevation) or a stale `403` (the firewall
+/// opened) would be permanent. Here it is correctable, in a versioned file, with a
+/// diff that says who decided.
+///
+/// This function is PURE and reads `collected` without altering it, so nothing here can
+/// reach the shared file.
+///
+/// ⚠️ AND A CALLER MUST NOT PUT IT BACK. This is a RULE, not a property anything enforces:
+/// what comes out is a BELIEF, and it is the very same `behaviour::Facts` type that
+/// `merge_into` and `merge_and_write` accept, so feeding a resolved value back into a
+/// record compiles perfectly and would ratchet a declared `slow`'s sentinel into the share
+/// PERMANENTLY — a wrong value on a monotone file, which is exactly what `behaviour.rs`
+/// promises no write can produce. Merge only what a machine actually observed. Kept that
+/// way, the collected fact survives on the share and returns the moment the override is
+/// removed: nothing is un-observed, only re-interpreted.
+///
+/// `slow` is asymmetric on purpose: declaring it true must WORK on a machine that has
+/// measured nothing, so it maps to a sentinel duration; declaring it false resets the
+/// measurement to 0, saying "whatever you timed, treat this as quick".
+///
+/// ⚠️ That 0 COLLIDES with a documented convention: `Facts::slow_secs` and
+/// `consent::HistEntry::secs` both read 0 as "never measured". So a `slow: false` package
+/// will be counted among the UNKNOWNS in a total the ladder spec asks to report explicitly
+/// (`at most ~4 min (3 unknown)`), rather than as a measured-quick one. Harmless for the
+/// rung filter — 0 is not slow, which is the right answer — but a caller building that
+/// count should know the two are indistinguishable here.
+// TWO allows for this mechanism, measured by stripping each under `-D warnings` rather than
+// guessed. `overrides` covers itself and the three `RawPkg` fields it reads; this one covers
+// itself. An allowed item IS a live root, so `Overrides` is kept alive redundantly — by
+// either allow independently, since `overrides` constructs it and `resolve_facts` takes it.
+// Neither attribute subsumes the other all the same: dropping `overrides`'s leaves the three
+// fields unread (reported as one warning), dropping this one leaves `resolve_facts` unused.
+//
+// Both leave together, and NOT in Task 5 — that task only WRITES observations and never
+// resolves them. The first caller is whatever reads a package's facts to DECIDE something:
+// the ladder, in its own plan.
+#[allow(dead_code)] // no consumer until something reads a package's facts to decide
+pub fn resolve_facts(
+    collected: &crate::behaviour::Facts,
+    declared: &Overrides,
+) -> crate::behaviour::Facts {
+    /// The duration a declared `slow: true` stands in for when nothing was ever measured.
+    /// A sentinel, not a real timing — the honest number always comes from the share.
+    ///
+    /// ⚠️ NOTHING YET MAKES THIS BIG ENOUGH. The ladder's "slow" threshold does not exist,
+    /// so this value is an ANCHOR that threshold must stay strictly below: pick one above
+    /// 600 and every `slow: true` in the catalogue goes silently inert, with no test to
+    /// notice — the test here can only pin this constant to itself. Whoever picks the
+    /// threshold owns that comparison.
+    const DECLARED_SLOW_SECS: u64 = 600;
+    crate::behaviour::Facts {
+        uac: declared.uac.unwrap_or(collected.uac),
+        forbidden: declared.forbidden.unwrap_or(collected.forbidden),
+        slow_secs: match declared.slow {
+            // A measured duration WORSE than the sentinel is the honest number and wins:
+            // the author says "slow", the machine says how slow.
+            Some(true) => collected.slow_secs.max(DECLARED_SLOW_SECS),
+            Some(false) => 0,
+            None => collected.slow_secs,
+        },
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -550,6 +665,247 @@ mod tests {
         let node = plan.steps.iter().find(|s| s.name == "Node.js").unwrap();
         assert_eq!(node.categories, vec!["misc"]);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    // ---- Behaviour OVERRIDES: the escape hatch out of a monotone ratchet ----
+
+    #[test]
+    fn catalogue_overrides_win_over_collected_facts() {
+        use crate::behaviour::Facts;
+        // The share says "this elevates and is blocked and is slow".
+        let collected = Facts {
+            uac: true,
+            forbidden: true,
+            slow_secs: 900,
+        };
+        // The catalogue says otherwise, explicitly. The author wins: this is the
+        // escape hatch that makes the ratchet correctable.
+        let declared = Overrides {
+            uac: Some(false),
+            forbidden: Some(false),
+            slow: None,
+        };
+        let f = resolve_facts(&collected, &declared);
+        assert!(!f.uac, "an explicit false in the catalogue wins");
+        assert!(!f.forbidden);
+        assert_eq!(
+            f.slow_secs, 900,
+            "not declared → the collected value stands"
+        );
+    }
+
+    #[test]
+    fn an_absent_override_does_not_override() {
+        use crate::behaviour::Facts;
+        let collected = Facts {
+            uac: true,
+            forbidden: false,
+            slow_secs: 100,
+        };
+        let f = resolve_facts(&collected, &Overrides::default());
+        assert!(f.uac, "absent means 'no opinion', not 'false'");
+        assert_eq!(f.slow_secs, 100);
+    }
+
+    #[test]
+    fn a_declared_fact_seeds_a_machine_with_no_data() {
+        use crate::behaviour::Facts;
+        // A fresh machine has collected nothing. C's hand-written observations
+        // (7-Zip, AWS CLI, Node.js, VS Code elevate; rclone is blocked) are the SEED,
+        // so the first Apply on a new machine is already calibrated.
+        let declared = Overrides {
+            uac: Some(true),
+            forbidden: None,
+            slow: None,
+        };
+        let f = resolve_facts(&Facts::default(), &declared);
+        assert!(f.uac, "the catalogue speaks when nothing was collected");
+    }
+
+    /// `slow` is the ONE asymmetric field — the catalogue says a boolean, the share holds
+    /// seconds — so both of its declared branches need pinning. Neither is covered by the
+    /// tests above, which only exercise `slow: None`: swapping the `max` for a `min`, or
+    /// the sentinel for `0`, would leave all three of them green.
+    #[test]
+    fn a_declared_slow_works_with_no_measurement_and_never_lowers_one() {
+        use crate::behaviour::Facts;
+        // Nothing measured. `slow: true` must still land somewhere a rung will call slow,
+        // otherwise declaring it would be inert on exactly the fresh machine it is for.
+        let seeded = resolve_facts(&Facts::default(), &slow_is(Some(true)));
+        assert!(
+            seeded.slow_secs >= 600,
+            "a declared slow must be slow with nothing measured, got {}",
+            seeded.slow_secs
+        );
+        // A real measurement WORSE than the sentinel is the honest number and must survive:
+        // the author says "slow", the machine says "how slow".
+        let measured = Facts {
+            slow_secs: 4_000,
+            ..Facts::default()
+        };
+        assert_eq!(
+            resolve_facts(&measured, &slow_is(Some(true))).slow_secs,
+            4_000,
+            "the sentinel must not lower a measured duration"
+        );
+        // And an explicit false clears it outright: "whatever you timed, treat this as quick".
+        assert_eq!(
+            resolve_facts(&measured, &slow_is(Some(false))).slow_secs,
+            0,
+            "an explicit false discards the measurement"
+        );
+        // The other two facts are untouched by the slow slot.
+        let both = Facts {
+            uac: true,
+            forbidden: true,
+            slow_secs: 10,
+        };
+        let r = resolve_facts(&both, &slow_is(Some(false)));
+        assert!(r.uac && r.forbidden, "slow does not speak for uac or 403");
+    }
+
+    fn slow_is(slow: Option<bool>) -> Overrides {
+        Overrides {
+            slow,
+            ..Overrides::default()
+        }
+    }
+
+    /// The two halves JOINED: a catalogue file's bytes all the way to the resolved facts.
+    /// Neither half proves this on its own — the parse test stops at `RawPkg`, and
+    /// `resolve_facts` takes an `Overrides` somebody has to build. The lift between them is
+    /// three same-typed `Option<bool>`s, so transposing two of them — or dropping one — is a
+    /// silent bug that only an end-to-end assertion catches. All three slots are crossed
+    /// here, from bytes a catalogue file could really contain (the shapes Task 7 will ship).
+    #[test]
+    fn a_declared_403_in_a_catalogue_file_reaches_the_resolved_facts() {
+        use crate::behaviour::Facts;
+        let cp = crate::catalog::parse_catalog_entry(
+            "name: rclone\nwinget: Rclone.Rclone\n\"403\": true\n",
+            "rclone",
+        )
+        .expect("parses");
+        // Nothing collected — the seed case, a fresh machine.
+        let f = resolve_facts(&Facts::default(), &cp.pkg.overrides());
+        assert!(f.forbidden, "the declared 403 arrived");
+        assert!(!f.uac, "and did not leak into the uac slot");
+        assert_eq!(f.slow_secs, 0, "nor into the duration");
+
+        // And the mirror: a declared `uac` must not read back as a 403.
+        let cp = crate::catalog::parse_catalog_entry("name: 7-Zip\nuac: true\n", "7-zip")
+            .expect("parses");
+        let f = resolve_facts(&Facts::default(), &cp.pkg.overrides());
+        assert!(f.uac);
+        assert!(
+            !f.forbidden,
+            "the two Option<bool> slots are not transposed"
+        );
+
+        // `slow` crosses the lift too. EITHER branch below catches a lift that drops the
+        // field — measured, by deleting one and applying the mutant: with nothing collected
+        // a dropped `Some(true)` yields 0, not 600, and over a measurement a dropped
+        // `Some(false)` yields 300, not 0. Both are kept because they pin different
+        // MEANINGS, not for redundant coverage: that a declared slow works on a machine
+        // with no data, and that a declared quick clears a real measurement.
+        let cp = crate::catalog::parse_catalog_entry("name: Obsidian\nslow: false\n", "obsidian")
+            .expect("parses");
+        let measured = Facts {
+            slow_secs: 300,
+            ..Facts::default()
+        };
+        assert_eq!(
+            resolve_facts(&measured, &cp.pkg.overrides()).slow_secs,
+            0,
+            "a declared `slow: false` must reach resolve_facts and clear the measurement"
+        );
+        let cp = crate::catalog::parse_catalog_entry("name: Obsidian\nslow: true\n", "obsidian")
+            .expect("parses");
+        assert!(
+            resolve_facts(&Facts::default(), &cp.pkg.overrides()).slow_secs >= 600,
+            "and a declared `slow: true` must reach it as the sentinel"
+        );
+
+        // A file declaring nothing yields the no-opinion overrides, so a collected fact
+        // stands untouched — this is what all 31 shipped files do today.
+        let cp = crate::catalog::parse_catalog_entry("name: jq\nbrew: jq\n", "jq").expect("parses");
+        assert_eq!(cp.pkg.overrides(), Overrides::default());
+        let collected = Facts {
+            uac: true,
+            forbidden: true,
+            slow_secs: 77,
+        };
+        assert_eq!(
+            resolve_facts(&collected, &cp.pkg.overrides()),
+            collected,
+            "a silent catalogue changes nothing"
+        );
+    }
+
+    #[test]
+    fn overrides_parse_from_yaml_with_the_403_key() {
+        let raw = "\
+name: rclone
+winget: Rclone.Rclone
+uac: false
+\"403\": true
+slow: true
+";
+        let cp = crate::catalog::parse_catalog_entry(raw, "rclone").expect("parses");
+        assert_eq!(cp.pkg.uac, Some(false));
+        assert_eq!(cp.pkg.forbidden, Some(true));
+        assert_eq!(cp.pkg.slow, Some(true));
+    }
+
+    #[test]
+    fn a_catalogue_file_without_overrides_still_parses() {
+        // All existing files have none of these fields. They must keep working.
+        let raw = "name: jq\nwinget: jqlang.jq\nbrew: jq\n";
+        let cp = crate::catalog::parse_catalog_entry(raw, "jq").expect("parses");
+        assert_eq!(cp.pkg.uac, None);
+        assert_eq!(cp.pkg.forbidden, None);
+        assert_eq!(cp.pkg.slow, None);
+    }
+
+    /// The SHIPPED catalogue, not a fixture. The synthetic test above proves that ONE
+    /// hand-written file with no override fields parses; it says nothing about the 31 real
+    /// ones. This walks them individually — `load_catalog` SKIPS an unparseable file in
+    /// silence, so a count taken through it could stay plausible while a file rotted — and
+    /// then checks that the loader still yields one entry per file, which is what a caller
+    /// actually gets.
+    ///
+    /// The count is a floor, not the exact 31, deliberately: adding a package is a normal
+    /// gesture and must not turn this file red for an unrelated reason. What the floor
+    /// protects is the loop's meaning — a glob that matched nothing would pass vacuously.
+    #[test]
+    fn every_shipped_catalogue_file_still_parses_after_the_new_fields() {
+        let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/catalog"));
+        let mut files = 0usize;
+        for entry in std::fs::read_dir(dir)
+            .expect("catalog/ is shipped")
+            .flatten()
+        {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+                continue; // sidecars like starship.nu are not packages
+            }
+            files += 1;
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap();
+            let raw = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                crate::catalog::parse_catalog_entry(&raw, stem).is_some(),
+                "{} no longer parses",
+                path.display()
+            );
+        }
+        assert!(
+            files > 20,
+            "only {files} catalogue files walked — the glob found (almost) nothing"
+        );
+        assert_eq!(
+            crate::catalog::load_catalog(dir.to_str().unwrap()).len(),
+            files,
+            "the loader must still yield one entry per catalogue file"
+        );
     }
 
     // B5: `requires:` from catalog YAML must reach the Step (the front does the

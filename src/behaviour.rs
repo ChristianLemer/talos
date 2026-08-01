@@ -22,9 +22,19 @@
 //! which no later merge can detect or repair.
 //!
 //! The price is that nothing is ever forgotten: if the firewall opens, a `forbidden`
-//! stays. The intended escape hatch is the CATALOGUE, which will override — punctual,
-//! versioned, and it leaves a trace of the decision. (Emptying the shared file would be
-//! an invisible gesture nobody would remember making.) That override is not built yet.
+//! stays. The escape hatch is the CATALOGUE — punctual, versioned, and it leaves a trace
+//! of the decision. (Emptying the shared file would be an invisible gesture nobody would
+//! remember making.) It is BUILT: `bundles::resolve_facts` applies a package's declared
+//! overrides over what was collected here, and `RawPkg::overrides` is the one lift from
+//! the YAML. Nothing CONSULTS it yet, so an override written today changes nothing
+//! observable until the ladder reads a row's facts — the mechanism is complete, its
+//! consumer is a separate plan.
+//!
+//! ⚠️ And it must stay on the reading side. What `resolve_facts` returns is a BELIEF, not
+//! an observation, and it is the same `Facts` type `merge_into` accepts — so feeding one
+//! back here would ratchet a declared `slow`'s sentinel into the share permanently, which
+//! is precisely the WRONG value the paragraphs above promise no write can produce. Merge
+//! only what a machine actually saw.
 //!
 //! ⭐ AND THERE IS NO SUBJECT HERE: no host, no user, no fine timestamp, no count. This
 //! answers "how does this package behave", a question about software. The install journal
