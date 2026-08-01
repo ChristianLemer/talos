@@ -656,6 +656,18 @@ function refreshLiveness() {
   // Refresh is available whenever we're idle — it only re-reads the machine.
   const refresh = document.getElementById("refresh-all");
   if (refresh) refresh.disabled = busy;
+  // Quit is refused DURING an Apply, and says why. The server exits the process, so a
+  // running installer — a child that can legitimately take minutes — would die with it,
+  // leaving a package half-written. Only `applyRunning` blocks it: quitting mid-SCAN is
+  // harmless (a probe writes nothing), and a scan is exactly when someone realises they
+  // opened the wrong tool and wants out.
+  const quit = document.getElementById("quit-all");
+  if (quit) {
+    quit.disabled = applyRunning;
+    quit.title = applyRunning
+      ? "Can't quit while applying — an install is running and would be interrupted"
+      : "Close Talos";
+  }
 }
 
 // The re-scan veil covers the WHOLE window (position:fixed, top-level), so the
@@ -1370,6 +1382,14 @@ function resetAll() {
 // first — a modal mirroring the consent dialog. The button only OPENS it; the
 // actual reset runs on explicit confirmation.
 const resetConfirmEl = document.getElementById("reset-confirm");
+// Quit — over the WEBSOCKET, not Tauri's JS API: the front is served from a real URL
+// (path A, WS, no IPC — see main.rs), so `window.__TAURI__` is not there to call. No
+// confirmation dialog: closing an installer panel is not destructive, and the Apply
+// guard in refreshLiveness already covers the one moment when it would be.
+document.getElementById("quit-all").onclick = () => {
+  if (applyRunning) return; // belt to the disabled attribute's braces
+  ws.send(JSON.stringify({ type: "quit" }));
+};
 document.getElementById("reset-all").onclick = () =>
   resetConfirmEl.classList.add("show");
 document.getElementById("reset-confirm-no").onclick = () =>

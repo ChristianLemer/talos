@@ -927,6 +927,10 @@
         <div class="hero-buttons">
           <button id="refresh-all" class="resetbtn" title="Re-scan the machine — re-check what's installed right now (your choices are kept)">Refresh</button>
           <button id="reset-all" class="resetbtn" title="Reset every toggle to the author's default">Reset</button>
+          <!-- Quit closes the app from inside the panel. Disabled during an Apply: a
+               running installer is a child process that would die with us, and the user
+               deserves to be told why rather than to lose a half-finished install. -->
+          <button id="quit-all" class="resetbtn" title="Close Talos">Quit</button>
           <button id="install-all" class="applybtn">Apply</button>
         </div>
         <span id="globalhint">Installs what you checked, updates what's outdated, removes what you unchecked.</span>

@@ -500,6 +500,30 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     }
                 }
             }
+            // quit: close the app from a button in the panel.
+            //
+            // It goes over the WEBSOCKET and not through Tauri's JS API, because the
+            // front is served from a real URL (http://127.0.0.1:1420) — "path A (WS, no
+            // IPC)", as main.rs puts it: the front does not drive the native window, and
+            // `window.__TAURI__` is not there to call. The socket is the only channel we
+            // have, so the socket is the channel we use.
+            //
+            // The sudo password is cleared FIRST. It lives in RAM for the duration of an
+            // Apply (model C) and is wiped at the end of one; quitting mid-way is another
+            // kind of end, and a secret must not survive on a path that skipped its
+            // cleanup. It costs one lock and removes a whole class of question.
+            //
+            // Then `std::process::exit`, deliberately, rather than asking Tauri to close
+            // the window: this thread is inside the tokio runtime on a spawned thread, not
+            // the main thread that owns the AppHandle, so there is no handle to ask. A
+            // running child (a real installer, minutes long) dies with us — which is why
+            // the FRONT refuses to send this while an Apply is running. The guard belongs
+            // there, where the user can be told why, not here where it can only be silent.
+            "quit" => {
+                clear_sudo_pw(&state).await;
+                println!("[quit] asked by the panel — exiting");
+                std::process::exit(0);
+            }
             // Deep-link straight to System Settings → Privacy & Security → App
             // Management, so the user can grant the permission a cask upgrade needs.
             "open-appmgmt-settings" => {
