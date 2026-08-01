@@ -56,6 +56,20 @@ fn scope_refuses(sel: &Selection, name: &str) -> bool {
     sel.scope.get(name).map(|s| s.as_str()) == Some("out")
 }
 
+/// True when this client text is a `cancel-step` aimed at the step currently running.
+///
+/// The index check is the whole point. A Stop click can land JUST as its step finishes —
+/// the message is then read while the NEXT step is streaming, and killing on the verb
+/// alone would murder an innocent row. Pure, so it is tested without a pty.
+#[allow(dead_code)]
+fn cancel_targets(txt: &str, running: u32) -> bool {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(txt) else {
+        return false;
+    };
+    v.get("type").and_then(|t| t.as_str()) == Some("cancel-step")
+        && v.get("i").and_then(|n| n.as_u64()) == Some(running as u64)
+}
+
 fn is_outdated_now(od: Option<&crate::managers::Outdated>) -> bool {
     // Approach B: presence in the scan IS the outdated signal, for casks and
     // formulae alike. The scan uses `--greedy-auto-updates`, so a self-updating
@@ -2052,5 +2066,27 @@ mod tests {
         // parse_selection would have dropped this, but a direct construction
         // must not become a silent refusal either: only "out" refuses.
         assert!(!super::scope_refuses(&sel, "Git"));
+    }
+
+    #[test]
+    fn cancel_targets_only_the_running_step() {
+        // The cheap mistake with the expensive consequence: the user clicks Stop as
+        // step 3 is already finishing, the message lands while step 4 runs, and we
+        // kill the WRONG row. The index must match.
+        assert!(super::cancel_targets(r#"{"type":"cancel-step","i":3}"#, 3));
+        assert!(!super::cancel_targets(r#"{"type":"cancel-step","i":5}"#, 3));
+    }
+
+    #[test]
+    fn cancel_targets_ignores_everything_else() {
+        // Other verbs stream past this check constantly (sudo-pw, forbidden-*): none
+        // of them may be read as a cancel.
+        assert!(!super::cancel_targets(r#"{"type":"sudo-pw","pw":"x"}"#, 3));
+        assert!(!super::cancel_targets(r#"{"type":"cancel-step"}"#, 3)); // no index
+        assert!(!super::cancel_targets("not json at all", 3));
+        assert!(!super::cancel_targets(
+            r#"{"type":"cancel-step","i":"3"}"#,
+            3
+        )); // string, not number
     }
 }
