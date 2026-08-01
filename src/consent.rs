@@ -26,6 +26,19 @@ pub struct HistEntry {
     pub action: String, // install | uninstall | upgrade
     #[serde(default)]
     pub ok: bool,
+    /// How long the step took, in whole seconds. 0 means EITHER pre-feature (every
+    /// line written before this field existed) OR sub-second, since `as_secs()`
+    /// truncates — most plausibly a step that failed fast, since a successful one pays
+    /// for the login-shell wrap and the re-probe on top of its own work. That ambiguity
+    /// is harmless: the consumer keeps the WORST duration (a `max`), so a 0 never wins.
+    ///
+    /// Absence reading as 0 rather than as an error is what lets the append-only
+    /// journal keep parsing its own older lines — and `parse_history`, the reader the
+    /// journal is actually read through, is hand-rolled: its `unwrap_or(0)` is the
+    /// mechanism. `#[serde(default)]` covers the derived path, which nothing currently
+    /// reads; it is here for consistency with the fields above it.
+    #[serde(default)]
+    pub secs: u64,
 }
 
 /// The consent state.
@@ -68,6 +81,7 @@ pub fn parse_history(raw: &str) -> Vec<HistEntry> {
                 .unwrap_or("")
                 .to_string(),
             ok: v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false),
+            secs: v.get("secs").and_then(|x| x.as_u64()).unwrap_or(0),
         });
     }
     out
@@ -268,6 +282,7 @@ mod tests {
             version: "0.24".into(),
             action: "install".into(),
             ok: true,
+            secs: 0,
         };
         // No consent yet → local written, shared ABSENT.
         append_history(&s, &e);
@@ -294,6 +309,7 @@ mod tests {
             version: "".into(),
             action: "install".into(),
             ok: true,
+            secs: 0,
         };
         append_history(&s, &e);
         let shared = shared_log_path(&s.exe_dir, &s.host, &s.user);
@@ -302,5 +318,32 @@ mod tests {
         assert_eq!(read_history(&s).len(), 0, "local emptied");
         assert!(shared.exists(), "the shared team log stays intact");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn history_roundtrips_the_duration() {
+        let e = HistEntry {
+            at: "2026-08-01T10:00:00Z".into(),
+            package: "AWS CLI".into(),
+            version: "2.36.13".into(),
+            action: "install".into(),
+            ok: true,
+            secs: 242,
+        };
+        let line = serde_json::to_string(&e).unwrap();
+        let back = parse_history(&format!("{line}\n"));
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].secs, 242);
+    }
+
+    #[test]
+    fn history_without_a_duration_reads_zero() {
+        // Every line written before this feature has no `secs`. They must still
+        // parse — a journal that rejects its own history is worse than one with a
+        // gap, and 0 reads honestly as "not measured".
+        let old = r#"{"at":"2026-07-01T10:00:00Z","package":"jq","version":"1.8.2","action":"install","ok":true}"#;
+        let back = parse_history(&format!("{old}\n"));
+        assert_eq!(back.len(), 1, "an old line must still parse");
+        assert_eq!(back[0].secs, 0, "absent duration → 0, not an error");
     }
 }

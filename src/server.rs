@@ -1554,6 +1554,13 @@ async fn do_step(
     is_cask: bool,
 ) -> StepOutcome {
     use crate::decision::Action;
+    // Timed from the top so the measurement covers everything the step really does:
+    // the pty run, the prompt waits inside it, AND the post-action
+    // `detect_present_detailed` re-probe below — that probe is slow enough that the
+    // startup scan times it per package. (The outdated scan is NOT in this window; both
+    // callers scan before calling and pass `is_cask` in.) A duration that stopped at the
+    // pty would flatter exactly the slow packages the number exists to expose.
+    let started = std::time::Instant::now();
     let os = state.os;
     // A cask Upgrade needs the forced --cask --force command (brew's receipt drift
     // → anti-clobber exit 1 otherwise). Single resolution point for BOTH callers
@@ -1689,6 +1696,7 @@ async fn do_step(
             version,
             action: action.as_str().to_string(),
             ok,
+            secs: started.elapsed().as_secs(),
         },
     );
     StepOutcome { ok, blocked }
