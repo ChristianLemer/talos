@@ -115,6 +115,7 @@ const GLYPH = {
   absent: "·",
   self: "·",
   fail: "✗",
+  cancelled: "⊘",
   forbidden: "⚠",
   unknown: "?",
 };
@@ -135,6 +136,9 @@ const LABEL = {
   // says WHY, via SCOPE_LABEL; this is the fallback when only a step status lands.
   self: "yours",
   fail: "failed",
+  // The user stopped this step. NOT `failed`: killing a step is a decision, not a
+  // breakage, and "failed" would send them looking for a cause that does not exist.
+  cancelled: "cancelled",
   forbidden: "blocked by firewall",
   // indeterminate: no practicable route to constate presence on this machine
   // (e.g. a winget-only package on Mac). NOT "absent" — we genuinely can't know.

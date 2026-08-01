@@ -322,6 +322,10 @@
       .badge.self       { color:var(--dim); }
       .statusLabel.self { color:var(--dim); }
       .fail         { color:#f7768e; font-weight:700; }
+      /* Stopped by the user. GREY, not red — this is not an alarm: the person already
+         knows, they pressed the button. Red would say "something broke, look at it",
+         which is exactly the confusion a distinct state exists to prevent. */
+      .cancelled    { color:var(--dim); }
       /* Apply buttons — one in the hero, one per bundle. Two visual states:
          GHOST (default): dim outline, no fill — nothing useful to do right now.
          LIVE (.live): filled blue, it WOULD act if pressed. Only useful buttons
