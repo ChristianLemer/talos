@@ -618,6 +618,21 @@ function refreshLiveness() {
   // hover for a manual re-run, but disabled while a run is on.
   for (const i of ids) {
     const r = rows[i];
+    // A RUNNING row's button becomes Stop. No new DOM and no second control: the row
+    // has exactly one action button and this function already rewrites it on every
+    // repaint ("button IS the action"), so the running state is just another thing it
+    // can be. `continue` because none of the normal act/colour logic applies — there is
+    // one thing to do here, and it is not an install.
+    const st = model.pkgs.get(i)?.status;
+    if (st && RUNNING.has(st)) {
+      r.apply.textContent = "Stop";
+      r.apply.disabled = false; // the ONE button that must stay live during a run
+      r.apply.className = "rerun remove"; // red: it interrupts, like a removal
+      r.apply.title =
+        "Stop this install. The package may be left half-installed — the next scan will show what is really there.";
+      r.details.classList.remove("plan-add", "plan-remove");
+      continue;
+    }
     // Out of scope → NO row action either. Found at a real click: in advanced mode
     // the per-row button stayed live and read "update" on an out-of-scope row, and
     // the server (correctly) refused it — an inert-but-clickable control, exactly
@@ -847,6 +862,14 @@ function render(steps, profiles = [], columns = 2) {
     apply.title = "Apply this one now";
     apply.onclick = (e) => {
       e.preventDefault();
+      // While this row is RUNNING the button means Stop — send the cancel and return.
+      // `i` is carried so the server can refuse a stale click: the message may land
+      // just as the step finishes, and killing the NEXT row would be the bug.
+      const st = model.pkgs.get(s.i)?.status;
+      if (st && RUNNING.has(st)) {
+        ws.send(JSON.stringify({ type: "cancel-step", i: s.i }));
+        return;
+      }
       if (applyRunning) return;
       const act = buttonAction(s.i); // send EXACTLY what the button shows
       if (!act) return;
