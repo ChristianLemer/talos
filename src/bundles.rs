@@ -128,6 +128,22 @@ pub struct Overrides {
     pub slow: Option<bool>,
 }
 
+/// The duration a declared `slow: true` stands in for when nothing was ever measured.
+/// A sentinel, not a real timing — the honest number always comes from the share.
+///
+/// It is an ANCHOR: the ladder's "slow" threshold must stay strictly BELOW it, or every
+/// `slow: true` in the catalogue goes silently inert. It is `pub` for exactly that reason —
+/// `ladder::SLOW_SECS` is asserted against it, which is the comparison the Part A plan
+/// could only describe in a comment because this was a function-local const.
+///
+/// It sits ABOVE `resolve_facts`'s doc essay rather than between the essay and the `fn`:
+/// `///` lines accumulate onto the next ITEM, so slipping a const in below them would have
+/// silently re-parented that whole essay onto this constant.
+///
+/// No `allow` of its own, measured rather than assumed: `resolve_facts` reads it, and an
+/// allowed item is a live ROOT, so this stays alive through it.
+pub const DECLARED_SLOW_SECS: u64 = 600;
+
 /// What the app should BELIEVE about a package: the fleet's observation, with the
 /// catalogue's explicit statement taking precedence.
 ///
@@ -161,7 +177,9 @@ pub struct Overrides {
 /// count should know the two are indistinguishable here.
 // TWO allows for this mechanism, measured by stripping each under `-D warnings` rather than
 // guessed. `overrides` covers itself and the three `RawPkg` fields it reads; this one covers
-// itself. An allowed item IS a live root, so `Overrides` is kept alive redundantly — by
+// itself AND the `DECLARED_SLOW_SECS` above, which is alive only through this root (measured:
+// stripping this allow reports the const unused too). An allowed item IS a live root, so
+// `Overrides` is kept alive redundantly — by
 // either allow independently, since `overrides` constructs it and `resolve_facts` takes it.
 // Neither attribute subsumes the other all the same: dropping `overrides`'s leaves the three
 // fields unread (reported as one warning), dropping this one leaves `resolve_facts` unused.
@@ -175,15 +193,6 @@ pub fn resolve_facts(
     collected: &crate::behaviour::Facts,
     declared: &Overrides,
 ) -> crate::behaviour::Facts {
-    /// The duration a declared `slow: true` stands in for when nothing was ever measured.
-    /// A sentinel, not a real timing — the honest number always comes from the share.
-    ///
-    /// ⚠️ NOTHING YET MAKES THIS BIG ENOUGH. The ladder's "slow" threshold does not exist,
-    /// so this value is an ANCHOR that threshold must stay strictly below: pick one above
-    /// 600 and every `slow: true` in the catalogue goes silently inert, with no test to
-    /// notice — the test here can only pin this constant to itself. Whoever picks the
-    /// threshold owns that comparison.
-    const DECLARED_SLOW_SECS: u64 = 600;
     crate::behaviour::Facts {
         uac: declared.uac.unwrap_or(collected.uac),
         forbidden: declared.forbidden.unwrap_or(collected.forbidden),

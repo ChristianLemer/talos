@@ -15,6 +15,7 @@ mod decision;
 mod deps;
 mod detect;
 mod forbidden;
+mod ladder;
 mod managers;
 mod outdated;
 mod platform;
