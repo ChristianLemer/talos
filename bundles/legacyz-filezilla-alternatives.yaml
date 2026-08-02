@@ -1,0 +1,35 @@
+# FileZilla alternatives — two candidates to replace FileZilla, to be TESTED against
+# the Medidata Rave endpoint before either becomes the answer.
+#
+# WHY THIS BUNDLE EXISTS. FileZilla is the study designers' route into Rave over
+# FTPS/SFTP, and winget cannot ship it: the author forbids third-party installers from
+# using his infrastructure, so winget removed the package in 2022 and now refuses every
+# re-request under "License prevents package from being added" (see catalog/filezilla.yaml
+# for the full evidence). The colleagues still need a client that installs.
+#
+# NEITHER IS VALIDATED YET, and that is the point of grouping them: Rave may demand a
+# specific FTPS mode (implicit vs explicit), a TLS version, or client-certificate auth,
+# and a client can advertise "FTPS" and still fail on that particular server. C tests
+# with Isabelle. Until one wins, both are offered and neither is imposed — hence a
+# standalone bundle nobody has to activate, rather than adding them to Legacy where they
+# would look like settled kit.
+#
+#   WinSCP    Windows only. Two-pane local↔remote, so no change of habit for a FileZilla
+#             user, and it ships a real MSI — the strongest argument in a managed
+#             corporate estate.
+#   Cyberduck Windows AND macOS, so one tool for the whole team. Single-pane server
+#             browser: a genuine change of habit for two-pane users.
+#
+# ⚠️ THE FILENAME CARRIES THE ORDER. `profiles.rs::load_profiles` sorts by path
+# (`paths.sort()`); there is no priority field. C asked for this card to sit AFTER Legacy
+# study designers, and "-" sorts BEFORE "." in ASCII, so the obvious
+# `legacy-filezilla-alternatives.yaml` would have placed it first. The `z` is what puts
+# it after `legacy.yaml`. Rename this file and the card moves.
+bundle: FileZilla alternatives
+emoji: 🔌
+usage: Candidates to replace FileZilla for Rave — to be tested, not yet chosen.
+highlights: [WinSCP, Cyberduck]
+description: Two FTPS/SFTP clients that install cleanly, pending a Rave test.
+packages:
+  - WinSCP
+  - Cyberduck
