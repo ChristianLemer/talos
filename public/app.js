@@ -789,12 +789,33 @@ function renderLadder() {
   const items = M.rungPlan(model, rung);
   const count = items.length === 1 ? "1 item" : `${items.length} items`;
   document.getElementById("ladder-count").textContent = count;
+  // …and HOW LONG, from this machine's own last-seen durations. Same rung as the count and
+  // via the same `rungPlan`, so the two can never describe different sets of rows.
+  //
+  // ⚠️ `rungSeconds` reads the LOCAL `secs`, never the shared `slow` boolean — those answer
+  // two different questions (see model.js's note). And the unknowns are part of the phrase:
+  // an unmeasured row adds nothing to the total, so a bare "~4 min" would under-report and
+  // teach the user to distrust every later number.
+  const est = L.formatEstimate(L.estimate(M.rungSeconds(model, rung)));
+  const estEl = document.getElementById("ladder-est");
+  if (estEl) {
+    estEl.textContent = est;
+    // Empty rung → no estimate AND no separator. `#ladder-blocked` two lines below already
+    // says "Nothing to do at this level", so a second phrase here would repeat it; the "·"
+    // is a CSS ::before on this element, so hiding it takes the punctuation with it.
+    estEl.hidden = !est;
+  }
   // A range input announces its VALUE — "4" — which is the one thing on this control that
-  // carries no meaning. The word and the count are the reading; `aria-valuetext` overrides
-  // the number with them, so a screen reader says "Everything, 6 items" rather than "4".
-  // Set here rather than in the markup because it changes on every move, exactly like the
-  // visible text it mirrors.
-  r.setAttribute("aria-valuetext", `${spec.name}, ${count}`);
+  // carries no meaning. The word, the count and the estimate are the reading; `aria-valuetext`
+  // overrides the number with them, so a screen reader says "Everything, 6 items, ~4 min for 6
+  // and 3 unknown" rather than "4". Set here rather than in the markup because it changes on
+  // every move, exactly like the visible text it mirrors.
+  //
+  // Comma-joined where the eye gets a "·": the same WORDS in the same order, punctuated for
+  // speech instead of for the page. The estimate is included rather than left visual-only —
+  // "how long will this take me" is not decoration, and a user who cannot see the widget has
+  // the same question.
+  r.setAttribute("aria-valuetext", est ? `${spec.name}, ${count}, ${est}` : `${spec.name}, ${count}`);
   renderLadderScale();
 }
 

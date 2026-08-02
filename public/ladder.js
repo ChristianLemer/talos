@@ -82,6 +82,83 @@ export function isSlow(facts) {
   return facts?.slow === true;
 }
 
+// Sum the local durations for a set of rows, and COUNT the rows that have none.
+//
+// ⚠️ Unknowns are counted and SHOWN, never silently omitted. A row with no local timing
+// contributes nothing to the total, so an early estimate under-reports — and a number that
+// reads as a prediction while being systematically wrong teaches people to distrust it.
+// Same discipline that made the scan narrate "checking X, i of n" rather than freeze on a
+// phrase.
+//
+// ⚠️ `0` is the "never measured HERE" sentinel and NEVER "it was instant" — timings.rs's
+// `note_duration` floors a real measurement at one second precisely so this test can be a
+// plain `s > 0`. So a warm-cache 1s row is KNOWN, and only a genuinely absent measurement
+// is unknown. (Anything stricter — `s > 1`, a "too fast to be real" filter — would move
+// every cached row into the unknown column and make the estimate read as if nothing had
+// ever been measured on a machine where everything has.)
+//
+// No twin in ladder.rs, deliberately: the server holds the durations but never phrases
+// them, and the estimate is a reading of a chosen rung, which only the front has.
+export function estimate(secsPerRow) {
+  let secs = 0, known = 0, unknown = 0;
+  for (const s of secsPerRow) {
+    if (s > 0) { secs += s; known++; } else { unknown++; }
+  }
+  return { secs, known, unknown };
+}
+
+// C's shape: "~N min for X and Y unknown".
+//
+// ⚠️ NOT "at most ~N min". The spec's worst-case framing was right for a total summed from
+// the SHARED slow_secs, which is a max over the fleet. These minutes come from the LOCAL
+// last-seen cache instead, which is neither a worst case nor an average — it is what it
+// took HERE last time. Claiming "at most" would be a false claim about a number that can
+// genuinely be exceeded, and the user is the one who would find out.
+//
+// The four readings, and why each is worded the way it is:
+//
+//   known>0, unknown>0 → "~4 min for 6 and 3 unknown". The minutes cover the 6 ONLY; the
+//                        3 are named so the number is never mistaken for a total.
+//   known>0, unknown=0 → "~4 min for all 4". "all" is said EXPLICITLY rather than dropping
+//                        the clause: a reader must never have to wonder whether an unknown
+//                        count was omitted or was zero. It is mildly redundant beside the
+//                        row count and that redundancy is the price of the guarantee.
+//   known=0, unknown>0 → "3 unknown". NO invented minutes — this is the ordinary reading on
+//                        a machine that has not applied anything yet, and the honest answer
+//                        is that we know what we would do and not how long it takes.
+//   nothing at all      → "" (see below).
+//
+// ⚠️ The empty rung returns an EMPTY STRING, not the plan's "nothing to do". Verified on
+// screen: `#ladder-blocked` already says "Nothing to do at this level. There is more further
+// right." two lines below, so the plan's wording put the same phrase twice in one widget —
+// and that note's own reasoning ("with nothing to do at all, the empty panel is the
+// message") is the argument against a third. "" also cannot be wrong: with no rows there is
+// no duration and no unknown to report. app.js drops the separator with it.
+export function formatEstimate({ secs, known, unknown }) {
+  if (known === 0 && unknown === 0) return "";
+  if (known === 0) return `${unknown} unknown`;
+  return `${duration(secs)} for ${unknown === 0 ? `all ${known}` : `${known} and ${unknown} unknown`}`;
+}
+
+// Seconds → the coarsest reading that is still true.
+//
+// ⚠️ "<1 min", never "~0 min": a 30s total rounds to 1 minute and a 29s total to ZERO, and
+// "~0 min" reads as "instant" for something that is not. The threshold is on the SECONDS,
+// before any rounding, so everything under a minute reads the same way.
+//
+// ⚠️ And hours are said in hours. "~127 min" is arithmetically fine and humanly useless —
+// the question this widget asks is "do I have time RIGHT NOW?", and nobody converts 127
+// minutes in their head to answer it. A fresh machine with Xcode CLT in the plan really is
+// this case. The minutes are carried out of the total rather than computed per-part, so a
+// 59.7-minute remainder cannot print as "1 h 60 min".
+function duration(secs) {
+  if (secs < 60) return "<1 min";
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `~${mins} min`;
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return m === 0 ? `~${h} h` : `~${h} h ${m} min`;
+}
+
 // May this action run at this rung? THE twin of ladder.rs::rung_allows.
 //   rung: 0..4  ·  action: "install"|"uninstall"|"upgrade"|"downgrade"|null
 export function rungAllows(rung, action, isConfig, facts) {

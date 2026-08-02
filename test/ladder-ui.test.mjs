@@ -116,7 +116,11 @@ test("ladder: the announcement is the WORD, not the number under it", () => {
   const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
   assert.match(body, /setAttribute\("aria-valuetext"/,
     "renderLadder must override the announced value with the word and the count");
-  assert.match(body, /aria-valuetext",\s*`\$\{spec\.name\}, \$\{count\}`/,
+  // It must be the SAME name and count the eye gets — the variables, never a second literal.
+  // (The estimate joined this reading later; its own test pins the full shape, including the
+  // no-estimate fallback. This one stays about the name and the count, which are never absent.)
+  const vt = body.slice(body.indexOf('setAttribute("aria-valuetext"'));
+  assert.match(vt.slice(0, vt.indexOf("\n")), /\$\{spec\.name\}, \$\{count\}/,
     "…and it must be the SAME name and count the eye gets, not a second wording");
 });
 
@@ -312,4 +316,78 @@ test("ladder: Apply refuses an EMPTY rung, and says the rung is why", () => {
     "the note appears only when the RUNG is what emptied the plan");
   assert.match(body, /Nothing to do at this level/,
     "the note names the state, and the slider as the fix");
+});
+
+test("ladder: the ESTIMATE comes from the local secs of the same rung, unknowns included", () => {
+  // Four ways a number this small could mislead, all invisible to the pure tests because they
+  // pin `estimate`/`formatEstimate` and cannot see what the widget FEEDS them:
+  //
+  //   1. the wrong rung  → "☕ Unattended · 3 items · ~40 min" (the minutes of 🏗️)
+  //   2. the SHARED `slow` instead of the LOCAL `secs` → minutes invented from a boolean
+  //   3. the unknowns dropped → a confident "~4 min" for a plan mostly unmeasured
+  //   4. a second traversal of model.pkgs → minutes for rows the count does not include
+  const at = appjs.indexOf("function renderLadder()");
+  assert.notEqual(at, -1, "renderLadder() must exist");
+  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
+  assert.match(body, /L\.formatEstimate\(L\.estimate\(M\.rungSeconds\(model, rung\)\)\)/,
+    "the estimate reads the chosen rung's LOCAL durations — any other argument is a wrong number");
+  // The phrase must never be assembled here: `formatEstimate` is where the wording and its
+  // limits live (no "at most", "<1 min" not "~0 min", the unknowns named), and a second
+  // formatter in the view would be a second wording to keep true. Comments stripped first —
+  // the comments quote the phrase on purpose, to say what the code must NOT do, and a guard
+  // that forbids explaining itself is a guard that gets the explanation deleted.
+  const code = body.replace(/\/\/.*$/gm, "");
+  assert.ok(!/min for|unknown`|\bat most\b/.test(code),
+    "app.js must not phrase the estimate itself — ladder.js owns the words and their limits");
+  // `p.slow` is a fleet-wide max reduced to a boolean; minutes from it could only be an
+  // invented constant, and a row is legitimately `slow: true, secs: 1` on a warm machine.
+  const modeljs = readFileSync(new URL("../public/model.js", import.meta.url), "utf8");
+  const rs = modeljs.indexOf("export function rungSeconds(");
+  assert.notEqual(rs, -1, "rungSeconds must live in model.js, beside rungPlan");
+  const rsBody = modeljs.slice(rs, modeljs.indexOf("\n}\n", rs));
+  assert.match(rsBody, /rungPlan\(model, rung\)/,
+    "…and it must walk rungPlan, so the minutes and the count describe the same rows");
+  assert.match(rsBody, /\.secs \|\| 0/, "the LOCAL last-seen duration");
+  assert.ok(!/\.slow\b/.test(rsBody.replace(/\/\/.*$/gm, "")),
+    "never the shared classification — that is a boolean and a different question");
+});
+
+test("ladder: an ABSENT estimate takes its separator with it", () => {
+  // At ⚡ on a machine whose config is already applied, the rung is empty: there is no
+  // duration and no unknown to report, and `#ladder-blocked` already says "Nothing to do at
+  // this level" two lines below. So the estimate goes quiet — but a "·" left behind would
+  // read as a value that failed to load, which is the "greyed out teaches nothing" failure
+  // in miniature. The separator is a ::before on the element, so hiding one hides both.
+  const rule = html.match(/\.ladder-est::before \{[^}]*\}/);
+  assert.ok(rule, ".ladder-est::before must carry the separator");
+  assert.match(rule[0], /content:"· "/, "…so that hiding the element removes it too");
+  const at = appjs.indexOf("function renderLadder()");
+  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
+  // The separator lives in ONE place. A "· " added in the JS as well would render "· · 3
+  // unknown" — a MEASURED mutation survivor (`estEl.textContent = est ? "· " + est : ""`
+  // passed every other test), and one that reads as a broken template rather than as a value.
+  // So the estimate's text is exactly what formatEstimate returned, unpunctuated.
+  assert.match(body, /estEl\.textContent = est;/,
+    "the estimate's text is the formatted phrase itself — no punctuation added here");
+  assert.ok(!body.includes('"· "') && !body.includes("'· '"),
+    "the '·' belongs to the ::before only; a second one would print twice");
+  assert.match(body, /estEl\.hidden = !est/, "an empty estimate hides the element");
+  // And the estimate must be its own element: folded into #ladder-count it could not be
+  // hidden without hiding the row count, which is never absent.
+  assert.match(html, /id="ladder-est"/, "the estimate needs its own node");
+  assert.match(html, /id="ladder-est"[^>]*hidden/,
+    "…starting hidden, so the first paint before any plan shows no stray separator");
+});
+
+test("ladder: the estimate is ANNOUNCED, not visual-only", () => {
+  // "How long will this take me" is the question the whole telemetry chain exists to answer,
+  // and a user who cannot see the widget has it too. `aria-valuetext` is already the reading
+  // for this control (a range would otherwise announce "4"), so the estimate belongs in it —
+  // in the same order as on screen, punctuated for speech.
+  const at = appjs.indexOf("function renderLadder()");
+  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
+  assert.match(body, /aria-valuetext",\s*est \? `\$\{spec\.name\}, \$\{count\}, \$\{est\}`/,
+    "the announcement carries the word, the count AND the estimate, in that order");
+  assert.match(body, /: `\$\{spec\.name\}, \$\{count\}`\)/,
+    "…and falls back to the word and count alone when there is no estimate to announce");
 });

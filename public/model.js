@@ -363,6 +363,22 @@ export function rungPlan(model, rung) {
   }
   return items;
 }
+// The local durations, in seconds, for the rows a rung would touch — ladder.js's `estimate`
+// turns them into "~4 min for 6 and 3 unknown". `0` = never measured HERE, which the estimate
+// COUNTS and SHOWS as unknown rather than treating as free.
+//
+// ⚠️ `p.secs`, the LOCAL last-seen duration, and NOT the shared classification. `p.slow` is
+// the other file's verdict — a max over the whole fleet, which exists so that a rung means
+// the same thing on every machine — and it is a BOOLEAN here, so deriving minutes from it
+// could only mean inventing a constant. A row can legitimately be `slow: true, secs: 1`
+// (measured: a brew bottle already cached); the rung puts it last for everyone and the
+// estimate still says "<1 min", because those are two different questions.
+//
+// Built on rungPlan rather than walking the packages again, so the count under the thumb and
+// the minutes beside it can never describe different sets of rows.
+export function rungSeconds(model, rung) {
+  return rungPlan(model, rung).map((i) => model.pkgs.get(i).secs || 0);
+}
 // WHY a row is out of this rung's reach, or null when it is in. A KEY, not a sentence:
 // this module is the rule layer and holds no copy — the words live in app.js beside the
 // other user-facing strings (`RUNG_WHY`), so they can be read and reworded in one place.

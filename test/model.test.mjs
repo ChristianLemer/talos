@@ -32,6 +32,7 @@ import {
   removeFromPersonal,
   removeProfile,
   rungPlan,
+  rungSeconds,
   scopeOf,
   setDecision,
   setExternal,
@@ -861,4 +862,39 @@ test("ladder: a downgrade is in NO rung — it mirrors AUTO_ACTS, not the ladder
   assert.equal(actionOf(m, 0), "downgrade");
   assert.equal(isActionable(m, 0), false);
   for (const r of [0, 1, 2, 3, 4]) assert.deepEqual(rungPlan(m, r), [], `rung ${r}`);
+});
+
+test("ladder: rungSeconds reads the LOCAL secs of exactly the rung's rows", () => {
+  // Two things this must not do, and both would be invisible on screen:
+  //
+  // 1. Read the SHARED classification. `slow` is a fleet-wide max reduced to a boolean, so
+  //    minutes derived from it could only be an invented constant — and a row is legitimately
+  //    `slow: true, secs: 1` when this machine's cache is warm (timings.rs, measured on 7-Zip).
+  // 2. Describe a different set of rows than the count beside it. It goes through rungPlan
+  //    for exactly that reason.
+  const m = createModel();
+  loadPlan(m, [
+    { i: 0, name: "Starship config", canUninstall: true, isConfig: true, secs: 3 },
+    { i: 1, name: "rg", canUninstall: true, secs: 12 },
+    { i: 2, name: "bat", canUninstall: true }, // never measured here → 0, the unknown sentinel
+    { i: 3, name: "AWS CLI", canUninstall: true, uac: true, secs: 242 },
+    // slow for EVERYONE (last rung), and one second HERE. Not a contradiction: the shared
+    // file classifies, the local file estimates.
+    { i: 4, name: "7-Zip", canUninstall: true, slow: true, secs: 1 },
+  ]);
+  for (const i of [0, 1, 2, 3, 4]) setDecision(m, i, "in");
+  for (const i of [2, 3, 4]) {
+    setStatusData(m, i, "ok");
+    setOutdated(m, i, true, "9.9.9");
+  }
+  assert.deepEqual(rungSeconds(m, 0), [3]);
+  assert.deepEqual(rungSeconds(m, 1), [3, 12]);
+  assert.deepEqual(rungSeconds(m, 2), [3, 12, 0], "the unmeasured row is present as 0, not dropped");
+  assert.deepEqual(rungSeconds(m, 3), [3, 12, 0, 242]);
+  assert.deepEqual(rungSeconds(m, 4), [3, 12, 0, 242, 1], "…and the slow-for-everyone row is 1s HERE");
+  // One value per row the rung touches, always — a length mismatch is how "N items" and the
+  // minutes beside it would come to describe different sets.
+  for (const r of [0, 1, 2, 3, 4]) {
+    assert.equal(rungSeconds(m, r).length, rungPlan(m, r).length, `rung ${r}`);
+  }
 });
