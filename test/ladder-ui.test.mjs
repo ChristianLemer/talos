@@ -288,3 +288,28 @@ test("ladder: the scale carries all five words, built from RUNGS", () => {
   assert.ok(rl.slice(0, rl.indexOf("\n}\n")).includes("renderLadderScale()"),
     "renderLadder must repaint the scale");
 });
+
+test("ladder: Apply refuses an EMPTY rung, and says the rung is why", () => {
+  // C, at the second sighting: "le apply reste actif même s'il semble ne plus rien y avoir
+  // à exécuter — est-ce normal?". It was not. A button that promises an action with nothing
+  // to do is the dishonesty this app already paid for once (the 403 retry card that offered
+  // a download and did nothing), and clicking it costs a full server round-trip — re-scan,
+  // full-window veil — to be told `done {nothing:true}`.
+  const at = appjs.indexOf("const g = document.getElementById(\"install-all\")");
+  assert.notEqual(at, -1, "the Apply button's liveness block must exist");
+  const body = appjs.slice(at, at + 1400);
+  // The emptiness must come from rungPlan, not from a second rule: the button, the count
+  // under the thumb and the server's own filter have to agree about what "nothing" means.
+  assert.match(body, /M\.rungPlan\(model, rung\)\.length === 0/,
+    "emptiness is asked of rungPlan — a second rule would drift from the count");
+  assert.match(body, /g\.disabled = busy \|\| rungEmpty/,
+    "Apply is refused when the rung has no work, not only while busy");
+  assert.match(body, /toggle\("live", .*!rungEmpty/,
+    "…and it must not glow `live` either, or a dead button still invites the click");
+  // And the reason is shown ONLY when a wider rung would help. With nothing to do at all,
+  // the empty panel is already the message.
+  assert.match(body, /rungEmpty && ids\.some\(isActionable\)/,
+    "the note appears only when the RUNG is what emptied the plan");
+  assert.match(body, /Nothing to do at this level/,
+    "the note names the state, and the slider as the fix");
+});

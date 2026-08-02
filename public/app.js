@@ -702,10 +702,32 @@ function refreshLiveness() {
     // only on state/outdated messages. Without this the number stayed stale
     // (e.g. "→ 15.2.0 update") while the button already said uninstall.
   }
-  // Global button: live if anything anywhere would act.
+  // Global button: live if anything anywhere would act — AT THE CHOSEN RUNG.
+  //
+  // ⚠️ `isActionable` answers "would a plain Apply touch this row", which is the machine's
+  // truth and knows nothing about the ladder. The rung can narrow that to nothing (⚡ on a
+  // machine with no config-atom to run), and then Apply must refuse: a button that promises
+  // an action with nothing to do is the dishonesty this app already paid for once, at the
+  // 403 retry card that offered a download and did nothing. It also costs a full server
+  // round-trip — re-scan, full-window veil — to be told `done {nothing:true}`.
+  //
+  // `rungPlan` rather than a second rule, so the button, the count under the thumb and the
+  // server's own filter cannot disagree about what "nothing" means.
   const g = document.getElementById("install-all");
-  g.classList.toggle("live", ids.some(isActionable) && !busy);
-  g.disabled = busy;
+  const rungEmpty = M.rungPlan(model, rung).length === 0;
+  g.classList.toggle("live", ids.some(isActionable) && !rungEmpty && !busy);
+  g.disabled = busy || rungEmpty;
+  // …and SAY why, rather than leaving a dead button to be puzzled over. Only when the rung
+  // is what emptied it: with nothing to do at all, the panel's own emptiness is the message
+  // and a note would be noise.
+  const why = document.getElementById("ladder-blocked");
+  if (why) {
+    const rungIsTheReason = rungEmpty && ids.some(isActionable);
+    // Stated, not scolded: an empty rung is ordinary, so the note says where the work is
+    // rather than telling the user to fix something.
+    why.textContent = rungIsTheReason ? "Nothing to do at this level. There is more further right." : "";
+    why.hidden = !rungIsTheReason;
+  }
   // Reset is available only when it would do something (model.canReset decides:
   // a moved package or an active profile). The view just reflects that verdict.
   const reset = document.getElementById("reset-all");
