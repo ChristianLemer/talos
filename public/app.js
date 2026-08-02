@@ -773,6 +773,55 @@ function renderLadder() {
   // Set here rather than in the markup because it changes on every move, exactly like the
   // visible text it mirrors.
   r.setAttribute("aria-valuetext", `${spec.name}, ${count}`);
+  renderLadderScale();
+}
+
+// The five labels under the scale, built ONCE from RUNGS and then only re-marked.
+// Built from RUNGS rather than written in the HTML so the scale cannot drift from the rule
+// it labels — the same reason the reading above comes from `spec` and not from a literal.
+//
+// Rebuilding the nodes on every move would throw away the click targets mid-drag and
+// re-run layout for five elements 30 times a second, so the DOM is created on first call
+// and afterwards only the `on` class moves.
+function renderLadderScale() {
+  const host = document.getElementById("ladder-scale");
+  if (!host) return;
+  if (!host.childElementCount) {
+    for (const [i, s] of L.RUNGS.entries()) {
+      const cell = document.createElement("span");
+      const emoji = document.createElement("span");
+      emoji.textContent = s.emoji;
+      const word = document.createElement("span");
+      word.className = "sc-word";
+      word.textContent = s.name;
+      cell.append(emoji, word);
+      // Clicking the label is the same gesture as dragging to it. It goes through the
+      // input's own event so there is ONE path that changes the rung — a second one would
+      // be a second place to forget `refreshLiveness`, which is what repaints the rows.
+      cell.addEventListener("click", () => {
+        const r = document.getElementById("ladder-range");
+        if (!r || r.disabled) return; // frozen during a run or an incomplete scan
+        r.value = String(i);
+        r.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      host.append(cell);
+    }
+  }
+  // Place each label on its OWN notch. ⚠️ A range's thumb centre is INSET by half a thumb
+  // at each end, so notch n is at (thumb/2) + n/4 × (width − thumb) — NOT at n/4 of the
+  // width. Measured after getting it wrong with equal columns: the outer two labels sat
+  // ~90px off at 900px, far enough that the leftmost read as belonging to the second
+  // detent. Recomputed on every paint because the zone is full-width and therefore
+  // responsive; `offsetWidth` is 0 while the panel is hidden, and then the loop is a no-op
+  // that the next repaint fixes.
+  const track = document.getElementById("ladder-range");
+  const w = track ? track.offsetWidth : 0;
+  const thumb = 16; // keep in step with #ladder-range::-webkit-slider-thumb
+  const n = L.RUNGS.length - 1;
+  for (const [i, cell] of [...host.children].entries()) {
+    cell.classList.toggle("on", i === rung);
+    if (w) cell.style.left = `${thumb / 2 + (i / n) * (w - thumb)}px`;
+  }
 }
 
 // The re-scan veil covers the WHOLE window (position:fixed, top-level), so the

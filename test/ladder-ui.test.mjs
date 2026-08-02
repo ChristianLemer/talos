@@ -256,3 +256,35 @@ test("ladder: rungReason names the fact by ASKING the rule, not by reading the f
   assert.ok(!/\bp\??\.?\bslow\b/.test(body.replace(/\/\/.*$/gm, "")),
     "`slow` must be derived from the rule, never read — that is the surviving mutant");
 });
+
+test("ladder: the scale carries all five words, built from RUNGS", () => {
+  // C, on seeing the full-width zone: "avec une telle largeur on peut mettre les
+  // différents mots sur l'échelle". The gap it closes is real — before this, the four
+  // rungs you were NOT on were invisible, so choosing meant dragging to discover.
+  //
+  // Built from RUNGS rather than written into the HTML, so the scale cannot drift from
+  // the rule it labels. A hand-written list would be a second source of truth for the
+  // words, and the words are a contract: three of the five promises were LIES until they
+  // were checked against rungAllows.
+  const at = appjs.indexOf("function renderLadderScale()");
+  assert.notEqual(at, -1, "renderLadderScale() must exist");
+  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
+  assert.match(body, /L\.RUNGS\.entries\(\)/,
+    "the labels come from RUNGS — never a literal list, which would drift");
+  assert.match(body, /classList\.toggle\("on", i === rung\)/,
+    "exactly one label is marked, and it is the chosen rung");
+  // Built once, then only re-marked: rebuilding mid-drag would drop the click targets and
+  // re-layout five nodes at pointer rate.
+  assert.match(body, /if \(!host\.childElementCount\)/,
+    "the nodes are created once, not on every move");
+  // Clicking a label must go through the INPUT's event, so there is one path that changes
+  // the rung — a second would be a second place to forget the row repaint.
+  assert.match(body, /dispatchEvent\(new Event\("input"/,
+    "a label click reuses the input's own event path");
+  assert.match(body, /if \(!r \|\| r\.disabled\) return/,
+    "…and it stays frozen during a run or an incomplete scan, like the slider");
+  // renderLadder must actually call it, or the scale never marks anything.
+  const rl = appjs.slice(appjs.indexOf("function renderLadder()"));
+  assert.ok(rl.slice(0, rl.indexOf("\n}\n")).includes("renderLadderScale()"),
+    "renderLadder must repaint the scale");
+});

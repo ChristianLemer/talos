@@ -120,6 +120,39 @@
       .ladder-name { font-weight:600; }
       .ladder-count { color:var(--dim); font-size:12px; font-family:"JetBrains Mono",monospace; }
       .ladder-promise { font-size:11.5px; color:var(--dim); line-height:1.35; max-width:60ch; }
+      /* THE LABELLED SCALE — each label centred on its OWN notch, which is not where a
+         naive layout puts it.
+         ⚠️ MEASURED, after getting it wrong: five equal grid columns put label n at
+         (n + ½)/5 of the width, so the outer two sat 88px and 92px off their notches at
+         900px — visibly wrong, and wrong in the direction that makes the leftmost label
+         look like it belongs to the second detent. A range's thumb centre does NOT travel
+         0→100% either: it is inset by half a thumb at each end, so notch n is at
+         8px + n/4 × (width − 16px). Absolute positioning on that formula, with a
+         translateX(-50%) to centre, is the only version that lands on the notch — verified
+         at all five positions against the fill percentage the thumb actually paints.
+         The ACTIVE label is the only one at full strength: five equally-bright words would
+         compete with the reading below and leave the choice unmarked. Dim for the rest, so
+         the scale is a menu and the bright one is the answer. */
+      .ladder-scale { position:relative; height:30px; font-size:10.5px; line-height:1.25;
+                      color:var(--dim); margin-top:-2px; }
+      .ladder-scale > span { position:absolute; top:0; transform:translateX(-50%);
+                             text-align:center; display:flex; flex-direction:column;
+                             align-items:center; gap:1px; cursor:pointer;
+                             white-space:nowrap; }
+      /* Centred on notch 0 and notch 4, the outer two labels hang half their width past
+         the track's ends. Anchor them to their edge instead: the label still reads as
+         belonging to the extreme notch (nothing else is near it), and nothing spills out
+         of the blue frame — which would look like a layout bug rather than a scale. */
+      .ladder-scale > span:first-child { transform:none; left:0 !important; align-items:flex-start; }
+      .ladder-scale > span:last-child { transform:none; left:auto !important; right:0; align-items:flex-end; }
+      /* The emoji stays legible when dim — it is the "do I have time?" signal, and a
+         greyed-out emoji is just a smaller emoji. Only the WORD carries the emphasis. */
+      .ladder-scale .sc-word { padding:0 2px; }
+      .ladder-scale > span.on { color:var(--fg); }
+      .ladder-scale > span.on .sc-word { font-weight:600; }
+      /* Clicking a label moves the thumb — the label IS the target the eye picked, and
+         making it inert would be a small lie about what looks clickable. */
+      .ladder-scale > span:hover .sc-word { color:var(--fg); }
       /* Catalog tab has no Apply bar (it is the BROWSE view), so it has nothing for a
          ladder to calibrate either. Mirrors `body.tab-catalog .hero-apply`, which lives
          with the other tab-scoped rules further down. */
@@ -1035,9 +1068,21 @@
           <option value="0"></option><option value="1"></option><option value="2"></option>
           <option value="3"></option><option value="4"></option>
         </datalist>
+        <!-- THE SCALE, labelled. C, on seeing the full-width zone: "avec une telle largeur
+             on peut mettre les différents mots sur l'échelle". It fixes a real gap — until
+             now the four rungs you were NOT on were invisible, so choosing meant dragging
+             the thumb to discover what existed. Now the options are readable before the
+             choice, and the reading below states its consequence after.
+             Populated by renderLadder from RUNGS, so the scale cannot drift from the rule.
+             aria-hidden: the slider already announces the same words through
+             `aria-valuetext`, and a screen reader reciting five labels it cannot act on
+             would be noise, not information. -->
+        <div id="ladder-scale" class="ladder-scale" aria-hidden="true"></div>
         <!-- THE WORD, under the thumb. Position alone does not read — that is the lesson
              the scope work paid for: a multi-detent control must READ unambiguously, and
-             five unlabelled notches do not. -->
+             five unlabelled notches do not. Kept alongside the scale rather than replaced
+             by it: the scale says what the OPTIONS are, this says what the chosen one DOES
+             (the count, and a promise that had to be corrected three times to stay true). -->
         <div class="ladder-read">
           <span id="ladder-emoji" class="ladder-emoji"></span>
           <span id="ladder-name" class="ladder-name"></span>
