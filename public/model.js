@@ -11,7 +11,7 @@ import {
   profileState,
   toggleState,
 } from "./decision.js";
-import { rungAllows } from "./ladder.js";
+import { RUNGS, rungAllows } from "./ladder.js";
 import { scopeOf as scopeRule, scopeReason as scopeReasonRule } from "./scope.js";
 import { compareVersions } from "./version.js";
 
@@ -362,6 +362,55 @@ export function rungPlan(model, rung) {
     items.push(i);
   }
   return items;
+}
+// WHY a row is out of this rung's reach, or null when it is in. A KEY, not a sentence:
+// this module is the rule layer and holds no copy — the words live in app.js beside the
+// other user-facing strings (`RUNG_WHY`), so they can be read and reworded in one place.
+// Returns "slow" | "hand" | "blocked" | "update" | "install" | null.
+//
+// ⚠️ DERIVED from `rungAllows`, never a second rule. Every branch below asks the rule and
+// only then explains, so the two cannot disagree — a copied table would eventually put a
+// reason on a row that IS in the plan, which is the one failure mode that would make the
+// dimming a lie rather than a hint.
+//
+// The order mirrors rung_allows's: the ACTION excludes before any fact does. A quiet
+// upgrade at 📦 is out for being an update, not for any behaviour — and so is a SLOW one,
+// which is the case that makes the order load-bearing: labelling it "slow" at 📦 would be
+// a lie the user could check by stepping one rung right and seeing it stay out.
+export function rungReason(rung, action, p) {
+  const isConfig = p?.isConfig === true;
+  const top = RUNGS.length - 1; // read from RUNGS so a sixth rung cannot leave this behind
+  // Ask the rule FIRST. In reach → there is nothing to explain.
+  if (rungAllows(rung, action, isConfig, p)) return null;
+  // Out at EVERY rung — a null action (out of scope, nothing to do) or a `downgrade`, which
+  // Apply never batches. The RUNG is not what excludes these, so they get no rung reason and
+  // the panel leaves them alone: dimming them would blame the slider for a row it does not
+  // govern, and on this machine that is most of the list.
+  if (!rungAllows(top, action, isConfig, p)) return null;
+  // THE ACTION, before any fact: would this same row still be out with nothing adverse
+  // about it? Then the verb is the reason and the facts are beside the point.
+  const calm = { uac: false, forbidden: false, slow: false };
+  if (!rungAllows(rung, action, isConfig, calm)) {
+    return action === "install" ? "install" : "update";
+  }
+  // A FACT is the reason: the rule admits this verb here when the facts are calm, so
+  // something about THIS package is what refuses. WHICH one is derived, not asserted — walk
+  // down to the lowest rung that still admits this row and let the rule name the fact. Only
+  // 🏗️ admits the slow ones; 👀 admits the hand and the block.
+  //
+  // ⚠️ Deliberately not `if (p.slow) return "slow"`, which is EXACTLY equivalent today and
+  // therefore survives every test (a measured mutation survivor, kept here as the reason the
+  // longer form is the one that ships). The difference is what happens when the table moves:
+  // if `forbidden` ever became the dominating fact, or if `slow` stopped dominating, the
+  // direct read would keep saying "slow — allow time" about a row held back by something
+  // else, and the user would step one rung right and watch it not come back. The walk cannot
+  // say that, because it asks. ladder-ui.test.mjs pins the shape for the same reason.
+  let first = top;
+  while (first > 0 && rungAllows(first - 1, action, isConfig, p)) first--;
+  if (first >= top) return "slow";
+  // 👀's two facts. `uac` wins when both hold: "needs your hand" is the one the user can act
+  // on, and it is the one they will actually watch happen.
+  return p?.uac ? "hand" : "blocked";
 }
 // The manual invert action a row button performs (label + direction + msg type).
 // ALWAYS inverts current machine state: absent→install, present→uninstall,

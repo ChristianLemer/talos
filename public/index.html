@@ -90,9 +90,23 @@
          meaning at a different scale, which is the axis the control actually moves.
          The fill is one gradient stopped at --fill%, set by app.js from the value: one
          property to update, and it degrades to a full green track if the var is missing. */
-      #ladder { padding:0 12px 10px; display:flex; flex-direction:column; gap:4px; }
-      .ladder-q { font-size:12px; color:var(--dim); }
-      #ladder-range { -webkit-appearance:none; appearance:none; width:100%; max-width:320px;
+      /* THE ZONE. C asked for full width and a blue frame, and the reasoning holds up: this
+         one control decides what every row below does, so it must out-rank them visually.
+         Blue is the only hue free to mean "this is what you ADJUST" — green/red/grey are
+         spoken for by the diff, and a control tinted with a verdict colour would read as a
+         verdict about a package. #3d59a1 is already the app's selection blue
+         (`.switch input:checked + .slider`), so the palette gains nothing new either. */
+      #ladder { margin:0 12px 10px; padding:10px 12px 12px; border:1px solid #3d59a1;
+                border-radius:10px; background:rgba(61,89,161,.07);
+                display:flex; flex-direction:column; gap:6px; }
+      /* The question reads as the zone's title now that the zone has an edge: full-strength
+         text, not the muted tone it wore when it was one line among many. */
+      .ladder-q { font-size:12px; color:var(--fg); font-weight:600; }
+      #ladder-range { -webkit-appearance:none; appearance:none; width:100%;
+                      /* UNCAPPED width: the control OWNS its zone — C's first request, and
+                         the reason is that its size is what says "this is the important
+                         part". It was capped at 320px when it shipped; that read as one more
+                         field in a form. */
                       height:6px; border-radius:999px; cursor:pointer;
                       background:linear-gradient(90deg,
                         #9ece6a 0%, #9ece6a var(--fill,100%),
@@ -308,6 +322,27 @@
          glance. A row in the plan overrides this (opacity back to full below). */
       details.posture-opt-out, details.posture-opt-in { opacity:.72; }
       details.plan-add, details.plan-remove { opacity:1; }
+      /* OUT OF THIS RUNG'S REACH — a third state, and deliberately NOT a fourth colour.
+         The row keeps its ✓ and its diff colour: the user's gesture is untouched and still
+         legible, because a control for LOOKING must not destroy intent. Dimmed + a reason,
+         so moving the slider teaches which packages cost what. This is the first place the
+         collected behaviour facts are visible to a user at all.
+         ⚠️ NOT display:none. "Every gesture leaves a trace" — a row that vanishes has been
+         a bug in this app twice, and a plan that silently drops rows is the same defect at
+         a larger scale. Dimmed.
+         ⚠️ AFTER the plan-add/plan-remove opacity:1 above, which would otherwise win by
+         being later at equal specificity and leave the dimming with no effect at all on
+         exactly the rows it is about (an in-plan row is the ONLY kind that can be out of
+         reach). Found by mutation: moving this block up passed every test and dimmed
+         nothing on screen. */
+      details.rung-out { opacity:.42; }
+      /* The REASON label. `display:none` here is about the label of an in-reach row, not
+         about the row — the row is always present, which is the rule that matters. It must
+         be display:none and not merely empty: `summary` is a flex row with `gap:10px`, so an
+         empty span is still a flex item and would widen EVERY row in the panel by 10px. */
+      .rung-why { display:none; }
+      details.rung-out .rung-why { display:inline; color:var(--dim); font-size:11px;
+                                   font-style:italic; white-space:nowrap; }
       /* While the machine scan runs, the panel is VISIBLE but not yet actionable:
          toggles/buttons are inert and slightly dimmed. Each row lights up as its
          probe answers (setStatus clears its own row), so the panel fills in live

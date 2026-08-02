@@ -15,6 +15,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RUNGS, rungAllows, rungFromInput, isSlow, SLOW_SECS } from "../public/ladder.js";
+// `rungReason` lives in model.js, beside `rungPlan`, and NOT in ladder.js — ladder.js is a
+// declared TWIN of src/ladder.rs, and an extra export with no Rust half would make that
+// claim false for the next reader who diffs them. It is tested here anyway, because it is
+// the same rule read from the other side: rungPlan answers "which rows", rungReason answers
+// "and why not the others", and the two must never be able to disagree.
+import { rungReason } from "../public/model.js";
 
 const quiet = { uac: false, forbidden: false, slow: false };
 const elevates = { uac: true, forbidden: false, slow: false };
@@ -187,4 +193,165 @@ test("rungFromInput yields an INTEGER NUMBER — a string on the wire would mean
   for (const v of ["-5", "0", "2", "4", "99", "", "x", null]) {
     assert.ok(RUNGS[rungFromInput(v)], `RUNGS[rungFromInput(${JSON.stringify(v)})] must exist`);
   }
+});
+
+test("a row excluded by the rung says WHY, in the user's terms", () => {
+  // The reason is the whole point: "greyed out" alone teaches nothing, and this is the
+  // first place the collected facts reach the user's eye. The wording is about THEM
+  // ("needs your hand"), not about the mechanism ("uac").
+  const slowUp = { isConfig: false, uac: false, forbidden: false, slow: true };
+  const uacUp = { isConfig: false, uac: true, forbidden: false, slow: false };
+  const blocked = { isConfig: false, uac: false, forbidden: true, slow: false };
+  const quiet = { isConfig: false, uac: false, forbidden: false, slow: false };
+
+  // At ☕ Unattended, an upgrade that drags is out — because it is slow.
+  assert.equal(rungReason(2, "upgrade", slowUp), "slow");
+  // …one that will ask for elevation is out for a different reason.
+  assert.equal(rungReason(2, "upgrade", uacUp), "hand");
+  assert.equal(rungReason(2, "upgrade", blocked), "blocked");
+  // A quiet upgrade is IN at ☕, so there is no reason to give.
+  assert.equal(rungReason(2, "upgrade", quiet), null);
+  // At 👀 the hand and the block are admitted; only slow remains out.
+  assert.equal(rungReason(3, "upgrade", uacUp), null);
+  assert.equal(rungReason(3, "upgrade", blocked), null);
+  assert.equal(rungReason(3, "upgrade", slowUp), "slow");
+  // At 🏗️ nothing is out, ever.
+  for (const f of [slowUp, uacUp, blocked, quiet]) {
+    assert.equal(rungReason(4, "upgrade", f), null);
+  }
+  // An UPGRADE excluded at rung 1 is not excluded by a fact at all — it is excluded by
+  // being an upgrade. That distinction must survive, or a quiet upgrade at 📦 would
+  // claim to be "slow".
+  assert.equal(rungReason(1, "upgrade", quiet), "update");
+  assert.equal(rungReason(1, "upgrade", slowUp), "update",
+    "the ACTION is the reason here, not the fact — the fact is not why it is out");
+  // An install is out at ⚡ for being an install, whatever its facts.
+  assert.equal(rungReason(0, "install", quiet), "install");
+  // ⚠️ And uninstall is NEVER out — the veto is honoured at every rung.
+  for (let r = 0; r <= 4; r++) assert.equal(rungReason(r, "uninstall", slowUp), null);
+});
+
+test("a row the LADDER does not govern gets no reason at all", () => {
+  // Beyond the plan's table, and the case that decides what the panel looks like on this
+  // machine. `downgrade` and a null action (out of scope, or nothing to do) are out at
+  // EVERY rung — so a reason would dim them at every position, never move when the slider
+  // moves, and blame the ladder for a row it does not govern. On this Mac that is most of
+  // the list, so it would read as "the ladder excluded 25 packages", which is false.
+  // A dimmed row must be a row the slider can UN-dim by going right; nothing else.
+  const quiet = { isConfig: false, uac: false, forbidden: false, slow: false };
+  for (let r = 0; r <= 4; r++) {
+    assert.equal(rungReason(r, "downgrade", quiet), null, "downgrade is Apply's business, not the rung's");
+    assert.equal(rungReason(r, null, quiet), null, "no action → nothing for a rung to exclude");
+  }
+});
+
+test("rungReason and rungAllows cannot disagree — a reason means OUT, exhaustively", () => {
+  // The invariant that makes the dimming trustworthy, checked over the whole cross product
+  // rather than at chosen points: a reason is present exactly when the rule refuses, EXCEPT
+  // for the rows no rung admits (pinned above). And every reason returned must be one of
+  // the keys app.js has words for — an unknown key would render an empty <span>, i.e. a
+  // dimmed row with no explanation, which is the "greyed out teaches nothing" failure.
+  const known = new Set(["slow", "hand", "blocked", "update", "install"]);
+  for (const action of ["install", "uninstall", "upgrade", "downgrade", null]) {
+    for (const isConfig of [false, true]) {
+      for (const uac of [false, true]) {
+        for (const forbidden of [false, true]) {
+          for (const slow of [false, true]) {
+            const p = { isConfig, uac, forbidden, slow };
+            const governed = rungAllows(RUNGS.length - 1, action, isConfig, p);
+            for (let r = 0; r < RUNGS.length; r++) {
+              const why = rungReason(r, action, p);
+              const allowed = rungAllows(r, action, isConfig, p);
+              const what = `${action} isConfig=${isConfig} uac=${uac} 403=${forbidden} slow=${slow} @${r}`;
+              if (allowed) {
+                assert.equal(why, null, `${what}: IN the plan, so no reason may be given`);
+              } else if (!governed) {
+                assert.equal(why, null, `${what}: no rung admits it, so the rung is not why`);
+              } else {
+                assert.ok(why, `${what}: out AND governed by the rung → it must say why`);
+                assert.ok(known.has(why), `${what}: "${why}" has no word in app.js's RUNG_WHY`);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+});
+
+test("the reason names the fact that is ACTUALLY holding the row back", () => {
+  // The defect the plan warns about, from the other direction: a word that contradicts the
+  // rule. "slow" must mean "one rung right is 🏗️", and "hand"/"blocked" must mean "one rung
+  // right is 👀" — verified by asking rungAllows, so the words cannot drift from the table.
+  const facts = [
+    { uac: false, forbidden: false, slow: true },
+    { uac: true, forbidden: false, slow: false },
+    { uac: false, forbidden: true, slow: false },
+    { uac: true, forbidden: true, slow: true },
+  ];
+  for (const f of facts) {
+    const p = { isConfig: false, ...f };
+    for (let r = 0; r < RUNGS.length; r++) {
+      const why = rungReason(r, "upgrade", p);
+      if (why !== "slow" && why !== "hand" && why !== "blocked") continue;
+      // The lowest rung that admits this row — the one the reason is a claim about.
+      let first = RUNGS.length - 1;
+      while (first > 0 && rungAllows(first - 1, "upgrade", false, p)) first--;
+      if (why === "slow") {
+        assert.equal(first, 4, `"slow" claims only 🏗️ admits it (facts ${JSON.stringify(f)})`);
+        assert.equal(p.slow, true, `…and the row must really BE slow`);
+      } else {
+        assert.equal(first, 3, `"${why}" claims 👀 admits it (facts ${JSON.stringify(f)})`);
+        assert.equal(why === "hand" ? p.uac : p.forbidden, true,
+          `…and the row must really carry the fact "${why}" names`);
+      }
+    }
+  }
+});
+
+test("every reason key is REACHABLE, and app.js's tooltip names a rung that really admits it", () => {
+  // Two contracts a user can check with their own eyes, so both are checked by RUNNING the
+  // rule rather than by reading strings.
+  //
+  // 1. Reachability. A key with no (rung, action, facts) that produces it is dead copy — five
+  //    words maintained for a state that cannot occur, and the next reader would trust it.
+  const reachable = new Set();
+  for (const a of ["install", "uninstall", "upgrade", "downgrade", null]) {
+    for (const isConfig of [false, true]) {
+      for (const uac of [false, true]) {
+        for (const forbidden of [false, true]) {
+          for (const slow of [false, true]) {
+            for (let r = 0; r < RUNGS.length; r++) {
+              const k = rungReason(r, a, { isConfig, uac, forbidden, slow });
+              if (k) reachable.add(k);
+            }
+          }
+        }
+      }
+    }
+  }
+  assert.deepEqual([...reachable].sort(), ["blocked", "hand", "install", "slow", "update"]);
+
+  // 2. app.js's tooltips NAME A RUNG ("Move to 👀 Stay nearby to include it"), which is a
+  //    promise about what happens next — the same class of claim as `RUNGS[].promise`, and
+  //    three of those five were caught being false. So the named rung must really admit the
+  //    row, and the one below it must really not.
+  const F = (o) => ({ isConfig: false, uac: false, forbidden: false, slow: false, ...o });
+  const entersAt = (rung, action, p) =>
+    rungAllows(rung, action, p.isConfig, p) && !rungAllows(rung - 1, action, p.isConfig, p);
+  assert.ok(entersAt(4, "upgrade", F({ slow: true })),
+    '"slow" says 🏗️ Everything — so 🏗️ must be exactly where a slow upgrade enters');
+  assert.ok(entersAt(3, "upgrade", F({ uac: true })),
+    '"needs your hand" says 👀 Stay nearby — so that is where a uac upgrade must enter');
+  assert.ok(entersAt(3, "upgrade", F({ forbidden: true })),
+    '"blocked here" says 👀 Stay nearby too');
+  // "an update": the tooltip says this rung "installs and removes, but runs no updates".
+  assert.ok(rungAllows(1, "install", false, F()) && rungAllows(1, "uninstall", false, F()),
+    "…installs and removes: both must be true at 📦, or the sentence is wrong");
+  assert.ok(!rungAllows(1, "upgrade", false, F()), "…but runs no updates");
+  assert.ok(rungAllows(2, "upgrade", false, F()), "…and 'move right' must actually work");
+  // "an install": the tooltip says this rung "applies config only".
+  assert.ok(rungAllows(0, "install", true, F()), "…a config atom IS applied at ⚡");
+  assert.ok(!rungAllows(0, "install", false, F()), "…and a plain install is not");
+  assert.ok(rungAllows(1, "install", false, F()), "…'move right' works here too");
 });

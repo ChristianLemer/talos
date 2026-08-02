@@ -612,6 +612,30 @@ let appmgmtStatus = "na";
 // a reality the user never saw. Freeze every action (general, bundle, row) until
 // the scan settles, exactly like applyRunning freezes them during a run.
 let scanning = false;
+// The reason a row is out of the chosen rung's reach, in the USER's terms rather than the
+// mechanism's: "needs your hand" is what happens TO THEM; `uac` is our word for it. Keyed by
+// what model.js's rungReason returns, which is a key precisely so these five strings can be
+// read together — this is the first place the collected behaviour facts reach a user's eye,
+// and a wrongly flagged package becomes findable by eye only if the words are honest.
+//
+// ⚠️ Every one of these is a CONTRACT with `rungAllows`, verified in ladder.test.mjs by
+// asking the rule rather than by reading these strings: "slow" only ever appears on a row
+// that 🏗️ alone admits, "an update" only on a row excluded for its VERB. The titles say what
+// the slider can do about it, because that is the question a dimmed row raises.
+const RUNG_WHY = {
+  slow: "slow — allow time",
+  hand: "needs your hand",
+  blocked: "blocked here",
+  update: "an update",
+  install: "an install",
+};
+const RUNG_WHY_TITLE = {
+  slow: "This one takes a while. Move the slider to 🏗️ Everything to include it.",
+  hand: "This one will ask you for a password or a confirmation. Move to 👀 Stay nearby to include it.",
+  blocked: "This one was blocked by the network last time. Move to 👀 Stay nearby to include it.",
+  update: "This rung installs and removes, but runs no updates. Move right to include it.",
+  install: "This rung applies config only. Move right to include it.",
+};
 function refreshLiveness() {
   const busy = applyRunning || scanning; // no action while running OR still scanning
   const ids = Object.keys(rows).map(Number);
@@ -632,6 +656,7 @@ function refreshLiveness() {
       r.apply.title =
         "Stop this install. The package may be left half-installed — the next scan will show what is really there.";
       r.details.classList.remove("plan-add", "plan-remove");
+      setRungOut(i, null); // a row that is RUNNING is manifestly not out of reach
       continue;
     }
     // Out of scope → NO row action either. Found at a real click: in advanced mode
@@ -659,6 +684,18 @@ function refreshLiveness() {
       "plan-remove",
       inPlan && act && act.dir === "remove",
     );
+    // THE LADDER'S THIRD STATE — derived here, persisted nowhere. A row keeps its gesture
+    // (✕/auto/✓, what the user WANTS) and its diff colour (what an Apply WOULD do); the rung
+    // is neither of those, so it may write neither. It dims the row and says why instead.
+    // C asked for the rows to "react as if selected or deselected" and then said "I don't
+    // know how it should look" — that hesitation is the design: if this wrote the gesture,
+    // going to ⚡ to look and back to 🏗️ would raise "did my ✓ survive?", and a control for
+    // LOOKING would be destroying intent.
+    //
+    // From `M.rungReason`, which asks `rungAllows` — never a second rule, or a row IN the
+    // plan could be dimmed. It returns null for a row no rung admits (out of scope, a
+    // downgrade), so the dimming marks only rows the slider can actually bring back.
+    setRungOut(i, M.rungReason(rung, M.actionOf(model, i), model.pkgs.get(i)));
     paintPkg(i); // switch colour follows the plan — refresh it as machine state lands
     paintVersion(i); // version display follows the plan too: toggling a row OUT
     // flips its target to "→ absent" (uninstall), so it must repaint here, not
@@ -701,6 +738,17 @@ function refreshLiveness() {
 // network's rung to stick, persistence goes in selection.json's `ui` block — the plan's
 // deferred table names it rather than guessing.)
 let rung = L.RUNGS.length - 1;
+
+// Dim one row and label it, or clear both. `why` is model.js's key or null — ONE function so
+// the class and the word can never disagree (a dimmed row with no reason is the "greyed out
+// teaches nothing" failure, and a reason on an undimmed row is invisible).
+function setRungOut(i, why) {
+  const r = rows[i];
+  if (!r) return;
+  r.details.classList.toggle("rung-out", !!why);
+  r.why.textContent = why ? RUNG_WHY[why] : "";
+  r.why.title = why ? RUNG_WHY_TITLE[why] || "" : "";
+}
 
 // Repaint the ladder's word, counts and fill. Called from refreshLiveness (the "anything
 // changed" hook) and from the input handler.
@@ -882,6 +930,11 @@ function render(steps, profiles = [], columns = 2) {
     note.className = "untouched-note";
     note.textContent = "unchanged";
     note.title = "You changed this in this session — nothing will happen to it";
+    // WHY the ladder leaves this row out, when it does. Created on every row and hidden by
+    // CSS until `.rung-out`, like `.untouched-note` above — a row's DOM does not change
+    // shape as the slider moves, only its classes do.
+    const why = document.createElement("span");
+    why.className = "rung-why";
     const badge = document.createElement("span");
     badge.className = "badge checking";
     badge.textContent = "⠹"; // pre-scan spinner, not a verdict yet
@@ -936,7 +989,7 @@ function render(steps, profiles = [], columns = 2) {
     // Add button. "My extras" = the packages set to ✓ (manualToggle "in").
     // Each state word sits immediately AFTER the control it describes, so the pairing
     // is spatial and needs no legend: [scope switch][its word] │ [desire][its word].
-    sum.append(sc, swScope, chk, swDesire, badge, name, note, delta, st, apply);
+    sum.append(sc, swScope, chk, swDesire, badge, name, note, why, delta, st, apply);
     const panel = document.createElement("div");
     panel.className = "panel";
     const copy = document.createElement("button");
@@ -975,6 +1028,7 @@ function render(steps, profiles = [], columns = 2) {
       swDesire,
       badge,
       statusLabel: st,
+      why,
       delta,
       apply,
       host,
@@ -1475,9 +1529,16 @@ document.getElementById("quit-all").onclick = () => {
 // the whole point of the widget is to answer "how many?" BEFORE you let go. The value is
 // parsed through ladder.js's rungFromInput: a range input's `.value` is a string, and
 // `server::rung_from_wire`'s `as_u64` would read a string as absent → Everything.
+//
+// ⚠️ refreshLiveness, NOT renderLadder: the ROWS answer the rung too (`.rung-out` and its
+// reason), and they are what C actually asked to see move — "j'aurais voulu que les packages
+// en dessous réagissent". renderLadder alone would repaint the count and leave the panel
+// stale, i.e. a widget saying "3 items" above rows that all look included. That is the exact
+// contradiction this task exists to remove, so calling the narrower function would silently
+// rebuild the bug. refreshLiveness repaints the rows AND calls renderLadder.
 document.getElementById("ladder-range").addEventListener("input", (e) => {
   rung = L.rungFromInput(e.target.value);
-  renderLadder();
+  refreshLiveness();
 });
 document.getElementById("reset-all").onclick = () =>
   resetConfirmEl.classList.add("show");

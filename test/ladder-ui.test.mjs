@@ -119,3 +119,140 @@ test("ladder: the announcement is the WORD, not the number under it", () => {
   assert.match(body, /aria-valuetext",\s*`\$\{spec\.name\}, \$\{count\}`/,
     "…and it must be the SAME name and count the eye gets, not a second wording");
 });
+
+test("ladder: moving the rung repaints the ROWS, not only the widget", () => {
+  // THE stale-panel bug, and the reason this task exists at all. The widget said "3 items" —
+  // a number — while the truth sat on screen in rows that did not move, and a summary that
+  // contradicts what it summarises is worse than no summary. C: "j'aurais voulu que les
+  // packages en dessous réagissent".
+  //
+  // `renderLadder()` repaints the word, the fill and the count and NOTHING about a row, so
+  // the handler must call `refreshLiveness()` — the "anything changed" hook, which repaints
+  // every row and then calls renderLadder itself. Pinned as source text because the failure
+  // is invisible to every other test: the count would still be right.
+  const handler = appjs.match(
+    /getElementById\("ladder-range"\)\s*\.addEventListener\(\s*"input"[\s\S]{0,300}?\}\);/,
+  );
+  assert.ok(handler, "the range input must be wired on `input`");
+  assert.match(handler[0], /refreshLiveness\(\)/,
+    "the rung handler must repaint the ROWS — renderLadder alone leaves the panel stale");
+  // And refreshLiveness must in fact be the hook that paints the third state, or the line
+  // above would be satisfied by a function that no longer does it.
+  const at = appjs.indexOf("function refreshLiveness()");
+  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
+  assert.match(body, /setRungOut\(i, M\.rungReason\(rung,/,
+    "…and refreshLiveness is where a row learns whether it is out of the rung's reach");
+});
+
+test("ladder: `rung-out` is DERIVED from rungReason, never from a second rule", () => {
+  // A copied rule would drift and eventually dim a row that IS in the plan — the one failure
+  // that turns the dimming from a hint into a lie. model.js's rungReason asks `rungAllows`
+  // and is exhaustively pinned against it in ladder.test.mjs, so app.js must ask IT and must
+  // not read a fact of its own.
+  const at = appjs.indexOf("function setRungOut(");
+  assert.notEqual(at, -1, "setRungOut() must exist — one place sets the class and the word");
+  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
+  assert.match(body, /classList\.toggle\("rung-out", !!why\)/,
+    "the class follows the reason exactly: no reason → not dimmed");
+  assert.match(body, /r\.why\.textContent = why \? RUNG_WHY\[why\] : ""/,
+    "and the WORD comes from the same reason, so the two cannot disagree");
+  // No second rule anywhere in app.js: the facts must not be consulted to decide dimming.
+  const paint = appjs.slice(appjs.indexOf("function refreshLiveness()"));
+  const upTo = paint.slice(0, paint.indexOf("\n}\n"));
+  for (const fact of ["\\.slow", "\\.uac", "\\.forbidden"]) {
+    assert.ok(!new RegExp(`rung-out[\\s\\S]{0,200}${fact}`).test(upTo),
+      `the dimming must not read ${fact} directly — that is rungAllows's job`);
+  }
+  // The reason keys and the words must be in lockstep: an unknown key renders an empty
+  // label, i.e. a dimmed row that explains nothing.
+  const why = appjs.match(/const RUNG_WHY = \{[^}]*\}/);
+  assert.ok(why, "RUNG_WHY must hold the user-facing words");
+  for (const k of ["slow", "hand", "blocked", "update", "install"]) {
+    assert.match(why[0], new RegExp(`\\b${k}:`), `RUNG_WHY needs a word for "${k}"`);
+  }
+  // The words are about the USER, not the mechanism: `uac` is our word, "your hand" is theirs.
+  assert.match(why[0], /needs your hand/, "the uac case must be said in the user's terms");
+  assert.ok(!/\buac\b/.test(why[0]), "…and never as the mechanism's");
+});
+
+test("ladder: a row out of reach is DIMMED, never hidden", () => {
+  // "Every gesture leaves a trace" has been paid for twice in this app — a cancelled row
+  // that VANISHED was a real bug, twice — and a plan that silently drops rows is that same
+  // defect at a larger scale: the user would have no way to learn that a package exists but
+  // costs too much for this rung. Dimming is the whole point: moving the slider teaches
+  // which packages cost what.
+  const rule = html.match(/details\.rung-out\s*\{[^}]*\}/);
+  assert.ok(rule, "details.rung-out needs a rule");
+  assert.match(rule[0], /opacity:/, "dimmed…");
+  assert.ok(!/display\s*:\s*none/.test(rule[0]), "…and NOT hidden");
+  assert.ok(!/visibility\s*:\s*hidden/.test(rule[0]), "…nor invisible, which is the same thing");
+  // And it must actually dim: the .plan-add/.plan-remove rule sets opacity:1 at the same
+  // specificity, so `details.rung-out` has to come AFTER it in the sheet or it loses — and
+  // an in-plan row is the ONLY kind that can be out of a rung's reach, so losing there means
+  // losing everywhere. (Live mutation survivor: moved above, every test still passed and
+  // nothing dimmed on screen.)
+  assert.ok(html.indexOf("details.plan-add, details.plan-remove { opacity:1; }")
+      < html.indexOf("details.rung-out {"),
+    "details.rung-out must come after the plan rows' opacity:1, or it never applies");
+  // The row's DOM does not change shape as the slider moves — the label exists on every row
+  // and is revealed by the class, like .untouched-note. An empty flex item would otherwise
+  // widen every row by summary's gap.
+  assert.match(html, /\.rung-why \{ display:none; \}/,
+    "the reason label is hidden until .rung-out, not created and destroyed");
+});
+
+test("ladder: the control OWNS its zone — full width, framed in the selection blue", () => {
+  // C: "je voudrais que le curseur prenne la totalité en large, parce que c'est quand même la
+  // partie la plus importante pour les gens… elle devrait être encadrée dans une zone bleue".
+  // The reasoning holds: this one control decides what every row below does, so it must
+  // out-rank them visually, and BLUE is the only hue free to mean "this is what you ADJUST" —
+  // green ("would add"), red ("would remove") and grey ("untouched") are spoken for by the
+  // diff, so a control tinted with a verdict colour would read as a verdict about a package.
+  const range = html.match(/#ladder-range \{[\s\S]*?\}/);
+  assert.ok(range, "#ladder-range needs a rule");
+  assert.match(range[0], /width:100%/);
+  assert.ok(!/max-width/.test(range[0]),
+    "no max-width: the width is what says 'this is the important part'");
+  const zone = html.match(/#ladder \{[\s\S]*?\}/);
+  assert.ok(zone, "#ladder needs a rule");
+  assert.match(zone[0], /border:1px solid #3d59a1/, "a real edge, in the app's selection blue");
+  assert.match(zone[0], /background:rgba\(61,89,161,/, "and a wash of the same blue");
+  // Not a NEW colour: #3d59a1 is already what a checked switch is painted with, so the
+  // palette gains nothing and the blue already means "chosen / adjustable" in this app.
+  assert.match(html, /input:checked \+ \.slider \{[^}]*#3d59a1/,
+    "#3d59a1 must still be the switch's blue — if that moves, the frame's reasoning moves");
+  // The diff's verdict colours must stay OUT of the frame.
+  for (const verdict of ["#9ece6a", "#f7768e"]) {
+    assert.ok(!zone[0].includes(verdict),
+      `the zone must not be tinted ${verdict} — that is a verdict about a package`);
+  }
+});
+
+test("ladder: rungReason names the fact by ASKING the rule, not by reading the fact", () => {
+  // A MEASURED mutation survivor, and the only one of the eight tried: replacing the walk
+  // down the rungs with `if (p?.slow) return "slow"` is exactly equivalent under today's
+  // table, so no behavioural test can see it — including the exhaustive cross-product one in
+  // ladder.test.mjs, which is not a weakness of that test but a fact about the two forms.
+  //
+  // The difference only appears when the table MOVES: if `slow` ever stopped dominating, or
+  // if `forbidden` became the dominating fact, the direct read would keep captioning the row
+  // "slow — allow time" while something else held it back, and the user would step one rung
+  // right and watch it not come back. That is a lie they can check, which is the failure mode
+  // this whole task is about. So the shape is pinned where the behaviour cannot be.
+  //
+  // Read from model.js (not app.js) because that is where the rule layer lives.
+  const modeljs = readFileSync(new URL("../public/model.js", import.meta.url), "utf8");
+  const at = modeljs.indexOf("export function rungReason(");
+  assert.notEqual(at, -1, "rungReason must exist in model.js, beside rungPlan");
+  const body = modeljs.slice(at, modeljs.indexOf("\n}\n", at));
+  assert.match(body, /while \(first > 0 && rungAllows\(first - 1, action, isConfig, p\)\) first--/,
+    "the fact is named by walking down to the lowest rung that admits the row");
+  // Only ONE fact may be read directly, and it is the tie-break between 👀's two — which is
+  // not a rung question at all (both sit on the same rung, so the rule cannot separate them).
+  const reads = body.match(/p\?\.(slow|uac|forbidden)/g) || [];
+  assert.deepEqual(reads, ["p?.uac"],
+    "the only fact read directly is the uac/403 tie-break — everything else asks rungAllows");
+  // And `slow` in particular must never be read: it is the one the walk decides.
+  assert.ok(!/\bp\??\.?\bslow\b/.test(body.replace(/\/\/.*$/gm, "")),
+    "`slow` must be derived from the rule, never read — that is the surviving mutant");
+});
