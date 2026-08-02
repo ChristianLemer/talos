@@ -7,7 +7,7 @@ use axum::{
     routing::get,
     Router,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -158,6 +158,23 @@ struct AppState {
     /// machine on a synchronised folder, and a cancelled Apply would leave half-formed
     /// facts behind.
     observed: tokio::sync::Mutex<std::collections::BTreeMap<String, crate::behaviour::Record>>,
+    /// What the app BELIEVES about each step — the fleet's observed facts with the
+    /// catalogue's declarations laid over them — index for index with `plan.steps`, like
+    /// `last_seen`.
+    ///
+    /// Read ONCE at startup and never again, so a behaviour file that lands mid-session is
+    /// not seen until the next launch. That is the mirror of the write side's "flush once
+    /// at the end": neither the plan nor the facts may shift under a running Apply.
+    ///
+    /// Not a Mutex, unlike `observed` beside it, because nothing mutates this one.
+    /// Immutable-after-boot is the property, and the type is what states it.
+    ///
+    /// ⚠️ These are BELIEFS of the same `Facts` type an observation has, so handing one to
+    /// `remember_behaviour`/`flush_behaviour` would compile and would ratchet a declared
+    /// `slow`'s sentinel onto the share permanently. `observed` is the only thing that may
+    /// travel that way. Nothing enforces the separation; these two fields being neighbours
+    /// is the whole reason it is said here.
+    facts: Vec<crate::behaviour::Facts>,
 }
 
 /// Records one observed presence in `last_seen` (grows the vector if the plan is
@@ -296,6 +313,45 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         &|m| println!("[bundles] {m}"),
     );
     println!("[plan] {} steps", plan.steps.len());
+    // The fleet's behaviour facts, read ONCE here beside the catalogue — and never again,
+    // so a behaviour file landing mid-session is not seen until the next launch. That is
+    // the mirror of the write side, which accumulates in memory and flushes once at the end:
+    // neither the plan nor the facts may shift under a running Apply.
+    //
+    // `TALOS_BEHAVIOUR` is a TEST MODE, not a deployment knob: it points the READ at any
+    // folder of `<id>.yaml` files, so a rung can be exercised without installing anything —
+    // which is the only way the `uac` rung is verifiable on macOS at all, since watch.rs has
+    // no macOS implementation and the signal cannot be OBSERVED here, only fabricated. Same
+    // shape as `TALOS_PUBLIC`: read where the paths are already resolved and PASSED DOWN, so
+    // behaviour_io stays ignorant of environment variables.
+    //
+    // ⚠️ It moves the READ only. An Apply still FLUSHES to the real share, so pointing this
+    // at a folder of versioned fixtures leaves that folder untouched — which is what will
+    // let the fixtures of a later task be facts rather than a scratch directory.
+    let behaviour_override = std::env::var_os("TALOS_BEHAVIOUR").map(PathBuf::from);
+    let collected = match &behaviour_override {
+        Some(dir) => {
+            println!(
+                "[behaviour] TEST MODE, reading fixtures from {}",
+                dir.display()
+            );
+            crate::behaviour_io::read_all_from(dir)
+        }
+        None => crate::behaviour_io::read_all(&sibling_dir),
+    };
+    let facts = crate::ladder::resolve_plan_facts(&plan.steps, &collected, os);
+    // The second number is NOT `facts.len()` (which is just the step count): it is how many
+    // rows actually believe something, collected or declared. That is the number that says
+    // whether the read landed — a share whose folder is missing prints `0 of 31`.
+    println!(
+        "[behaviour] {} package(s) with collected facts; {} of {} step(s) know something",
+        collected.len(),
+        facts
+            .iter()
+            .filter(|f| **f != crate::behaviour::Facts::default())
+            .count(),
+        facts.len()
+    );
     // The top-panel "needs" (profiles.yaml lives INSIDE the same bundles dir; the
     // bundle scan skips it because it only reads subfolders with a bundle.yaml).
     let profiles = load_profiles(bundles_dir.to_str().unwrap_or("bundles"));
@@ -327,6 +383,7 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         consent,
         sudo_pw: tokio::sync::Mutex::new(None),
         observed: tokio::sync::Mutex::new(std::collections::BTreeMap::new()),
+        facts,
     });
 
     let state_for_root = state.clone();
@@ -410,6 +467,33 @@ async fn root_or_ws(ws: Option<WebSocketUpgrade>, state: Arc<AppState>) -> Respo
     }
 }
 
+/// ONE row of the `plan` message, as the front reads it.
+///
+/// A free function of plain data rather than a closure inside `handle_socket`, so the
+/// MAPPING can be pinned by a test. `handle_socket` needs a live WebSocket, which put this
+/// out of every test's reach — measured, not assumed: a mutant swapping `uac` for
+/// `forbidden` here and hardcoding `slow: false` passed the entire suite. The three ladder
+/// discriminants are the front's input for the widget's per-rung counts, so a silent swap
+/// would mislabel rows rather than fail anything.
+///
+/// `uac`/`forbidden` cross as booleans and so does `slow`: the front decides how FAR to go,
+/// not how long something takes, so the SECONDS are not its business here (the estimate gets
+/// its own field, from the local last-seen timings, in a later task).
+///
+/// `facts` is indexed with `get`, not `[i]`: it is built from `plan.steps` at startup and
+/// cannot be shorter, but a row with no facts and a row past the end must read the same —
+/// all-false — rather than panic on a socket.
+fn step_json(s: &crate::bundles::Step, i: usize, facts: &[crate::behaviour::Facts]) -> Value {
+    let f = facts.get(i).copied().unwrap_or_default();
+    json!({
+        "i": i, "name": s.name, "description": s.description, "bundle": s.bundle,
+        "canUninstall": s.uninstall.is_some(), "posture": s.posture.as_str(),
+        "isConfig": s.is_config, "pin": s.pin, "categories": s.categories,
+        "requires": s.requires, // package names this one needs (B5 transitive pull, §8)
+        "uac": f.uac, "forbidden": f.forbidden, "slow": crate::ladder::is_slow(&f)
+    })
+}
+
 async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     let steps = &state.plan.steps;
 
@@ -419,14 +503,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     let steps_json: Vec<_> = steps
         .iter()
         .enumerate()
-        .map(|(i, s)| {
-            json!({
-                "i": i, "name": s.name, "description": s.description, "bundle": s.bundle,
-                "canUninstall": s.uninstall.is_some(), "posture": s.posture.as_str(),
-                "isConfig": s.is_config, "pin": s.pin, "categories": s.categories,
-                "requires": s.requires // package names this one needs (B5 transitive pull, §8)
-            })
-        })
+        .map(|(i, s)| step_json(s, i, &state.facts))
         .collect();
     // The top-panel "needs" (profiles.yaml), loaded at boot. Same keys the front
     // expects (renderProfiles, app.js:164): name/emoji/usage/highlights/description/packages.
@@ -1868,7 +1945,7 @@ async fn do_step(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bundles::{Posture, Step};
+    use crate::bundles::{Overrides, Posture, Step};
     use crate::managers::Outdated;
     use crate::platform::Os;
 
@@ -1894,6 +1971,7 @@ mod tests {
             requires: Vec::new(),
             posture: Posture::OptIn,
             categories: Vec::new(),
+            overrides: Overrides::default(),
         }
     }
 
@@ -1903,6 +1981,53 @@ mod tests {
             version: Some(version.into()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_rows_behaviour_crosses_the_wire_under_the_names_the_front_reads() {
+        // The three ladder discriminants, keyed and mapped. Written because a mutant that
+        // swapped `uac` for `forbidden` and hardcoded `slow: false` passed the whole suite:
+        // `steps_json` lived inside `handle_socket`, which needs a live WebSocket, so the
+        // mapping was unreachable from any test. The facts differ from each other on purpose
+        // — a fixture with two equal booleans cannot catch a swap.
+        let facts = vec![
+            crate::behaviour::Facts {
+                uac: true,
+                forbidden: false,
+                slow_secs: 0,
+            },
+            crate::behaviour::Facts {
+                uac: false,
+                forbidden: true,
+                slow_secs: crate::ladder::SLOW_SECS,
+            },
+        ];
+        let s = brew_step("nushell", None);
+
+        let row = super::step_json(&s, 0, &facts);
+        assert_eq!(row["uac"], true, "index 0 elevates");
+        assert_eq!(row["forbidden"], false);
+        assert_eq!(row["slow"], false, "0 seconds is unknown, not slow");
+
+        let row = super::step_json(&s, 1, &facts);
+        assert_eq!(row["uac"], false);
+        assert_eq!(row["forbidden"], true, "index 1 is the blocked one");
+        assert_eq!(
+            row["slow"], true,
+            "the SECONDS stay server-side; the front is told the CLASSIFICATION"
+        );
+
+        // A row past the end reads all-false rather than panicking on a socket. `facts` is
+        // built from `plan.steps` so this cannot happen today — which is exactly why nothing
+        // else would notice if the lookup became `[i]`.
+        let row = super::step_json(&s, 99, &facts);
+        assert_eq!(row["uac"], false);
+        assert_eq!(row["forbidden"], false);
+        assert_eq!(row["slow"], false);
+        assert_eq!(
+            row["i"], 99,
+            "and the index it was asked about is what it reports"
+        );
     }
 
     #[test]
@@ -2369,6 +2494,9 @@ mod tests {
             sudo_pw: tokio::sync::Mutex::new(None),
             last_seen: tokio::sync::Mutex::new(Vec::new()),
             observed: tokio::sync::Mutex::new(std::collections::BTreeMap::new()),
+            // Empty, matching the empty plan above: these tests exercise the WRITE side,
+            // and the resolved beliefs are exactly what must never travel that way.
+            facts: Vec::new(),
         }
     }
 

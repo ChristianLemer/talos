@@ -24,11 +24,13 @@
 //! The price is that nothing is ever forgotten: if the firewall opens, a `forbidden`
 //! stays. The escape hatch is the CATALOGUE — punctual, versioned, and it leaves a trace
 //! of the decision. (Emptying the shared file would be an invisible gesture nobody would
-//! remember making.) It is BUILT: `bundles::resolve_facts` applies a package's declared
-//! overrides over what was collected here, and `RawPkg::overrides` is the one lift from
-//! the YAML. Nothing CONSULTS it yet, so an override written today changes nothing
-//! observable until the ladder reads a row's facts — the mechanism is complete, its
-//! consumer is a separate plan.
+//! remember making.) It is BUILT and now CONSULTED: `bundles::resolve_facts` applies a
+//! package's declared overrides over what was collected here, `RawPkg::overrides` is the one
+//! lift from the YAML, and `ladder::resolve_plan_facts` runs the pair over every step at
+//! startup — so an override written in catalog/ finally changes what a row says.
+//!
+//! ⚠️ It is consulted, not yet ACTED on. The facts reach the front per row; the rung filter
+//! that would let them change which steps an Apply runs is still unwired.
 //!
 //! ⚠️ And it must stay on the reading side. What `resolve_facts` returns is a BELIEF, not
 //! an observation, and it is the same `Facts` type `merge_into` accepts — so feeding one
@@ -56,12 +58,28 @@ use std::collections::BTreeMap;
 // `merge_into`, and now none: the Apply path calls `key` and `merge_into` when a step
 // records what it observed, which — with the flush going through the IO shell — reaches
 // everything else transitively (`key`/`merge_into` reach `merge`; the parse/serialise trio
-// is reached via `merge_and_write`). Nothing here is waiting for a consumer any more: the
-// allows that remain in this plan are `read_all`
-// (behaviour_io.rs) and `resolve_facts`/`overrides` (bundles.rs), all on the READING side,
-// whose first caller is the ladder's own plan.
+// is reached via `merge_and_write`). Nothing here is waiting for a consumer any more.
 //
-// Measured by stripping one at a time under `-D warnings`, not guessed.
+// And nowhere else is, either: the three that survived Part A — `read_all` in
+// behaviour_io.rs, `resolve_facts` and `RawPkg::overrides` in bundles.rs, all on the READING
+// side — left together when the ladder gave them their caller. `server::serve` reads every
+// package's facts at startup and `ladder::resolve_plan_facts` lays the catalogue's
+// declarations over them. The behaviour mechanism now carries no `allow(dead_code)` at all,
+// across all three of its files.
+//
+// Measured by stripping one at a time under `-D warnings`, not guessed. Two things that
+// measurement showed, worth recording because they are counter-intuitive:
+//
+// - Of the ten `#[allow(dead_code)]` left in the tree, only FIVE are load-bearing:
+//   `Posture::parse`, `StepOutcome::ok`, and the ladder's three — `rung_allows`,
+//   `Rung::from_wire` and `Rung::as_str`, the filter half that is still unwired. The other
+//   five — on `Posture` itself and on `Step`'s `install`/`upgrade`/`downgrade`/`requires` —
+//   are REDUNDANT: every one of those items is read somewhere. That predates this work, and
+//   is left alone here rather than swept in: verified by stripping the same five against the
+//   PARENT commit's files, where clippy is equally silent.
+// - An `allow` on the reading side did NOT go away when the Apply path started COLLECTING
+//   facts. That wiring only writes observations, and feeding a resolved fact back into it is
+//   the one thing this module forbids. It took a READER.
 
 /// What was observed for ONE (route, os) of one package.
 /// `Default` = nothing observed, which is distinct from "observed as false" only in

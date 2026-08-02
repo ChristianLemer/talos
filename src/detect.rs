@@ -275,7 +275,7 @@ pub fn detect_present_detailed(step: &Step, os: Os) -> Presence {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bundles::{Posture, Step};
+    use crate::bundles::{Overrides, Posture, Step};
 
     fn step() -> Step {
         Step {
@@ -297,6 +297,7 @@ mod tests {
             requires: vec![],
             posture: Posture::OptIn,
             categories: vec!["misc".into()],
+            overrides: Overrides::default(),
         }
     }
 

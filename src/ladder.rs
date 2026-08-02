@@ -1,12 +1,13 @@
-//! ladder.rs — how FAR an Apply goes.
+//! ladder.rs — how FAR an Apply goes, and the facts that calibrate it.
 //!
 //! Apply used to be all-or-nothing. The ladder is one control with five CUMULATIVE
 //! rungs, so a user can ask for "the fast harmless part now" or "everything that will
 //! not interrupt me" — C's framing, and the reason the behaviour telemetry exists at all.
 //!
-//! This module is PURE: the rungs and the filter. No IO, no state, no socket. The wiring
-//! is server.rs's, and it does not exist yet — see the per-item `allow(dead_code)` notes
-//! below for which task removes each one.
+//! This module is PURE: the rungs, the filter, and the resolution of (collected ×
+//! declared) onto a plan. No IO, no state, no socket. The wiring is server.rs's —
+//! `resolve_plan_facts` is called there at startup, while the FILTER is still unwired; see
+//! the per-item `allow(dead_code)` notes below for which task removes each one.
 //!
 //! ⚠️ The facts this reads are a BELIEF, not an observation: `bundles::resolve_facts`
 //! lays the catalogue's declarations over what the fleet observed, and what comes out is
@@ -16,7 +17,45 @@
 //! file permanently: a WRONG value, which is precisely what `behaviour.rs` promises no
 //! write can produce. Merge only what a machine actually observed.
 
-use crate::behaviour::Facts;
+use crate::behaviour::{Facts, Record};
+use crate::bundles::{resolve_facts, Step};
+use crate::platform::Os;
+use std::collections::BTreeMap;
+
+/// What the app should BELIEVE about every step, index for index with the plan — the same
+/// parallel-vector shape `AppState::last_seen` already uses.
+///
+/// Called ONCE at startup, beside the catalogue. Not per Apply: a behaviour file that
+/// appears mid-session is not seen until the next launch, which is correct — the plan must
+/// not shift under a running Apply. That is the exact mirror of the write side, which
+/// accumulates in memory and flushes once at the end.
+///
+/// The lookup is by (catalogue id, `route/os`), because a behaviour belongs to the COUPLE:
+/// `Amazon.AWSCLI` via winget on Windows elevates, `brew install awscli` does not. A step
+/// with no route on this platform keys to `none/<os>`, which no real file writes — so it
+/// gets `Facts::default()` rather than another route's facts. It also has no commands, so
+/// it can never be an action anyway.
+///
+/// ⚠️ WHAT COMES OUT MUST NOT GO BACK TOWARD THE SHARE — see the module doc. It is a
+/// belief, of the same type an observation has.
+pub fn resolve_plan_facts(
+    steps: &[Step],
+    collected: &BTreeMap<String, Record>,
+    os: Os,
+) -> Vec<Facts> {
+    steps
+        .iter()
+        .map(|s| {
+            let at = crate::behaviour::key(s.route.as_deref().unwrap_or(""), os);
+            let observed = collected
+                .get(&s.id)
+                .and_then(|rec| rec.get(&at))
+                .copied()
+                .unwrap_or_default();
+            resolve_facts(&observed, &s.overrides)
+        })
+        .collect()
+}
 
 /// The measured duration at or above which a package is CLASSIFIED slow — "allow time",
 /// the last rung.
@@ -46,8 +85,10 @@ pub const SLOW_SECS: u64 = 60;
 
 /// Does this package DRAG? The one place the threshold is applied, so nothing can drift.
 ///
-/// No `allow` of its own, measured rather than assumed: `rung_allows` calls it, and an
-/// allowed item is a live ROOT, so this stays alive through it.
+/// No `allow` of its own, and no longer needs one to be borrowed: `server::handle_socket`
+/// puts `slow` on the wire per row through it, so this is a real root now and `SLOW_SECS`
+/// lives through it. (It used to be kept alive only by `rung_allows`'s allow — measured
+/// again after that wiring: stripping that allow reports two warnings, not four.)
 pub fn is_slow(f: &Facts) -> bool {
     f.slow_secs >= SLOW_SECS
 }
@@ -145,9 +186,11 @@ impl Rung {
 /// duplication runs in the safe direction: if the twin drifts, a count is wrong, never an
 /// action.
 // Task 4 calls this in `visual_plan`'s build loop, which is what makes the ladder govern
-// anything at all. MEASURED: this allow additionally keeps `is_slow`, `SLOW_SECS` and
-// `Rung::level` alive — stripping it alone reports four warnings, not one. It does NOT keep
-// the enum's variants alive; `from_wire` is what constructs those.
+// anything at all. MEASURED, after the facts reached the wire: this allow additionally keeps
+// `Rung::level` alive — stripping it alone now reports TWO warnings (`level` and this), where
+// it reported four before. `is_slow` and `SLOW_SECS` no longer hang off it: `steps_json`
+// calls `is_slow` per row, so they stand on their own. It does NOT keep the enum's variants
+// alive; `from_wire` is what constructs those.
 #[allow(dead_code)]
 pub fn rung_allows(
     rung: Rung,
@@ -186,7 +229,7 @@ pub fn rung_allows(
 mod tests {
     use super::*;
     use crate::behaviour::Facts;
-    use crate::bundles::Overrides;
+    use crate::bundles::{Overrides, Posture};
     use crate::decision::Action;
 
     fn f(uac: bool, blocked: bool, secs: u64) -> Facts {
@@ -194,6 +237,32 @@ mod tests {
             uac,
             forbidden: blocked,
             slow_secs: secs,
+        }
+    }
+
+    /// A minimal Step for the resolution tests: only `id`, `route` and `overrides`
+    /// matter here, the rest are inert defaults.
+    fn step(id: &str, route: Option<&str>, ov: Overrides) -> Step {
+        Step {
+            id: id.into(),
+            bundle: String::new(),
+            name: id.into(),
+            description: String::new(),
+            install: None,
+            uninstall: None,
+            upgrade: None,
+            downgrade: None,
+            route: route.map(|r| r.into()),
+            system_id: None,
+            detect: None,
+            check: None,
+            is_config: false,
+            version_regex: None,
+            pin: None,
+            requires: Vec::new(),
+            posture: Posture::OptIn,
+            categories: Vec::new(),
+            overrides: ov,
         }
     }
 
@@ -395,5 +464,139 @@ mod tests {
             "the threshold is inclusive"
         );
         assert!(is_slow(&f(false, false, 9999)));
+    }
+
+    #[test]
+    fn facts_are_read_for_this_route_and_os_only() {
+        // A behaviour belongs to the (route, os) COUPLE. A record that only knows
+        // about winget/windows must say NOTHING about the same package on brew/darwin
+        // — otherwise a Mac would inherit Windows' elevation and drop a rung for no
+        // reason at all.
+        let mut collected = std::collections::BTreeMap::new();
+        let mut rec = crate::behaviour::Record::new();
+        rec.insert("winget/windows".into(), f(true, false, 242));
+        rec.insert("brew/darwin".into(), f(false, false, 38));
+        collected.insert("aws-cli".to_string(), rec);
+
+        let steps = vec![step("aws-cli", Some("brew"), Overrides::default())];
+        let facts = resolve_plan_facts(&steps, &collected, Os::Darwin);
+        assert_eq!(facts.len(), 1);
+        assert!(
+            !facts[0].uac,
+            "the Windows elevation must not leak onto a Mac"
+        );
+        assert_eq!(
+            facts[0].slow_secs, 38,
+            "the brew/darwin duration, not winget's"
+        );
+
+        // Same steps, same record, a different os: `brew/windows` is not a key anything
+        // writes, so nothing is known — and in particular the winget record is NOT
+        // consulted just because the os now matches its half of the couple.
+        let facts = resolve_plan_facts(&steps, &collected, Os::Windows);
+        assert_eq!(
+            facts[0].slow_secs, 0,
+            "brew on Windows is not a key that exists"
+        );
+        assert!(!facts[0].uac);
+    }
+
+    #[test]
+    fn a_catalogue_override_wins_over_what_the_fleet_observed() {
+        // The escape hatch, reaching the plan for the first time. Until this task,
+        // `resolve_facts` had no caller at all, so an override written in catalog/
+        // changed nothing observable.
+        let mut collected = std::collections::BTreeMap::new();
+        let mut rec = crate::behaviour::Record::new();
+        rec.insert("brew/darwin".into(), f(true, true, 900));
+        collected.insert("rclone".to_string(), rec);
+
+        let declared = Overrides {
+            uac: Some(false),
+            forbidden: Some(false),
+            slow: None,
+        };
+        let steps = vec![step("rclone", Some("brew"), declared)];
+        let facts = resolve_plan_facts(&steps, &collected, Os::Darwin);
+        assert!(!facts[0].uac, "an explicit false in the catalogue wins");
+        assert!(!facts[0].forbidden);
+        assert_eq!(
+            facts[0].slow_secs, 900,
+            "not declared → the collected value stands"
+        );
+    }
+
+    #[test]
+    fn a_package_nobody_has_observed_gets_the_declaration_alone() {
+        // A fresh machine. The seeds ARE the calibration: without this, its first
+        // Apply would promise "nothing will interrupt you" and then hit a UAC prompt.
+        let collected = std::collections::BTreeMap::new();
+        let steps = vec![step(
+            "7-zip",
+            Some("winget"),
+            Overrides {
+                uac: Some(true),
+                forbidden: None,
+                slow: None,
+            },
+        )];
+        let facts = resolve_plan_facts(&steps, &collected, Os::Windows);
+        assert!(
+            facts[0].uac,
+            "the catalogue speaks when nothing was collected"
+        );
+        assert_eq!(facts[0].slow_secs, 0, "and invents no duration");
+    }
+
+    #[test]
+    fn a_step_with_no_route_here_gets_nothing_rather_than_a_wrong_key() {
+        // Notepad++ on a Mac: no route, so no commands, so no action — but it must
+        // still produce a Facts, at the right index, without matching some other
+        // route's record. `behaviour::key` maps "" to "none", which no real file uses.
+        let mut collected = std::collections::BTreeMap::new();
+        let mut rec = crate::behaviour::Record::new();
+        rec.insert("winget/windows".into(), f(true, false, 5));
+        collected.insert("notepad-plus-plus".to_string(), rec);
+
+        let steps = vec![step("notepad-plus-plus", None, Overrides::default())];
+        let facts = resolve_plan_facts(&steps, &collected, Os::Darwin);
+        assert_eq!(facts.len(), 1);
+        assert_eq!(
+            facts[0],
+            Facts::default(),
+            "no route → nothing known, not somebody else's facts"
+        );
+    }
+
+    #[test]
+    fn the_result_is_parallel_to_the_plan_index_for_index() {
+        // The vector is indexed by step position, exactly like `last_seen`. A shorter
+        // or reordered result would silently attribute one package's facts to another.
+        // The three steps share a route and differ only in id and declaration, so a
+        // lookup keyed on anything but the id would collapse them.
+        let mut collected = std::collections::BTreeMap::new();
+        let mut rec = crate::behaviour::Record::new();
+        rec.insert("brew/darwin".into(), f(false, true, 0));
+        collected.insert("c".to_string(), rec);
+        let steps = vec![
+            step("a", Some("brew"), Overrides::default()),
+            step(
+                "b",
+                Some("brew"),
+                Overrides {
+                    uac: Some(true),
+                    forbidden: None,
+                    slow: None,
+                },
+            ),
+            step("c", Some("brew"), Overrides::default()),
+        ];
+        let facts = resolve_plan_facts(&steps, &collected, Os::Darwin);
+        assert_eq!(facts.len(), 3);
+        assert_eq!(facts[0], Facts::default(), "index 0 knows nothing");
+        assert!(facts[1].uac, "index 1 is the one that declared it");
+        assert!(!facts[1].forbidden, "and it did not inherit index 2's 403");
+        assert!(!facts[2].uac);
+        assert!(facts[2].forbidden, "index 2 is the one the fleet observed");
     }
 }

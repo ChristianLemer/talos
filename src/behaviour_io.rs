@@ -19,14 +19,15 @@ use crate::behaviour::{merge_into, parse_behaviour, parse_failed, to_yaml, Recor
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-// ONE `allow(dead_code)` is left below, on `read_all`. The other one went when the Apply
-// path started flushing its observations through `merge_and_write` — which, being reached,
-// now keeps `read_one`, `write_one`, `behaviour_path`, `behaviour_dir` and
-// `note_if_whole_file_loss` alive without any allow of their own.
+// There are NO `allow(dead_code)` left in this module. There were two while nothing read
+// the facts back; the first went when the Apply path started flushing its observations
+// through `merge_and_write`, and `read_all`'s went when the ladder gave it the caller it
+// was waiting for — `server::serve` loads every package's facts once at startup, beside the
+// catalogue. Being reached, those two roots now keep `read_all_from`, `read_one`,
+// `write_one`, `behaviour_path`, `behaviour_dir` and `note_if_whole_file_loss` alive with no
+// allow of their own.
 //
-// `read_all` outlives this plan on purpose: nothing in it reads the facts back. Its first
-// caller is the ladder's own plan, which loads them at startup beside the catalogue.
-// Measured by stripping it under `-D warnings`: without it, one warning returns.
+// Measured by stripping one at a time under `-D warnings`, not guessed.
 
 /// The folder holding every package's facts. Single-sourced here so `behaviour_path` and
 /// `read_all` cannot drift apart about where the layout lives.
@@ -102,11 +103,22 @@ pub fn read_one(exe_dir: &Path, id: &str) -> Record {
 
 /// Every package's facts, keyed by package id. Called ONCE at startup, beside the
 /// catalogue — not per Apply, so the plan cannot shift under a running one.
-#[allow(dead_code)] // no caller in THIS plan — the ladder's first task reads the facts
 pub fn read_all(exe_dir: &Path) -> BTreeMap<String, Record> {
+    read_all_from(&behaviour_dir(exe_dir))
+}
+
+/// The same read, against an EXPLICIT folder of `<id>.yaml` files.
+///
+/// Split out so a test mode can point at versioned fixtures (`tests/fixtures/behaviour/`)
+/// without this module learning anything about environment variables. Env is global
+/// mutable state and a shell full of it is a shell that cannot be unit-tested; the
+/// resolution therefore happens in `server::serve`, next to where `exe_dir` itself is
+/// resolved, exactly the way `TALOS_PUBLIC` is read in `main.rs` and PASSED DOWN.
+///
+/// No `allow` of its own: `read_all` reaches it, and `read_all` has a real caller.
+pub fn read_all_from(dir: &Path) -> BTreeMap<String, Record> {
     let mut out = BTreeMap::new();
-    let dir = behaviour_dir(exe_dir);
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return out; // no behaviour folder yet → nothing known, which is fine
     };
     for entry in entries.flatten() {
@@ -242,6 +254,29 @@ mod tests {
             all.get("broken").map(|r| r.is_empty()),
             Some(true),
             "a corrupt file yields an EMPTY record, not a missing key or a panic"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_all_from_takes_the_leaf_folder_not_the_share_root() {
+        // The two entry points differ by exactly one `join("behaviour")`, and that is the
+        // whole contract: `read_all` is given the share root and appends the layout,
+        // `read_all_from` is given the folder of yaml files itself. A test mode pointing at
+        // versioned fixtures uses the latter, and fixtures do NOT live under a `behaviour/`
+        // subfolder of a fixture root — so an accidental join here would read nothing and
+        // the test mode would silently look like "no facts collected".
+        let dir = tmp("talos-test-behaviour-leaf");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("nushell.yaml"), "brew/darwin:\n  uac: true\n").unwrap();
+        let all = read_all_from(&dir);
+        assert!(
+            all["nushell"]["brew/darwin"].uac,
+            "read straight from {dir:?}"
+        );
+        assert!(
+            read_all(&dir).is_empty(),
+            "and read_all over the SAME folder finds nothing: it looks one level deeper"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

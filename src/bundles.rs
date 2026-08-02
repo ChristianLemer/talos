@@ -105,11 +105,12 @@ impl RawPkg {
     /// YAML to `resolve_facts`, so the three same-typed `Option<bool>` slots are
     /// transposed in at most one place — and that place has a test.
     ///
-    /// This allow covers the three `RawPkg` fields as well: an allowed item is a live
-    /// ROOT, so reading them here keeps them alive. Three field-level allows were measured
-    /// first and are strictly redundant — the noise that becomes permanent. See
-    /// `resolve_facts` for what removes both of the mechanism's allows.
-    #[allow(dead_code)] // no consumer until something reads a package's facts to decide
+    /// Reading the three fields through ONE accessor is also what spares them three
+    /// `allow(dead_code)` of their own: an item that is read is alive, and everything above
+    /// stays alive through this one function. That mattered while nothing consumed the
+    /// declarations at all and it still holds now — `load_from_catalog` calls this to fill
+    /// `Step::overrides`, so the allow this carried is gone, measured by stripping it under
+    /// `-D warnings`.
     pub fn overrides(&self) -> Overrides {
         Overrides {
             uac: self.uac,
@@ -140,8 +141,8 @@ pub struct Overrides {
 /// `///` lines accumulate onto the next ITEM, so slipping a const in below them would have
 /// silently re-parented that whole essay onto this constant.
 ///
-/// No `allow` of its own, measured rather than assumed: `resolve_facts` reads it, and an
-/// allowed item is a live ROOT, so this stays alive through it.
+/// No `allow` of its own, measured rather than assumed: `resolve_facts` reads it, and that
+/// function now has a real caller of its own, so nothing here is alive only by permission.
 pub const DECLARED_SLOW_SECS: u64 = 600;
 
 /// What the app should BELIEVE about a package: the fleet's observation, with the
@@ -175,20 +176,15 @@ pub const DECLARED_SLOW_SECS: u64 = 600;
 /// (`at most ~4 min (3 unknown)`), rather than as a measured-quick one. Harmless for the
 /// rung filter — 0 is not slow, which is the right answer — but a caller building that
 /// count should know the two are indistinguishable here.
-// TWO allows for this mechanism, measured by stripping each under `-D warnings` rather than
-// guessed. `overrides` covers itself and the three `RawPkg` fields it reads; this one covers
-// itself AND the `DECLARED_SLOW_SECS` above, which is alive only through this root (measured:
-// stripping this allow reports the const unused too). An allowed item IS a live root, so
-// `Overrides` is kept alive redundantly — by
-// either allow independently, since `overrides` constructs it and `resolve_facts` takes it.
-// Neither attribute subsumes the other all the same: dropping `overrides`'s leaves the three
-// fields unread (reported as one warning), dropping this one leaves `resolve_facts` unused.
+// The `allow(dead_code)` this mechanism carried on both `overrides` and this function is
+// GONE, stripped one at a time under `-D warnings` rather than as a batch. The caller is
+// `ladder::resolve_plan_facts`, reached from `server::serve`: it looks each step's collected
+// facts up on the share and lays `Step::overrides` over them, which is what finally makes an
+// override written in catalog/ change something observable.
 //
-// Both leave together, and they did NOT leave when the Apply path started collecting facts:
-// that wiring only WRITES observations, and feeding a RESOLVED fact back into it is the one
-// thing the design forbids (see behaviour.rs). The first caller is whatever reads a
-// package's facts to DECIDE something: the ladder, in its own plan.
-#[allow(dead_code)] // no consumer until something reads a package's facts to decide
+// It did NOT arrive when the Apply path started collecting facts. That wiring only WRITES
+// observations, and feeding a RESOLVED fact back into it is the one thing the design forbids
+// (see the ⚠️ above and behaviour.rs). It took a READER to make these live.
 pub fn resolve_facts(
     collected: &crate::behaviour::Facts,
     declared: &Overrides,
@@ -234,6 +230,11 @@ pub struct Step {
     pub requires: Vec<String>,
     pub posture: Posture,
     pub categories: Vec<String>,
+    /// What this package DECLARES about its behaviour, carried from the catalogue so a
+    /// consumer can resolve it against what the fleet observed. NOT the resolved value:
+    /// resolution needs the collected half, which lives on the share and is read by the
+    /// server, not here.
+    pub overrides: Overrides,
 }
 
 pub struct Commands {
@@ -468,6 +469,7 @@ pub fn load_from_catalog(
             } else {
                 p.category.clone()
             },
+            overrides: p.overrides(),
         });
     }
     Plan { steps }
