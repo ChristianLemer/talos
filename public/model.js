@@ -11,6 +11,7 @@ import {
   profileState,
   toggleState,
 } from "./decision.js";
+import { rungAllows } from "./ladder.js";
 import { scopeOf as scopeRule, scopeReason as scopeReasonRule } from "./scope.js";
 import { compareVersions } from "./version.js";
 
@@ -67,6 +68,16 @@ export function loadPlan(model, steps, profiles = []) {
       // scan flips it. A switch that pre-guessed would be the bug.
       external: false,
       requires: s.requires ?? [], // package names this one needs (transitive pull, §8)
+      // The ladder's three discriminants, resolved SERVER-side (fleet observation with the
+      // catalogue's declaration laid over it) and sent with the plan. The front does not
+      // compute them and does not hold the durations behind them — it is told the verdict.
+      uac: !!s.uac,
+      forbidden: !!s.forbidden,
+      slow: !!s.slow,
+      // How long this took HERE last time, in whole seconds. 0 = never measured, which the
+      // estimate must COUNT and SHOW as unknown rather than treat as free (server.rs floors
+      // a measurement at 1s precisely so this sentinel stays unambiguous).
+      secs: Number(s.secs) || 0,
       present: null,
       outdated: false,
       // Version pinning: `pin` is the exact reference declared in the YAML (null
@@ -326,6 +337,31 @@ export function versionSummary(model, i) {
 const AUTO_ACTS = ["install", "uninstall", "upgrade"];
 export function isActionable(model, i) {
   return AUTO_ACTS.includes(actionOf(model, i));
+}
+// Which rows a given rung would touch, in catalogue order. The FRONT needs this only to
+// show the choice; the SERVER is what filters (see ladder.js's header).
+//
+// Returns indices rather than a number because Task 6's estimate needs the rows
+// themselves (each carries its own `secs`), and one traversal should answer both.
+//
+// ⚠️ The AUTO_ACTS gate is REDUNDANT today and kept as a COUPLING guard, not as a live
+// filter — measured, not assumed: deleting the line kills nothing, because `rungAllows`
+// independently refuses `downgrade` and a null action, which are the only two things
+// AUTO_ACTS excludes. Its job is to keep the two lists tied: if a verb is ever added to
+// `rungAllows` without being added to AUTO_ACTS, the count would promise a batch action
+// Apply does not take, and this line is what stops it. Stated plainly because an
+// "obviously necessary" filter that in fact filters nothing is the kind of line a later
+// reader trusts too much.
+export function rungPlan(model, rung) {
+  const items = [];
+  for (const i of [...model.pkgs.keys()].sort((a, b) => a - b)) {
+    const a = actionOf(model, i);
+    if (!AUTO_ACTS.includes(a)) continue;
+    const p = model.pkgs.get(i);
+    if (!rungAllows(rung, a, p.isConfig, p)) continue;
+    items.push(i);
+  }
+  return items;
 }
 // The manual invert action a row button performs (label + direction + msg type).
 // ALWAYS inverts current machine state: absent→install, present→uninstall,

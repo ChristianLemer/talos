@@ -31,6 +31,7 @@ import {
   profileStateOf,
   removeFromPersonal,
   removeProfile,
+  rungPlan,
   scopeOf,
   setDecision,
   setExternal,
@@ -775,4 +776,89 @@ test("touched: Reset clears the traces — it is the 'forget my choices' gesture
   assert.equal(isTouched(m, 0), true);
   clearAllDecisions(m);
   assert.equal(isTouched(m, 0), false, "witnesses to discarded choices go with them");
+});
+
+// --- the ladder's per-rung count ---------------------------------------------
+//
+// rungPlan is the WIDGET's input, not the plan: the server filters (ladder.js's header
+// says why). What it must never do is disagree with `isActionable` about which rows are
+// candidates at all, or read the rung off the wrong row.
+
+test("ladder: the three discriminants and `secs` arrive from the plan, defaulted false/0", () => {
+  const m = createModel();
+  loadPlan(m, [
+    { i: 0, name: "AWS CLI", canUninstall: true, uac: true, forbidden: false, slow: true, secs: 242 },
+    { i: 1, name: "rg", canUninstall: true }, // a plan row that says nothing
+  ]);
+  assert.deepEqual(
+    { uac: m.pkgs.get(0).uac, forbidden: m.pkgs.get(0).forbidden, slow: m.pkgs.get(0).slow, secs: m.pkgs.get(0).secs },
+    { uac: true, forbidden: false, slow: true, secs: 242 },
+  );
+  // An absent field is FALSE and 0, never undefined: rungAllows reads them directly, and
+  // `0` is the "never measured here" sentinel the estimate must show as unknown.
+  assert.deepEqual(
+    { uac: m.pkgs.get(1).uac, forbidden: m.pkgs.get(1).forbidden, slow: m.pkgs.get(1).slow, secs: m.pkgs.get(1).secs },
+    { uac: false, forbidden: false, slow: false, secs: 0 },
+  );
+});
+
+test("ladder: rungPlan grows monotonically, and each row enters at ITS rung", () => {
+  const m = createModel();
+  loadPlan(m, [
+    // 0 — a config-atom to install: rung 0. canUninstall:false would derive it OUT of
+    // scope, so it is given a route back; scope is a different gate and gates first.
+    { i: 0, name: "Starship config", canUninstall: true, isConfig: true },
+    // 1 — a plain install: rung 1
+    { i: 1, name: "rg", canUninstall: true },
+    // 2 — a quiet upgrade: rung 2
+    { i: 2, name: "bat", canUninstall: true },
+    // 3 — an upgrade that elevates: rung 3
+    { i: 3, name: "AWS CLI", canUninstall: true, uac: true },
+    // 4 — an upgrade that drags: rung 4
+    { i: 4, name: "Xcode CLT", canUninstall: true, slow: true },
+  ]);
+  for (const i of [0, 1, 2, 3, 4]) setDecision(m, i, "in");
+  for (const i of [2, 3, 4]) {
+    setStatusData(m, i, "ok");
+    setOutdated(m, i, true, "9.9.9");
+  }
+  assert.deepEqual([0, 1, 2, 3, 4].map((i) => actionOf(m, i)),
+    ["install", "install", "upgrade", "upgrade", "upgrade"], "the fixture is what it claims");
+  assert.deepEqual(rungPlan(m, 0), [0]);
+  assert.deepEqual(rungPlan(m, 1), [0, 1]);
+  assert.deepEqual(rungPlan(m, 2), [0, 1, 2]);
+  assert.deepEqual(rungPlan(m, 3), [0, 1, 2, 3]);
+  assert.deepEqual(rungPlan(m, 4), [0, 1, 2, 3, 4]);
+  // The top rung is exactly the rows a plain Apply would touch — the widget's count at 4
+  // must equal what the diff view already shows, or the ladder contradicts the panel.
+  assert.deepEqual(rungPlan(m, 4), [0, 1, 2, 3, 4].filter((i) => isActionable(m, i)));
+});
+
+test("ladder: a removal is in EVERY rung, and an out-of-scope row is in none", () => {
+  const m = createModel();
+  loadPlan(m, [
+    // 0 — present, unwanted, and slow+uac+403: still removed at rung 0. The ladder governs
+    // how far to GO; a ✕ is honoured or it is not.
+    { i: 0, name: "Miro", canUninstall: true, uac: true, forbidden: true, slow: true },
+    // 1 — the Git hazard: present, unwanted, but installed outside our manager.
+    { i: 1, name: "Git", canUninstall: true },
+  ]);
+  for (const i of [0, 1]) setStatusData(m, i, "ok");
+  setExternal(m, 1, true);
+  assert.equal(actionOf(m, 0), "uninstall");
+  assert.equal(actionOf(m, 1), null, "scope gates before the rung does");
+  for (const r of [0, 1, 2, 3, 4]) {
+    assert.deepEqual(rungPlan(m, r), [0], `rung ${r}: the ✕ stands, the external row does not`);
+  }
+});
+
+test("ladder: a downgrade is in NO rung — it mirrors AUTO_ACTS, not the ladder", () => {
+  const m = createModel();
+  loadPlan(m, [{ i: 0, name: "Nushell", canUninstall: true, pin: "0.113.1" }]);
+  setDecision(m, 0, "in");
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "0.114.0"); // above the pin → downgrade, manual only
+  assert.equal(actionOf(m, 0), "downgrade");
+  assert.equal(isActionable(m, 0), false);
+  for (const r of [0, 1, 2, 3, 4]) assert.deepEqual(rungPlan(m, r), [], `rung ${r}`);
 });

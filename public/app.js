@@ -4,6 +4,7 @@ import {
   forbiddenMessage,
   postureDefault as _postureDefault,
 } from "./decision.js";
+import * as L from "./ladder.js";
 import * as M from "./model.js";
 const model = M.createModel();
 
@@ -687,6 +688,43 @@ function refreshLiveness() {
       ? "Can't quit while applying — an install is running and would be interrupted"
       : "Close Talos";
   }
+  // The ladder's counts follow the same facts every button above does, so it repaints from
+  // the same hook rather than from each caller: a toggle, a scan verdict and an `outdated`
+  // pill all change what a rung would touch, and all of them already route through here.
+  renderLadder();
+}
+
+// The chosen rung, 0..4. NOT PERSISTED, deliberately: the question the ladder asks is "do I
+// have time RIGHT NOW?", which is about this moment and not a preference — the emoji ramp
+// says so explicitly. So every launch resets to Everything, which is also exactly the
+// behaviour that shipped before the ladder existed. (If C lives with it and wants a slow
+// network's rung to stick, persistence goes in selection.json's `ui` block — the plan's
+// deferred table names it rather than guessing.)
+let rung = L.RUNGS.length - 1;
+
+// Repaint the ladder's word, counts and fill. Called from refreshLiveness (the "anything
+// changed" hook) and from the input handler.
+function renderLadder() {
+  const r = document.getElementById("ladder-range");
+  if (!r) return;
+  const spec = L.RUNGS[rung];
+  r.value = String(rung);
+  // grey → green, stopped at the thumb. NOT red → green — the reasoning, and a correction
+  // to it, are on index.html's #ladder rules.
+  r.style.setProperty("--fill", `${(rung / (L.RUNGS.length - 1)) * 100}%`);
+  r.disabled = applyRunning || scanning; // nothing moves during a run or an incomplete scan
+  document.getElementById("ladder-emoji").textContent = spec.emoji;
+  document.getElementById("ladder-name").textContent = spec.name;
+  document.getElementById("ladder-promise").textContent = spec.promise;
+  const items = M.rungPlan(model, rung);
+  const count = items.length === 1 ? "1 item" : `${items.length} items`;
+  document.getElementById("ladder-count").textContent = count;
+  // A range input announces its VALUE — "4" — which is the one thing on this control that
+  // carries no meaning. The word and the count are the reading; `aria-valuetext` overrides
+  // the number with them, so a screen reader says "Everything, 6 items" rather than "4".
+  // Set here rather than in the markup because it changes on every move, exactly like the
+  // visible text it mirrors.
+  r.setAttribute("aria-valuetext", `${spec.name}, ${count}`);
 }
 
 // The re-scan veil covers the WHOLE window (position:fixed, top-level), so the
@@ -739,6 +777,15 @@ function applyAll() {
     on,
     off,
     unmanaged: M.unmanagedIndices(model),
+    // How far to go. Sent exactly as `unmanaged` is, and for the same reason: the server
+    // BUILDS the plan, so it must be told rather than handed a pre-filtered list. The
+    // per-row buttons ignore this entirely — clicking install on one row is an explicit
+    // gesture about one thing, and the ladder calibrates the BATCH.
+    //
+    // ⚠️ An INTEGER, never the input's string: `server::rung_from_wire` reads it with
+    // `as_u64`, which rejects a string or a float and then falls back to Everything. See
+    // ladder.js's `rungFromInput`, which is the only place `.value` is converted.
+    rung,
   }));
 }
 
@@ -1424,6 +1471,14 @@ document.getElementById("quit-all").onclick = () => {
   if (applyRunning) return; // belt to the disabled attribute's braces
   ws.send(JSON.stringify({ type: "quit" }));
 };
+// The ladder. `input` and not `change`, so dragging repaints the word and the count live —
+// the whole point of the widget is to answer "how many?" BEFORE you let go. The value is
+// parsed through ladder.js's rungFromInput: a range input's `.value` is a string, and
+// `server::rung_from_wire`'s `as_u64` would read a string as absent → Everything.
+document.getElementById("ladder-range").addEventListener("input", (e) => {
+  rung = L.rungFromInput(e.target.value);
+  renderLadder();
+});
 document.getElementById("reset-all").onclick = () =>
   resetConfirmEl.classList.add("show");
 document.getElementById("reset-confirm-no").onclick = () =>

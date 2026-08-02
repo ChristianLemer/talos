@@ -76,6 +76,40 @@
       .tagline b { color:var(--fg); font-weight:600; }
       #globalhint { font-size:12px; color:var(--dim); max-width:28ch; line-height:1.4; }
       #overall { font-size:12px; color:var(--dim); }
+      /* The ladder — "how far do you want to go?", right under the Apply bar it calibrates.
+         FILL goes grey → GREEN as you go right, NOT red → green.
+
+         ⚠️ The reason is NOT "the leftmost rung removes nothing" — that reading was in the
+         plan and it is FALSE: `uninstall` sits on EVERY rung, including 0, because a rung
+         governs how far to GO and never whether to honour the user's ✕. Rung 0 removes
+         exactly as much as rung 4 does. The real reason survives the correction and is
+         simpler: red is the diff language's word for "would remove", and NO position of
+         this control changes how much gets removed — so red would encode an axis the
+         widget does not have. Green (#9ece6a) already means "a plain Apply would
+         install/update this"; along the ladder it means "more will be applied" — the same
+         meaning at a different scale, which is the axis the control actually moves.
+         The fill is one gradient stopped at --fill%, set by app.js from the value: one
+         property to update, and it degrades to a full green track if the var is missing. */
+      #ladder { padding:0 12px 10px; display:flex; flex-direction:column; gap:4px; }
+      .ladder-q { font-size:12px; color:var(--dim); }
+      #ladder-range { -webkit-appearance:none; appearance:none; width:100%; max-width:320px;
+                      height:6px; border-radius:999px; cursor:pointer;
+                      background:linear-gradient(90deg,
+                        #9ece6a 0%, #9ece6a var(--fill,100%),
+                        var(--line) var(--fill,100%), var(--line) 100%); }
+      #ladder-range::-webkit-slider-thumb { -webkit-appearance:none; appearance:none;
+                        width:16px; height:16px; border-radius:50%; background:#c0caf5;
+                        border:2px solid var(--bg); cursor:pointer; }
+      #ladder-range:disabled { cursor:default; opacity:.5; }
+      .ladder-read { display:flex; align-items:baseline; gap:8px; font-size:13px; }
+      .ladder-emoji { font-size:15px; line-height:1; }
+      .ladder-name { font-weight:600; }
+      .ladder-count { color:var(--dim); font-size:12px; font-family:"JetBrains Mono",monospace; }
+      .ladder-promise { font-size:11.5px; color:var(--dim); line-height:1.35; max-width:60ch; }
+      /* Catalog tab has no Apply bar (it is the BROWSE view), so it has nothing for a
+         ladder to calibrate either. Mirrors `body.tab-catalog .hero-apply`, which lives
+         with the other tab-scoped rules further down. */
+      body.tab-catalog #ladder { display:none; }
       #steps { padding:8px 12px; position:relative; min-height:180px; }
       /* Re-scan veil: shown while the server re-scans presence BEFORE the plan
          arrives (the silent gap). Covers EVERYTHING — `position:fixed` on a
@@ -939,6 +973,42 @@
         </div>
         <span id="globalhint">Installs what you checked, updates what's outdated, removes what you unchecked.</span>
         <span id="overall">connecting…</span>
+      </div>
+      <!-- THE LADDER: how far this Apply goes. Five cumulative rungs, one control —
+           the aspects (speed, non-interruption, no-403) are not independent, they
+           nest, so four checkboxes would have been the wrong shape (C's design).
+
+           Visible in SIMPLE mode too, unlike the per-row state words. Those are
+           advanced-only because a word on every row announces the majority state 25
+           times to flag 6 exceptions; ONE global control has no majority to repeat.
+
+           A native <input type="range"> and not a hand-rolled control: the row toggle
+           is hand-rolled only because no native element does three states with
+           position-as-hand plus colour-as-diff overlaid. This is a plain 5-detent
+           linear scale, which is exactly what a range input IS — and it brings arrow-key
+           navigation, the focus ring, and a labelled control for free.
+
+           NOT the reading, though: a range announces its VALUE, and "4" is the one thing
+           here that means nothing. `renderLadder` sets `aria-valuetext` on every move so
+           the announcement is "Everything, 6 items" — the same words the eye gets. -->
+      <div id="ladder">
+        <div class="ladder-q">How far do you want to go?</div>
+        <input id="ladder-range" type="range" min="0" max="4" step="1" value="4"
+               aria-label="How far this Apply goes"
+               list="ladder-detents">
+        <datalist id="ladder-detents">
+          <option value="0"></option><option value="1"></option><option value="2"></option>
+          <option value="3"></option><option value="4"></option>
+        </datalist>
+        <!-- THE WORD, under the thumb. Position alone does not read — that is the lesson
+             the scope work paid for: a multi-detent control must READ unambiguously, and
+             five unlabelled notches do not. -->
+        <div class="ladder-read">
+          <span id="ladder-emoji" class="ladder-emoji"></span>
+          <span id="ladder-name" class="ladder-name"></span>
+          <span id="ladder-count" class="ladder-count"></span>
+        </div>
+        <div id="ladder-promise" class="ladder-promise"></div>
       </div>
       <!-- App Management banner: some app updates need the macOS permission and
            it's missing. Shown only when appmgmtStatus === "missing". -->
