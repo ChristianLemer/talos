@@ -175,6 +175,17 @@ struct AppState {
     /// travel that way. Nothing enforces the separation; these two fields being neighbours
     /// is the whole reason it is said here.
     facts: Vec<crate::behaviour::Facts>,
+    /// This machine's LAST-SEEN duration per (package id, `route/os`), read ONCE at startup
+    /// — the snapshot the front is told about so it can show minutes. Immutable after boot,
+    /// on the same clock as `facts`: one mental model, and nothing moves under a running
+    /// Apply. An improved estimate appears at the NEXT launch (see the deferred table).
+    timings: crate::timings::Timings,
+    /// Durations measured during the CURRENT Apply, flushed beside `observed`.
+    ///
+    /// A SECOND accumulator rather than a reading of `observed`, deliberately: `observed`
+    /// ratchets to a MAX within one Apply (a 403 + Retry runs the same step twice), and
+    /// this file wants the LAST run. Same site, different semantics.
+    timed: tokio::sync::Mutex<crate::timings::Timings>,
 }
 
 /// Records one observed presence in `last_seen` (grows the vector if the plan is
@@ -204,9 +215,37 @@ async fn remember_behaviour(
     crate::behaviour::merge_into(rec, &k, &facts);
 }
 
+/// Records how long ONE step took, for the LOCAL duration cache. Nothing touches disk here.
+///
+/// ⚠️ ASSIGNMENT, not a ratchet. This is the local file's semantics and it is the OPPOSITE
+/// of `remember_behaviour`'s, just above — that one merges monotonically because many
+/// machines write the shared file; this one has a single writer and wants the LAST run.
+/// Reaching for `merge_into` here would freeze one unlucky slow run as this machine's
+/// estimate forever.
+async fn remember_duration(state: &AppState, id: &str, route: &str, secs: u64) {
+    let at = crate::behaviour::key(route, state.os);
+    let mut t = state.timed.lock().await;
+    crate::timings::note_duration(&mut t, id, &at, secs);
+}
+
 /// Writes everything the Apply observed to the share, then clears the accumulator.
 /// Best-effort by construction (behaviour_io swallows IO errors): an offline share
 /// costs us the update, never the Apply.
+///
+/// It flushes TWO accumulators, despite the name: the shared behaviour facts, and the local
+/// duration cache (`timed` → `timings.yaml`). One ending, because both are measured by the
+/// same steps and both want the same "once, at the end" discipline — a cancelled Apply must
+/// leave neither half-formed. Everything else about them differs: different file, different
+/// folder, different merge rule (monotone max for the share, assignment for the local one).
+/// The name is the older half's; it is kept because the two call sites read as "the Apply is
+/// over" and splitting them would only make a caller choose.
+///
+/// ⚠️ The two halves are SEQUENTIAL, not nested, and that is deliberate on two counts. It
+/// keeps `observed`'s early-out from gating the local write (they happen to be non-empty
+/// together today — both are filled at the same site in `do_step` — but that is a coupling
+/// nothing enforces, and a future caller of `remember_duration` alone would silently lose
+/// its measurement). And it means no code path ever holds both locks, so the pair cannot
+/// deadlock however a later site orders them.
 ///
 /// Clearing matters as much as writing: the state outlives one Apply, and a second Apply
 /// in the same session must not re-write the first one's facts — the ratchet makes that
@@ -223,18 +262,29 @@ async fn remember_behaviour(
 /// what counts as empty, and that rule would have to be revisited every time a fourth
 /// fact lands with a meaningful default.
 async fn flush_behaviour(state: &AppState) {
-    let mut obs = state.observed.lock().await;
-    if obs.is_empty() {
-        return;
+    {
+        let mut obs = state.observed.lock().await;
+        if !obs.is_empty() {
+            for (id, rec) in obs.iter() {
+                crate::behaviour_io::merge_and_write(&state.consent.exe_dir, id, rec);
+            }
+            // "flushed", not "wrote": `write_one` swallows every IO error, so on an offline
+            // or read-only share this line prints after writing nothing at all. Claiming
+            // the write succeeded would make the log lie exactly where someone is debugging
+            // a missing file.
+            println!("[behaviour] flushed facts for {} package(s)", obs.len());
+            obs.clear();
+        }
     }
-    for (id, rec) in obs.iter() {
-        crate::behaviour_io::merge_and_write(&state.consent.exe_dir, id, rec);
+    // The LOCAL cache, on the same ending and with the same clear-after-write discipline.
+    // Its own scope, its own emptiness check — see the ⚠️ above.
+    let mut fresh = state.timed.lock().await;
+    if !fresh.is_empty() {
+        crate::timings::merge_and_write_timings(&state.data_dir, &fresh);
+        // Same honesty as the line above: `write_timings` swallows its IO errors too.
+        println!("[timings] flushed durations for {} package(s)", fresh.len());
+        fresh.clear();
     }
-    // "flushed", not "wrote": `write_one` swallows every IO error, so on an offline or
-    // read-only share this line prints after writing nothing at all. Claiming the write
-    // succeeded would make the log lie exactly where someone is debugging a missing file.
-    println!("[behaviour] flushed facts for {} package(s)", obs.len());
-    obs.clear();
 }
 
 /// The presence vector the Apply reasons over: the FRESH probe where we have one,
@@ -360,6 +410,15 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
     // next to the exe (the one that contains bundles/) — that's where the consented
     // shared copy lands. host/user name the shared log; env best-effort.
     let data_dir = local_data_dir(os);
+    // The local duration cache. A derived cache of what the journal already records, kept
+    // because a bounded keyed read at startup beats walking an append-only journal
+    // backwards. Deleting it is harmless. LOCAL dir, never `exe_dir`: the share is read by
+    // N machines and this number is about THIS one.
+    let timings = crate::timings::read_timings(&data_dir);
+    println!(
+        "[timings] {} package(s) with a local duration",
+        timings.len()
+    );
     let exe_dir = sibling_dir;
     let consent = ConsentStore {
         local_dir: data_dir.clone(),
@@ -384,6 +443,8 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         sudo_pw: tokio::sync::Mutex::new(None),
         observed: tokio::sync::Mutex::new(std::collections::BTreeMap::new()),
         facts,
+        timings,
+        timed: tokio::sync::Mutex::new(crate::timings::Timings::new()),
     });
 
     let state_for_root = state.clone();
@@ -476,21 +537,47 @@ async fn root_or_ws(ws: Option<WebSocketUpgrade>, state: Arc<AppState>) -> Respo
 /// discriminants are the front's input for the widget's per-rung counts, so a silent swap
 /// would mislabel rows rather than fail anything.
 ///
-/// `uac`/`forbidden` cross as booleans and so does `slow`: the front decides how FAR to go,
-/// not how long something takes, so the SECONDS are not its business here (the estimate gets
-/// its own field, from the local last-seen timings, in a later task).
+/// `uac`/`forbidden` cross as booleans and so does `slow` — the CLASSIFICATION, from the
+/// shared file's worst-seen `slow_secs`. `secs` is the other half and a different question:
+/// this machine's LAST-SEEN duration, from the local cache. The front needs both because it
+/// answers both — how far to go (the rungs) and how long it will take ME (the estimate).
+///
+/// ⚠️ So a row can legitimately carry `"slow": true, "secs": 1`, and that is not a
+/// contradiction to debug: see timings.rs's module doc for the measured 7-Zip case.
 ///
 /// `facts` is indexed with `get`, not `[i]`: it is built from `plan.steps` at startup and
 /// cannot be shorter, but a row with no facts and a row past the end must read the same —
 /// all-false — rather than panic on a socket.
-fn step_json(s: &crate::bundles::Step, i: usize, facts: &[crate::behaviour::Facts]) -> Value {
+///
+/// `timings` arrives as plain data, not through `&AppState`, for the reason this function
+/// exists at all: `handle_socket` needs a live WebSocket, so anything reached only from there
+/// is unreachable from a test — and the last mutant to hide in this mapping did exactly that.
+fn step_json(
+    s: &crate::bundles::Step,
+    i: usize,
+    facts: &[crate::behaviour::Facts],
+    timings: &crate::timings::Timings,
+    os: Os,
+) -> Value {
     let f = facts.get(i).copied().unwrap_or_default();
     json!({
         "i": i, "name": s.name, "description": s.description, "bundle": s.bundle,
         "canUninstall": s.uninstall.is_some(), "posture": s.posture.as_str(),
         "isConfig": s.is_config, "pin": s.pin, "categories": s.categories,
         "requires": s.requires, // package names this one needs (B5 transitive pull, §8)
-        "uac": f.uac, "forbidden": f.forbidden, "slow": crate::ladder::is_slow(&f)
+        "uac": f.uac, "forbidden": f.forbidden, "slow": crate::ladder::is_slow(&f),
+        // How long this took HERE last time, for the ladder's minutes. 0 = no local
+        // measurement, which the widget must COUNT and SHOW as unknown rather than silently
+        // treat as free. Keyed by (id, route/os), like the file — so a package measured via
+        // brew contributes nothing to a winget estimate, which is the point of the key.
+        //
+        // `0` can ONLY mean "absent", never "it was fast": `note_duration` floors a
+        // measurement at 1s, precisely so that this sentinel stays unambiguous.
+        "secs": timings
+            .get(&s.id)
+            .and_then(|per| per.get(&crate::behaviour::key(s.route.as_deref().unwrap_or(""), os)))
+            .copied()
+            .unwrap_or(0)
     })
 }
 
@@ -503,7 +590,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     let steps_json: Vec<_> = steps
         .iter()
         .enumerate()
-        .map(|(i, s)| step_json(s, i, &state.facts))
+        .map(|(i, s)| step_json(s, i, &state.facts, &state.timings, state.os))
         .collect();
     // The top-panel "needs" (profiles.yaml), loaded at boot. Same keys the front
     // expects (renderProfiles, app.js:164): name/emoji/usage/highlights/description/packages.
@@ -1928,6 +2015,36 @@ async fn do_step(
         },
     )
     .await;
+    // The same elapsed seconds, into the LOCAL cache — for the minutes shown to THIS user.
+    //
+    // ⚠️ The number is the same; what happens to it is the opposite. Above it is merged with
+    // a `max` into a fleet-wide classification; here it is ASSIGNED, so a warm run LOWERS the
+    // estimate. Reached once per ATTEMPT, exactly like the call above, and that is why the
+    // two accumulators are separate: after a 403 + Retry the share must keep the WORST of the
+    // two attempts and this file must keep the LAST.
+    //
+    // ⚠️ AND A CANCELLED OR FAILED STEP IS RECORDED TOO, which cuts differently here than
+    // above. The ratchet absorbs a short cancelled run (a max never goes down); assignment
+    // does not — a step killed after 2s writes 2s and under-states the next estimate. Kept
+    // anyway: a filter would need to know what "properly finished" means for every route,
+    // and the cost of the under-statement is one optimistic estimate that the next full run
+    // corrects.
+    //
+    // ⚠️ THIS CALL'S ARGUMENTS ARE UNTESTED, exactly like `remember_behaviour`'s above, and
+    // for the same reason: `do_step` needs a live WebSocket and a pty, so no unit test
+    // reaches this line. MEASURED, not assumed — a mutant that passed `&step.name` instead of
+    // `&step.id` and a hardcoded `0` instead of the elapsed seconds left all 208 tests green
+    // and clippy silent. What IS pinned is everything downstream (`remember_duration`, the
+    // flush, the wire lookup); the four values handed over here are verified by reading, and
+    // by the real-click check Task 8 owes. Deleting the call outright is caught, but only by
+    // clippy's dead-code error, not by a test.
+    remember_duration(
+        state,
+        &step.id,
+        step.route.as_deref().unwrap_or(""),
+        started.elapsed().as_secs(),
+    )
+    .await;
     append_history(
         &state.consent,
         &HistEntry {
@@ -2003,24 +2120,25 @@ mod tests {
             },
         ];
         let s = brew_step("nushell", None);
+        let no_timings = crate::timings::Timings::new();
 
-        let row = super::step_json(&s, 0, &facts);
+        let row = super::step_json(&s, 0, &facts, &no_timings, Os::Darwin);
         assert_eq!(row["uac"], true, "index 0 elevates");
         assert_eq!(row["forbidden"], false);
         assert_eq!(row["slow"], false, "0 seconds is unknown, not slow");
 
-        let row = super::step_json(&s, 1, &facts);
+        let row = super::step_json(&s, 1, &facts, &no_timings, Os::Darwin);
         assert_eq!(row["uac"], false);
         assert_eq!(row["forbidden"], true, "index 1 is the blocked one");
         assert_eq!(
             row["slow"], true,
-            "the SECONDS stay server-side; the front is told the CLASSIFICATION"
+            "the fleet's WORST seconds stay server-side; the front is told the CLASSIFICATION"
         );
 
         // A row past the end reads all-false rather than panicking on a socket. `facts` is
         // built from `plan.steps` so this cannot happen today — which is exactly why nothing
         // else would notice if the lookup became `[i]`.
-        let row = super::step_json(&s, 99, &facts);
+        let row = super::step_json(&s, 99, &facts, &no_timings, Os::Darwin);
         assert_eq!(row["uac"], false);
         assert_eq!(row["forbidden"], false);
         assert_eq!(row["slow"], false);
@@ -2028,6 +2146,55 @@ mod tests {
             row["i"], 99,
             "and the index it was asked about is what it reports"
         );
+    }
+
+    #[test]
+    fn the_local_last_seen_duration_crosses_the_wire_keyed_by_route_and_os() {
+        // The ESTIMATION half. Two things a mutant could get wrong silently, so both are
+        // pinned: the (id, route/os) key, and that an unmeasured row sends 0 rather than
+        // borrowing a sibling route's number.
+        let s = brew_step("nushell", None); // id "nushell", route "brew"
+        let mut t = crate::timings::Timings::new();
+        crate::timings::note_duration(&mut t, "nushell", "brew/darwin", 38);
+        crate::timings::note_duration(&mut t, "nushell", "winget/windows", 242);
+        let facts = vec![crate::behaviour::Facts::default()];
+
+        let row = super::step_json(&s, 0, &facts, &t, Os::Darwin);
+        assert_eq!(row["secs"], 38, "this machine's os picks brew/darwin");
+        // Same package, same route, other os → the other entry. Not 38, or the os half of
+        // the key is being ignored.
+        let mut win = brew_step("nushell", None);
+        win.route = Some("winget".into());
+        let row = super::step_json(&win, 0, &facts, &t, Os::Windows);
+        assert_eq!(row["secs"], 242);
+        // Measured on brew, asked about winget on THIS os → unknown, not the brew number.
+        let row = super::step_json(&win, 0, &facts, &t, Os::Darwin);
+        assert_eq!(
+            row["secs"], 0,
+            "a route this machine never measured is unknown, not a sibling's duration"
+        );
+        // A package with no entry at all → 0, which the widget shows as unknown.
+        let row = super::step_json(&brew_step("jq", None), 0, &facts, &t, Os::Darwin);
+        assert_eq!(row["secs"], 0);
+    }
+
+    #[test]
+    fn a_slow_classification_and_a_fast_local_estimate_travel_together() {
+        // The consequence somebody will file as a bug, pinned so the two halves cannot be
+        // "fixed" into agreement: 7-Zip is CLASSIFIED slow for the whole fleet (worst-seen
+        // over a minute) while THIS Mac measured 1 second, its brew bottle already cached.
+        // Both fields are right; they answer different questions.
+        let s = brew_step("7-zip", None);
+        let facts = vec![crate::behaviour::Facts {
+            slow_secs: crate::ladder::SLOW_SECS + 182,
+            ..Default::default()
+        }];
+        let mut t = crate::timings::Timings::new();
+        crate::timings::note_duration(&mut t, "7-zip", "brew/darwin", 1);
+
+        let row = super::step_json(&s, 0, &facts, &t, Os::Darwin);
+        assert_eq!(row["slow"], true, "the FLEET's classification");
+        assert_eq!(row["secs"], 1, "and this MACHINE's estimate, unreconciled");
     }
 
     #[test]
@@ -2497,6 +2664,11 @@ mod tests {
             // Empty, matching the empty plan above: these tests exercise the WRITE side,
             // and the resolved beliefs are exactly what must never travel that way.
             facts: Vec::new(),
+            // Empty for the same reason: `timings` is the READ snapshot, and the write side
+            // must never consult it — a flush that merged the boot snapshot back in would
+            // re-write, on every Apply, durations this Apply never measured.
+            timings: crate::timings::Timings::new(),
+            timed: tokio::sync::Mutex::new(crate::timings::Timings::new()),
         }
     }
 
@@ -2714,6 +2886,106 @@ mod tests {
         assert!(
             raw.contains("403"),
             "and the facts themselves are there: {raw}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- the LOCAL duration accumulator -------------------------------------------------
+    //
+    // Same shape as the four above, one file over: `remember_duration` + the second half of
+    // `flush_behaviour`. Pinned separately because the SEMANTICS are inverted — assignment,
+    // not a ratchet — and because they write to a different folder (`data_dir`, local) than
+    // everything above (`consent.exe_dir`, shared). `state_with_share` puts the local dir
+    // INSIDE the share dir, so one `remove_dir_all` still cleans up.
+
+    #[tokio::test]
+    async fn a_second_run_in_the_same_apply_replaces_the_duration_it_does_not_ratchet() {
+        // ⭐ THE property, at the accumulator. A 403 + Retry runs the same step twice in ONE
+        // Apply: the share must keep the WORST of the two (asserted above), and this file
+        // must keep the LAST. If someone reached for `merge_into` here by reflex, both would
+        // keep 240 and one unlucky cold run would be this machine's estimate forever.
+        let dir = share("talos-test-timed-assign");
+        let state = state_with_share(&dir);
+        super::remember_duration(&state, "aws-cli", "brew", 240).await;
+        super::remember_duration(&state, "aws-cli", "brew", 12).await;
+        assert_eq!(
+            state.timed.lock().await["aws-cli"]["brew/darwin"],
+            12,
+            "the LAST attempt's duration, not the worst"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn flush_writes_the_local_durations_then_empties_the_accumulator() {
+        // The local half of the one flush: into `data_dir`, NOT the share. Asserted on the
+        // path as well as the value, because writing this to the shared folder would publish
+        // one machine's warm cache as if it were the fleet's classification.
+        let dir = share("talos-test-timed-flush");
+        let state = state_with_share(&dir);
+        super::remember_duration(&state, "nushell", "brew", 41).await;
+        super::remember_duration(&state, "rclone", "brew", 3).await;
+        super::flush_behaviour(&state).await;
+
+        let back = crate::timings::read_timings(&state.data_dir);
+        assert_eq!(back["nushell"]["brew/darwin"], 41);
+        assert_eq!(back["rclone"]["brew/darwin"], 3);
+        assert!(
+            !crate::timings::timings_path(&dir).exists(),
+            "timings.yaml must be LOCAL; it landed in the shared folder"
+        );
+        assert!(
+            state.timed.lock().await.is_empty(),
+            "the accumulator must be empty after the flush, like the shared one"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_second_apply_lowers_a_duration_and_keeps_the_packages_it_did_not_touch() {
+        // ⭐ THE property, end to end through the DISK — which is where it actually matters,
+        // and where the in-memory test above proves nothing: `merge_and_write_timings` does a
+        // read-modify-write, so a `max` could hide there and stay green above.
+        let dir = share("talos-test-timed-two-applies");
+        let state = state_with_share(&dir);
+        super::remember_duration(&state, "uv", "brew", 300).await;
+        super::remember_duration(&state, "jq", "brew", 3).await;
+        super::flush_behaviour(&state).await;
+        // Second Apply: uv again, warm this time. jq untouched.
+        super::remember_duration(&state, "uv", "brew", 9).await;
+        super::flush_behaviour(&state).await;
+
+        let back = crate::timings::read_timings(&state.data_dir);
+        assert_eq!(
+            back["uv"]["brew/darwin"], 9,
+            "the faster run LOWERED the estimate — the opposite of the share's ratchet"
+        );
+        assert_eq!(
+            back["jq"]["brew/darwin"], 3,
+            "and a package this Apply never touched survived the overwrite"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn the_local_flush_does_not_depend_on_the_shared_one_having_anything() {
+        // The two halves of `flush_behaviour` are sequential, not nested. Written because the
+        // obvious wiring — appending the local flush inside the shared one's body — puts it
+        // behind `observed.is_empty()`'s early return, and every measurement would vanish
+        // for any caller that recorded a duration without recording a fact. They happen to
+        // be filled together in `do_step` today; nothing enforces that.
+        let dir = share("talos-test-timed-independent");
+        let state = state_with_share(&dir);
+        super::remember_duration(&state, "jq", "brew", 7).await;
+        super::flush_behaviour(&state).await;
+        assert_eq!(
+            crate::timings::read_timings(&state.data_dir)["jq"]["brew/darwin"],
+            7,
+            "a duration with no accompanying fact still reached the disk"
+        );
+        assert!(
+            !dir.join("behaviour").exists(),
+            "and nothing was written to the share"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

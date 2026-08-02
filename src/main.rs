@@ -23,6 +23,7 @@ mod profiles;
 mod pty;
 mod selection;
 mod server;
+mod timings;
 mod watch;
 
 fn main() {

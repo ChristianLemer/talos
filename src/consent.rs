@@ -32,6 +32,13 @@ pub struct HistEntry {
     /// for the login-shell wrap and the re-probe on top of its own work. That ambiguity
     /// is harmless: the consumer keeps the WORST duration (a `max`), so a 0 never wins.
     ///
+    /// ⚠️ `timings.rs` DISAGREES about 0, deliberately. There it means "never measured
+    /// here" and nothing else, because the ladder's estimate must be able to tell an
+    /// unmeasured row from a fast one — so a sub-second run is floored to 1s before it is
+    /// stored. This journal keeps the raw truncation instead: it is the TRACE, and a 0 here
+    /// is an honest "under a second or from before the field existed". Two files, two
+    /// conventions, on purpose — do not "align" them.
+    ///
     /// Absence reading as 0 rather than as an error is what lets the append-only
     /// journal keep parsing its own older lines — and `parse_history`, the reader the
     /// journal is actually read through, is hand-rolled: its `unwrap_or(0)` is the
