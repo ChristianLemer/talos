@@ -1,0 +1,15 @@
+# THE SLOW ONE. `slow_secs` is well above `ladder::SLOW_SECS` (60), so an UPGRADE of this
+# row is admitted only at the last rung 🏗️ Everything — `rung_allows` gives slow the
+# dominating branch (`needed = 4`).
+#
+# The stem matches `catalog/aws-cli.yaml`, the same correspondence the real share uses: this
+# file stands in for the durations a fleet would have collected about the AWS CLI.
+#
+# ⚠️ `catalog/aws-cli.yaml` DOES declare `uac: true`, so this row's `uac` comes from the
+# catalogue on both platforms and is not evidence that this file was read. Its `slow_secs`
+# is — nothing declares `slow` anywhere in `catalog/`, so a slow AWS CLI can only have come
+# from here (or from a real measurement, which is the point).
+brew/darwin:
+  slow_secs: 900
+winget/windows:
+  slow_secs: 900

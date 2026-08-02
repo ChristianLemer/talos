@@ -371,6 +371,94 @@ mod tests {
     }
 
     #[test]
+    fn the_shipped_fixtures_parse_and_reach_every_rung() {
+        // The fixtures under tests/fixtures/behaviour/ are CHECKED IN, so they can rot
+        // exactly like a catalogue file can. This reads THEM, not a synthetic copy — a
+        // fixture that exists but parses to nothing is the failure mode that actually
+        // happened during this work: the YAML key is `"403"`, not `forbidden` (there is a
+        // `#[serde(rename = "403")]` on the Rust field), and a file writing the field name
+        // parses cleanly into a record with the fact OFF. No error, no warning, and the only
+        // symptom is a rendered reason in the UI that disagrees with what was fabricated.
+        //
+        // The path is relative to CARGO_MANIFEST_DIR rather than the cwd, and the count is
+        // ASSERTED — a test that silently passes because the folder was missing would be
+        // worse than no test at all (`read_all_from` returns an empty map for an absent
+        // directory, by design).
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/behaviour");
+        let all = read_all_from(&dir);
+        assert_eq!(
+            all.len(),
+            4,
+            "four fixtures, one per rung-relevant fact: {all:?}"
+        );
+
+        // Rung 4 🏗️: slow DOMINATES, so this one is admitted nowhere below Everything.
+        let slow = &all["aws-cli"]["brew/darwin"];
+        assert!(
+            crate::ladder::is_slow(slow),
+            "the slow fixture must actually CLASSIFY as slow, not merely carry a big number"
+        );
+        // Rung 3 👀, the two halves. `uac` is the one that cannot be observed on macOS at
+        // all (the watcher is `#[cfg(target_os = "windows")]`); `403` merely saves a trip to
+        // the office. Same rung, very different standing — see the fixtures' README.
+        assert!(
+            all["uv"]["brew/darwin"].forbidden,
+            "the 403 fixture — and if this fails, suspect the KEY before the value"
+        );
+        assert!(all["nushell"]["brew/darwin"].uac, "the uac fixture");
+        // Rung 2 ☕: the control. Without it the set would only ever prove EXCLUSION.
+        let fast = &all["jq"]["brew/darwin"];
+        assert!(
+            fast.slow_secs > 0 && !crate::ladder::is_slow(fast),
+            "the fast fixture must be MEASURED and quick — a 0 would read as unknown"
+        );
+
+        // Every fixture must be written for BOTH platforms, or the set stops working the
+        // moment it is used on Windows — which is where the `uac` signal is real.
+        for (id, rec) in &all {
+            assert!(
+                rec.contains_key("brew/darwin") && rec.contains_key("winget/windows"),
+                "fixture `{id}` must carry both route/os keys, got {rec:?}"
+            );
+        }
+
+        // And every stem must name a real catalogue package. The stem IS the id
+        // (`behaviour_path` joins `format!("{id}.yaml")`), so a made-up name matches no row,
+        // can never appear in a plan, and looks perfectly fine while proving nothing.
+        let catalog = crate::catalog::load_catalog(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("catalog")
+                .to_str()
+                .unwrap(),
+        );
+        for id in all.keys() {
+            assert!(
+                catalog.contains_key(id),
+                "fixture `{id}.yaml` matches no catalogue package, so it can never appear \
+                 on a row — the file stem IS the catalogue id"
+            );
+        }
+
+        // The two facts that must NOT already be declared in catalog/, or the fixture is
+        // indistinguishable from the declaration and proves nothing about this FOLDER being
+        // read. Asserted rather than commented, because the catalogue is free to change:
+        // `catalog/rclone.yaml` already declares `"403": true`, which is exactly why the 403
+        // fixture is `uv` and not `rclone`.
+        assert_eq!(
+            catalog["uv"].pkg.forbidden, None,
+            "the 403 fixture's package must declare no 403 of its own"
+        );
+        assert_eq!(
+            catalog["nushell"].pkg.uac, None,
+            "the uac fixture's package must declare no uac of its own"
+        );
+        assert_eq!(
+            catalog["aws-cli"].pkg.slow, None,
+            "the slow fixture's package must declare no slow of its own"
+        );
+    }
+
+    #[test]
     fn an_unwritable_share_is_survivable() {
         // The share may be offline. A failed write must be a no-op, never a panic — same
         // stance as append_history's shared copy.

@@ -1,0 +1,27 @@
+# THE ELEVATION ONE, and the reason this folder exists at all. `uac: true` puts an UPGRADE
+# of this row at 👀 Stay nearby: excluded at ☕ Unattended, admitted at 👀.
+#
+# ⭐ ON macOS THIS FACT CANNOT BE OBSERVED. The window watcher that sets `saw_window` is
+# `#[cfg(target_os = "windows")]` (`src/server.rs`, the watcher thread and both relay
+# blocks), so no macOS run can ever produce `uac: true` — this fixture is the ONLY way to
+# reach that half of rung 3 on a Mac. Contrast `uv.yaml`: `forbidden::is403` has no platform
+# gate, so a Mac behind a corporate firewall really does collect a 403. See the README.
+#
+# The choice of package was constrained twice, and both constraints cost a rewrite if
+# ignored:
+#   1. NOT one of the four packages that declare `uac: true` in `catalog/` (7-Zip, AWS CLI,
+#      Node.js, VS Code) — a seeded row looks identical whether this file was read or not.
+#   2. NOT a row that is out of scope on the verifying machine. `actionOf` returns null for
+#      those (`public/model.js`), so they produce no action at any rung and the fixture is
+#      inert. Git reads `external` on the dev Mac (Xcode CLT) and both config-atoms derive
+#      out, which rules out the three obvious picks.
+# `nushell` is a brew formula Talos manages, and it carries `version: "0.113.1"` in the
+# catalogue — a pin BELOW what brew ships, so its action really is `upgrade`, which is what a
+# `uac` fixture needs (see below).
+#
+# ⚠️ A `uac` FIXTURE IS ONLY VISIBLE ON AN UPGRADE. Rungs 2/3/4 separate upgrades; an install
+# is rung 1 whatever the facts say. So the row must be present-and-outdated when you look.
+brew/darwin:
+  uac: true
+winget/windows:
+  uac: true

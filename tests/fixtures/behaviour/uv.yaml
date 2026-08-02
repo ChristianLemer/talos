@@ -1,0 +1,19 @@
+# THE BLOCKED ONE. `"403": true` puts an UPGRADE of this row at 👀 Stay nearby: excluded at
+# ☕ Unattended, admitted at 👀 (`rung_allows`'s `f.uac || f.forbidden` branch, `needed = 3`).
+#
+# ⚠️ THE KEY IS `"403"`, NOT `forbidden`. The Rust field is `forbidden` (an identifier cannot
+# start with a digit) and carries `#[serde(rename = "403")]`, so serde matches the KEY's
+# text. A file that wrote `forbidden: true` would parse into a record with the fact OFF and
+# no error at all — the whole file simply reads as "we know nothing". That mistake was made
+# once during this work and was caught only because the UI's rendered reason disagreed with
+# what had been fabricated.
+#
+# NOT `rclone`, which the first draft of this fixture set used: `catalog/rclone.yaml` already
+# DECLARES `"403": true` (the real a corporate network observation, seeded for a fresh machine), so a rclone
+# fixture is indistinguishable from the declaration and proves nothing about this file being
+# read. `uv` declares nothing, and a real a corporate network `uv` install did meet a real 403 — the
+# observation the 403 recovery path was field-validated on.
+brew/darwin:
+  "403": true
+winget/windows:
+  "403": true

@@ -1,0 +1,13 @@
+# THE CONTROL. Measured and quick: an UPGRADE of this row is admitted from ☕ Unattended, the
+# lowest rung any upgrade can reach. Without a row like this the other three prove only that
+# rows can be EXCLUDED, not that the filter ever lets one through on its facts.
+#
+# ⚠️ 3, not 0. Zero is the documented sentinel for "never measured" (`behaviour::Facts` and
+# `consent::HistEntry` both read it that way, and `timings::note_duration` floors a real
+# measurement at 1s so the sentinel stays unambiguous). A 0 here would read as UNKNOWN, which
+# is a different statement from "we timed it and it was fast" — and the ladder's estimate
+# counts unknowns out loud.
+brew/darwin:
+  slow_secs: 3
+winget/windows:
+  slow_secs: 3
