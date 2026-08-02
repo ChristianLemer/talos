@@ -468,6 +468,16 @@
                   transition:color .15s, border-color .15s; }
       .resetbtn:hover { color:#e0af68; border-color:#e0af68; }
       .resetbtn:disabled { opacity:.4; cursor:default; }
+      /* Quit, in the header beside the app's mark. Quiet by default — it is a way out,
+         not something to reach for — and only borderless-to-outlined on hover, so it
+         does not compete with Apply for the eye. `flex:none` so the tagline keeps the
+         width. Disabled during an Apply: a running installer is our child process and
+         would die with us; the user deserves to be told, not to lose a half-done install. */
+      .quitbtn { flex:none; align-self:flex-start; background:none; color:var(--dim);
+                 border:1px solid transparent; padding:5px 11px; border-radius:7px;
+                 cursor:pointer; font-size:12px; transition:color .15s, border-color .15s; }
+      .quitbtn:hover { color:var(--fg); border-color:var(--line); }
+      .quitbtn:disabled { opacity:.4; cursor:default; }
       /* Bundle panel — TWO columns (spec §24): the dependency CHAIN on the left
          (Base→Documents→Data→Development, each needs the one above), STANDALONE
          bundles on the right (Terminal tools, Legacy, My setup). */
@@ -831,7 +841,10 @@
                 background:radial-gradient(130% 130% at 50% 30%, #24283b 0%, #16161e 70%);
                 transition:opacity .4s ease; }
       #splash.hide { opacity:0; pointer-events:none; }
-      .splash-inner { text-align:center; max-width:30ch; padding:24px; }
+      /* 30ch was sized for the title + count alone. A child cannot outgrow its parent,
+         so the explanation below was squeezed into ~300px in a 1700px window — three
+         cramped lines. The box grows; the SHORT elements keep their own narrow measure. */
+      .splash-inner { text-align:center; max-width:min(62ch, 86vw); padding:24px; }
       .splash-logo { font-size:46px; margin-bottom:18px; animation:bob 1.6s ease-in-out infinite; }
       @keyframes bob { 0%,100%{ transform:translateY(0) } 50%{ transform:translateY(-8px) } }
       /* Title placeholder (no centaur logo yet). Accent gradient like the hero h1. */
@@ -844,7 +857,22 @@
       .splash-now { font-size:16px; color:#c0caf5; min-height:1.4em; line-height:1.4;
                     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .splash-count { font-size:13px; color:var(--dim); margin-top:6px; font-variant-numeric:tabular-nums; }
-      .splash-bar { margin-top:22px; height:3px; background:var(--line); border-radius:3px; overflow:hidden; }
+      /* The REASON for the wait, under the bar. Quiet: it is read once, on a first
+         launch, and must not compete with the narration line above it (which is the live
+         fact). `.splash-inner` caps everything at 30ch — right for a title, too narrow
+         for a sentence — so this one widens itself back out and re-centres, the only
+         element here that is prose rather than a label.
+         `max-width` (not `width`): a fixed width forced narrow wrapping even in a wide
+         window, which stranded "Thanks for your patience." across two ragged lines.
+         `text-wrap:balance` evens the lines out rather than leaving a lone short one. */
+      .splash-why { margin:20px auto 0; max-width:min(62ch, 86vw);
+                    font-size:12.5px; line-height:1.55; color:var(--dim);
+                    text-wrap:balance; }
+      /* Own measure, centred: the bar used to inherit `.splash-inner`'s 30ch, and when
+         that box grew to fit the explanation the bar stretched with it — a 3px hairline
+         nearly 500px wide reads as a divider, not as progress. */
+      .splash-bar { margin:22px auto 0; width:min(30ch, 100%); height:3px;
+                    background:var(--line); border-radius:3px; overflow:hidden; }
       /* INDETERMINATE (pre-scan): the sliding shuttle. Dropped the moment we know
          the count — see .splash-bar.determinate. */
       .splash-bar span { display:block; height:100%; width:40%; border-radius:3px;
@@ -867,6 +895,22 @@
       <div class="splash-now" id="splash-now">starting up…</div>
       <div class="splash-count" id="splash-count"></div>
       <div class="splash-bar" id="splash-bar"><span></span></div>
+      <!-- WHY the wait, not how long. The lines above already say WHAT is happening
+           ("checking Nushell… 7 of 31" + a determinate bar) — true at every instant,
+           on every machine. What was missing is the REASON, so a first-time user reads
+           a purpose instead of a delay.
+           Deliberately NO duration: the scan runs ~2s on a warm Mac and ~25s on a slow
+           Windows box, so any figure we promised would be wrong for somebody, and a
+           broken promise costs more trust than silence. A measured "last time: 22s"
+           would be honest, but only from the SECOND launch — and the first is the one
+           that decides whether a new colleague thinks this thing works. -->
+      <!-- The closing courtesy is one unbreakable unit (nbsp between its words): left to
+           itself it split as "Thanks for / your patience.", a four-word sentence
+           straddling two lines, which reads as a layout accident, not a sentence. -->
+      <div class="splash-why">
+        Talos looks at what is already installed before proposing anything, so it never
+        reinstalls what you have. Thanks&nbsp;for&nbsp;your&nbsp;patience.
+      </div>
     </div></div>
 
     <!-- Re-scan veil: shown while the server re-scans presence BEFORE the plan
@@ -1032,6 +1076,12 @@
         <h1><span class="accent">Talos</span> — your workspace, ready in one click.</h1>
         <p class="tagline">Everything your <b>AI coding agent</b> needs, installed and kept current.</p>
       </div>
+      <!-- Quit lives HERE, with the app's own identity — not in the list's action bar.
+           That bar (Refresh · Reset · Apply) acts on the PACKAGES; Quit acts on the
+           APPLICATION, a different order of thing. It also sat immediately beside
+           Apply, so a mis-aimed click closed the app instead of installing. Far from
+           Apply, and in the frame that means "Talos itself". -->
+      <button id="quit-all" class="quitbtn" title="Close Talos">Quit</button>
     </header>
     <nav>
       <!-- "Changes", not "Bundles": this view's own CSS already called itself "the
@@ -1054,10 +1104,6 @@
         <div class="hero-buttons">
           <button id="refresh-all" class="resetbtn" title="Re-scan the machine — re-check what's installed right now (your choices are kept)">Refresh</button>
           <button id="reset-all" class="resetbtn" title="Reset every toggle to the author's default">Reset</button>
-          <!-- Quit closes the app from inside the panel. Disabled during an Apply: a
-               running installer is a child process that would die with us, and the user
-               deserves to be told why rather than to lose a half-finished install. -->
-          <button id="quit-all" class="resetbtn" title="Close Talos">Quit</button>
           <button id="install-all" class="applybtn">Apply</button>
         </div>
         <span id="globalhint">Installs what you checked, updates what's outdated, removes what you unchecked.</span>

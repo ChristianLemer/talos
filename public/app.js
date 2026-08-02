@@ -1254,25 +1254,36 @@ function enterFocusMode(planIndices) {
     // focus-show = this row is part of the plan → stays visible throughout.
     rows[i].details.classList.toggle("focus-show", inPlan.has(i));
   }
-  // Remember each planned row's original slot (parent + the node it sat before),
-  // then re-append them in plan order. Only planned rows move; the hidden ones
-  // stay where they are, so restoring is exact.
+  // Remember each planned row's original INDEX among its siblings — not the node it
+  // sat before. A sibling anchor is only valid while it stays put, and the anchor of
+  // one planned row is very often ANOTHER planned row (two rows of the same category
+  // sit next to each other). Both move, and insertBefore(el, movedAnchor) then drops
+  // the row wherever the anchor happens to be: A,B,C,D,E came back as A,C,D,E,B, which
+  // scattered rows out of their category and out of reach. An index is a fact about
+  // the resting list, and nothing we do to the plan changes it.
   planOrigin = planIndices
     .map((i) => rows[i]?.details)
     .filter(Boolean)
-    .map((el) => ({ el, parent: el.parentNode, before: el.nextSibling }));
+    .map((el) => ({ el, parent: el.parentNode, at: indexOfChild(el) }));
   for (const i of planIndices) {
     const el = rows[i]?.details;
     if (el) el.parentNode.appendChild(el); // re-append = move to the end, in plan order
   }
 }
+
+/// Position of `el` among its parent's children — the slot to put it back into.
+function indexOfChild(el) {
+  return el.parentNode ? Array.prototype.indexOf.call(el.parentNode.children, el) : -1;
+}
 function exitFocusMode() {
   document.body.classList.remove("applying");
-  // Put the moved rows back where the catalogue had them (reverse order, so each
-  // `before` anchor is still valid when its turn comes).
+  // Put the moved rows back in their catalogue slots, LOWEST INDEX FIRST: inserting
+  // at index k is only correct once every earlier slot is already filled, so the
+  // ascending sweep rebuilds the list from the top down and each `at` lands exactly.
   if (planOrigin) {
-    for (const { el, parent, before } of planOrigin.slice().reverse()) {
-      parent.insertBefore(el, before);
+    for (const { el, parent, at } of [...planOrigin].sort((a, b) => a.at - b.at)) {
+      const ref = parent.children[at] ?? null; // null → append (it was last)
+      if (ref !== el) parent.insertBefore(el, ref);
     }
     planOrigin = null;
   }
