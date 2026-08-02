@@ -646,7 +646,10 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 // indistinguishable from `auto` (see the desire match in
                 // apply_diff), so the server would have no way to know.
                 let unmanaged = json_indices(&parsed, "unmanaged");
-                apply_diff(&mut socket, &state, on, off, unmanaged).await;
+                // How far to go. Sent by the front exactly as `unmanaged` is; parsed here
+                // so an absent field lands on Everything rather than on nothing.
+                let rung = rung_from_wire(&parsed);
+                apply_diff(&mut socket, &state, on, off, unmanaged, rung).await;
             }
             "install" | "uninstall" | "upgrade" | "downgrade" => {
                 if let Some(i) = parsed.get("i").and_then(|v| v.as_u64()).map(|n| n as usize) {
@@ -969,6 +972,20 @@ fn json_indices(v: &serde_json::Value, key: &str) -> Vec<usize> {
         .unwrap_or_default()
 }
 
+/// The rung off the wire. Absent, non-numeric or out of range → Everything.
+///
+/// ⚠️ The default is deliberately the LARGEST rung, not the smallest. Every front shipped
+/// before the ladder omits this field, and so does any hand-rolled probe; they must get
+/// today's behaviour. Silently doing LESS than the user asked would be the worse error, and
+/// a rung is a preference rather than a safety property — unlike `unmanaged`, whose
+/// omission the server refuses to trust (see `scope_refuses`, which reads the disk instead).
+fn rung_from_wire(v: &serde_json::Value) -> crate::ladder::Rung {
+    match v.get("rung").and_then(|r| r.as_u64()) {
+        Some(n) => crate::ladder::Rung::from_wire(n),
+        None => crate::ladder::Rung::default(),
+    }
+}
+
 /// ROW action: a single button on a row (install/uninstall/upgrade/
 /// downgrade). Runs do_step on that index then emits `done` to unfreeze the UI.
 /// downgrade is allowed (explicit manual click, the only destructive path outside the batch).
@@ -1119,6 +1136,7 @@ async fn apply_diff(
     on: Vec<usize>,
     off: Vec<usize>,
     unmanaged: Vec<usize>,
+    rung: crate::ladder::Rung,
 ) {
     use crate::decision::{action_for, Action, Desired, MachineFacts};
     use crate::deps::{index_of_names, make_index, requires_reason, topo_sort, DepNode};
@@ -1279,6 +1297,10 @@ async fn apply_diff(
 
     // Action per package: desire (on→present, off→absent, neither→auto=None).
     let mut visual_plan: Vec<(usize, Action)> = Vec::new();
+    // How many rows `action_for` offered an action for, BEFORE the ladder narrowed them.
+    // Counted rather than derived from `steps.len()`, which is the catalogue and not the
+    // candidate set: a log line reading "2 of 31" would name the wrong denominator.
+    let mut candidates = 0usize;
     let sel = read_selection(&state.data_dir);
     for (i, step) in steps.iter().enumerate() {
         // Out of scope → never an action. TWO sources, deliberately, because they
@@ -1313,9 +1335,38 @@ async fn apply_diff(
         if let Some(a @ (Action::Install | Action::Uninstall | Action::Upgrade)) =
             action_for(desired, &facts)
         {
+            candidates += 1;
+            // THE LADDER, applied HERE and not in the front. `row_action` never sees the
+            // wire lists, so a front-only filter would be cosmetic — the Git-hazard lesson
+            // (talos-scope-second-axis). The consequence is milder than there (a rung is a
+            // preference, not a safety property), but the plan is the server's to build,
+            // and building it from a rung it was TOLD is simpler than trusting a
+            // pre-filtered list.
+            //
+            // AFTER `action_for`, not before: the rule takes the ACTION, so which action a
+            // row would get has to be known first. Filtering rows earlier would also change
+            // the candidate count, and `uninstall` — which no rung filters — is precisely
+            // an action, not a property of a row.
+            //
+            // The facts come from the STARTUP snapshot, so they cannot shift mid-Apply.
+            // A row with no entry (a plan longer than it was at boot — impossible today,
+            // guarded anyway) reads as "nothing known", which is the permissive direction
+            // for a preference and the same stance merge_presences takes for presence.
+            let f = state.facts.get(i).copied().unwrap_or_default();
+            if !crate::ladder::rung_allows(rung, a, step.is_config, &f) {
+                continue;
+            }
             visual_plan.push((i, a));
         }
     }
+    // What the rung cost, for a log reader. Both numbers are candidate counts: the
+    // denominator is what `action_for` offered, NOT the catalogue's step count.
+    println!(
+        "[ladder] rung {}: {} of {} candidate action(s) kept",
+        rung.as_str(),
+        visual_plan.len(),
+        candidates
+    );
 
     // Order by dependencies (required before dependents; visual order = tie-break).
     let plan = topo_sort(&visual_plan, &nodes, &idx);
@@ -2599,6 +2650,113 @@ mod tests {
             "an untouched row still acts"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- the rung on the wire ------------------------------------------------------
+    //
+    // `apply_diff` needs a live WebSocket, so the FILTER SITE inside it is not reachable
+    // from a unit test — `ladder::rung_allows` is tested exhaustively in its own module
+    // (a table, one row per candidate, one column per rung), and Task 8 verifies the
+    // wiring at real clicks. What IS testable here is the wire parse, which is where a
+    // rung can silently become the wrong one.
+    //
+    // Read this beside `scope_refuses_from_disk_so_omitting_the_wire_list_is_not_a_bypass`
+    // just above: the two assert OPPOSITE stances on an omitted field, on purpose. Scope is
+    // a safety property, so its omission is not trusted; a rung is a preference, so its
+    // omission means the largest one.
+    #[test]
+    fn the_rung_comes_off_the_wire_and_an_absent_one_means_everything() {
+        use crate::ladder::Rung;
+        let msg = |raw: &str| -> Rung {
+            let v: serde_json::Value = serde_json::from_str(raw).unwrap_or_default();
+            super::rung_from_wire(&v)
+        };
+        assert_eq!(msg(r#"{"type":"apply","rung":0}"#), Rung::ConfigOnly);
+        assert_eq!(msg(r#"{"type":"apply","rung":2}"#), Rung::Unattended);
+        assert_eq!(msg(r#"{"type":"apply","rung":4}"#), Rung::Everything);
+        // THE case that matters: a client that says nothing about the rung must get
+        // today's behaviour, not the smallest one. Doing silently LESS than the user asked
+        // is the worse direction of error, and every front shipped before this change
+        // omits the field.
+        assert_eq!(
+            msg(r#"{"type":"apply","on":[1],"off":[]}"#),
+            Rung::Everything,
+            "an absent rung must not shrink the Apply"
+        );
+        // And garbage is not trusted into a smaller rung either. `as_u64` returns None for
+        // a string and for a negative, so both land on the default rather than on rung 0 —
+        // which is only safe BECAUSE the default is the largest rung.
+        assert_eq!(msg(r#"{"type":"apply","rung":"config"}"#), Rung::Everything);
+        assert_eq!(msg(r#"{"type":"apply","rung":-1}"#), Rung::Everything);
+        assert_eq!(msg(r#"{"type":"apply","rung":99}"#), Rung::Everything);
+        // Not even a message that failed to parse at all: `unwrap_or_default` gives Null,
+        // and Null has no `rung`. (The `apply` arm reaches this with the same value the
+        // `type` match read, so a Null can never actually get here — asserted so the
+        // function stays total if that ever changes.)
+        assert_eq!(msg("not json at all"), Rung::Everything);
+    }
+
+    /// WHERE the filter is, and where it must NOT be. Text-level for the same reason as
+    /// `every_ui_locking_message_has_a_handler` and `every_presence_observation_is_recorded`:
+    /// both sites need a live WebSocket, so no unit test can call them — and both defects are
+    /// about the PRESENCE or POSITION of a call, which the source shows exactly.
+    ///
+    /// Verified to bite. FOUR mutants, each of which the rest of the suite passed happily
+    /// and this test failed on: consulting `rung_allows` inside `row_action`; filtering
+    /// BEFORE `action_for` on a presumed action; applying the filter to a hardcoded
+    /// `Action::Install` instead of to `a`; and deleting the filter outright.
+    #[test]
+    fn the_ladder_filters_the_batch_after_action_for_and_never_a_row_button() {
+        let src = include_str!("server.rs");
+        // Ignore this test module, or its own mentions would satisfy the assertions.
+        let code = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+
+        // ---- the per-row button IGNORES the ladder --------------------------------
+        // Clicking install on one row is an explicit gesture about one thing. The ladder
+        // calibrates the BATCH; a row button that consulted it would refuse a click the
+        // user just made, which is the opposite of what a button is for.
+        let at = code
+            .find("async fn row_action(")
+            .expect("row_action moved — re-point this test");
+        let body = &code[at..at + code[at..].find("\n}\n").expect("row_action's body ends")];
+        // The CALL, not the word: a future comment in there is free to explain why the
+        // ladder is absent, and should not fail this.
+        assert!(
+            !body.contains("rung_allows(") && !body.contains("rung_from_wire("),
+            "row_action consults the ladder → a per-row click, which is an explicit gesture \
+             about ONE package, would be refused by a preference about the batch"
+        );
+
+        // ---- the batch filter sits AFTER action_for -------------------------------
+        // `rung_allows` takes the ACTION, so which action a row would get has to be known
+        // first. Filtering earlier would decide on a PRESUMED action (and would change the
+        // candidate count the log line reports).
+        //
+        // Both `find`s are FIRST occurrences, which is exact here only because each string
+        // appears once in the non-test source — asserted, so a second call site cannot make
+        // this comparison quietly meaningless.
+        assert_eq!(
+            code.matches("rung_allows(").count(),
+            1,
+            "a second rung_allows call site appeared — this ordering check reads only the \
+             first, so re-write it rather than trusting it"
+        );
+        let decides = code
+            .find("action_for(desired, &facts)")
+            .expect("the visual_plan loop's action_for call moved — re-point this test");
+        let filters = code
+            .find("rung_allows(")
+            .expect("nothing calls rung_allows → the ladder governs nothing at all");
+        assert!(
+            filters > decides,
+            "the rung filter runs BEFORE action_for, so it judges a presumed action rather \
+             than the one the shared rule chose"
+        );
+        // And on THAT action, not on one reconstructed beside it.
+        assert!(
+            code[filters..].starts_with("rung_allows(rung, a, step.is_config, &f)"),
+            "the filter must be applied to `a` — the action action_for returned"
+        );
     }
 
     #[test]

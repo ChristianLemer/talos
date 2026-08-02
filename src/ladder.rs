@@ -5,9 +5,13 @@
 //! not interrupt me" — C's framing, and the reason the behaviour telemetry exists at all.
 //!
 //! This module is PURE: the rungs, the filter, and the resolution of (collected ×
-//! declared) onto a plan. No IO, no state, no socket. The wiring is server.rs's —
-//! `resolve_plan_facts` is called there at startup, while the FILTER is still unwired; see
-//! the per-item `allow(dead_code)` notes below for which task removes each one.
+//! declared) onto a plan. No IO, no state, no socket. The wiring is server.rs's:
+//! `resolve_plan_facts` is called there at startup, `rung_from_wire` parses the rung off the
+//! `apply` message, and `rung_allows` governs `apply_diff`'s `visual_plan` loop. Every item
+//! here has a real caller now — the module carries no `allow(dead_code)`.
+//!
+//! ⚠️ The filter governs the BATCH only. `row_action` deliberately does not consult a rung:
+//! clicking install on one row is an explicit gesture about one thing.
 //!
 //! ⚠️ The facts this reads are a BELIEF, not an observation: `bundles::resolve_facts`
 //! lays the catalogue's declarations over what the fleet observed, and what comes out is
@@ -85,10 +89,10 @@ pub const SLOW_SECS: u64 = 60;
 
 /// Does this package DRAG? The one place the threshold is applied, so nothing can drift.
 ///
-/// No `allow` of its own, and no longer needs one to be borrowed: `server::handle_socket`
-/// puts `slow` on the wire per row through it, so this is a real root now and `SLOW_SECS`
-/// lives through it. (It used to be kept alive only by `rung_allows`'s allow — measured
-/// again after that wiring: stripping that allow reports two warnings, not four.)
+/// Two real callers, either of which would keep it and `SLOW_SECS` alive on its own:
+/// `server::step_json` puts `slow` on the wire per row, and `rung_allows` classifies with it.
+/// It briefly depended on `rung_allows`'s `#[allow(dead_code)]` to stay borrowed at all;
+/// nothing in this module carries one any more.
 pub fn is_slow(f: &Facts) -> bool {
     f.slow_secs >= SLOW_SECS
 }
@@ -134,11 +138,11 @@ impl Default for Rung {
 
 impl Rung {
     /// From the wire. Out of range → Everything, for the reason on `Default`.
-    // Task 4 calls this from server.rs's `apply` arm; until then only the test does, and a
-    // #[cfg(test)] caller does not keep a non-test build's item alive. MEASURED: this allow
-    // also keeps four of the five variants CONSTRUCTED — stripping it alone reports two
-    // warnings. (`Everything` needs no help: `Default` constructs it.)
-    #[allow(dead_code)]
+    ///
+    /// Called by `server::rung_from_wire`, which is what finally made this a real root —
+    /// and with it the four variants it constructs. It carried an `#[allow(dead_code)]`
+    /// until then, because a `#[cfg(test)]` caller does not keep a non-test build's item
+    /// alive.
     pub fn from_wire(n: u64) -> Rung {
         match n {
             0 => Rung::ConfigOnly,
@@ -148,9 +152,8 @@ impl Rung {
             _ => Rung::Everything,
         }
     }
-    /// For the log line, so an Apply says how far it was told to go.
-    // Task 4 puts this in `apply_diff`'s log line. Same test-only situation as `from_wire`.
-    #[allow(dead_code)]
+    /// For the log line, so an Apply says how far it was told to go — `apply_diff` prints
+    /// it beside `kept of candidates`.
     pub fn as_str(&self) -> &'static str {
         match self {
             Rung::ConfigOnly => "config-only",
@@ -185,13 +188,11 @@ impl Rung {
 /// cosmetic (`row_action` never sees the wire lists — the Git-hazard lesson), so the
 /// duplication runs in the safe direction: if the twin drifts, a count is wrong, never an
 /// action.
-// Task 4 calls this in `visual_plan`'s build loop, which is what makes the ladder govern
-// anything at all. MEASURED, after the facts reached the wire: this allow additionally keeps
-// `Rung::level` alive — stripping it alone now reports TWO warnings (`level` and this), where
-// it reported four before. `is_slow` and `SLOW_SECS` no longer hang off it: `steps_json`
-// calls `is_slow` per row, so they stand on their own. It does NOT keep the enum's variants
-// alive; `from_wire` is what constructs those.
-#[allow(dead_code)]
+///
+/// ⚠️ AND `row_action` MUST NOT CALL THIS. A per-row button is an explicit gesture about one
+/// package — the ladder calibrates the BATCH, and nothing else. The whole module is now
+/// `allow`-free: `apply_diff`'s `visual_plan` loop calls this for real, which is what
+/// keeps `Rung::level` alive with it.
 pub fn rung_allows(
     rung: Rung,
     action: crate::decision::Action,
