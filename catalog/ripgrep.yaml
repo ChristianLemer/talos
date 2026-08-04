@@ -5,3 +5,15 @@ winget: BurntSushi.ripgrep.MSVC
 brew: ripgrep
 detect: rg --version
 category: [terminal]
+# Observed on a corporate network (C's colleague, 2026-08-04): the corporate firewall answers
+# 403 on this one, through winget. A SEED for a fresh machine, extended by the shared
+# behaviour file as the fleet meets the same wall.
+#
+# ⚠️ This is a NETWORK fact, not a Windows one: `forbidden::is403` has no platform gate, so
+# a Mac behind the same firewall collects it too. It is scoped to (winget, windows) here
+# only because that is where it was seen.
+#
+# If the firewall ever opens, change this to `false` HERE rather than emptying the shared
+# file: an observation can only ratchet a fact ON, and the catalogue is the one place that
+# can turn it off — with a diff saying who decided.
+"403": true

@@ -949,8 +949,17 @@ slow: true
                 .overrides()
         };
 
-        // C observed these four elevating on Windows via winget.
-        for stem in ["7-zip", "aws-cli", "node", "visual-studio-code"] {
+        // Observed elevating on Windows via winget. The first four are C's, the last two
+        // came from a colleague's real Windows machine on 2026-08-04 — the first field data the
+        // telemetry ever produced, and the reason this list is expected to grow.
+        for stem in [
+            "7-zip",
+            "aws-cli",
+            "node",
+            "visual-studio-code",
+            "starship",
+            "notepad-plus-plus",
+        ] {
             let o = declared(stem);
             assert_eq!(o.uac, Some(true), "{stem} must declare uac: true");
             // ⚠️ A LATENT false red: if any of these four is ever observed hitting a 403 at
@@ -963,15 +972,25 @@ slow: true
         // (Measured: serde_yaml accepts a BARE `403:` here too — it matches the renamed
         // field on the key's text, integer-looking or not. The shipped file quotes it for
         // the reader, not out of necessity.)
-        let o = declared("rclone");
-        assert_eq!(o.forbidden, Some(true), "rclone must declare 403: true");
-        assert_eq!(o.uac, None, "rclone says nothing about elevation");
+        // And the ones a corporate firewall answers 403 on. rclone is C's; jj and ripgrep came
+        // from the colleague's machine on 2026-08-04.
+        //
+        // ⚠️ `403` is a NETWORK fact, not a Windows one — `forbidden::is403` has no platform
+        // gate, so a Mac behind the same firewall collects it too. Do not "fix" these into a
+        // Windows-only list.
+        for stem in ["rclone", "jj", "ripgrep"] {
+            let o = declared(stem);
+            assert_eq!(o.forbidden, Some(true), "{stem} must declare 403: true");
+            assert_eq!(o.uac, None, "{stem} says nothing about elevation");
+        }
 
         // A package with no declaration must stay silent — otherwise the seed is not a
         // seed but a default, and "no opinion" would have collapsed into "false".
-        assert_eq!(declared("jq").uac, None);
-        assert_eq!(declared("jq").forbidden, None);
-        assert_eq!(declared("jq").slow, None);
+        // `bat` rather than `jq`: jq is now a fixture's subject, and a control that shares a
+        // package with a fixture stops being an independent control.
+        assert_eq!(declared("bat").uac, None);
+        assert_eq!(declared("bat").forbidden, None);
+        assert_eq!(declared("bat").slow, None);
     }
 
     // B5: `requires:` from catalog YAML must reach the Step (the front does the
