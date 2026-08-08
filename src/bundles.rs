@@ -376,7 +376,29 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
             .unwrap_or_default();
         return Commands {
             route: Some("claude-plugin".into()),
-            install: Some(format!("{add}claude plugin install {id} --scope user")),
+            // `install` THEN `update`, and the second is what actually does the work on a
+            // machine that already has the plugin.
+            //
+            // ⚠️ MEASURED, not assumed. `claude plugin install` on an already-installed id
+            // answers `✔ Plugin "…" is already installed (scope: user)` and changes nothing —
+            // so changing a package's `marketplace:` to a corrected fork switches the SOURCE
+            // (the new version is even downloaded into the cache) while leaving the OLD plugin
+            // active. Talos would report a green row over a stale plugin.
+            //
+            // The root cause is upstream of this line and is NOT fixed here: `scan_outdated`
+            // only asks the native manager (winget/brew), which knows nothing about Claude
+            // plugins, so `f.outdated` is always false for this route and `action_for` can
+            // never choose `Upgrade`. Every plugin and skill in the catalogue is un-updatable
+            // by Talos for the same reason. Comparing the installed version against the
+            // marketplace's would fix it properly and let the existing machinery do the rest;
+            // that is its own piece of work.
+            //
+            // Until then this chain is deliberately opportunistic: `update` on an
+            // already-current plugin is a no-op, so the cost is one extra command and the
+            // benefit is that a corrected source actually reaches the machine.
+            install: Some(format!(
+                "{add}claude plugin install {id} --scope user && claude plugin update {id}"
+            )),
             uninstall: Some(format!("claude plugin uninstall {id}")),
             upgrade: Some(format!("claude plugin update {id}")),
             downgrade: None,
@@ -484,6 +506,49 @@ mod tests {
             name: name.into(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_claude_plugin_install_also_updates() {
+        // MEASURED: `claude plugin install <id>` on an already-installed plugin answers
+        // "already installed" and changes nothing. So pointing a package at a corrected fork
+        // switches the SOURCE while leaving the OLD plugin active — Talos would show a green
+        // row over a stale plugin. The chained `update` is what actually lands the fix.
+        //
+        // Pinned because nothing else would notice its removal: the route's own tests only
+        // checked `route`, and `scan_outdated` never marks a plugin outdated (it asks the
+        // native manager only), so `action_for` can never reach the `upgrade` command either.
+        let mut p = pkg("jj skills");
+        p.claude_plugin = Some("jj@claude-plugin-jj".into());
+        p.marketplace = Some("ChristianLemer/claude-plugin-jj".into());
+        let c = commands_for(&p, Os::Windows);
+        assert_eq!(c.route.as_deref(), Some("claude-plugin"));
+        let install = c.install.as_deref().expect("an install command");
+        assert!(
+            install.contains("marketplace add \"ChristianLemer/claude-plugin-jj\""),
+            "the fork must be registered first: {install}"
+        );
+        assert!(
+            install.contains("plugin install jj@claude-plugin-jj"),
+            "…then installed: {install}"
+        );
+        assert!(
+            install.contains("&& claude plugin update jj@claude-plugin-jj"),
+            "…and UPDATED, or an already-installed plugin never moves: {install}"
+        );
+        // A package with no marketplace still installs and updates — the `add` is what is
+        // optional, not the update.
+        let mut q = pkg("some plugin");
+        q.claude_plugin = Some("x@y".into());
+        let d = commands_for(&q, Os::Windows).install.unwrap();
+        assert!(
+            !d.contains("marketplace add"),
+            "no marketplace declared: {d}"
+        );
+        assert!(
+            d.contains("&& claude plugin update x@y"),
+            "still updates: {d}"
+        );
     }
 
     #[test]

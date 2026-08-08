@@ -2,7 +2,20 @@
 name: jj skills
 description: AI manual for Jujutsu — pairs with the jj binary
 claude-plugin: jj@claude-plugin-jj
-marketplace: kawaz/claude-plugin-jj
+# FORK, not upstream. kawaz/claude-plugin-jj's jj-guard.sh reads its payload with
+# `input=$(</dev/stdin)`, which fails when stdin is a Windows named pipe — how the harness
+# spawns hooks. `set -euo pipefail` then exits before the payload is read, so the hook
+# returns non-zero and EVERY git command is allowed through: ~330 ms per Bash call, 32
+# failures in one session, 0 commands blocked. The fork changes one word (`$(cat)`) and
+# bumps to 0.3.4 so the version-keyed plugin cache can tell the two apart.
+#
+# ⚠️ The marketplace NAME is unchanged, so adding this fork OVERWRITES the upstream entry
+# (measured: last add wins, silently) and no `marketplace remove` is needed. The overwrite
+# goes both ways though — if upstream is ever re-added it takes over without a word.
+#
+# Temporary by intent: it dies the day the fix lands upstream. The repo is dormant (issues
+# unanswered since March), so expect to carry it a while.
+marketplace: ChristianLemer/claude-plugin-jj
 detect: jj
 category: [automation]
 requires:
