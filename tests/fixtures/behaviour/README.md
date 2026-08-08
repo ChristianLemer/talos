@@ -30,8 +30,8 @@ rewrites them.
 | file | the rung it exercises | why this package |
 |---|---|---|
 | `aws-cli.yaml` | 🏗️ Everything — `slow_secs: 900`, well above `ladder::SLOW_SECS` (60) | slow DOMINATES in `rung_allows`, so this row is admitted nowhere below the top. `catalog/aws-cli.yaml` declares no `slow` (nothing in `catalog/` does), so a slow AWS CLI can only have come from here |
-| `nushell.yaml` | 👀 Stay nearby — `uac: true` | **deliberately NOT one of the four packages that declare `uac: true` in `catalog/`** (7-Zip, AWS CLI, Node.js, VS Code) — a seeded row looks identical whether this file was read or not. And **deliberately a row Talos manages**: Git reads `external` on the dev Mac (Xcode CLT) and both config-atoms derive out of scope, and an out-of-scope row yields no action at any rung |
-| `uv.yaml` | 👀 Stay nearby — `"403": true` | **not `rclone`**, which already declares `"403": true` in `catalog/` (the real a corporate network observation, seeded). `uv` declares nothing, and a real a corporate network `uv` install did meet a real 403 |
+| `helix.yaml` | 👀 Stay nearby — `uac: true` | **deliberately NOT one of the four packages that declare `uac: true` in `catalog/`** (7-Zip, AWS CLI, Node.js, VS Code) — a seeded row looks identical whether this file was read or not. And **deliberately a row Talos manages**: Git reads `external` on the dev Mac (Xcode CLT) and both config-atoms derive out of scope, and an out-of-scope row yields no action at any rung |
+| `fd.yaml` | 👀 Stay nearby — `"403": true` | the subject must declare nothing of its own, and it MOVES as facts get promoted: rclone → uv → fd (uv was promoted 2026-08-08 when the fleet saw a real 403) |
 | `jq.yaml` | ☕ Unattended — measured and quick (`slow_secs: 3`) | the CONTROL. Without a row the filter lets THROUGH on its facts, the other three prove only that rows can be excluded |
 
 **File stems are catalogue ids.** `behaviour_io::behaviour_path` joins `format!("{id}.yaml")`,

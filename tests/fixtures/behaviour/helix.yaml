@@ -1,3 +1,8 @@
+# ⚠️ THE SUBJECT MUST DECLARE NOTHING, and it keeps moving as facts get promoted: a package
+# whose `catalog/` entry already says `uac: true` makes this fixture indistinguishable from the
+# declaration. `nushell` was the subject until the fleet observed a real elevation on it and it
+# was promoted (2026-08-08). `helix` is the current one — nothing has flagged it, and it is
+# present on both routes so the row can be an upgrade.
 # THE ELEVATION ONE, and the reason this folder exists at all. `uac: true` puts an UPGRADE
 # of this row at 👀 Stay nearby: excluded at ☕ Unattended, admitted at 👀.
 #

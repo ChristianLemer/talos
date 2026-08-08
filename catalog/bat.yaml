@@ -5,3 +5,5 @@ winget: sharkdp.bat
 brew: bat
 detect: bat --version
 category: [terminal]
+# 403 on a corporate network via winget. Promoted from behaviour/ (fleet, 2026-08-06).
+"403": true

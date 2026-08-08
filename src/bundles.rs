@@ -953,12 +953,18 @@ slow: true
         // came from a colleague's real Windows machine on 2026-08-04 — the first field data the
         // telemetry ever produced, and the reason this list is expected to grow.
         for stem in [
+            // C's, from her own field use
             "7-zip",
             "aws-cli",
             "node",
             "visual-studio-code",
+            // reported by a colleague, 2026-08-04
             "starship",
             "notepad-plus-plus",
+            // promoted from behaviour/ — the fleet found these before anyone declared them
+            "git",
+            "greenshot",
+            "nushell",
         ] {
             let o = declared(stem);
             assert_eq!(o.uac, Some(true), "{stem} must declare uac: true");
@@ -978,7 +984,7 @@ slow: true
         // ⚠️ `403` is a NETWORK fact, not a Windows one — `forbidden::is403` has no platform
         // gate, so a Mac behind the same firewall collects it too. Do not "fix" these into a
         // Windows-only list.
-        for stem in ["rclone", "jj", "ripgrep"] {
+        for stem in ["rclone", "jj", "ripgrep", "bat", "uv"] {
             let o = declared(stem);
             assert_eq!(o.forbidden, Some(true), "{stem} must declare 403: true");
             assert_eq!(o.uac, None, "{stem} says nothing about elevation");
@@ -986,11 +992,14 @@ slow: true
 
         // A package with no declaration must stay silent — otherwise the seed is not a
         // seed but a default, and "no opinion" would have collapsed into "false".
-        // `bat` rather than `jq`: jq is now a fixture's subject, and a control that shares a
-        // package with a fixture stops being an independent control.
-        assert_eq!(declared("bat").uac, None);
-        assert_eq!(declared("bat").forbidden, None);
-        assert_eq!(declared("bat").slow, None);
+        // The control must declare NOTHING, and it keeps moving as facts get promoted: jq
+        // became a fixture's subject, then bat gained a 403 from the fleet. `marktext` is the
+        // current choice — a package no report and no machine has flagged. When it too gets
+        // promoted, move this rather than deleting it: without a control, "no opinion" could
+        // silently collapse into "false" and nothing would notice.
+        assert_eq!(declared("marktext").uac, None);
+        assert_eq!(declared("marktext").forbidden, None);
+        assert_eq!(declared("marktext").slow, None);
     }
 
     // B5: `requires:` from catalog YAML must reach the Step (the front does the

@@ -8,11 +8,12 @@
 # once during this work and was caught only because the UI's rendered reason disagreed with
 # what had been fabricated.
 #
-# NOT `rclone`, which the first draft of this fixture set used: `catalog/rclone.yaml` already
-# DECLARES `"403": true` (the real a corporate network observation, seeded for a fresh machine), so a rclone
-# fixture is indistinguishable from the declaration and proves nothing about this file being
-# read. `uv` declares nothing, and a real a corporate network `uv` install did meet a real 403 — the
-# observation the 403 recovery path was field-validated on.
+# ⚠️ THE SUBJECT MUST DECLARE NOTHING, and it keeps moving as facts get promoted. A package
+# whose `catalog/` entry already says `"403": true` makes this fixture indistinguishable from
+# the declaration, so it would prove nothing about this FILE being read. rclone was rejected
+# for that at the first draft; `uv` replaced it, then `uv` itself was promoted once the fleet
+# observed a real 403 on it (2026-08-08). `fd` is the current subject — nothing has flagged
+# it. When it too gets promoted, move the fixture rather than dropping it.
 brew/darwin:
   "403": true
 winget/windows:

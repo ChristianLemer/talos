@@ -402,10 +402,10 @@ mod tests {
         // all (the watcher is `#[cfg(target_os = "windows")]`); `403` merely saves a trip to
         // the office. Same rung, very different standing — see the fixtures' README.
         assert!(
-            all["uv"]["brew/darwin"].forbidden,
+            all["fd"]["brew/darwin"].forbidden,
             "the 403 fixture — and if this fails, suspect the KEY before the value"
         );
-        assert!(all["nushell"]["brew/darwin"].uac, "the uac fixture");
+        assert!(all["helix"]["brew/darwin"].uac, "the uac fixture");
         // Rung 2 ☕: the control. Without it the set would only ever prove EXCLUSION.
         let fast = &all["jq"]["brew/darwin"];
         assert!(
@@ -443,13 +443,13 @@ mod tests {
         // indistinguishable from the declaration and proves nothing about this FOLDER being
         // read. Asserted rather than commented, because the catalogue is free to change:
         // `catalog/rclone.yaml` already declares `"403": true`, which is exactly why the 403
-        // fixture is `uv` and not `rclone`.
+        // fixture subject declares nothing of its own.
         assert_eq!(
-            catalog["uv"].pkg.forbidden, None,
+            catalog["fd"].pkg.forbidden, None,
             "the 403 fixture's package must declare no 403 of its own"
         );
         assert_eq!(
-            catalog["nushell"].pkg.uac, None,
+            catalog["helix"].pkg.uac, None,
             "the uac fixture's package must declare no uac of its own"
         );
         assert_eq!(

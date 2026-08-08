@@ -6,3 +6,5 @@ brew: nushell
 detect: nu --version
 version: "0.113.1"
 category: [foundation]
+# Asks for an authorisation on Windows via winget. Promoted from behaviour/ (fleet, 2026-08-06).
+uac: true

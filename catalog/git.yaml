@@ -5,3 +5,6 @@ winget: Git.Git
 brew: git
 detect: git --version
 category: [vcs]
+# Asks for an authorisation on Windows via winget, and takes ~9 min — the slowest
+# thing in the catalogue. Promoted from behaviour/ (fleet, 2026-08-06).
+uac: true

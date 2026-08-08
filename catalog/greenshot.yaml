@@ -3,3 +3,5 @@ name: Greenshot
 description: Screenshot tool for Windows.
 winget: Greenshot.Greenshot
 category: [legacy]
+# Asks for an authorisation on Windows via winget. Promoted from behaviour/ (fleet, 2026-08-06).
+uac: true
