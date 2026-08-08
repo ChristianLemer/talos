@@ -145,4 +145,10 @@ For *why* Talos exists — the ramp, the deterministic vs the open sea, the refu
 
 ---
 
+## License
+
+MIT — see [LICENSE](LICENSE). Use it, fork it, ship it.
+
+---
+
 *The bronze guardian, in a loop, around the perimeter.*

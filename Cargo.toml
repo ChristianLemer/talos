@@ -2,6 +2,7 @@
 name = "talos"
 version = "0.0.1"
 edition = "2021"
+license = "MIT"
 # Two [[bin]] targets (Talos + pty-smoke) → Tauri can't tell which to bundle since
 # the bin no longer matches the crate name. default-run settles it: Talos.
 default-run = "Talos"
