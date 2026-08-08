@@ -3,33 +3,7 @@ name: Notepad++
 description: Source code editor and Notepad replacement for Windows.
 winget: Notepad++.Notepad++
 category: [legacy]
-# Observed on Windows via winget (C's colleague, 2026-08-04): asks for an authorisation, so
-# an unattended Apply must not schedule it. A SEED — without this line a fresh machine's
-# first Apply would promise "nothing will interrupt you" and then stop on a prompt.
-#
-# ⚠️ Scoped to (winget, windows) by the observation, not by this file. The same package
-# through brew on macOS does not elevate, and macOS cannot even observe this: the watcher
-# is Windows-only.
-#
-# ⚠️ THE COLLECTED TELEMETRY DISAGREES, and this declaration wins ON PURPOSE. The shared
-# file records `slow_secs: 103` for this package with NO `uac` — so the watcher saw nothing
-# while a human saw a prompt. That is a FALSE NEGATIVE, not a refutation, and the code says
-# why it is possible:
-#
-#   · the watcher samples every 1200 ms (`server.rs`), so a prompt answered quickly between
-#     two ticks is never seen;
-#   · it looks for a window inside TALOS'S OWN process tree, and Windows' UAC prompt belongs
-#     to consent.exe, outside it — the detector was built for installer windows stranded
-#     behind the panel, not for UAC specifically;
-#   · a non-interactive `winget` may not prompt where a manual install of the same package
-#     does, in which case both observations are true of different gestures.
-#
-# So a human observation is BETTER evidence here than the detector's silence, and the
-# catalogue overriding the telemetry is exactly the escape hatch this design has for it.
-# The asymmetry decides: one `uac` too many costs a rung of caution, a missing one breaks
-# the promise that nothing will interrupt you.
-#
-# ⚠️ And it corrects a claim worth not repeating: 13 packages carry a duration with no
-# `uac`, which proves the watcher does not flag EVERYTHING — it does NOT prove it flags
-# everything it should. False negatives are live, and this row may be one.
+# Asks for an authorisation on Windows via winget (colleague, 2026-08-04).
+# The watcher missed it — it samples every 1.2 s and does not see consent.exe,
+# which is outside Talos's process tree. A report beats its silence.
 uac: true

@@ -5,16 +5,5 @@ winget: Starship.Starship
 brew: starship
 detect: starship --version
 category: [terminal]
-# Observed on Windows via winget (C's colleague, 2026-08-04): asks for an authorisation, so
-# an unattended Apply must not schedule it. A SEED — without this line a fresh machine's
-# first Apply would promise "nothing will interrupt you" and then stop on a prompt.
-#
-# ⚠️ Scoped to (winget, windows) by the observation, not by this file. The same package
-# through brew on macOS does not elevate, and macOS cannot even observe this: the watcher
-# is Windows-only.
-#
-# ⚠️ AND THE SIGNAL IS COARSE: watch.rs detects "a foreign window appeared", which an
-# installer's own window trips exactly as an elevation prompt does. Tolerated because a
-# false positive costs one rung of caution, never a broken promise — but it is why the
-# negative check (a quiet package must NOT gain this) is the one that matters on Windows.
+# Asks for an authorisation on Windows via winget (colleague, 2026-08-04).
 uac: true
