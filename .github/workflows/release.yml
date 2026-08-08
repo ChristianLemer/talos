@@ -7,7 +7,7 @@
 # NO runtime smoke-test: the binary is now a NATIVE GUI app (Tauri window), not a
 # headless server — it won't boot reliably on a display-less runner. The real
 # runtime check is a manual smoke-test on a real Windows machine (see the porting
-# garde-fous in docs/superpowers/TASK-tauri-migration.md). CI proves it COMPILES
+# garde-fous, kept with the project's private notes). CI proves it COMPILES
 # and produces installable bundles; it does not prove it runs.
 #
 # The runner produces UNSIGNED bundles (signing/notarisation is a separate step,

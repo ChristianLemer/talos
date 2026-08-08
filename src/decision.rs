@@ -37,7 +37,7 @@ pub fn compare_versions(a: &str, b: &str) -> i32 {
 // Rust twin (`posture_default_in`/`is_locked`/`toggle_in`/`desired_state`)
 // encoded the SUPERSEDED posture-default model (mandatory locked-in, opt-in
 // default-out) and its tests blessed it → false-green. Removed 2026-07-21 (see
-// docs/superpowers/2026-07-21-windows-review-model-ux.md §2). If the server ever
+// the Windows review model note, §2). If the server ever
 // takes over desire resolution ("path B"), re-derive it from the CURRENT model
 // (decision.js): only `forbidden` locks; nothing is wanted until pulled.
 

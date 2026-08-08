@@ -2,7 +2,7 @@
 # the Rust logic passes, the pure JS model passes, and clippy is clean. It does
 # NOT build the GUI bundle or prove the app runs (that's release.yml, on a tag);
 # the real runtime check stays a manual smoke-test on a real machine (see the
-# porting garde-fous in docs/superpowers/TASK-tauri-migration.md).
+# porting garde-fous, kept with the project's private notes).
 #
 # WHY ubuntu for the Rust jobs: the core logic is OS-agnostic and Linux runners
 # are the fastest/cheapest. But talos pulls tauri v2, whose build script links

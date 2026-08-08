@@ -80,7 +80,7 @@ appeared" really means "UAC asked". An installer's own window trips the same det
 there is no macOS implementation to compare against. A fixture proves the ladder ROUTES a
 `uac` row to rung 3. That is a different question from whether a real installer would have
 set the flag correctly, and only Windows can settle the second one: section 10 of
-`docs/superpowers/2026-07-31-windows-smoke-test-beta13.md` — the NEGATIVE check, that a quiet
+The beta.13 Windows smoke-test note — the NEGATIVE check, that a quiet
 package must NOT gain `uac: true` — remains the decider.
 
 ## ⚠️ Reproducing a five-rung spread
