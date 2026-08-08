@@ -11,8 +11,25 @@ category: [legacy]
 # through brew on macOS does not elevate, and macOS cannot even observe this: the watcher
 # is Windows-only.
 #
-# ⚠️ AND THE SIGNAL IS COARSE: watch.rs detects "a foreign window appeared", which an
-# installer's own window trips exactly as an elevation prompt does. Tolerated because a
-# false positive costs one rung of caution, never a broken promise — but it is why the
-# negative check (a quiet package must NOT gain this) is the one that matters on Windows.
+# ⚠️ THE COLLECTED TELEMETRY DISAGREES, and this declaration wins ON PURPOSE. The shared
+# file records `slow_secs: 103` for this package with NO `uac` — so the watcher saw nothing
+# while a human saw a prompt. That is a FALSE NEGATIVE, not a refutation, and the code says
+# why it is possible:
+#
+#   · the watcher samples every 1200 ms (`server.rs`), so a prompt answered quickly between
+#     two ticks is never seen;
+#   · it looks for a window inside TALOS'S OWN process tree, and Windows' UAC prompt belongs
+#     to consent.exe, outside it — the detector was built for installer windows stranded
+#     behind the panel, not for UAC specifically;
+#   · a non-interactive `winget` may not prompt where a manual install of the same package
+#     does, in which case both observations are true of different gestures.
+#
+# So a human observation is BETTER evidence here than the detector's silence, and the
+# catalogue overriding the telemetry is exactly the escape hatch this design has for it.
+# The asymmetry decides: one `uac` too many costs a rung of caution, a missing one breaks
+# the promise that nothing will interrupt you.
+#
+# ⚠️ And it corrects a claim worth not repeating: 13 packages carry a duration with no
+# `uac`, which proves the watcher does not flag EVERYTHING — it does NOT prove it flags
+# everything it should. False negatives are live, and this row may be one.
 uac: true
