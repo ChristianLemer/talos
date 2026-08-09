@@ -229,6 +229,31 @@ fn system_from_bulk(step: &Step, os: Os, bulk: Option<&BulkPresence>) -> Option<
     })
 }
 
+/// Run the machine-wide presence listing(s) and parse them into one table.
+///
+/// `None` when there is no native manager, the command fails, or the output is not
+/// recognised. Every one of those means "probe per package", never "nothing is
+/// installed" — reading an unreadable listing as an empty machine would make Apply
+/// offer to install software that is already there.
+///
+/// Serial on purpose, like everything in the scan: this removes processes, it adds
+/// no concurrency (`talos-scan-serial-and-narrated`).
+pub fn fetch_bulk_presence(os: Os) -> Option<BulkPresence> {
+    let mgr = native_manager(os)?;
+    let mut text = String::new();
+    for cmd in std::iter::once(mgr.presence_scan_command()).chain(mgr.presence_scan_command_cask())
+    {
+        let probe = shell_probe(os, &cmd);
+        let d = run_probe_detailed(&probe);
+        // ⚠️ Do NOT bail on a non-zero exit. brew's cask listing can complain while
+        // still printing usable lines, and `parse_presence` is the authority on
+        // whether the text was understood — an exit code is not.
+        text.push_str(&d.output);
+        text.push('\n');
+    }
+    mgr.parse_presence(&text).ok()
+}
+
 /// Detailed presence. Order: check → binary+manager → content-list → exit-code.
 pub fn detect_present_detailed(step: &Step, os: Os) -> Presence {
     detect_present_detailed_with(step, os, None)

@@ -16,11 +16,17 @@ use crate::consent::{
     append_history, clear_history, read_consent, read_history, write_consent, ConsentStore,
     HistEntry,
 };
-use crate::detect::detect_present_detailed;
+use crate::detect::{detect_present_detailed, detect_present_detailed_with};
 use crate::outdated::{outdated_for, scan_outdated};
 use crate::platform::{current_os, local_data_dir, Os};
 use crate::profiles::{load_profiles, Profiles};
 use crate::selection::{read_selection, write_selection, Selection};
+
+/// Below this many rows to probe, the machine-wide presence listing costs more than
+/// the per-package probes it replaces (~3.7 s for one `winget list` vs ~1.3 s per
+/// package, measured on Windows 2026-08-09). The opening scan is always above it;
+/// the Apply re-scan, scoped to the diff, is usually below.
+const BULK_PRESENCE_WORTH_IT: usize = 3;
 
 /// The value for the `appmgmt` key sent to the front (wire string).
 fn appmgmt_wire(status: crate::platform::AppMgmtStatus) -> &'static str {
@@ -891,12 +897,34 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
             std::collections::HashMap::new()
         }
     };
+    // One listing for the whole machine, fetched beside the outdated scan and for the
+    // same reason: fewer processes, not more threads. An unrecognised listing yields
+    // None → every package probes as before, so the worst case is today's behaviour
+    // and never a screen of false absents.
+    let bulk_started = std::time::Instant::now();
+    let bulk = tokio::task::spawn_blocking(move || crate::detect::fetch_bulk_presence(os))
+        .await
+        .unwrap_or(None);
+    match &bulk {
+        Some(t) => println!(
+            "[scan] presence (batched) {} installed in {:?}",
+            t.len(),
+            bulk_started.elapsed()
+        ),
+        None => eprintln!("[scan] presence listing UNAVAILABLE — probing per package"),
+    }
+    // Shared read-only across the per-package tasks: cloning the table per package
+    // would undo exactly the saving this is here for.
+    let bulk = std::sync::Arc::new(bulk);
     for (i, step) in steps.iter().enumerate() {
         let step_owned = step.clone();
+        let bulk_c = std::sync::Arc::clone(&bulk);
         let probe_started = std::time::Instant::now();
-        let p = tokio::task::spawn_blocking(move || detect_present_detailed(&step_owned, os))
-            .await
-            .unwrap_or_default();
+        let p = tokio::task::spawn_blocking(move || {
+            detect_present_detailed_with(&step_owned, os, bulk_c.as_ref().as_ref())
+        })
+        .await
+        .unwrap_or_default();
         // Timing per package: this is the evidence for "is serial bearable?".
         println!(
             "[scan] {}/{} {} in {:?}",
@@ -1259,6 +1287,20 @@ async fn apply_diff(
     // scan is ever still too slow, the fix is BATCH (one list command), never threads.
     let mut probed: std::collections::HashMap<usize, crate::detect::Presence> =
         std::collections::HashMap::with_capacity(to_probe.len());
+    // ⭐ The batched listing pays only above a few rows, and this scan is SCOPED to
+    // the diff — measured at 0-2 packages on a converged machine
+    // (`talos-apply-rescan-scoped-to-diff`). One `winget list` costs ~3.7 s where a
+    // per-package probe costs ~1.3 s, so break-even is around three: below it the
+    // listing is a LOSS, and the fast path exists to be fast.
+    let bulk = if to_probe.len() >= BULK_PRESENCE_WORTH_IT {
+        std::sync::Arc::new(
+            tokio::task::spawn_blocking(move || crate::detect::fetch_bulk_presence(os))
+                .await
+                .unwrap_or(None),
+        )
+    } else {
+        std::sync::Arc::new(None)
+    };
     for (nth, &i) in to_probe.iter().enumerate() {
         // Narrate BEFORE probing: the veil says which package is being checked while
         // it is being checked (`nth of total`) — the same honesty the splash got, now
@@ -1274,9 +1316,12 @@ async fn apply_diff(
             ))
             .await;
         let step_owned = steps[i].clone();
-        let p = tokio::task::spawn_blocking(move || detect_present_detailed(&step_owned, os))
-            .await
-            .unwrap_or_default();
+        let bulk_c = std::sync::Arc::clone(&bulk);
+        let p = tokio::task::spawn_blocking(move || {
+            detect_present_detailed_with(&step_owned, os, bulk_c.as_ref().as_ref())
+        })
+        .await
+        .unwrap_or_default();
         remember_presence(state, i, p.clone()).await;
         probed.insert(i, p);
     }
@@ -2034,6 +2079,17 @@ async fn do_step(
             .await;
     }
 
+    // ⭐ This site keeps probing PER PACKAGE, and not only because one package does
+    // not pay for a whole-machine listing: a listing fetched before the action would
+    // be STALE for the very row that just changed, which is the one fact this probe
+    // exists to establish. Detect, don't remember — and don't consult a table older
+    // than the install.
+    //
+    // ⚠️ Kept ABOVE the anchor comment below on purpose: the guard
+    // `every_presence_observation_is_recorded` reads a 1600-char window starting at
+    // that anchor, and this block placed inside it pushed `remember_presence` out by
+    // 8 characters. The guard was right; the comment moved.
+    //
     // Re-detect presence AFTER any successful action — and RE-EMIT a `state` to the
     // front, so the fresh version shows RIGHT AWAY (before, it was only computed for
     // the journal → the front kept "absent/no version" until a manual refresh). The
