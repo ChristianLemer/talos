@@ -85,6 +85,36 @@ impl SystemManager {
             _ => "brew outdated --greedy-auto-updates --json=v2".into(),
         }
     }
+    /// ONE listing for the whole machine, the presence counterpart of
+    /// `outdated_scan_command`. brew needs a second call for casks — see
+    /// `presence_scan_command_cask`.
+    pub fn presence_scan_command(&self) -> String {
+        match self.route {
+            "winget" => "winget list --accept-source-agreements".into(),
+            _ => "brew list --versions".into(),
+        }
+    }
+    /// brew reports formulae and casks separately, so a full picture needs both.
+    /// `None` for a manager that lists everything at once.
+    pub fn presence_scan_command_cask(&self) -> Option<String> {
+        match self.route {
+            "winget" => None,
+            _ => Some("brew list --cask --versions".into()),
+        }
+    }
+    /// Installed id (lowercased) → its version, for the WHOLE machine.
+    ///
+    /// `Err` when the output was not recognised. That distinction is the point: an
+    /// empty map read as "nothing installed" would make Apply offer to install
+    /// software that is already there — the mirror of the false-green defect fixed
+    /// on the upgrade side.
+    #[allow(clippy::result_unit_err)] // recognised-or-not; there is no second cause to name
+    pub fn parse_presence(&self, output: &str) -> Result<HashMap<String, String>, ()> {
+        match self.route {
+            "winget" => parse_winget_list(output),
+            _ => parse_brew_list(output),
+        }
+    }
     /// Extracts the version from presence_command's output.
     pub fn parse_version(&self, id: &str, output: &str) -> String {
         match self.route {
@@ -245,6 +275,90 @@ pub fn parse_winget_upgrade(raw: &str) -> HashMap<String, Outdated> {
     map
 }
 
+// `winget list`: the same FIXED-WIDTH table as `winget upgrade`, minus the meaning
+// of the rows — EVERY row here is an installed package, upgradable or not. Sliced
+// by header offsets, never by spaces (names and versions contain them).
+fn parse_winget_list(raw: &str) -> Result<HashMap<String, String>, ()> {
+    let cleaned = strip_ansi(raw);
+    let lines: Vec<String> = cleaned
+        .lines()
+        .map(|l| l.trim_end_matches('\r').to_string())
+        .collect();
+    // "Available" is optional here: `winget list` prints the column, but a machine
+    // with nothing to upgrade leaves every cell empty, so recognition keys on
+    // Id + Version — the two columns that always carry meaning.
+    let Some(h) = lines
+        .iter()
+        .position(|l| l.contains("Id") && l.contains("Version"))
+    else {
+        return Err(());
+    };
+    let header = &lines[h];
+    let (Some(id_pos), Some(ver_pos)) = (header.find("Id"), header.find("Version")) else {
+        return Err(());
+    };
+    // The column after Version bounds the version cell: Available if present, else
+    // Source, else the end of the line.
+    let ver_end = header
+        .find("Available")
+        .or_else(|| header.find("Source"))
+        .filter(|&e| e > ver_pos);
+
+    let mut map = HashMap::new();
+    for line in &lines[h + 1..] {
+        // ⚠️ `continue`, not `break` as the upgrade parser does: there every row
+        // after a blank is noise, here a short MSIX row must not end the table.
+        if line.trim().is_empty() {
+            continue;
+        }
+        // separator line (dashes/spaces only)
+        if line.trim().chars().all(|c| c == '-' || c.is_whitespace()) {
+            continue;
+        }
+        if line.len() < ver_pos {
+            continue;
+        }
+        let slice = |a: usize, b: Option<usize>| -> String {
+            let end = b.filter(|&e| e > a).unwrap_or(line.len()).min(line.len());
+            line.get(a..end).unwrap_or("").trim().to_string()
+        };
+        let id = slice(id_pos, Some(ver_pos));
+        // ⚠️ winget marks a held/pinned entry with a leading "> ". The marker is not
+        // part of the version and must not reach the UI.
+        let version = slice(ver_pos, ver_end)
+            .trim_start_matches('>')
+            .trim()
+            .to_string();
+        if id.is_empty() {
+            continue;
+        }
+        map.insert(id.to_lowercase(), version);
+    }
+    Ok(map)
+}
+
+// `brew list --versions`: one package per line, "name v1 v2…". The first version is
+// the current one. Recognition is structural — at least one line shaped that way —
+// because brew prints no header to key on.
+fn parse_brew_list(raw: &str) -> Result<HashMap<String, String>, ()> {
+    let mut map = HashMap::new();
+    for line in raw.lines() {
+        let mut cols = line.split_whitespace();
+        let (Some(name), Some(v)) = (cols.next(), cols.next()) else {
+            continue;
+        };
+        if !v.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+            continue; // not a "name version" line (a warning, a prompt…)
+        }
+        map.insert(name.to_lowercase(), v.to_string());
+    }
+    if map.is_empty() {
+        Err(()) // nothing recognised: cannot claim the machine is empty
+    } else {
+        Ok(map)
+    }
+}
+
 // `brew outdated --json=v2`: formulae + casks.
 fn parse_brew_outdated(output: &str) -> HashMap<String, Outdated> {
     let mut map = HashMap::new();
@@ -285,6 +399,85 @@ fn parse_brew_outdated(output: &str) -> HashMap<String, Outdated> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn presence_scan_reads_the_captured_windows_listing() {
+        // The SAME capture the upgrade parser is tested against: a real machine's
+        // output, not a hand-aligned fixture. It carries the two shapes no synthetic
+        // one had — a `> `-prefixed version and an MSIX id with a backslash.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/managers/winget-list-real.txt");
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let m = WINGET
+            .parse_presence(&raw)
+            .expect("the header is recognised");
+
+        // Every id in the table is a PRESENT package, upgradable or not — that is the
+        // difference from parse_winget_upgrade, which keeps only upgradable rows.
+        assert_eq!(m.get("git.git").map(String::as_str), Some("2.51.0"));
+        assert_eq!(m.get("openjs.nodejs").map(String::as_str), Some("20.1.0"));
+        assert_eq!(
+            m.get("microsoft.visualstudiocode").map(String::as_str),
+            Some("1.130.0"),
+            "a current package must still be PRESENT"
+        );
+        // ⚠️ The `> ` prefix marks a held entry. The version must be usable, not
+        // carry the marker into the UI.
+        assert_eq!(
+            m.get("agilebits.1password").map(String::as_str),
+            Some("8.12.30.21"),
+            "the `> ` prefix must be stripped"
+        );
+        // An MSIX id has no Source column; it must still be found, not crash.
+        assert!(
+            m.keys().any(|k| k.contains("aim-tams")),
+            "an MSIX row is still an installed package: {:?}",
+            m.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn presence_scan_reads_brew_listings() {
+        // Two listings merge into one map: `brew list --versions` for formulae and
+        // the `--cask` call, because brew reports them separately.
+        let formulae = "git 2.51.0\nnode 26.5.1 26.4.0\njq 1.8.2\n";
+        let casks = "visual-studio-code 1.130.0\n";
+        let m = BREW
+            .parse_presence(&format!("{formulae}{casks}"))
+            .expect("plain lines are recognised");
+        assert_eq!(m.get("git").map(String::as_str), Some("2.51.0"));
+        assert_eq!(m.get("jq").map(String::as_str), Some("1.8.2"));
+        assert_eq!(
+            m.get("visual-studio-code").map(String::as_str),
+            Some("1.130.0")
+        );
+        // Several versions installed → the FIRST is what brew reports as current.
+        assert_eq!(m.get("node").map(String::as_str), Some("26.5.1"));
+    }
+
+    #[test]
+    fn an_unreadable_listing_is_an_error_not_an_empty_machine() {
+        // ⭐ The trap. An empty map from a failed command is indistinguishable from a
+        // machine with nothing installed — and reading it as "nothing installed"
+        // would make Apply offer to install everything that is already there.
+        assert!(WINGET
+            .parse_presence("Failed in attempting to update the source: winget")
+            .is_err());
+        assert!(WINGET.parse_presence("").is_err());
+        assert!(BREW
+            .parse_presence("Error: Another active Homebrew process")
+            .is_err());
+        // A recognised-but-empty listing is a REAL answer and must be Ok.
+        assert_eq!(
+            WINGET
+                .parse_presence("Name  Id  Version  Available  Source\n----\n")
+                .map(|m| m.len()),
+            Ok(0)
+        );
+        // ⚠️ brew's empty output is genuinely ambiguous — no header to recognise —
+        // so unlike winget it CANNOT report a recognised-but-empty machine.
+        assert!(BREW.parse_presence("").is_err());
+    }
 
     #[test]
     fn native_manager_by_os() {
