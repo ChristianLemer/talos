@@ -306,6 +306,85 @@ export def reachability []: nothing -> table {
 
 # The whole picture. Prints each section, and with --save writes a timestamped
 # report to attach to an issue.
+# Capture, VERBATIM, what this machine prints — no parsing, no verdicts. The
+# bytes are the evidence: a fixture like tests/fixtures/managers/ is made of
+# exactly this, and interpreting the output here would throw the finding away.
+#
+# Runs from a checkout on either platform: the commands are the ones Talos
+# itself runs, and absence of a manager is recorded rather than fatal.
+export def capture [
+    --out: path        # folder to write into (default: talos-capture-<stamp> here)
+    --package: string  # the id whose row was wrong — adds its per-package probes
+    --stamp: string    # timestamp for the default folder name
+]: nothing -> path {
+    let ts = (if ($stamp | is-not-empty) { $stamp } else { (date now | format date "%Y%m%d-%H%M%S") })
+    let dir = (if ($out | is-not-empty) { $out } else { $"talos-capture-($ts)" })
+    mkdir $dir
+
+    # One row per command: what was asked, how long it took, where it landed.
+    # `complete` keeps stdout, stderr AND the exit code — a non-zero exit is
+    # itself evidence, so nothing is discarded.
+    let cmds = ([
+        { name: "winget-list",     exe: "winget", args: [list --accept-source-agreements] }
+        { name: "winget-upgrade",  exe: "winget", args: [upgrade --accept-source-agreements --source winget] }
+        { name: "brew-list",       exe: "brew",   args: [list --versions] }
+        { name: "brew-list-cask",  exe: "brew",   args: [list --cask --versions] }
+        { name: "brew-outdated",   exe: "brew",   args: [outdated --greedy-auto-updates --json=v2] }
+    ] | append (if ($package | is-not-empty) { [
+        { name: "probe-winget-list",   exe: "winget", args: [list --id $package --exact --source winget --accept-source-agreements] }
+        { name: "probe-brew-versions", exe: "brew",   args: [list --versions $package] }
+        { name: "probe-brew-cask",     exe: "brew",   args: [list --cask --versions $package] }
+    ] } else { [] }))
+
+    let rows = ($cmds | each {|c|
+        if (which $c.exe | is-empty) {
+            { command: $"($c.exe) ($c.args | str join ' ')", status: $"skipped: ($c.exe) not on PATH", elapsed: null, lines: 0 }
+        } else {
+            let started = (date now)
+            let r = (try { ^$c.exe ...$c.args | complete } catch { { stdout: "", stderr: $"failed to run", exit_code: -1 } })
+            let elapsed = ((date now) - $started)
+            let body = $"# ($c.exe) ($c.args | str join ' ')\n# captured (date now | format date '%+'), exit ($r.exit_code?), in ($elapsed)\n\n($r.stdout?)($r.stderr?)"
+            $body | save --force ([$dir $"($c.name).txt"] | path join)
+            { command: $"($c.exe) ($c.args | str join ' ')", status: $"exit ($r.exit_code?)", elapsed: $elapsed, lines: ($r.stdout? | default "" | lines | length) }
+        }
+    })
+
+    # The files Talos READS, copied as-is: presence for a plugin comes from these,
+    # not from a command.
+    let claude = ([$nu.home-dir ".claude"] | path join)
+    for pair in [
+        [([$claude "plugins" "installed_plugins.json"] | path join), "installed_plugins.json"]
+        [([$claude "settings.json"] | path join), "claude-settings.json"]
+    ] {
+        let src = ($pair | first)
+        if ($src | path exists) { cp $src ([$dir ($pair | last)] | path join) }
+    }
+
+    # Each marketplace's own manifest — the version a plugin SHOULD be at. Copied
+    # whole, because the manifest is not always at the clone root.
+    let mkt = ([$claude "plugins" "marketplaces"] | path join)
+    if ($mkt | path exists) {
+        let mdest = ([$dir "marketplaces"] | path join)
+        mkdir $mdest
+        for d in (ls $mkt | where type == dir | get name) {
+            let m = ([$d ".claude-plugin" "marketplace.json"] | path join)
+            if ($m | path exists) { cp $m ([$mdest $"($d | path basename).marketplace.json"] | path join) }
+        }
+    }
+
+    {
+        captured: (date now | format date "%+")
+        machine: (os)
+        managers: (managers)
+        commands: $rows
+    } | to yaml | save --force ([$dir "INDEX.yaml"] | path join)
+
+    print $"capture written to: ($dir)"
+    print "Zip it and attach it, with what you EXPECTED versus what Talos SHOWED."
+    $rows | print
+    $dir
+}
+
 export def main [
     --deep          # also probe per package (slower; distinguishes absent from missing)
     --save: string  # write the report to this path; omit the value for a timestamped default
