@@ -21,11 +21,11 @@ content-grep across commits, so those stay useful. **Never** use a git command t
 ⚠️ **`jj new` immediately after a push.** jj's working copy is a real commit; if `@` is the
 commit the bookmark points at and you edit a file, you amend the **pushed** commit and a `jj
 describe` overwrites its message. This repo has been bitten 3×. Check with
-`jj log -r 'tauri@origin | @'` before touching anything.
+`jj log -r 'beta@origin | @'` before touching anything.
 
 ⚠️ **`git log --all` lies here.** jj adds thousands of internal `refs/jj/keep` refs, so `--all`
 reports ~15 000 commits instead of the real count. Always scope to the branch:
-`git log refs/heads/tauri`.
+`git log refs/heads/beta`.
 
 ⚠️ **`_*` is gitignored** (local scratch). `_PLAN*.md`, `_STACK.md` live on disk, never
 versioned. Editing only a `_*` file and committing produces an EMPTY commit.
@@ -34,10 +34,19 @@ versioned. Editing only a `_*` file and committing produces an EMPTY commit.
 
 | ref | what |
 |---|---|
-| `tauri` | **the living branch**, 314 commits, linear (0 merges) |
-| `main` | the primordial empty commit — deliberately, work is on `tauri` |
-| tags | 19 (`v0.0.1-beta.1` … `beta.19`), all on the rewritten history |
+| `beta` | **the living branch**, 327 commits, linear (0 merges) |
+| `main` | the primordial empty commit — deliberately, work is on `beta` |
+| tags | 20 (`v0.0.1-beta.1` … `beta.20`), all on the rewritten history |
 | visibility | **private** |
+
+⚠️ **The living branch was called `tauri` until 2026-08-09.** It was renamed because the name
+described the *framework* — and the framework had already been replaced once (Deno →
+Rust/Tauri), so it was one migration away from lying again. An old note, handoff or shell
+history citing `tauri` means `beta`. The branch `tauri` no longer exists.
+
+⚠️ **`beta` the branch and `beta.N` the tags are two different things.** The branch is *where
+work happens*; the tags are *released builds*. A future 1.0 will still live on a branch called
+`beta` — the name will be wrong then, and that was a knowing trade-off.
 
 `docs/` is **gitignored** — the field notes (handoffs, plans, specs, session states) describe
 specific corporate estates, so they live on disk beside the repo, not in it. They are still
