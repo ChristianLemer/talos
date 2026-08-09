@@ -1,19 +1,34 @@
 {
   "permissions": {
     "allow": [
-      "Bash(deno fmt *)",
-      "Bash(deno lint *)",
-      "Bash(deno check *)",
-      "Bash(deno task dev)",
-      "Bash(deno task test)",
-      "Bash(deno task build:mac)",
-      "Bash(deno task build:win)",
-      "Bash(deno task build:win-debug)",
+      "Bash(cargo test)",
+      "Bash(cargo test *)",
+      "Bash(cargo fmt)",
+      "Bash(cargo fmt --check)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo build *)",
+      "Bash(cargo check *)",
+      "Bash(cargo metadata *)",
+      "Bash(cargo tauri build *)",
+      "Bash(node --test *)",
       "Bash(jj log *)",
       "Bash(jj status)",
       "Bash(jj status *)",
       "Bash(jj diff *)",
-      "Bash(jj file list *)"
+      "Bash(jj file list *)",
+      "Bash(jj bookmark list *)",
+      "Bash(jj op log *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git ls-files *)",
+      "Bash(git ls-tree *)",
+      "Bash(git rev-list *)",
+      "Bash(git rev-parse *)",
+      "Bash(git ls-remote *)",
+      "Bash(gh run list *)",
+      "Bash(gh run view *)",
+      "Bash(gh release list *)",
+      "Bash(gh release view *)"
     ]
   }
 }
