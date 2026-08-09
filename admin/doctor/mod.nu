@@ -327,26 +327,43 @@ export def path-view [
 
     # 2. The registry-only PATH, rebuilt exactly as Talos does it.
     let refresh = "$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User');"
-    # `Get-Command` rather than `where.exe`: it is what resolves against $env:Path
-    # in-process, so it sees the rebuild. Silently continue → an empty answer
-    # instead of a thrown error, because "not found" is the finding.
-    let wrapped = (try {
-        ^powershell.exe -NoProfile -Command $"($refresh) (Get-Command ($exe) -ErrorAction SilentlyContinue).Source"
-        | complete | get stdout | str trim
-    } catch { "" })
 
+    # ⚠️ Built by CONCATENATION, never by `$"..."` interpolation. A PowerShell
+    # snippet is full of parentheses, and nu reads `(Get-Command …)` inside an
+    # interpolated string as ITS OWN subexpression: it tries to run Get-Command
+    # locally, throws, and the catch hands back "" — which then reads as
+    # "git not found". That is exactly how this gesture accused the machine of the
+    # very defect it was written to detect (field report, 2026-08-09). A probe that
+    # cannot run must say so, never answer "absent".
+    let resolve = "(Get-Command " + $exe + " -ErrorAction SilentlyContinue).Source"
+
+    let wrapped = (ps-probe ($refresh + " " + $resolve))
     # 3. The SAME powershell WITHOUT the rebuild — the control. If this finds the
     # exe and the wrapped one does not, the rebuild is the cause, full stop.
-    let plain = (try {
-        ^powershell.exe -NoProfile -Command $"(Get-Command ($exe) -ErrorAction SilentlyContinue).Source"
-        | complete | get stdout | str trim
-    } catch { "" })
+    let plain = (ps-probe $resolve)
 
     [
-        { source: "interactive (nu)",        found: ($interactive | is-not-empty), where: $interactive }
-        { source: "powershell -NoProfile",   found: ($plain | is-not-empty),       where: (if ($plain | is-empty) { null } else { $plain }) }
-        { source: "talos_wrap (PATH rebuilt)", found: ($wrapped | is-not-empty),   where: (if ($wrapped | is-empty) { null } else { $wrapped }) }
+        { source: "interactive (nu)", found: ($interactive | is-not-empty), where: $interactive, note: null }
+        { source: "powershell -NoProfile", found: $plain.found, where: $plain.where, note: $plain.note }
+        { source: "talos_wrap (PATH rebuilt)", found: $wrapped.found, where: $wrapped.where, note: $wrapped.note }
     ]
+}
+
+# Run one PowerShell snippet and report WHAT HAPPENED, not just whether output
+# came back. `found: false` means the exe was not on that PATH; `note` carries the
+# reason when the probe itself could not run — the two must never look alike.
+def ps-probe [snippet: string]: nothing -> record {
+    if (which powershell.exe | is-empty) {
+        return { found: false, where: null, note: "powershell.exe not on PATH — probe did not run" }
+    }
+    let r = (do { ^powershell.exe -NoProfile -Command $snippet } | complete)
+    let out = ($r.stdout? | default "" | str trim)
+    let err = ($r.stderr? | default "" | str trim)
+    if ($r.exit_code? | default 0) != 0 and ($out | is-empty) {
+        # A non-zero exit with nothing on stdout is a BROKEN PROBE, not an absence.
+        return { found: false, where: null, note: $"probe failed: exit ($r.exit_code?) ($err)" }
+    }
+    { found: ($out | is-not-empty), where: (if ($out | is-empty) { null } else { $out }), note: null }
 }
 
 # The PATH entries Talos LOSES by rebuilding from the registry.
@@ -479,10 +496,14 @@ export def capture [
             [ "path-live",        "$env:Path" ]
             [ "path-registry",    "[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User')" ]
             [ "git-plain",        "(Get-Command git -ErrorAction SilentlyContinue).Source" ]
-            [ "git-talos-wrap",   $"($refresh) (Get-Command git -ErrorAction SilentlyContinue).Source" ]
+            # ⚠️ Concatenated, NOT interpolated: nu reads `(Get-Command …)` inside a
+            # `$"..."` as its own subexpression and tries to run it locally. See
+            # `ps-probe` — that mistake made this very gesture report a false
+            # "git not found" in the field.
+            [ "git-talos-wrap",   ($refresh + " (Get-Command git -ErrorAction SilentlyContinue).Source") ]
             # The failing gesture itself, wrapped exactly as Talos wraps it. Read-only:
             # --version asks git to identify itself, it clones nothing.
-            [ "git-version-talos-wrap", $"($refresh) git --version" ]
+            [ "git-version-talos-wrap", ($refresh + " git --version") ]
         ] {
             let label = ($probe | first)
             let ps = ($probe | last)
