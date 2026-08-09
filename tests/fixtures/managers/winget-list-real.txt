@@ -1,0 +1,10 @@
+Name                                                         Id                                                                                    Version                    Available           Source
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+1Password                                                    AgileBits.1Password                                                                   > 8.12.30.21                                   winget
+1Password CLI                                                AgileBits.1Password.CLI                                                               2.34.1                                         winget
+7-Zip 26.02 (x64 edition)                                    7zip.7zip                                                                             26.02.00.0                                     winget
+AIM-T AMS                                                    MSIX\AdvancedMicroDevicesInc-2.AIM-TAMS_5.1.1678.0_x64__0a9344xs7nr4m                 5.1.1678.0
+Git                                                          Git.Git                                                                               2.51.0                     2.52.0              winget
+Node.js                                                      OpenJS.NodeJS                                                                         20.1.0                     21.0.0              winget
+Microsoft Visual Studio Code (User)                          Microsoft.VisualStudioCode                                                            1.130.0                                        winget
+Nushell                                                      Nushell.Nushell                                                                       0.113.1                    0.114.0             winget

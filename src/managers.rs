@@ -340,4 +340,55 @@ mod tests {
             Some("21.0.0".into())
         );
     }
+
+    /// The hand-aligned fixture above proves the offsets arithmetic; it does NOT
+    /// prove the parser survives what a real machine prints. This one reads
+    /// output CAPTURED on a Windows box (winget v1.29.280, 2026-08-09) and kept
+    /// under tests/fixtures/managers/ so it can be replaced by a maintainer's
+    /// own capture when a row comes out wrong.
+    ///
+    /// Two shapes in it that no synthetic fixture had: a Version cell prefixed
+    /// with `> ` (winget marks a pinned/held entry that way) and an MSIX id
+    /// carrying a backslash and no Source column at all.
+    #[test]
+    fn winget_upgrade_parses_real_captured_output() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/managers/winget-list-real.txt");
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("fixture {} unreadable: {e}", path.display()));
+        let m = parse_winget_upgrade(&raw);
+
+        // Only rows that actually offer an upgrade are entries: three here.
+        assert_eq!(m.len(), 3, "upgradable rows in the capture: {m:?}");
+        assert_eq!(
+            m.get("openjs.nodejs")
+                .map(|o| (o.current.as_str(), o.available.as_str())),
+            Some(("20.1.0", "21.0.0"))
+        );
+        assert_eq!(
+            m.get("git.git").map(|o| o.available.clone()),
+            Some("2.52.0".into())
+        );
+        assert_eq!(
+            m.get("nushell.nushell").map(|o| o.available.clone()),
+            Some("0.114.0".into())
+        );
+
+        // A row with no Available cell must NOT become an upgrade candidate —
+        // that would make Talos offer an upgrade to the version already there.
+        assert!(
+            !m.contains_key("agilebits.1password"),
+            "a `> `-prefixed row with no Available must not be an upgrade"
+        );
+        assert!(
+            !m.contains_key("microsoft.visualstudiocode"),
+            "a current row must not be an upgrade"
+        );
+        // The MSIX id has no Source column; whatever the parser does with it, it
+        // must not panic and must not invent an upgrade.
+        assert!(
+            !m.keys().any(|k| k.contains("aim-tams")),
+            "an MSIX row without Available must not be an upgrade"
+        );
+    }
 }
