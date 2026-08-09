@@ -1871,6 +1871,9 @@ ws.onmessage = (ev) => {
       // know how many packages there are, so the bar shuttles.
       scanTotal = (msg.steps || []).length;
       scanSeen = 0;
+      // A fresh scan re-answers the upgrade question, so last run's warning must
+      // not survive into it — a stale caution is its own kind of lie.
+      document.getElementById("outdated-warn")?.classList.remove("show");
       splashProgress(null, 0);
       render(
         msg.steps,
@@ -1978,9 +1981,28 @@ ws.onmessage = (ev) => {
     case "starting":
       overall.textContent = "starting…";
       break; // clicked before engine ready
+    // ⚠️ The upgrade scan could not be READ — which is not the same as "nothing
+    // is outdated", and used to be indistinguishable from it. Every row below is
+    // still correct about PRESENCE (a separate probe); what is missing is any
+    // knowledge of upgrades. Saying so is the difference between a user who knows
+    // the check did not run and one who trusts a screen of green rows.
+    case "outdated-unavailable": {
+      const el = document.getElementById("outdated-warn");
+      if (!el) break;
+      el.innerHTML =
+        "<b>Upgrade check unavailable.</b> Package presence below is still accurate, " +
+        "but nothing here knows whether a newer version exists. " +
+        "The machine said: <code></code>";
+      // textContent, never innerHTML: the reason quotes raw manager output.
+      el.querySelector("code").textContent = msg.reason || "(no reason given)";
+      el.classList.add("show");
+      break;
+    }
     case "outdated": { // a present package has a newer version
       const r = rows[msg.i];
       if (!r) break;
+      // A row that DID report an upgrade proves the scan worked after all.
+      document.getElementById("outdated-warn")?.classList.remove("show");
       // Carry the available version into the model, then let paintVersion render
       // it (a pinned package ignores this — its pin owns the display, so no third
       // number). One renderer, no repetition.

@@ -864,10 +864,33 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
     let os = state.os;
     let steps = &state.plan.steps;
     let started = std::time::Instant::now();
-    let scan = tokio::task::spawn_blocking(move || scan_outdated(os))
+    let scanned = tokio::task::spawn_blocking(move || scan_outdated(os))
         .await
-        .unwrap_or_default();
+        .unwrap_or(Err(crate::outdated::ScanFailure::CommandFailed(
+            "the scan task did not finish".into(),
+        )));
     println!("[scan] outdated (batched) in {:?}", started.elapsed());
+
+    // ⚠️ An unreadable scan is NOT "nothing is outdated". Saying so out loud is
+    // the difference between a user who knows the check did not happen and one
+    // who trusts a screen of green rows. The rows still work — presence is a
+    // separate probe — but nothing claims to know about upgrades.
+    let scan = match &scanned {
+        Ok(map) => map.clone(),
+        Err(reason) => {
+            eprintln!("[scan] outdated UNAVAILABLE: {}", reason.message());
+            let _ = socket
+                .send(Message::Text(
+                    json!({
+                        "type": "outdated-unavailable",
+                        "reason": reason.message(),
+                    })
+                    .to_string(),
+                ))
+                .await;
+            std::collections::HashMap::new()
+        }
+    };
     for (i, step) in steps.iter().enumerate() {
         let step_owned = step.clone();
         let probe_started = std::time::Instant::now();
@@ -1018,8 +1041,14 @@ async fn row_action(socket: &mut WebSocket, state: &AppState, i: usize, action: 
     // single-row button use the SAME forced-cask path as the batch Apply.
     let is_cask = if act == Action::Upgrade {
         let os = state.os;
+        // An unreadable scan cannot tell cask from formula. Defaulting to false
+        // is the safe direction here: the cask path adds --force, and forcing on
+        // a guess is worse than not forcing.
         let scan = tokio::task::spawn_blocking(move || scan_outdated(os))
             .await
+            .unwrap_or(Err(crate::outdated::ScanFailure::CommandFailed(
+                "the scan task did not finish".into(),
+            )))
             .unwrap_or_default();
         outdated_for(step.system_id.as_deref(), &scan)
             .map(|o| o.is_cask)
@@ -1160,9 +1189,24 @@ async fn apply_diff(
             json!({ "type": "rescan-progress", "name": "what's out of date" }).to_string(),
         ))
         .await;
+    // If the scan is unreadable, `outdated(i)` is false for every row — which
+    // would NARROW the re-probe set on an assumption. seeds_for_rescan already
+    // re-probes anything it has no reliable knowledge of, so the safe reading of
+    // a failed scan is an empty map, never a claim.
     let scan = tokio::task::spawn_blocking(move || scan_outdated(os))
         .await
-        .unwrap_or_default();
+        .unwrap_or(Err(crate::outdated::ScanFailure::CommandFailed(
+            "the scan task did not finish".into(),
+        )));
+    if let Err(reason) = &scan {
+        eprintln!("[apply] outdated UNAVAILABLE: {}", reason.message());
+        let _ = socket
+            .send(Message::Text(
+                json!({ "type": "outdated-unavailable", "reason": reason.message() }).to_string(),
+            ))
+            .await;
+    }
+    let scan = scan.unwrap_or_default();
 
     // WHAT to re-probe: the rows where something COULD happen, plus what their
     // `requires` pull, transitively. Not all 30.

@@ -98,6 +98,34 @@ impl SystemManager {
             _ => parse_brew_outdated(output),
         }
     }
+    /// Did this output have the SHAPE the parser expects, regardless of how many
+    /// entries it yielded?
+    ///
+    /// Without this, an empty parse is ambiguous: "nothing is outdated" and "this
+    /// output is a shape I do not know" look identical, and Talos would claim the
+    /// machine is current on the strength of text it never understood. A scan can
+    /// legitimately be recognised AND empty — that is the whole point.
+    pub fn is_recognised(&self, output: &str) -> bool {
+        match self.route {
+            // The fixed-width table is identified by its header. winget also has
+            // a legitimate no-table answer, which it states in prose.
+            "winget" => {
+                let clean = strip_ansi(output);
+                let has_header = clean
+                    .lines()
+                    .any(|l| l.contains("Id") && l.contains("Available"));
+                let says_nothing_to_do = clean.to_lowercase().contains("no installed package")
+                    || clean.contains("No applicable update found")
+                    || clean.contains("are up to date");
+                has_header || says_nothing_to_do
+            }
+            // `--json=v2` is recognised when it parses as JSON carrying the two
+            // buckets. An empty `{"formulae":[],"casks":[]}` is a real answer.
+            _ => serde_json::from_str::<serde_json::Value>(output)
+                .ok()
+                .is_some_and(|v| v.get("formulae").is_some() || v.get("casks").is_some()),
+        }
+    }
 }
 
 pub const WINGET: SystemManager = SystemManager {
@@ -350,6 +378,30 @@ mod tests {
     /// Two shapes in it that no synthetic fixture had: a Version cell prefixed
     /// with `> ` (winget marks a pinned/held entry that way) and an MSIX id
     /// carrying a backslash and no Source column at all.
+    /// ⭐ The distinction the whole ScanFailure type exists for: an output that
+    /// is UNDERSTOOD but lists nothing must not read the same as an output the
+    /// parser never recognised. Without this, Talos claims a machine is current
+    /// on the strength of text it could not read.
+    #[test]
+    fn recognised_separates_a_real_empty_answer_from_an_unreadable_one() {
+        let w = &WINGET;
+        // A header with no rows: read, and genuinely empty.
+        assert!(w.is_recognised("Name  Id  Version  Available  Source\n----\n"));
+        // winget's prose answer for "nothing to do".
+        assert!(w.is_recognised("No installed package found matching input criteria."));
+        // ⚠️ The field-hit case: the source failed, no table was printed. This is
+        // NOT "up to date" and must not be reported as such.
+        assert!(!w.is_recognised("Failed in attempting to update the source: winget"));
+        assert!(!w.is_recognised(""));
+
+        let b = &BREW;
+        // Empty buckets are a real answer from `--json=v2`.
+        assert!(b.is_recognised(r#"{"formulae":[],"casks":[]}"#));
+        // Anything that is not that JSON shape was not understood.
+        assert!(!b.is_recognised("Error: Another active Homebrew process"));
+        assert!(!b.is_recognised("[]"));
+    }
+
     #[test]
     fn winget_upgrade_parses_real_captured_output() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

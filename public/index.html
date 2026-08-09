@@ -801,6 +801,16 @@
       /* Row-level firewall banner — the DURABLE recovery UI (the modal is transient).
          Lives at the top of a forbidden row's panel; blue like the modal (a 403
          is a routine hurdle, not an alarm). */
+      /* A caution, not a failure: the rows below still work — only the upgrade
+         check is missing. Amber rather than the blue of the 403 banner, so the
+         two are not confused, and muted enough not to shout. */
+      .warn-banner { display:none; margin:0 0 10px; padding:9px 12px; border-radius:7px;
+                     font-size:13px; line-height:1.5;
+                     background:#2a2418; border:1px solid #5c4a24; color:#e3c88a; }
+      .warn-banner.show { display:block; }
+      .warn-banner b { color:#f0dcae; }
+      .warn-banner code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px;
+                          color:#f0dcae; word-break:break-all; }
       .fb-banner { display:none; margin:0 0 8px; padding:9px 12px; border-radius:7px; font-size:13px; line-height:1.5;
                    background:#20283f; border:1px solid #33436b; color:#a9c2fb; }
       .fb-banner.show { display:block; }
@@ -1196,6 +1206,11 @@
           <span class="switch"><input type="checkbox" id="show-all"><span class="slider"></span></span>
         </label>
       </div>
+      <!-- Upgrade-check banner. Shown ONLY when the machine-wide outdated scan
+           could not be read: an empty scan and an unreadable one used to look
+           identical, so a source hiccup showed a screen of reassuring green rows.
+           This says the check did not happen, and quotes the machine. -->
+      <div id="outdated-warn" class="warn-banner"></div>
       <div id="steps"></div>
     </div>
 
