@@ -369,43 +369,45 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
         };
     }
     if let Some(id) = &pkg.claude_plugin {
-        // ⭐ Before the `add`, SHOW the git it is about to use. A `marketplace add` shells
-        // out to git, and when it fails the row's terminal carried only claude's own
-        // message — never which git, nor whether one was found, nor why credentials were
-        // being requested for a PUBLIC repo. Field case (2026-08-09): a plugin install
-        // failure plus an unexpected 1Password prompt, undiagnosable from the panel.
+        // Before the `add`, SHOW what decides whether the clone can work. The row's
+        // terminal used to carry only claude's own message, which is accurate but reads
+        // wrong: *"Command 'git' not found or is in an unsafe location (current
+        // directory)"* looks like "there is no git" and actually means "every git I found
+        // lives under the working directory".
         //
-        // Three questions, in the order that narrows fastest:
-        //   1. WHICH git — a wrong one, or none at all, explains everything downstream.
-        //   2. is a url rewrite redirecting the clone — an `insteadOf` mapping https to
-        //      ssh sends a public clone down an AUTHENTICATED path, which is exactly how a
-        //      credential prompt appears for a repo that needs no credentials.
-        //   3. what does git think the credential helper is.
+        // ⚠️ The FIRST version of this diagnostic hunted a `url.*.insteadOf` rewrite. That
+        // suspect was measured on the machine and REFUTED — no rewrite existed, the
+        // credential helper was the plain `manager`, and there was no ~/.ssh/config. The
+        // https→ssh switch is INTERNAL to claude (SSH is its default for a short
+        // `owner/repo`), which is exactly what a `git config` read cannot show. So the
+        // questions are now the two that were actually load-bearing:
+        //   1. WHICH git, and the CWD it is judged against — the pair that produces the
+        //      message. `pty::safe_working_dir` fixes the cwd; echoing it is how the row
+        //      proves the fix is in force rather than asking anyone to trust it.
+        //   2. is the clone going over https — `CLAUDE_CODE_PLUGIN_PREFER_HTTPS`, set in
+        //      the pty environment, is what keeps the ssh agent (and 1Password) out of a
+        //      public clone. Printing it makes an environment-only fix auditable.
         //
         // ⚠️ Joined with `;`, never `&&`: a diagnostic that can fail the install it was
-        // added to debug is worse than no diagnostic. And every one is read-only and
+        // added to debug is worse than no diagnostic. Every command is read-only and
         // non-interactive — a prompting command deadlocks a display-only row (memory
-        // display-only-terminal). `|| true` on the config reads because git exits 1 when a
-        // pattern matches nothing, which is the NORMAL answer here.
+        // display-only-terminal).
         let git_diag = if pkg.marketplace.is_some() {
             match os {
                 Os::Windows => concat!(
-                    "echo [talos] git for the marketplace clone:; ",
-                    "(Get-Command git -ErrorAction SilentlyContinue).Source; ",
-                    "git --version; ",
-                    "echo [talos] url rewrites (empty is normal):; ",
-                    "git config --get-regexp \"url\\..*\\.insteadof\"; ",
-                    "echo [talos] credential helper:; ",
-                    "git config --get-all credential.helper; ",
+                    "echo [talos] cwd (claude refuses a git BELOW it):; ",
+                    "$PWD.Path; ",
+                    "echo [talos] git candidates:; ",
+                    "where.exe git; ",
+                    "echo [talos] https for plugin clones (1 = no ssh agent, no 1Password):; ",
+                    "$env:CLAUDE_CODE_PLUGIN_PREFER_HTTPS; ",
                 )
                 .to_string(),
                 _ => concat!(
-                    "echo '[talos] git for the marketplace clone:'; ",
-                    "command -v git; git --version; ",
-                    "echo '[talos] url rewrites (empty is normal):'; ",
-                    "git config --get-regexp 'url\\..*\\.insteadof' || true; ",
-                    "echo '[talos] credential helper:'; ",
-                    "git config --get-all credential.helper || true; ",
+                    "echo '[talos] cwd:'; pwd; ",
+                    "echo '[talos] git candidates:'; command -v git; ",
+                    "echo '[talos] https for plugin clones:'; ",
+                    "echo \"${CLAUDE_CODE_PLUGIN_PREFER_HTTPS:-unset}\"; ",
                 )
                 .to_string(),
             }
@@ -579,24 +581,32 @@ mod tests {
             install.contains("&& claude plugin update jj@claude-plugin-jj"),
             "…and UPDATED, or an already-installed plugin never moves: {install}"
         );
-        // ⭐ A `marketplace add` shells out to git, and when it fails the row's terminal
-        // showed only claude's own message — never WHICH git, or whether one was found at
-        // all. Field case (2026-08-09): the operator got a plugin install failure AND an
-        // unexpected 1Password prompt, with no way to tell from the panel whether git was
-        // resolved, which git, or why credentials were being asked for a PUBLIC repo.
+        // ⭐ A `marketplace add` shells out to git, and claude's failure message reads as
+        // "no git" when it actually means "every git found lives under the cwd". So the
+        // row must show the PAIR that produces that verdict — the cwd and the candidates —
+        // plus whether the clone will go over https (the thing that keeps the ssh agent,
+        // and 1Password, out of a public clone).
+        //
+        // ⚠️ These two assertions replaced a pair that looked for a `url.*.insteadOf`
+        // rewrite. That suspect was measured on the machine and refuted; keeping its test
+        // would have kept the wrong question alive.
         assert!(
-            install.contains("git --version"),
-            "the row must SHOW which git it found before using it: {install}"
+            install.contains("where.exe git") || install.contains("command -v git"),
+            "the row must SHOW the git candidates: {install}"
         );
         assert!(
-            install.contains("git config --get-regexp") || install.contains("insteadOf"),
-            "…and whether a url rewrite is redirecting a public clone: {install}"
+            install.contains("CLAUDE_CODE_PLUGIN_PREFER_HTTPS"),
+            "…and whether the clone goes over https rather than ssh: {install}"
+        );
+        assert!(
+            install.contains("cwd") || install.contains("$PWD") || install.contains("pwd"),
+            "…and the cwd it is judged against, which is what decides: {install}"
         );
         // ⚠️ Every added command must be non-interactive and must NOT be able to fail the
         // chain: a diagnostic that breaks the install it was added to debug is worse than
         // no diagnostic (memory display-only-terminal — a prompting command deadlocks).
         assert!(
-            !install.contains("git --version &&"),
+            !install.contains("where.exe git &&"),
             "the diagnostic must not gate the install with &&: {install}"
         );
 

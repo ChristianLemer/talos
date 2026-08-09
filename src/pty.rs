@@ -2,6 +2,71 @@ use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use std::sync::mpsc::Receiver;
 
+/// A working directory that cannot make `claude` refuse its own git.
+///
+/// ⭐ FIELD-MEASURED on Windows (2026-08-09), by extracting `claude` 2.1.226's
+/// executable resolver and replaying it: it REFUSES any `git.exe` that lives under
+/// the current directory, and answers *"Command 'git' not found or is in an unsafe
+/// location (current directory)"*. That is an anti-hijack guard, and the message is
+/// accurate — it does not mean "no git", it means "every git found is under the cwd".
+///
+/// The trap needs two ingredients, and a corporate estate supplies both:
+///   - git installed under the user profile (`AppData\Local\Programs\Git`) — what a
+///     winget install without elevation, or the installer's "just me" mode, does when
+///     the user is not an administrator;
+///   - Talos launched from a folder that is a common ancestor of EVERY candidate —
+///     `C:\Users\clemer`, or any ancestor of it. Launching an exe from the profile or
+///     from Downloads is the default gesture of someone told "copy these three things".
+///
+/// The pty inherited Talos's own cwd (`CommandBuilder` was never given one), so the
+/// operator's PowerShell resolved git while Talos's child did not — same machine, same
+/// PATH, same git, two verdicts. 6 of 12 tested directories triggered it.
+///
+/// `System32` is the answer rather than `C:\`: the guard compares `cwd + separator`,
+/// and for the root that becomes `C:\\`, which nothing satisfies — so the root escapes
+/// BY ACCIDENT of string concatenation. Relying on that would be fragile. `%TEMP%` is
+/// worse than useless here: it lives under `AppData\Local`, squarely inside the trap.
+///
+/// POSIX keeps its inherited cwd: the guard is Windows-only in `claude`, so changing it
+/// there would alter relative-path semantics for no benefit.
+pub fn safe_working_dir() -> Option<std::path::PathBuf> {
+    if !cfg!(target_os = "windows") {
+        return None;
+    }
+    let root = std::env::var_os("SYSTEMROOT")
+        .or_else(|| std::env::var_os("WINDIR"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"));
+    let sys32 = root.join("System32");
+    // Never hand the pty a directory that does not exist — that fails the spawn
+    // outright, which would be a worse defect than the one being fixed.
+    if sys32.is_dir() {
+        Some(sys32)
+    } else if root.is_dir() {
+        Some(root)
+    } else {
+        None
+    }
+}
+
+/// Does `cwd` make `claude` reject `candidate`? Claude's rule, as measured: the
+/// candidate is refused when its parent IS the cwd, or when it sits anywhere below it.
+///
+/// Pure, so the rule that drove the fix is pinned without a Windows machine. Compares
+/// case-insensitively because Windows paths are.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn claude_would_refuse(candidate: &str, cwd: &str) -> bool {
+    let c = candidate.to_lowercase().replace('/', "\\");
+    let d = cwd.to_lowercase().replace('/', "\\");
+    let d_trimmed = d.trim_end_matches('\\');
+    // `dirname(candidate) == cwd`, then the `cwd + sep` prefix. A cwd of `c:\` yields
+    // the prefix `c:\\`, which nothing matches — the accident that spares the root.
+    match c.rsplit_once('\\') {
+        Some((parent, _)) if parent == d_trimmed => true,
+        _ => c.starts_with(&format!("{d}\\")),
+    }
+}
+
 /// Runs `program args...` in a pty and calls `on_bytes` for each chunk read.
 /// Returns the process exit code.
 ///
@@ -36,6 +101,28 @@ pub fn run<F: FnMut(&[u8])>(
         .map_err(|e| std::io::Error::other(e.to_string()))?;
     let mut cmd = CommandBuilder::new(program);
     cmd.args(args);
+    // Windows: never let the child inherit Talos's own cwd — see `safe_working_dir`.
+    // The child would otherwise run wherever the exe was launched from, and `claude`
+    // refuses a git that lives under the cwd.
+    if let Some(dir) = safe_working_dir() {
+        cmd.cwd(dir);
+    }
+    // ⭐ Force plugin marketplace clones over HTTPS.
+    //
+    // MEASURED in claude 2.1.226: `owner/repo` becomes `git@github.com:owner/repo.git`
+    // unless CLAUDE_CODE_PLUGIN_PREFER_HTTPS (or CLAUDE_CODE_REMOTE) is set — SSH is the
+    // DEFAULT. So cloning a PUBLIC marketplace solicited the ssh agent, and 1Password
+    // opened its own window asking for a key the repo never needed. claude already
+    // hardens the clone against interactive prompts (GIT_TERMINAL_PROMPT=0, GIT_ASKPASS,
+    // BatchMode=yes), but BatchMode stops ssh ASKING — it does not stop the agent being
+    // QUERIED, and the agent's window lives outside git's channel entirely.
+    //
+    // Set in the pty ENVIRONMENT rather than prefixed onto the command line: only
+    // `platform::shell_probe` / `pty_shell` may build a shell line (memory
+    // single-shell-wrapping), and a third place doing it is how the fixes get bypassed.
+    // The cost is that it does not appear in the row's terminal — accepted, because
+    // `admin doctor` can report it and a shell-quoting bug here would break every step.
+    cmd.env("CLAUDE_CODE_PLUGIN_PREFER_HTTPS", "1");
     let mut child = pair
         .slave
         .spawn_command(cmd)
@@ -102,6 +189,95 @@ pub fn run<F: FnMut(&[u8])>(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    // The real candidates and directories from the field measurement: git installed
+    // under the user profile, with NO candidate outside it.
+    const GIT_CMD: &str = r"C:\Users\clemer\AppData\Local\Programs\Git\cmd\git.exe";
+    const GIT_MINGW: &str = r"C:\Users\clemer\AppData\Local\Programs\Git\mingw64\bin\git.exe";
+
+    #[test]
+    fn the_cwd_that_makes_claude_refuse_its_own_git() {
+        // ⭐ Every one of these was MEASURED by replaying claude 2.1.226's resolver on
+        // the machine — they are outputs, not deductions. A cwd that is a common
+        // ancestor of ALL candidates leaves the resolver with nothing to return.
+        for trap in [
+            r"C:\Users",
+            r"C:\Users\clemer",
+            r"C:\Users\clemer\AppData",
+            r"C:\Users\clemer\AppData\Local",
+            r"C:\Users\clemer\AppData\Local\Programs",
+            r"C:\Users\clemer\AppData\Local\Programs\Git",
+        ] {
+            assert!(
+                claude_would_refuse(GIT_CMD, trap) && claude_would_refuse(GIT_MINGW, trap),
+                "both candidates must be refused from {trap} — that is the reported bug"
+            );
+        }
+        // And the directories that are safe, for the same reason reversed.
+        for ok in [
+            r"C:\Windows\System32",
+            r"C:\Users\clemer\Downloads",
+            r"C:\Talos",
+        ] {
+            assert!(
+                !claude_would_refuse(GIT_CMD, ok),
+                "{ok} must not trap the candidate"
+            );
+        }
+    }
+
+    #[test]
+    fn descending_into_the_git_install_is_saved_by_a_sibling() {
+        // ⚠️ Counter-intuitive, and measured: from `…\Git\mingw64\bin` the local
+        // candidate IS refused, but the SIBLING `cmd\git.exe` is not — and the resolver
+        // returns the first survivor. So the trap is not "being under the Git install",
+        // it is being a common ancestor of EVERY candidate. Pinned because a fix aimed
+        // at the wrong formulation would look right and miss.
+        let cwd = r"C:\Users\clemer\AppData\Local\Programs\Git\mingw64\bin";
+        assert!(
+            claude_would_refuse(GIT_MINGW, cwd),
+            "the local one is refused"
+        );
+        assert!(
+            !claude_would_refuse(GIT_CMD, cwd),
+            "the sibling survives, which is why this cwd resolves"
+        );
+    }
+
+    #[test]
+    fn the_drive_root_escapes_by_accident_so_it_is_not_the_answer() {
+        // The guard tests the `cwd + separator` prefix; for `C:\` that is `C:\\`, which
+        // nothing matches. Documented so nobody "simplifies" the fix to `C:\` — it works
+        // for a reason that is a string-concatenation artefact, not a guarantee.
+        assert!(!claude_would_refuse(GIT_CMD, r"C:\"));
+    }
+
+    #[test]
+    fn the_safe_dir_is_outside_any_user_profile() {
+        let dir = safe_working_dir();
+        // POSIX imposes no cwd — claude's guard is Windows-only, so overriding it there
+        // would change what a relative path means for no benefit. That `None` is the
+        // CONTRACT, not an accident, so it is asserted rather than merely allowed.
+        assert_eq!(
+            dir.is_some(),
+            cfg!(target_os = "windows"),
+            "a cwd is imposed on Windows and only there"
+        );
+        if let Some(d) = dir {
+            let s = d.to_string_lossy().to_lowercase();
+            assert!(s.contains("system32") || s.contains("windows"), "got {s}");
+            assert!(
+                !claude_would_refuse(GIT_CMD, &d.to_string_lossy()),
+                "the chosen cwd must not be an ancestor of a user-profile git: {s}"
+            );
+            // ⚠️ %TEMP% would be a natural guess and is WRONG: it lives under
+            // AppData\Local, squarely inside the trap.
+            assert!(
+                !s.contains("appdata"),
+                "must never be under the profile: {s}"
+            );
+        }
+    }
 
     /// The load-bearing test of this whole feature: a killed child must let `run`
     /// RETURN rather than block forever. That only works because the child-wait

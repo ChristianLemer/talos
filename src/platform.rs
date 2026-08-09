@@ -334,14 +334,19 @@ pub fn exe_sibling_dir(exe: &std::path::Path) -> PathBuf {
 // Windows PATH refresh: an install writes the registry but does NOT propagate the PATH
 // to already-running processes → a freshly installed tool would read "absent" without this.
 //
-// ⚠️ It APPENDS. It used to ASSIGN, and that was a real defect, confirmed on a real
-// machine (beta.20): `git --version` worked in the operator's own PowerShell while
-// `claude plugin marketplace add` failed inside Talos saying git was missing.
-// Assigning threw away the live process PATH and rebuilt it from two registry keys,
-// so anything living ONLY in the process environment disappeared — an MSIX/Store
-// shim under WindowsApps, a directory an installer put on the session PATH only.
-// `marketplace add` shells out to git, so it was the first gesture to notice; every
-// probe was equally blind, silently.
+// ⚠️ It APPENDS, and that is right on its own merits: assigning threw away the live
+// process PATH and rebuilt it from two registry keys, so anything living ONLY in the
+// process environment disappeared — an MSIX/Store shim under WindowsApps, a directory
+// an installer put on the session PATH only. A refresh must not be destructive.
+//
+// ⚠️ But this was NOT the cause of the "git not found" symptom it was first written
+// for, and the correction matters more than the fix: the symptom RETURNED after
+// beta.21 shipped this. Measured on the machine afterwards — no empty and no relative
+// segment in the joined PATH, so no entry could be read as "current directory"; and
+// `claude`'s own resolver does not consult the shell PATH at all, it calls `where.exe`
+// with its process environment. The real cause was the working directory: see
+// `pty::safe_working_dir`. A fix that does not make the symptom disappear was not the
+// cause of it.
 //
 // The live PATH comes FIRST: it is the more specific answer (what this process was
 // actually given), and PowerShell resolves left to right. Duplicates are harmless.
@@ -471,17 +476,18 @@ mod tests {
 
     #[test]
     fn windows_path_refresh_keeps_the_live_path() {
-        // ⭐ FIELD-CONFIRMED (Windows, beta.20): `git --version` worked in the
-        // operator's PowerShell and `claude plugin marketplace add` failed inside
-        // Talos saying git was missing. The cause was this prefix ASSIGNING over
-        // $env:Path — the live process PATH was discarded and rebuilt from two
-        // registry keys, so anything present only in the process environment
-        // vanished: an MSIX/Store shim under WindowsApps, a directory an installer
-        // added to the session only. `marketplace add` shells out to git, so it was
-        // the first gesture to notice.
+        // The assertion stands on its own: a refresh must not be destructive. Assigning
+        // discarded the live process PATH and rebuilt it from two registry keys, losing
+        // anything present only in the process environment (an MSIX/Store shim under
+        // WindowsApps, a session-only directory). And it must still HAPPEN, or a freshly
+        // installed tool would read absent until Talos restarted.
         //
-        // The refresh must still HAPPEN (a freshly installed tool must be visible
-        // without restarting Talos) — it must simply not be destructive.
+        // ⚠️ Its original JUSTIFICATION was wrong, and is corrected here rather than
+        // quietly dropped. This was written as the cause of `claude` answering "git not
+        // found or is in an unsafe location" — it was not. The symptom returned after the
+        // fix shipped (beta.21), and the measured cause is the working directory handed
+        // to the pty: `claude` refuses a git living under the cwd, and never consults the
+        // shell PATH for this at all. See `pty::safe_working_dir`.
         assert!(
             WIN_PATH_REFRESH.contains("$env:Path=$env:Path"),
             "the refresh must APPEND to the live PATH, never replace it: {WIN_PATH_REFRESH}"
