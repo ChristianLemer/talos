@@ -90,6 +90,16 @@ distribution model is **rsync** (or any copy): drop `Talos.exe` + `bundles/` sid
 side on the target — no installer required. The binaries are **unsigned** for now
 (signing/notarisation is a separate step).
 
+⚠️ **Where that content comes from is not this repository.** A GitHub Release here
+publishes the **binaries only** — `Talos.exe` and the zipped `.app`, never a
+`catalog/` or `bundles/`. The `catalog/` and `bundles/` you see in this tree are
+**examples**, and they double as fixtures for the engine's own tests. A maintainer
+keeps their real content in their own place and pairs it with a released binary; the
+two halves meet on the target machine, not in this repo.
+
+That is the hermetic boundary stated as a distribution rule: the engine knows no
+client, so it cannot also be the home of anyone's catalogue.
+
 ### 3 — Distribute it
 
 Hand `dist/` to your team. The two parts travel **together** — the exe is the

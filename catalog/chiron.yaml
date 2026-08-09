@@ -2,9 +2,21 @@
 name: Chiron
 description: The wise centaur — methodological companion of the tekton corpus
 claude-plugin: chiron@tekton
-# Site-specific: the Tekton marketplace folder on a shared drive. Adjust
-# per deployment (a local path, not a github repo).
-marketplace: "<vault>/<zone>/Tekton"
+# No `marketplace:` on purpose. The tekton corpus is not published to a public
+# marketplace, so where it lives is a DEPLOYMENT fact, not a property of the
+# package — a maintainer declares it in their own catalogue.
+#
+# What used to sit here was a path relative to a shared-drive root
+# ("<vault>/…/Tekton"), and `bundles.rs` hands that value verbatim to
+# `claude plugin marketplace add`, which resolves it against the CURRENT WORKING
+# DIRECTORY. So it could only ever have worked with Talos launched from that root
+# — which is why the marketplace ended up added by hand on the one machine using
+# it. A declaration that cannot resolve is worse than none: it silently builds a
+# command that fails.
+#
+# Without it, the install command drops the `marketplace add` prefix and this row
+# reads "unverifiable" rather than green — the honest answer for a core that
+# cannot know where a site keeps its vault.
 detect: chiron
 category: [methodology]
 requires:
