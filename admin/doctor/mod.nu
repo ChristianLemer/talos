@@ -287,6 +287,104 @@ def declared-in-directory [root: path, name: string]: nothing -> any {
     } else { null }
 }
 
+# ⭐ Does a command Talos runs see the same PATH you do?
+#
+# The field symptom this answers: `git --version` works in your own PowerShell,
+# and `claude plugin marketplace add` inside Talos fails saying git is missing.
+#
+# Talos does not run a command in your shell. On Windows it prefixes EVERY
+# command (probe and pty alike, `platform.rs` WIN_PATH_REFRESH) with:
+#
+#     $env:Path = <Machine registry PATH> + ';' + <User registry PATH>
+#
+# That is an ASSIGNMENT, not an append — the process PATH is discarded and
+# rebuilt from two registry keys. Anything present only in the live process
+# environment vanishes: an MSIX/Store shim under WindowsApps, a directory an
+# installer added to the session only, or anything your PowerShell profile adds
+# (which is never read anyway — the probe passes -NoProfile).
+#
+# So this compares three PATHs for one executable, and the interesting row is the
+# one where `interactive` finds it and `talos_wrap` does not.
+export def path-view [
+    exe: string = "git"  # the executable whose visibility is in question
+]: nothing -> table {
+    let win = ($nu.os-info.name == "windows")
+    # 1. What nu sees right now — closest to "your interactive shell".
+    let interactive = (which $exe | get path? | default [] | first | default null)
+
+    if not $win {
+        # POSIX wraps with the user's own shell in interactive+login, so there is
+        # no registry rebuild to lose anything. Reported for symmetry, and because
+        # a login shell CAN still differ from this one.
+        let login = (try {
+            ^($env.SHELL? | default "/bin/zsh") -ilc $"command -v ($exe)" | complete | get stdout | str trim
+        } catch { "" })
+        return [
+            { source: "interactive (nu)", found: ($interactive | is-not-empty), where: $interactive }
+            { source: "talos_wrap ($SHELL -ilc)", found: ($login | is-not-empty), where: (if ($login | is-empty) { null } else { $login }) }
+        ]
+    }
+
+    # 2. The registry-only PATH, rebuilt exactly as Talos does it.
+    let refresh = "$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User');"
+    # `Get-Command` rather than `where.exe`: it is what resolves against $env:Path
+    # in-process, so it sees the rebuild. Silently continue → an empty answer
+    # instead of a thrown error, because "not found" is the finding.
+    let wrapped = (try {
+        ^powershell.exe -NoProfile -Command $"($refresh) (Get-Command ($exe) -ErrorAction SilentlyContinue).Source"
+        | complete | get stdout | str trim
+    } catch { "" })
+
+    # 3. The SAME powershell WITHOUT the rebuild — the control. If this finds the
+    # exe and the wrapped one does not, the rebuild is the cause, full stop.
+    let plain = (try {
+        ^powershell.exe -NoProfile -Command $"(Get-Command ($exe) -ErrorAction SilentlyContinue).Source"
+        | complete | get stdout | str trim
+    } catch { "" })
+
+    [
+        { source: "interactive (nu)",        found: ($interactive | is-not-empty), where: $interactive }
+        { source: "powershell -NoProfile",   found: ($plain | is-not-empty),       where: (if ($plain | is-empty) { null } else { $plain }) }
+        { source: "talos_wrap (PATH rebuilt)", found: ($wrapped | is-not-empty),   where: (if ($wrapped | is-empty) { null } else { $wrapped }) }
+    ]
+}
+
+# The PATH entries Talos LOSES by rebuilding from the registry.
+#
+# Windows-only and deliberately blunt: it diffs the live process PATH against
+# `Machine + User`, and every returned row is a directory a Talos-run command
+# cannot see. If `git` lives in one of them, the diagnosis is closed.
+export def path-lost []: nothing -> table {
+    if ($nu.os-info.name != "windows") {
+        return []  # POSIX wraps with the user's own login shell; nothing is rebuilt
+    }
+    let live = (try {
+        ^powershell.exe -NoProfile -Command "$env:Path" | complete | get stdout | str trim
+    } catch { "" })
+    let registry = (try {
+        ^powershell.exe -NoProfile -Command "[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User')"
+        | complete | get stdout | str trim
+    } catch { "" })
+
+    def split-path [s: string]: nothing -> list<string> {
+        $s | split row ";" | each {|d| $d | str trim | str trim --right --char '\' } | where {|d| $d | is-not-empty }
+    }
+    let live_dirs = (split-path $live)
+    let reg_dirs = (split-path $registry)
+
+    $live_dirs | where {|d| not ($d in $reg_dirs) } | each {|d|
+        {
+            lost_dir: $d
+            exists: ($d | path exists)
+            # What a lost directory actually costs: the executables in it. Named
+            # rather than counted, because "git.exe was in there" ends the hunt.
+            executables: (if ($d | path exists) {
+                (try { ls $d | get name | path basename | where {|f| $f | str ends-with ".exe" } | first 6 } catch { [] })
+            } else { [] })
+        }
+    }
+}
+
 # Can this machine reach what a package manager needs? Talos does not fetch
 # these itself, but a corporate firewall answering 403 is a known failure mode.
 export def reachability []: nothing -> table {
@@ -372,11 +470,35 @@ export def capture [
         }
     }
 
+    # ⭐ The PATH as Talos rebuilds it, captured VERBATIM. A `marketplace add` that
+    # cannot find git leaves no trace in any listing above — this is where the
+    # evidence for that lives, and it costs two cheap commands.
+    if ($nu.os-info.name == "windows") {
+        let refresh = "$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User');"
+        for probe in [
+            [ "path-live",        "$env:Path" ]
+            [ "path-registry",    "[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User')" ]
+            [ "git-plain",        "(Get-Command git -ErrorAction SilentlyContinue).Source" ]
+            [ "git-talos-wrap",   $"($refresh) (Get-Command git -ErrorAction SilentlyContinue).Source" ]
+            # The failing gesture itself, wrapped exactly as Talos wraps it. Read-only:
+            # --version asks git to identify itself, it clones nothing.
+            [ "git-version-talos-wrap", $"($refresh) git --version" ]
+        ] {
+            let label = ($probe | first)
+            let ps = ($probe | last)
+            let r = (try { ^powershell.exe -NoProfile -Command $ps | complete } catch { { stdout: "", stderr: "failed to run", exit_code: -1 } })
+            $"# powershell -NoProfile -Command ($ps)\n# exit ($r.exit_code?)\n\n($r.stdout?)($r.stderr?)"
+            | save --force ([$dir $"($label).txt"] | path join)
+        }
+    }
+
     {
         captured: (date now | format date "%+")
         machine: (os)
         managers: (managers)
         commands: $rows
+        path_view: (path-view "git")
+        path_lost: (path-lost)
     } | to yaml | save --force ([$dir "INDEX.yaml"] | path join)
 
     print $"capture written to: ($dir)"
@@ -419,6 +541,30 @@ export def main [
         print "  (pass --deep to tell 'not installed' apart from 'missing from the listing')"
     }
 
+    # ⭐ Placed BEFORE the plugin section on purpose: a plugin install that cannot
+    # find git fails here, not in the drift table, and reading the tables in that
+    # order is what tells the two apart.
+    print "\n=== PATH: does a Talos-run command see what you see? ==="
+    let pv = (path-view "git")
+    $pv | print
+    let lost = (path-lost)
+    let wrapped_blind = ($pv | where source =~ "talos_wrap" | where not found | is-not-empty)
+    let elsewhere_ok = ($pv | where source !~ "talos_wrap" | where found | is-not-empty)
+    if $wrapped_blind and $elsewhere_ok {
+        print "  ⚠️ git is on YOUR PATH but NOT on the one Talos builds."
+        print "     Talos rebuilds \$env:Path from the Machine+User registry keys, so anything"
+        print "     living only in the live process environment disappears — and a"
+        print "     `claude plugin marketplace add` shells out to git, so it fails."
+        if ($lost | is-not-empty) {
+            print "     Directories lost to that rebuild:"
+            $lost | print
+        }
+    } else if ($lost | is-not-empty) {
+        print "  These directories are on the live PATH but NOT in the registry — a"
+        print "  Talos-run command cannot see them (harmless unless a tool lives there):"
+        $lost | print
+    }
+
     print "\n=== claude plugins: installed vs declared ==="
     plugin-drift | print
 
@@ -439,6 +585,8 @@ export def main [
             catalogue: $cat
             bulk: (bulk)
             coverage: $cov
+            path_view: $pv
+            path_lost: $lost
             plugins: (plugin-drift)
             sources: (sources)
             reachability: (reachability)
