@@ -369,6 +369,49 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
         };
     }
     if let Some(id) = &pkg.claude_plugin {
+        // ⭐ Before the `add`, SHOW the git it is about to use. A `marketplace add` shells
+        // out to git, and when it fails the row's terminal carried only claude's own
+        // message — never which git, nor whether one was found, nor why credentials were
+        // being requested for a PUBLIC repo. Field case (2026-08-09): a plugin install
+        // failure plus an unexpected 1Password prompt, undiagnosable from the panel.
+        //
+        // Three questions, in the order that narrows fastest:
+        //   1. WHICH git — a wrong one, or none at all, explains everything downstream.
+        //   2. is a url rewrite redirecting the clone — an `insteadOf` mapping https to
+        //      ssh sends a public clone down an AUTHENTICATED path, which is exactly how a
+        //      credential prompt appears for a repo that needs no credentials.
+        //   3. what does git think the credential helper is.
+        //
+        // ⚠️ Joined with `;`, never `&&`: a diagnostic that can fail the install it was
+        // added to debug is worse than no diagnostic. And every one is read-only and
+        // non-interactive — a prompting command deadlocks a display-only row (memory
+        // display-only-terminal). `|| true` on the config reads because git exits 1 when a
+        // pattern matches nothing, which is the NORMAL answer here.
+        let git_diag = if pkg.marketplace.is_some() {
+            match os {
+                Os::Windows => concat!(
+                    "echo [talos] git for the marketplace clone:; ",
+                    "(Get-Command git -ErrorAction SilentlyContinue).Source; ",
+                    "git --version; ",
+                    "echo [talos] url rewrites (empty is normal):; ",
+                    "git config --get-regexp \"url\\..*\\.insteadof\"; ",
+                    "echo [talos] credential helper:; ",
+                    "git config --get-all credential.helper; ",
+                )
+                .to_string(),
+                _ => concat!(
+                    "echo '[talos] git for the marketplace clone:'; ",
+                    "command -v git; git --version; ",
+                    "echo '[talos] url rewrites (empty is normal):'; ",
+                    "git config --get-regexp 'url\\..*\\.insteadof' || true; ",
+                    "echo '[talos] credential helper:'; ",
+                    "git config --get-all credential.helper || true; ",
+                )
+                .to_string(),
+            }
+        } else {
+            String::new()
+        };
         let add = pkg
             .marketplace
             .as_deref()
@@ -397,7 +440,7 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
             // already-current plugin is a no-op, so the cost is one extra command and the
             // benefit is that a corrected source actually reaches the machine.
             install: Some(format!(
-                "{add}claude plugin install {id} --scope user && claude plugin update {id}"
+                "{git_diag}{add}claude plugin install {id} --scope user && claude plugin update {id}"
             )),
             uninstall: Some(format!("claude plugin uninstall {id}")),
             upgrade: Some(format!("claude plugin update {id}")),
@@ -536,6 +579,27 @@ mod tests {
             install.contains("&& claude plugin update jj@claude-plugin-jj"),
             "…and UPDATED, or an already-installed plugin never moves: {install}"
         );
+        // ⭐ A `marketplace add` shells out to git, and when it fails the row's terminal
+        // showed only claude's own message — never WHICH git, or whether one was found at
+        // all. Field case (2026-08-09): the operator got a plugin install failure AND an
+        // unexpected 1Password prompt, with no way to tell from the panel whether git was
+        // resolved, which git, or why credentials were being asked for a PUBLIC repo.
+        assert!(
+            install.contains("git --version"),
+            "the row must SHOW which git it found before using it: {install}"
+        );
+        assert!(
+            install.contains("git config --get-regexp") || install.contains("insteadOf"),
+            "…and whether a url rewrite is redirecting a public clone: {install}"
+        );
+        // ⚠️ Every added command must be non-interactive and must NOT be able to fail the
+        // chain: a diagnostic that breaks the install it was added to debug is worse than
+        // no diagnostic (memory display-only-terminal — a prompting command deadlocks).
+        assert!(
+            !install.contains("git --version &&"),
+            "the diagnostic must not gate the install with &&: {install}"
+        );
+
         // A package with no marketplace still installs and updates — the `add` is what is
         // optional, not the update.
         let mut q = pkg("some plugin");
