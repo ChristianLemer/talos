@@ -305,6 +305,11 @@ def declared-in-directory [root: path, name: string]: nothing -> any {
 #
 # So this compares three PATHs for one executable, and the interesting row is the
 # one where `interactive` finds it and `talos_wrap` does not.
+#
+# ⚠️ The rebuild snippet is READ FROM platform.rs, never retyped. A diagnostic
+# that carries its own copy of the thing it diagnoses drifts the day the engine
+# changes, and would then describe a Talos that no longer exists — the same reason
+# this module derives package ids from catalog/ instead of hardcoding them.
 export def path-view [
     exe: string = "git"  # the executable whose visibility is in question
 ]: nothing -> table {
@@ -325,8 +330,9 @@ export def path-view [
         ]
     }
 
-    # 2. The registry-only PATH, rebuilt exactly as Talos does it.
-    let refresh = "$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User');"
+    # 2. The registry-only PATH, rebuilt exactly as Talos does it — read from the
+    #    engine, so this cannot describe a wrapping the engine no longer uses.
+    let refresh = (win-path-refresh)
 
     # ⚠️ Built by CONCATENATION, never by `$"..."` interpolation. A PowerShell
     # snippet is full of parentheses, and nu reads `(Get-Command …)` inside an
@@ -349,6 +355,85 @@ export def path-view [
     ]
 }
 
+# The PATH rebuild Talos really prefixes onto every Windows command, READ from
+# `src/platform.rs` (WIN_PATH_REFRESH). Reading beats retyping: the whole value of
+# this gesture is that it reproduces the ENGINE, and a hardcoded copy would keep
+# answering confidently about a wrapping that had changed underneath it.
+#
+# Falls back to the known literal when the source is unreachable — a kit deployed
+# without a checkout still gets an answer, flagged by `source` in `wrapping`.
+def win-path-refresh []: nothing -> string {
+    let src = ([($MODULE_DIR | path dirname | path dirname) "src" "platform.rs"] | path join)
+    let literal = "$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User');"
+    if not ($src | path exists) { return $literal }
+    # The const is a single quoted line in Rust; take what is between the quotes.
+    let hit = (try {
+        open --raw $src | lines
+        | where {|l| $l | str contains "GetEnvironmentVariable('Path','Machine')" }
+        | where {|l| not ($l | str starts-with "//") }
+        | first
+    } catch { null })
+    if ($hit | is-empty) { return $literal }
+    let inner = ($hit | parse --regex '"(?<s>[^"]+)"' | get s? | default [] | first | default "")
+    if ($inner | is-empty) { $literal } else { $inner }
+}
+
+# ⭐ Where the rebuild snippet came from, and whether it still matches the engine.
+# The row to read is `matches_engine: false` — it means this gesture is describing
+# a Talos that no longer exists, and every verdict below it is suspect.
+export def wrapping []: nothing -> record {
+    let src = ([($MODULE_DIR | path dirname | path dirname) "src" "platform.rs"] | path join)
+    let from_source = ($src | path exists)
+    let used = (win-path-refresh)
+    {
+        source: (if $from_source { $src } else { "built-in fallback (no checkout beside this module)" })
+        assigns_not_appends: ($used | str contains "$env:Path=")
+        snippet: $used
+        # An APPEND would read `$env:Path=$env:Path+…` or `+=`. Today it does not,
+        # which is the whole hypothesis: the live process PATH is discarded.
+        keeps_live_path: (($used | str contains '$env:Path=$env:Path') or ($used | str contains '$env:Path+='))
+    }
+}
+
+# ⭐ Run the gesture that ACTUALLY fails, wrapped exactly as Talos wraps it.
+#
+# `path-view` answers "can that PATH see git?". This answers the operator's real
+# question — "does `claude plugin marketplace add` work when Talos runs it?" —
+# because a resolvable git is necessary but not sufficient: claude may look for git
+# its own way, and only running the thing settles that.
+#
+# READ-ONLY: `git --version` and `claude --version` identify themselves; the
+# marketplace add is run in --help form, never for real, so nothing is cloned or
+# registered.
+export def marketplace-add-dry []: nothing -> table {
+    if ($nu.os-info.name != "windows") {
+        return []  # the rebuild is Windows-only; POSIX wraps with the login shell
+    }
+    let refresh = (win-path-refresh)
+    [
+        # Both wrapped, so the comparison is apples to apples: the ONLY difference
+        # between the two rows of each pair is the PATH rebuild.
+        { what: "git --version (talos wrap)",     ps: ($refresh + " git --version") }
+        { what: "git --version (no wrap)",        ps: "git --version" }
+        { what: "claude --version (talos wrap)",  ps: ($refresh + " claude --version") }
+        # What `marketplace add` needs from git, without touching anything: --help
+        # exits 0 only if the git binary is really there and runnable.
+        { what: "git clone --help (talos wrap)",  ps: ($refresh + " git clone --help") }
+    ] | each {|c|
+        let r = (ps-probe $c.ps)
+        {
+            what: $c.what
+            # Judged on the EXIT CODE, not on "was there output": these are real
+            # commands, and `git clone --help` prints a wall of text whether or not
+            # git was found. Exit 0 is the only thing that means "this worked".
+            ok: ($r.code == 0)
+            # First line only: a version string, or the error that explains the row.
+            answer: (if ($r.where | is-empty) { null } else { $r.where | lines | first | str trim })
+            note: $r.note
+        }
+    }
+}
+
 # Run one PowerShell snippet and report WHAT HAPPENED, not just whether output
 # came back. `found: false` means the exe was not on that PATH; `note` carries the
 # reason when the probe itself could not run — the two must never look alike.
@@ -359,11 +444,18 @@ def ps-probe [snippet: string]: nothing -> record {
     let r = (do { ^powershell.exe -NoProfile -Command $snippet } | complete)
     let out = ($r.stdout? | default "" | str trim)
     let err = ($r.stderr? | default "" | str trim)
-    if ($r.exit_code? | default 0) != 0 and ($out | is-empty) {
+    let code = ($r.exit_code? | default 0)
+    if $code != 0 and ($out | is-empty) {
         # A non-zero exit with nothing on stdout is a BROKEN PROBE, not an absence.
-        return { found: false, where: null, note: $"probe failed: exit ($r.exit_code?) ($err)" }
+        # ⚠️ 127 is what Talos's own wrapper returns for CommandNotFoundException
+        # (platform.rs), so it is worth naming rather than lumping in.
+        let why = (if $code == 127 { "command not found (exit 127)" } else { $"exit ($code)" })
+        return { found: false, where: null, note: ($"probe failed: ($why) ($err)" | str trim), code: $code }
     }
-    { found: ($out | is-not-empty), where: (if ($out | is-empty) { null } else { $out }), note: null }
+    # `code` travels so a caller running a REAL command (not just resolving a name)
+    # can judge on the exit status instead of on "was there output" — `git clone
+    # --help` prints plenty either way.
+    { found: ($out | is-not-empty), where: (if ($out | is-empty) { null } else { $out }), note: null, code: $code }
 }
 
 # The PATH entries Talos LOSES by rebuilding from the registry.
@@ -518,8 +610,10 @@ export def capture [
         machine: (os)
         managers: (managers)
         commands: $rows
+        wrapping: (wrapping)
         path_view: (path-view "git")
         path_lost: (path-lost)
+        marketplace_add_dry: (marketplace-add-dry)
     } | to yaml | save --force ([$dir "INDEX.yaml"] | path join)
 
     print $"capture written to: ($dir)"
@@ -566,11 +660,25 @@ export def main [
     # find git fails here, not in the drift table, and reading the tables in that
     # order is what tells the two apart.
     print "\n=== PATH: does a Talos-run command see what you see? ==="
+    # The wrapping FIRST: it says where the snippet came from, and a snippet read
+    # from a stale source would make every row below it meaningless.
+    let wrap = (wrapping)
+    $wrap | print
     let pv = (path-view "git")
     $pv | print
+
+    # ⚠️ A probe that could not RUN must never be read as "git is absent" — that is
+    # the defect this section shipped with once (nu ate the PowerShell parentheses
+    # and both powershell rows came back false on a healthy machine).
+    let broken = ($pv | where note != null)
+    if ($broken | is-not-empty) {
+        print "  ⚠️ SOME PROBES DID NOT RUN — the rows below are not evidence of anything:"
+        $broken | select source note | print
+    }
+
     let lost = (path-lost)
-    let wrapped_blind = ($pv | where source =~ "talos_wrap" | where not found | is-not-empty)
-    let elsewhere_ok = ($pv | where source !~ "talos_wrap" | where found | is-not-empty)
+    let wrapped_blind = ($pv | where source =~ "talos_wrap" | where note == null | where not found | is-not-empty)
+    let elsewhere_ok = ($pv | where source !~ "talos_wrap" | where note == null | where found | is-not-empty)
     if $wrapped_blind and $elsewhere_ok {
         print "  ⚠️ git is on YOUR PATH but NOT on the one Talos builds."
         print "     Talos rebuilds \$env:Path from the Machine+User registry keys, so anything"
@@ -584,6 +692,25 @@ export def main [
         print "  These directories are on the live PATH but NOT in the registry — a"
         print "  Talos-run command cannot see them (harmless unless a tool lives there):"
         $lost | print
+    }
+
+    # ⭐ Resolving a name is necessary, not sufficient. This RUNS the gesture that
+    # actually fails, wrapped the way Talos wraps it — the only thing that settles
+    # whether `marketplace add` can work.
+    let dry = (marketplace-add-dry)
+    if ($dry | is-not-empty) {
+        print "\n=== the failing gesture, run as Talos runs it (read-only) ==="
+        $dry | print
+        let wrapped_fails = ($dry | where what =~ "talos wrap" | where not ok | is-not-empty)
+        let unwrapped_ok = ($dry | where what =~ "no wrap" | where ok | is-not-empty)
+        if $wrapped_fails and $unwrapped_ok {
+            print "  ⚠️ CONFIRMED: the command works unwrapped and FAILS with Talos's wrapping."
+            print "     The PATH rebuild is the cause. Fix = make it APPEND to \$env:Path"
+            print "     instead of assigning over it (src/platform.rs WIN_PATH_REFRESH)."
+        } else if (not $wrapped_fails) {
+            print "  ✔ git and claude answer under Talos's wrapping — the PATH is NOT the cause."
+            print "    If a marketplace add still fails, capture its output: the cause is elsewhere."
+        }
     }
 
     print "\n=== claude plugins: installed vs declared ==="
@@ -606,8 +733,10 @@ export def main [
             catalogue: $cat
             bulk: (bulk)
             coverage: $cov
+            wrapping: $wrap
             path_view: $pv
             path_lost: $lost
+            marketplace_add_dry: $dry
             plugins: (plugin-drift)
             sources: (sources)
             reachability: (reachability)
