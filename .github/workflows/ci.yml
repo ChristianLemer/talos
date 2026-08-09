@@ -70,6 +70,42 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+  windows-lints:
+    name: cargo test + clippy (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # ⭐ WHY a second platform, and why it is not redundant with the job above.
+      #
+      # beta.24 shipped a `dead_code` error that failed `clippy -D warnings` on WINDOWS
+      # ONLY: the function's callers are `#[cfg(all(test, unix))]`, so it is dead exactly
+      # there, while its `allow` was gated on `not(windows)`. CI was GREEN on that commit
+      # and could not have been otherwise — it ran on ubuntu alone. Re-running the four
+      # verifications harder on one OS would never have caught it.
+      #
+      # This repo is full of `cfg(target_os)` — the appmgmt probe, the AppMgmtStatus
+      # variants, `quiet_command`'s creation flags, the whole POSIX/Windows split in
+      # platform.rs. Every one of those is a place where a lint can be true on one
+      # platform and false on another, which makes single-platform linting structurally
+      # unable to protect the tree.
+      #
+      # No `cargo build` and no fmt here: fmt is platform-independent (the job above owns
+      # it) and release.yml already proves the Windows binary compiles, on tags. Lints and
+      # tests are the half that catches cfg-gated defects, and Windows runner minutes bill
+      # at 2× — so scope is what buys the check.
+      - name: Test
+        run: cargo test --all-targets
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
   js:
     name: node --test (pure model)
     runs-on: ubuntu-22.04

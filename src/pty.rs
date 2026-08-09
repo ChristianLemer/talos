@@ -54,7 +54,18 @@ pub fn safe_working_dir() -> Option<std::path::PathBuf> {
 ///
 /// Pure, so the rule that drove the fix is pinned without a Windows machine. Compares
 /// case-insensitively because Windows paths are.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+/// ⚠️ The gate names WHAT USES this, not a platform. It read `not(target_os = "windows")`
+/// and that was exactly backwards: the only callers are this module's tests, gated
+/// `#[cfg(all(test, unix))]`, so the function is dead precisely ON Windows — where the old
+/// gate withheld the allow and `clippy -D warnings` therefore failed, on the one platform
+/// this code is about.
+///
+/// ⚠️ And the reason it shipped is NOT that the four verifications were skipped. They were
+/// run, on a Mac, where this is green by construction; CI was green too and could not have
+/// been otherwise, because CI ran on ubuntu alone. A `cfg`-gated defect is invisible to a
+/// single-platform lint run — no amount of re-running the checks on one OS would have found
+/// it. That is why `ci.yml` now lints on windows-latest as well.
+#[cfg_attr(not(all(test, unix)), allow(dead_code))]
 pub fn claude_would_refuse(candidate: &str, cwd: &str) -> bool {
     let c = candidate.to_lowercase().replace('/', "\\");
     let d = cwd.to_lowercase().replace('/', "\\");

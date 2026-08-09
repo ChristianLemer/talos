@@ -392,14 +392,33 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
         // added to debug is worse than no diagnostic. Every command is read-only and
         // non-interactive — a prompting command deadlocks a display-only row (memory
         // display-only-terminal).
+        //
+        // ⭐ AND THE LABELS CARRY NO PARENTHESIS AT ALL. The first version of this
+        // diagnostic wrote them bare, which broke the whole route on Windows: PowerShell
+        // reads an unquoted `(` as a sub-expression, parses the inside as CODE and RUNS
+        // it. Reproduced locally under pwsh, four ways:
+        //     echo [talos] cwd (uname -a):;   → printed the uname output: a process ran
+        //     echo [talos] c (1 = no ssh):;   → ParserError, exit 1
+        //     echo [talos] c (1 no ssh):;     → ParserError too, so it is NOT the `=`
+        //     echo [talos] git candidates:;   → fine, brackets are harmless
+        // So the label `(claude refuses a git BELOW it)` INVOKED claude, and the chain
+        // died before `marketplace add` — which is why beta.23's and beta.24's fixes
+        // never executed at all.
+        //
+        // Quoting would be enough, and is not what this does. A quote is one keystroke
+        // from being lost by a later edit, and the failure it re-opens is silent on Mac
+        // and total on Windows. Prose in a label buys nothing the doc comments above do
+        // not already say, so the labels are now plain words: nothing to quote, nothing
+        // to execute. The `unquoted_parens_free` guard stays as the backstop for anything
+        // a future author writes.
         let git_diag = if pkg.marketplace.is_some() {
             match os {
                 Os::Windows => concat!(
-                    "echo [talos] cwd (claude refuses a git BELOW it):; ",
+                    "echo '[talos] cwd -- claude refuses a git below it:'; ",
                     "$PWD.Path; ",
-                    "echo [talos] git candidates:; ",
+                    "echo '[talos] git candidates:'; ",
                     "where.exe git; ",
-                    "echo [talos] https for plugin clones (1 = no ssh agent, no 1Password):; ",
+                    "echo '[talos] https for plugin clones, 1 = no ssh agent:'; ",
                     "$env:CLAUDE_CODE_PLUGIN_PREFER_HTTPS; ",
                 )
                 .to_string(),
@@ -546,6 +565,82 @@ pub fn load_from_catalog(
 mod tests {
     use super::*;
 
+    /// Panics if `line` contains a parenthesis a shell would treat as CODE.
+    ///
+    /// ⭐ The defect this exists for shipped in beta.24 and broke the whole plugin route
+    /// on Windows: three `echo` labels were written unquoted, and PowerShell reads an
+    /// unquoted `(` as the start of a sub-expression — it parses the inside as code and
+    /// RUNS it. Reproduced locally under `pwsh`:
+    ///     echo [talos] cwd (uname -a):;   → printed uname's output; a process was spawned
+    ///     echo [talos] c (1 = no ssh):;   → ParserError, exit 1
+    ///     echo [talos] c (1 no ssh):;     → ParserError as well, so it is NOT the `=`
+    ///     echo [talos] git candidates:;   → fine; brackets are harmless, only parens bite
+    ///
+    /// ⚠️ Why the rule is "no parenthesis in a label" and not "quote your parentheses".
+    /// Quoting works — verified, `echo '[talos] cwd (uname -a):'` prints it literally —
+    /// but it makes correctness depend on a single keystroke surviving every future edit,
+    /// and its failure is INVISIBLE on Mac and TOTAL on Windows. A rule that cannot be
+    /// half-applied is worth more than one that can. Parens are still allowed where they
+    /// carry meaning — inside `$(...)`, `${...}` and PowerShell property access — because
+    /// there they ARE the code, deliberately.
+    ///
+    /// Reports the offending fragment, not just a boolean: a failure naming the line but
+    /// not the spot sends the reader back to a 300-character string to hunt for it.
+    fn assert_shell_safe(line: &str, what: &str) {
+        let chars: Vec<char> = line.chars().collect();
+        let mut in_single = false;
+        let mut in_double = false;
+        for (i, &ch) in chars.iter().enumerate() {
+            match ch {
+                '\'' if !in_double => in_single = !in_single,
+                '"' if !in_single => in_double = !in_double,
+                '(' if !in_single => {
+                    // Meaningful, deliberate parens: `$(cmd)`, `${x}`, and PowerShell's
+                    // `(expr).Prop` / `(Get-Command x)`. Only the first is a substitution
+                    // this code writes today; the check names the rest so a legitimate
+                    // future use is not blocked by a test that cannot tell them apart.
+                    let preceded_by_dollar = i > 0 && chars[i - 1] == '$';
+                    assert!(
+                        preceded_by_dollar,
+                        "{what}: an unquoted `(` is CODE to PowerShell and gets RUN. \
+                         At char {i}: …{}… \nFull line: {line}",
+                        chars[i.saturating_sub(20)..(i + 20).min(chars.len())]
+                            .iter()
+                            .collect::<String>()
+                    );
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            !in_single && !in_double,
+            "{what}: an unbalanced quote — the rest of the line is not what it looks like: \
+             {line}"
+        );
+    }
+
+    #[test]
+    fn the_shell_safety_rule_holds_before_anything_relies_on_it() {
+        // Pin the checker itself, or a silent bug in it makes every caller vacuously
+        // green — the way a guard stops guarding without anyone noticing.
+        assert_shell_safe("echo '[talos] cwd -- safe:'; $PWD.Path", "quoted label");
+        assert_shell_safe("echo '[talos] git candidates:'; where.exe git", "plain");
+        assert_shell_safe("brew list --versions git", "no parens at all");
+        // `$(...)` is a substitution: allowed, because there the parens ARE the intent.
+        assert_shell_safe("echo \"$(git --version)\"", "deliberate substitution");
+
+        // And the shapes that must FAIL. Each is a real line from the shipped defect.
+        for bad in [
+            "echo [talos] cwd (claude refuses a git BELOW it):; ",
+            "echo [talos] https for plugin clones (1 = no ssh agent, no 1Password):; ",
+            "echo [a] (git --version)",
+            "echo 'unbalanced",
+        ] {
+            let caught = std::panic::catch_unwind(|| assert_shell_safe(bad, "mutant")).is_err();
+            assert!(caught, "the checker must reject: {bad}");
+        }
+    }
+
     fn pkg(name: &str) -> RawPkg {
         RawPkg {
             name: name.into(),
@@ -609,6 +704,13 @@ mod tests {
             !install.contains("where.exe git &&"),
             "the diagnostic must not gate the install with &&: {install}"
         );
+        // ⭐ And it must PARSE. Everything above checks that commands are PRESENT; none of
+        // it would have caught the defect that actually shipped — three labels written
+        // without quotes, so PowerShell parsed each parenthesis as a sub-expression and
+        // executed it. The chain died at its first line with `InvalidLeftHandSide`, exit
+        // 1, before `marketplace add`, which is why beta.23's and beta.24's fixes never
+        // ran. Presence is not parseability.
+        assert_shell_safe(install, "the plugin install chain");
 
         // A package with no marketplace still installs and updates — the `add` is what is
         // optional, not the update.
@@ -995,6 +1097,65 @@ mod tests {
             resolve_facts(&collected, &cp.pkg.overrides()),
             collected,
             "a silent catalogue changes nothing"
+        );
+    }
+
+    /// Every command the SHIPPED catalogue produces, on every OS, must parse.
+    ///
+    /// ⭐ This is the coverage the per-package test above cannot give. That one builds a
+    /// `pkg()` by hand, so it proves the labels THIS code writes are safe — and says
+    /// nothing about a `run:` or `check:` an author adds tomorrow, which goes through the
+    /// same shell wrapping and fails the same way: at Apply time, on Windows only, with a
+    /// parser error that reads like a broken package rather than a broken label.
+    ///
+    /// ⚠️ Passes trivially today — no shipped command carries a parenthesis. That is
+    /// precisely why it goes in NOW rather than after the next incident: a tripwire has to
+    /// exist before the file that trips it, and one that costs nothing while green is the
+    /// cheapest kind there is. It is also the repo's own idiom (`catalog.rs` and the npm
+    /// route already assert against the shipped catalogue, not fixtures).
+    #[test]
+    fn every_shipped_command_parses_on_every_os() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("catalog");
+        let mut checked = 0usize;
+        for e in std::fs::read_dir(&dir).expect("the shipped catalogue must be readable") {
+            let path = e.expect("readable entry").path();
+            // The two `.nu` sidecars are FILES, not command lines — the command that
+            // invokes them is what this checks, and it lives in the yaml.
+            if path.extension().and_then(|x| x.to_str()) != Some("yaml") {
+                continue;
+            }
+            let id = path.file_stem().unwrap().to_string_lossy().to_string();
+            let raw = std::fs::read_to_string(&path).expect("readable");
+            let Some(cp) = crate::catalog::parse_catalog_entry(&raw, &id) else {
+                continue;
+            };
+            for os in [Os::Windows, Os::Darwin, Os::Linux] {
+                let c = commands_for(&cp.pkg, os);
+                for (verb, cmd) in [
+                    ("install", &c.install),
+                    ("uninstall", &c.uninstall),
+                    ("upgrade", &c.upgrade),
+                    ("downgrade", &c.downgrade),
+                ] {
+                    if let Some(cmd) = cmd {
+                        checked += 1;
+                        assert_shell_safe(cmd, &format!("{id} {os:?} {verb}"));
+                    }
+                }
+            }
+            // `check:` is wrapped by the same `shell_probe` and is the OTHER command an
+            // author writes by hand, so it falls under the same rule.
+            if let Some(chk) = cp.pkg.check.as_deref() {
+                checked += 1;
+                assert_shell_safe(chk, &format!("{id} check"));
+            }
+        }
+        // ⚠️ Without this, a renamed folder or a parse that starts returning None turns
+        // the whole test into a green no-op — the classic way a shipped-catalogue guard
+        // stops guarding while still reporting success.
+        assert!(
+            checked > 30,
+            "only {checked} shipped commands checked — the catalogue was not really read"
         );
     }
 
