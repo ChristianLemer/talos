@@ -333,8 +333,20 @@ pub fn exe_sibling_dir(exe: &std::path::Path) -> PathBuf {
 
 // Windows PATH refresh: an install writes the registry but does NOT propagate the PATH
 // to already-running processes → a freshly installed tool would read "absent" without this.
+//
+// ⚠️ It APPENDS. It used to ASSIGN, and that was a real defect, confirmed on a real
+// machine (beta.20): `git --version` worked in the operator's own PowerShell while
+// `claude plugin marketplace add` failed inside Talos saying git was missing.
+// Assigning threw away the live process PATH and rebuilt it from two registry keys,
+// so anything living ONLY in the process environment disappeared — an MSIX/Store
+// shim under WindowsApps, a directory an installer put on the session PATH only.
+// `marketplace add` shells out to git, so it was the first gesture to notice; every
+// probe was equally blind, silently.
+//
+// The live PATH comes FIRST: it is the more specific answer (what this process was
+// actually given), and PowerShell resolves left to right. Duplicates are harmless.
 const WIN_PATH_REFRESH: &str =
-    "$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User');";
+    "$env:Path=$env:Path+';'+[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User');";
 
 /// The USER's POSIX shell (resolved from $SHELL, fallback /bin/zsh then
 /// /bin/sh). "What the user sees in their terminal" — IT is the one that knows
@@ -455,6 +467,46 @@ mod tests {
         assert_eq!(p.cmd, "powershell.exe");
         assert!(p.args.last().unwrap().contains("exit 127"));
         assert!(p.args.last().unwrap().contains("node --version"));
+    }
+
+    #[test]
+    fn windows_path_refresh_keeps_the_live_path() {
+        // ⭐ FIELD-CONFIRMED (Windows, beta.20): `git --version` worked in the
+        // operator's PowerShell and `claude plugin marketplace add` failed inside
+        // Talos saying git was missing. The cause was this prefix ASSIGNING over
+        // $env:Path — the live process PATH was discarded and rebuilt from two
+        // registry keys, so anything present only in the process environment
+        // vanished: an MSIX/Store shim under WindowsApps, a directory an installer
+        // added to the session only. `marketplace add` shells out to git, so it was
+        // the first gesture to notice.
+        //
+        // The refresh must still HAPPEN (a freshly installed tool must be visible
+        // without restarting Talos) — it must simply not be destructive.
+        assert!(
+            WIN_PATH_REFRESH.contains("$env:Path=$env:Path"),
+            "the refresh must APPEND to the live PATH, never replace it: {WIN_PATH_REFRESH}"
+        );
+        // Both registry scopes still consulted — that is what the refresh is FOR.
+        for scope in ["'Path','Machine'", "'Path','User'"] {
+            assert!(
+                WIN_PATH_REFRESH.contains(scope),
+                "{scope} must still be read: {WIN_PATH_REFRESH}"
+            );
+        }
+        // And it must reach the two wrappers, or the fix is theoretical: these are
+        // the only two places that build a Windows command line.
+        for line in [
+            shell_probe(Os::Windows, "git --version")
+                .args
+                .pop()
+                .unwrap(),
+            pty_shell(Os::Windows, "git --version").args.pop().unwrap(),
+        ] {
+            assert!(
+                line.contains("$env:Path=$env:Path"),
+                "a wrapper lost the non-destructive refresh: {line}"
+            );
+        }
     }
 
     #[test]
