@@ -1,0 +1,33 @@
+# Line endings — LF in the repository AND in the working tree, on every platform.
+#
+# ⭐ This is not a style preference, it is a correctness requirement. Four tests in this
+# tree are TEXT-LEVEL guards: they `include_str!` a source file and assert on the shape of
+# what they find, because the defect they hold is the ABSENCE or POSITION of a call, which
+# no unit test can reach (`every_presence_observation_is_recorded`,
+# `every_ui_locking_message_has_a_handler`, `the_ladder_filters_the_batch_…`,
+# `probes_and_actions_agree_on_where_they_run`). `include_str!` embeds the bytes AS THEY SIT
+# ON DISK.
+#
+# So with git's default `core.autocrlf=true` on Windows, those files arrive CRLF and a
+# search for `"\n}\n"` finds nothing: the guard panics instead of guarding. That is exactly
+# what happened — 225 tests green on Windows, one red, invisible to ubuntu-only CI for as
+# long as CI was ubuntu-only.
+#
+# `text=auto eol=lf` normalises on commit and checks out LF everywhere, which makes the
+# bytes a Rust test reads the same on every machine. The `\r`-stripping in those tests stays
+# as belt-and-braces: this file governs a fresh clone, not a working tree someone already
+# has, nor a zip download.
+* text=auto eol=lf
+
+# Binaries and images: never touched, or the content is corrupted.
+*.png binary
+*.ico binary
+*.icns binary
+*.zip binary
+*.exe binary
+
+# ⚠️ Captured tool output used as a test fixture is BYTE-EXACT evidence — it is what a real
+# machine printed, and `parse_winget_list` slices it by fixed-width header offsets. Leave it
+# exactly as captured: a normalisation here would silently move the columns the parser
+# depends on.
+tests/fixtures/** -text

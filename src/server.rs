@@ -2807,7 +2807,17 @@ mod tests {
     /// `Action::Install` instead of to `a`; and deleting the filter outright.
     #[test]
     fn the_ladder_filters_the_batch_after_action_for_and_never_a_row_button() {
-        let src = include_str!("server.rs");
+        // ⚠️ `\r` stripped FIRST. `include_str!` embeds the file as it sits on disk, and
+        // with no `.gitattributes` git checks this tree out CRLF on Windows — so the
+        // `"\n}\n"` this test looks for to find the end of a function body matched nothing
+        // there and the `expect` panicked. Normalised at the source rather than at the one
+        // search, so every assertion below reasons about the same text on every platform.
+        //
+        // ⭐ A PRE-EXISTING defect, found on the FIRST run of the windows-latest CI job
+        // added in the same commit as this note — 225 tests green, this one red, and
+        // ubuntu-only CI could never have seen it. That is the class of thing that job is
+        // for, and it earned its cost immediately.
+        let src = include_str!("server.rs").replace('\r', "");
         // Ignore this test module, or its own mentions would satisfy the assertions.
         let code = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
 
