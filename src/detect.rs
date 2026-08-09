@@ -193,8 +193,54 @@ fn system_probe(step: &Step, os: Os) -> Option<Probe> {
     Some(shell_probe(os, &mgr.presence_command(sid)))
 }
 
+/// The machine-wide installed table: lowercased manager id → version.
+pub type BulkPresence = std::collections::HashMap<String, String>;
+
+/// Answer the MANAGER half of presence from the machine-wide listing instead of
+/// spawning a per-package probe.
+///
+/// `None` means "no answer here, probe as before" — either there is no table, or
+/// this package is not on the native manager's route. `Some` carries the verdict
+/// AND the evidence, whose cmdline names the listing rather than a command that
+/// never ran.
+fn system_from_bulk(step: &Step, os: Os, bulk: Option<&BulkPresence>) -> Option<ProbeResult> {
+    let bulk = bulk?;
+    let mgr = native_manager(os)?;
+    let sid = step.system_id.as_deref()?;
+    if step.route.as_deref() != Some(mgr.route) {
+        return None;
+    }
+    let cmdline = mgr.presence_scan_command();
+    Some(match bulk.get(&sid.to_lowercase()) {
+        // In the listing: present, and the listing IS the evidence.
+        Some(v) => ProbeResult {
+            ok: true,
+            code: 0,
+            output: format!("{sid} {v}"),
+            cmdline,
+        },
+        // Consulted and absent: no process needed to conclude that either.
+        None => ProbeResult {
+            ok: false,
+            code: 1,
+            output: format!("{sid}: not in the installed list"),
+            cmdline,
+        },
+    })
+}
+
 /// Detailed presence. Order: check → binary+manager → content-list → exit-code.
 pub fn detect_present_detailed(step: &Step, os: Os) -> Presence {
+    detect_present_detailed_with(step, os, None)
+}
+
+/// Presence, with an optional machine-wide listing to consult instead of spawning a
+/// per-package manager probe.
+///
+/// `bulk = None` ⇒ probe exactly as before. That is what makes this reversible: an
+/// unreadable listing degrades to today's behaviour, never to a screen of false
+/// absents (which would make Apply offer to install what is already there).
+pub fn detect_present_detailed_with(step: &Step, os: Os, bulk: Option<&BulkPresence>) -> Presence {
     // 1. check (config-atom) — verbatim, exit 0 = converged.
     if let Some(check) = &step.check {
         let probe = shell_probe(os, check);
@@ -211,8 +257,17 @@ pub fn detect_present_detailed(step: &Step, os: Os) -> Presence {
     {
         let bin = presence_probe(step.detect.as_deref(), os).map(|p| run_probe_detailed(&p));
         let bin_ok = bin.as_ref().map(|d| d.ok).unwrap_or(false);
+        // The MANAGER half. A machine-wide listing answers it without a process; no
+        // listing (or a package on another route) falls back to probing.
+        //
+        // ⚠️ The BINARY half above stays per-package on purpose: presence is
+        // `bin_ok || system_ok`, and a package can be present outside its manager
+        // (git from Xcode CLT — the hole talos-scope-second-axis closed). Dropping
+        // it would re-open that. `sp` still decides `external`, so it is computed
+        // even when the listing answered: it says "this package HAS a manager
+        // route", which is a fact about the catalogue, not a probe of the machine.
         let sp = system_probe(step, os);
-        let sd = sp.as_ref().map(run_probe_detailed);
+        let sd = system_from_bulk(step, os, bulk).or_else(|| sp.as_ref().map(run_probe_detailed));
         let system_ok = sd.as_ref().map(|d| d.ok).unwrap_or(false);
         let present = bin_ok || system_ok;
         if !present {
@@ -255,7 +310,18 @@ pub fn detect_present_detailed(step: &Step, os: Os) -> Presence {
     if matches!(step.route.as_deref(), Some("claude-plugin") | Some("skill")) {
         return detect_agent_content(step);
     }
-    // 4. exit-code (system manager without a binary detect).
+    // 4. exit-code (system manager without a binary detect). This stage is a pure
+    //    manager probe, so the listing replaces it whole — there is no binary half
+    //    to preserve here.
+    if let Some(d) = system_from_bulk(step, os, bulk) {
+        let v = version_from(step, &d.output);
+        return Presence {
+            present: Some(d.ok),
+            version: Some(v),
+            diag: Some(d),
+            ..Default::default()
+        };
+    }
     if let Some(probe) = system_probe(step, os) {
         let d = run_probe_detailed(&probe);
         let v = version_from(step, &d.output);
@@ -299,6 +365,80 @@ mod tests {
             categories: vec!["misc".into()],
             overrides: Overrides::default(),
         }
+    }
+
+    #[test]
+    fn a_bulk_hit_replaces_the_manager_probe() {
+        let mut s = step();
+        s.route = Some("brew".into());
+        s.system_id = Some("jq".into());
+        s.detect = None; // no binary probe: isolate the manager half
+        let mut bulk = std::collections::HashMap::new();
+        bulk.insert("jq".to_string(), "1.8.2".to_string());
+        let p = detect_present_detailed_with(&s, Os::Darwin, Some(&bulk));
+        assert_eq!(p.present, Some(true));
+        assert_eq!(p.version.as_deref(), Some("1.8.2"));
+        // The evidence must name the listing, not a per-package command that never ran.
+        assert!(
+            p.diag.as_ref().unwrap().cmdline.contains("brew list"),
+            "{:?}",
+            p.diag
+        );
+    }
+
+    #[test]
+    fn a_package_absent_from_the_table_is_absent() {
+        let mut s = step();
+        s.route = Some("brew".into());
+        s.system_id = Some("not-installed".into());
+        s.detect = None;
+        let bulk = std::collections::HashMap::new();
+        let p = detect_present_detailed_with(&s, Os::Darwin, Some(&bulk));
+        assert_eq!(p.present, Some(false));
+    }
+
+    #[test]
+    fn no_table_falls_back_to_the_per_package_probe() {
+        // ⭐ The reversibility guarantee: None means "probe as before", so an
+        // unreadable listing degrades to today's behaviour rather than to a screen
+        // of false absents.
+        let mut s = step();
+        s.route = Some("brew".into());
+        s.system_id = Some("definitely-not-a-package-xyz".into());
+        s.detect = None;
+        let p = detect_present_detailed_with(&s, Os::Darwin, None);
+        // Whatever the real machine answers, the point is that it ASKED: a probe ran,
+        // so there is a per-package command line in the evidence.
+        assert!(
+            p.diag
+                .as_ref()
+                .is_some_and(|d| d.cmdline.contains("definitely-not-a-package-xyz")),
+            "the fallback must run a per-package probe: {:?}",
+            p.diag
+        );
+    }
+
+    #[test]
+    fn the_binary_probe_still_answers_for_a_package_outside_its_manager() {
+        // ⭐ The hole talos-scope-second-axis was written for: `git` from Xcode CLT
+        // is PRESENT while brew never heard of it. The bulk table says absent, the
+        // binary probe says present, and `bin_ok || system_ok` must still win.
+        if cfg!(target_os = "windows") {
+            return;
+        }
+        let mut s = step();
+        s.route = Some("brew".into());
+        s.system_id = Some("git".into());
+        s.detect = Some("printf v9.9.9".into()); // stands in for a binary that answers
+        let bulk = std::collections::HashMap::new(); // brew knows nothing
+        let p = detect_present_detailed_with(&s, Os::Darwin, Some(&bulk));
+        assert_eq!(
+            p.present,
+            Some(true),
+            "a binary outside its manager is still present: {:?}",
+            p.diag
+        );
+        assert!(p.external, "present, but not through its manager");
     }
 
     #[test]
