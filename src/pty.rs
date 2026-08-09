@@ -253,6 +253,29 @@ mod tests {
     }
 
     #[test]
+    fn probes_and_actions_agree_on_where_they_run() {
+        // ⭐ A row that ACTS correctly and DETECTS wrong is worse than one that fails
+        // outright: it reports absent, Apply installs, and the next scan reports absent
+        // again — a loop with no error message. That happens the moment the probe path
+        // and the pty path disagree about the cwd, so the two are pinned together here.
+        //
+        // Text-level, deliberately: the defect is the ABSENCE of a call in a function
+        // whose whole job is to build a Command, which the source shows exactly. Same
+        // technique as server.rs's `every_presence_observation_is_recorded`.
+        let src = include_str!("platform.rs");
+        let code = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        let at = code
+            .find("pub fn quiet_command")
+            .expect("quiet_command must exist");
+        let body = &code[at..(at + 700).min(code.len())];
+        assert!(
+            body.contains("safe_working_dir"),
+            "the probe path must use the SAME safe cwd as the pty, or a package can read \
+             absent while installing perfectly"
+        );
+    }
+
+    #[test]
     fn the_safe_dir_is_outside_any_user_profile() {
         let dir = safe_working_dir();
         // POSIX imposes no cwd — claude's guard is Windows-only, so overriding it there

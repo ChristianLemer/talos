@@ -9,17 +9,28 @@ use std::process::Command;
 /// (powershell/winget at scan time) creates ITS OWN console — hence the black window
 /// that appears "later", during the scan. CREATE_NO_WINDOW (0x0800_0000) suppresses it.
 /// Elsewhere (macOS/Linux): a plain `Command::new`, the flag does not exist.
+///
+/// ⭐ It also gets the same safe working directory the pty gets (`pty::safe_working_dir`).
+/// PROBES and ACTIONS must not disagree about where they run: `claude` refuses a `git.exe`
+/// living under the cwd, so a probe left on the launch folder could report a package
+/// absent while the action installs it perfectly — a row that acts correctly and detects
+/// wrong is worse than one that fails outright.
+///
+/// Not reachable today (plugin presence is a native disk read of `installed_plugins.json`,
+/// never a shell-out to `claude`), and set anyway: the cost is one call, and the day
+/// someone writes `detect: claude plugin list` the trap would be silent. Detect,
+/// don't remember — but detect from the same place you act.
 pub fn quiet_command(program: &str) -> Command {
-    let cmd = Command::new(program);
+    let mut cmd = Command::new(program);
+    if let Some(dir) = crate::pty::safe_working_dir() {
+        cmd.current_dir(dir);
+    }
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let mut cmd = cmd;
         cmd.creation_flags(CREATE_NO_WINDOW);
-        return cmd;
     }
-    #[cfg(not(target_os = "windows"))]
     cmd
 }
 
