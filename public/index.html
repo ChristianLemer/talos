@@ -397,6 +397,18 @@
       .rung-why { display:none; }
       details.rung-out .rung-why { display:inline; color:var(--dim); font-size:11px;
                                    font-style:italic; white-space:nowrap; }
+      /* The row's FACTS — what this package will do to you, shown at every rung. Same
+         empty-flex-item trap as .rung-why above: the WRAPPER collapses when a row carries no
+         fact, so a factless row is not widened by an empty span. Muted and small on purpose —
+         it is context for a decision, never a warning competing with the name. */
+      .row-facts:empty { display:none; }
+      .row-facts { display:inline-flex; gap:6px; }
+      .row-fact { color:var(--dim); font-size:11px; white-space:nowrap;
+                  border:1px solid var(--line); border-radius:4px; padding:0 5px; }
+      /* Only the password one is tinted, and only faintly: it is the single fact that will
+         STOP an Apply and wait for a human. "was blocked" is a memory and "takes a while" is
+         a duration — neither interrupts, so neither earns a colour. */
+      .row-fact.fact-uac { color:var(--warn, #d9a54a); border-color:var(--warn, #d9a54a); }
       /* While the machine scan runs, the panel is VISIBLE but not yet actionable:
          toggles/buttons are inert and slightly dimmed. Each row lights up as its
          probe answers (setStatus clears its own row), so the panel fills in live
@@ -1138,17 +1150,16 @@
            the announcement is "Everything, 6 items" — the same words the eye gets. -->
       <div id="ladder">
         <div class="ladder-q">How far do you want to go?</div>
-        <!-- max=5 and six detents: ⚡ Config only · 🧩 Extensions · 📦 Add missing ·
-             ☕ Unattended · 👀 Stay nearby · 🏗️ Everything. `value` starts at the TOP, which
-             `renderLadder` re-asserts from RUNGS.length — the markup only has to not
-             contradict it. ⚠️ If a seventh rung is ever added, THIS is the attribute that
-             does not derive from RUNGS and will silently cap the slider one short. -->
-        <input id="ladder-range" type="range" min="0" max="5" step="1" value="5"
+        <!-- max=2 and three detents: ⚡ Config only · 🧩 Extensions · 📦 Apps. `value` starts
+             at the TOP, which `renderLadder` re-asserts from RUNGS.length — the markup only
+             has to not contradict it. ⚠️ THIS attribute is the one thing in the feature that
+             does not derive from RUNGS, so a rung added or removed without touching it caps
+             the slider silently. Guarded by ladder-ui.test.mjs. -->
+        <input id="ladder-range" type="range" min="0" max="2" step="1" value="2"
                aria-label="How far this Apply goes"
                list="ladder-detents">
         <datalist id="ladder-detents">
           <option value="0"></option><option value="1"></option><option value="2"></option>
-          <option value="3"></option><option value="4"></option><option value="5"></option>
         </datalist>
         <!-- THE SCALE, labelled. C, on seeing the full-width zone: "avec une telle largeur
              on peut mettre les différents mots sur l'échelle". It fixes a real gap — until

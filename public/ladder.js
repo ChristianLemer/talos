@@ -50,19 +50,16 @@ export const RUNGS = [
   // count them as unknown.
   { key: "extensions", emoji: "🧩", name: "Extensions",
     promise: "Also plugins and skills. Downloaded into your profile — never installed on the machine" },
-  { key: "add-missing", emoji: "📦", name: "Add missing",
-    promise: "Installs what is absent. No updates" },
-  { key: "unattended", emoji: "☕", name: "Unattended",
-    // ⚠️ "Updates that…", not "nothing will interrupt you". The uac/403 gate governs
-    // UPGRADES only — an INSTALL flagged `uac` is admitted from rung 1 (ladder.rs's table
-    // says so in as many words: "an install of something known to elevate is STILL rung 1",
-    // because an install was explicitly asked for). So a bare "walk away" would promise
-    // something rung 1 already broke. The ☕ still carries the intent; the words stay exact.
-    promise: "Also the updates that ask you nothing. Only new installs may still prompt" },
-  { key: "stay-nearby", emoji: "👀", name: "Stay nearby",
-    promise: "Also updates that need your hand, or a page unblocked" },
-  { key: "everything", emoji: "🏗️", name: "Everything",
-    promise: "Also the slow ones. Allow time" },
+  // 📦 The machine, and NOTHING is excluded here — not the slow ones, not the ones that will
+  // ask for your hand. Three rungs replaced six: ☕ Unattended, 👀 Stay nearby and 🏗️
+  // Everything sorted upgrades by `uac`/`403`/`slow`, and those are per-package FACTS the row
+  // now carries in words. A rung that filtered them decided for the user, and the only way to
+  // learn WHY a line was missing was to drag the slider until it came back.
+  //
+  // ⚠️ So this promise must NOT claim you can walk away — it can stop on a password prompt.
+  // It says where things land, which is the one thing all three rungs answer.
+  { key: "apps", emoji: "📦", name: "Apps",
+    promise: "Also apps on the machine — every install and update. Some will ask for your hand" },
 ];
 
 // A range input's `.value` is a STRING. This turns it into the integer the wire needs.
@@ -181,15 +178,15 @@ export function rungAllows(rung, action, isConfig, isExtension, facts) {
   if (action === "uninstall") return true;
   // Never batched by Apply (mirrors AUTO_ACTS and the server's Install|Uninstall|Upgrade).
   if (action === "downgrade") return false;
-  // An extension installs INTO a host: rung 1, above config-atoms and below binaries. It
-  // stays rung 1 even if a fact says it elevates — the ROUTE earns the rung, not the
-  // observation (the Rust twin's table says the same, and pins it).
-  if (action === "install") return isConfig ? true : isExtension ? rung >= 1 : rung >= 2;
-  if (action === "upgrade") {
-    // ⚠️ Every threshold moved up by one when Extensions was inserted at 1. slow DOMINATES:
-    // the last rung is the only one that includes "the slow ones".
-    const needed = isSlow(facts) ? 5 : (facts?.uac || facts?.forbidden) ? 4 : 3;
-    return rung >= needed;
+  // ⭐ An action rides the rung of the KIND it acts on — your files, your profile, or the
+  // machine — and the FACTS no longer move it. `uac`/`403`/`slow` are shown on the row
+  // instead of filtering on the user's behalf.
+  //
+  // ⚠️ `facts` is still a parameter and is deliberately unused for the verdict: `isSlow` is
+  // exported for the row labels and the estimate, and dropping the argument would break the
+  // twin's shape for no gain. If it ever becomes unused THERE too, remove both together.
+  if (action === "install" || action === "upgrade") {
+    return isConfig ? true : isExtension ? rung >= 1 : rung >= 2;
   }
   return false;
 }

@@ -172,12 +172,22 @@ test("ladder: `rung-out` is DERIVED from rungReason, never from a second rule", 
   // label, i.e. a dimmed row that explains nothing.
   const why = appjs.match(/const RUNG_WHY = \{[^}]*\}/);
   assert.ok(why, "RUNG_WHY must hold the user-facing words");
-  for (const k of ["slow", "hand", "blocked", "update", "install"]) {
+  // ⭐ TWO keys where there were five. "slow", "hand" and "blocked" left this map when the
+  // rungs that sorted by those facts were cut — a fact can no longer hold a row out of a rung,
+  // so it can no longer be the reason one is dimmed. They did not leave the APP: see ROW_FACTS,
+  // which shows them on every row at every rung.
+  for (const k of ["extension", "app"]) {
     assert.match(why[0], new RegExp(`\\b${k}:`), `RUNG_WHY needs a word for "${k}"`);
   }
-  // The words are about the USER, not the mechanism: `uac` is our word, "your hand" is theirs.
-  assert.match(why[0], /needs your hand/, "the uac case must be said in the user's terms");
-  assert.ok(!/\buac\b/.test(why[0]), "…and never as the mechanism's");
+  // And the facts' words are still said in the USER's terms, not the mechanism's — that
+  // discipline moved to ROW_FACTS with them.
+  const facts = appjs.match(/const ROW_FACTS = \{[\s\S]*?\n\}/);
+  assert.ok(facts, "ROW_FACTS must hold the per-row fact words");
+  assert.match(facts[0], /asks for your password/, "the uac case must be in the user's terms");
+  assert.match(facts[0], /uac: \{/, "…keyed by the wire field, which is where `uac` may appear");
+  for (const k of ["uac", "forbidden", "slow"]) {
+    assert.match(facts[0], new RegExp(`${k}: \\{`), `ROW_FACTS needs an entry for "${k}"`);
+  }
 });
 
 test("ladder: a row out of reach is DIMMED, never hidden", () => {
@@ -233,41 +243,36 @@ test("ladder: the control OWNS its zone — full width, framed in the selection 
   }
 });
 
-test("ladder: rungReason names the fact by ASKING the rule, not by reading the fact", () => {
-  // A MEASURED mutation survivor, and the only one of the eight tried: replacing the walk
-  // down the rungs with `if (p?.slow) return "slow"` is exactly equivalent under today's
-  // table, so no behavioural test can see it — including the exhaustive cross-product one in
-  // ladder.test.mjs, which is not a weakness of that test but a fact about the two forms.
+test("ladder: rungReason reads the KIND and no fact at all", () => {
+  // ⭐ THIS TEST REPLACES a shape guard that pinned a `while` loop walking down the rungs to
+  // DERIVE which fact held a row back. That loop was a measured mutation survivor's antidote:
+  // `if (p?.slow) return "slow"` was exactly equivalent under the old table, so only the shape
+  // could be pinned, not the behaviour.
   //
-  // The difference only appears when the table MOVES: if `slow` ever stopped dominating, or
-  // if `forbidden` became the dominating fact, the direct read would keep captioning the row
-  // "slow — allow time" while something else held it back, and the user would step one rung
-  // right and watch it not come back. That is a lie they can check, which is the failure mode
-  // this whole task is about. So the shape is pinned where the behaviour cannot be.
+  // The loop is gone because the question is: no fact can hold a row out of a rung any more, so
+  // there is no fact to derive. What must be pinned instead is the inverse — that rungReason
+  // reads NO fact whatsoever. A fact creeping back in here would caption a row with something
+  // the rule does not act on, which is the same class of lie in a new shape.
   //
   // Read from model.js (not app.js) because that is where the rule layer lives.
   const modeljs = readFileSync(new URL("../public/model.js", import.meta.url), "utf8");
   const at = modeljs.indexOf("export function rungReason(");
   assert.notEqual(at, -1, "rungReason must exist in model.js, beside rungPlan");
   const body = modeljs.slice(at, modeljs.indexOf("\n}\n", at));
-  // ⚠️ The literal call is matched, so adding an argument turns this red and makes a human
-  // confirm the new one is threaded from the right place — which is the guard working. It bit
-  // when `isExtension` joined the rule.
-  assert.match(
-    body,
-    /while \(first > 0 && rungAllows\(first - 1, action, isConfig, isExt, p\)\) first--/,
-    "the fact is named by walking down to the lowest rung that admits the row",
-  );
-  // Only ONE fact may be read directly, and it is the tie-break between 👀's two — which is
-  // not a rung question at all (both sit on the same rung, so the rule cannot separate them).
-  // Still only ONE fact read directly. `p?.isExtension` is deliberately NOT in this pattern:
-  // it is a CLASS (what route installs this), not an adverse fact the rung walk could derive.
-  const reads = body.match(/p\?\.(slow|uac|forbidden)/g) || [];
-  assert.deepEqual(reads, ["p?.uac"],
-    "the only fact read directly is the uac/403 tie-break — everything else asks rungAllows");
-  // And `slow` in particular must never be read: it is the one the walk decides.
-  assert.ok(!/\bp\??\.?\bslow\b/.test(body.replace(/\/\/.*$/gm, "")),
-    "`slow` must be derived from the rule, never read — that is the surviving mutant");
+  // Comments are stripped first: they legitimately NAME the facts to explain why they left.
+  const code = body.replace(/\/\/.*$/gm, "");
+  for (const fact of ["slow", "uac", "forbidden"]) {
+    assert.ok(
+      !new RegExp(`\\b${fact}\\b`).test(code),
+      `rungReason must not read \`${fact}\` — the rungs no longer sort by it, so a caption \
+built on it would describe something the rule does not do`,
+    );
+  }
+  // It must still ASK the rule rather than restate it: a copied table would eventually put a
+  // reason on a row that IS in the plan.
+  assert.match(code, /rungAllows\(/, "the verdict comes from the rule, never from a second copy");
+  // And the two things it MAY read are the classes, which is what the rungs are now built on.
+  assert.match(code, /isExtension/, "the kind is what decides, so the kind is what it reads");
 });
 
 test("ladder: the scale carries all five words, built from RUNGS", () => {

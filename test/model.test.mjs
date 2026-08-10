@@ -809,16 +809,15 @@ test("ladder: rungPlan grows monotonically, and each row enters at ITS rung", ()
     // 0 — a config-atom to install: rung 0. canUninstall:false would derive it OUT of
     // scope, so it is given a route back; scope is a different gate and gates first.
     { i: 0, name: "Starship config", canUninstall: true, isConfig: true },
-    // 1 — an EXTENSION to install: rung 1. One row per rung, so the fixture demonstrates
-    // the whole scale — and this is the row that would have ridden with `rg` before.
+    // 1 — an EXTENSION: rung 1. One row per rung, so the fixture demonstrates the whole scale.
     { i: 1, name: "Chiron", canUninstall: true, isExtension: true },
-    // 2 — a plain install: rung 2
+    // 2 — an app to install: rung 2
     { i: 2, name: "rg", canUninstall: true },
-    // 3 — a quiet upgrade: rung 3
+    // 3, 4, 5 — apps to UPGRADE, one per fact. ⭐ All three now land on the SAME rung: the
+    // rungs that sorted by `uac` / `slow` are gone, and those facts are shown on the row
+    // instead. Kept in the fixture precisely to prove they no longer separate anything.
     { i: 3, name: "bat", canUninstall: true },
-    // 4 — an upgrade that elevates: rung 4
     { i: 4, name: "AWS CLI", canUninstall: true, uac: true },
-    // 5 — an upgrade that drags: rung 5
     { i: 5, name: "Xcode CLT", canUninstall: true, slow: true },
   ]);
   for (const i of [0, 1, 2, 3, 4, 5]) setDecision(m, i, "in");
@@ -829,15 +828,13 @@ test("ladder: rungPlan grows monotonically, and each row enters at ITS rung", ()
   assert.deepEqual([0, 1, 2, 3, 4, 5].map((i) => actionOf(m, i)),
     ["install", "install", "install", "upgrade", "upgrade", "upgrade"],
     "the fixture is what it claims");
-  assert.deepEqual(rungPlan(m, 0), [0]);
-  assert.deepEqual(rungPlan(m, 1), [0, 1], "🧩 adds the extension and NOT the binary");
-  assert.deepEqual(rungPlan(m, 2), [0, 1, 2]);
-  assert.deepEqual(rungPlan(m, 3), [0, 1, 2, 3]);
-  assert.deepEqual(rungPlan(m, 4), [0, 1, 2, 3, 4]);
-  assert.deepEqual(rungPlan(m, 5), [0, 1, 2, 3, 4, 5]);
+  assert.deepEqual(rungPlan(m, 0), [0], "⚡ the config-atom alone");
+  assert.deepEqual(rungPlan(m, 1), [0, 1], "🧩 adds the extension and NOT the app");
+  assert.deepEqual(rungPlan(m, 2), [0, 1, 2, 3, 4, 5],
+    "📦 adds every app at once — including the elevating and the slow one");
   // The top rung is exactly the rows a plain Apply would touch — the widget's count there
   // must equal what the diff view already shows, or the ladder contradicts the panel.
-  assert.deepEqual(rungPlan(m, 5), [0, 1, 2, 3, 4, 5].filter((i) => isActionable(m, i)));
+  assert.deepEqual(rungPlan(m, 2), [0, 1, 2, 3, 4, 5].filter((i) => isActionable(m, i)));
 });
 
 test("ladder: a removal is in EVERY rung, and an out-of-scope row is in none", () => {
@@ -898,13 +895,16 @@ test("ladder: rungSeconds reads the LOCAL secs of exactly the rung's rows", () =
   }
   assert.deepEqual(rungSeconds(m, 0), [3]);
   assert.deepEqual(rungSeconds(m, 1), [3, 0], "the extension is counted, at 0 = unknown");
-  assert.deepEqual(rungSeconds(m, 2), [3, 0, 12]);
-  assert.deepEqual(rungSeconds(m, 3), [3, 0, 12, 0], "the unmeasured row is present as 0, not dropped");
-  assert.deepEqual(rungSeconds(m, 4), [3, 0, 12, 0, 242]);
-  assert.deepEqual(rungSeconds(m, 5), [3, 0, 12, 0, 242, 1], "…and the slow-for-everyone row is 1s HERE");
+  assert.deepEqual(
+    rungSeconds(m, 2),
+    [3, 0, 12, 0, 242, 1],
+    "📦 carries every app's seconds, unmeasured rows present as 0 rather than dropped — and " +
+      "the slow-for-everyone row is 1s HERE, which is not a contradiction: the shared file " +
+      "classifies, the local one estimates",
+  );
   // One value per row the rung touches, always — a length mismatch is how "N items" and the
   // minutes beside it would come to describe different sets.
-  for (const r of [0, 1, 2, 3, 4, 5]) {
+  for (const r of [0, 1, 2]) {
     assert.equal(rungSeconds(m, r).length, rungPlan(m, r).length, `rung ${r}`);
   }
 });

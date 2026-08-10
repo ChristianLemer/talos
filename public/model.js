@@ -362,7 +362,7 @@ export function rungPlan(model, rung) {
     const a = actionOf(model, i);
     if (!AUTO_ACTS.includes(a)) continue;
     const p = model.pkgs.get(i);
-    if (!rungAllows(rung, a, p.isConfig, p.isExtension === true, p)) continue;
+    if (!rungAllows(rung, a, p.isConfig, p.isExtension === true)) continue;
     items.push(i);
   }
   return items;
@@ -400,38 +400,28 @@ export function rungSeconds(model, rung) {
 export function rungReason(rung, action, p) {
   const isConfig = p?.isConfig === true;
   const isExt = p?.isExtension === true;
-  const top = RUNGS.length - 1; // read from RUNGS so a sixth rung cannot leave this behind
+  const top = RUNGS.length - 1; // read from RUNGS so another rung cannot leave this behind
   // Ask the rule FIRST. In reach → there is nothing to explain.
-  if (rungAllows(rung, action, isConfig, isExt, p)) return null;
+  if (rungAllows(rung, action, isConfig, isExt)) return null;
   // Out at EVERY rung — a null action (out of scope, nothing to do) or a `downgrade`, which
   // Apply never batches. The RUNG is not what excludes these, so they get no rung reason and
   // the panel leaves them alone: dimming them would blame the slider for a row it does not
   // govern, and on this machine that is most of the list.
-  if (!rungAllows(top, action, isConfig, isExt, p)) return null;
-  // THE ACTION, before any fact: would this same row still be out with nothing adverse
-  // about it? Then the verb is the reason and the facts are beside the point.
-  const calm = { uac: false, forbidden: false, slow: false };
-  if (!rungAllows(rung, action, isConfig, isExt, calm)) {
-    return action === "install" ? "install" : "update";
-  }
-  // A FACT is the reason: the rule admits this verb here when the facts are calm, so
-  // something about THIS package is what refuses. WHICH one is derived, not asserted — walk
-  // down to the lowest rung that still admits this row and let the rule name the fact. Only
-  // 🏗️ admits the slow ones; 👀 admits the hand and the block.
+  if (!rungAllows(top, action, isConfig, isExt)) return null;
+  // ⭐ WHAT IS LEFT is the KIND, and only the kind. Three reasons became two, and the two that
+  // went ("slow", "hand", "blocked") are the point of the reshape: a fact can no longer hold a
+  // row out of a rung, so it can no longer be the reason one is dimmed. Those words did not
+  // disappear — they moved from "why this row is out of reach" to "what this row will do to
+  // you", shown on every row at every rung.
   //
-  // ⚠️ Deliberately not `if (p.slow) return "slow"`, which is EXACTLY equivalent today and
-  // therefore survives every test (a measured mutation survivor, kept here as the reason the
-  // longer form is the one that ships). The difference is what happens when the table moves:
-  // if `forbidden` ever became the dominating fact, or if `slow` stopped dominating, the
-  // direct read would keep saying "slow — allow time" about a row held back by something
-  // else, and the user would step one rung right and watch it not come back. The walk cannot
-  // say that, because it asks. ladder-ui.test.mjs pins the shape for the same reason.
-  let first = top;
-  while (first > 0 && rungAllows(first - 1, action, isConfig, isExt, p)) first--;
-  if (first >= top) return "slow";
-  // 👀's two facts. `uac` wins when both hold: "needs your hand" is the one the user can act
-  // on, and it is the one they will actually watch happen.
-  return p?.uac ? "hand" : "blocked";
+  // ⚠️ And the walk that derived the fact is gone with them. It existed because `slow`
+  // dominated `uac`/`403` and the dominance had to be ASKED rather than assumed; with the
+  // facts out of the rule there is nothing left to ask.
+  // A config-atom is admitted at rung 0, so it can never be out of reach and never reaches
+  // here. What remains is: an EXTENSION held out at rung 0 ("move to 🧩"), or an app held out
+  // at 0 or 1 ("move to 📦"). The key names WHERE it enters, which is the only actionable
+  // thing left to say.
+  return isExt ? "extension" : "app";
 }
 // The manual invert action a row button performs (label + direction + msg type).
 // ALWAYS inverts current machine state: absent→install, present→uninstall,

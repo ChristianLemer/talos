@@ -1558,12 +1558,12 @@ async fn apply_diff(
             // the candidate count, and `uninstall` — which no rung filters — is precisely
             // an action, not a property of a row.
             //
-            // The facts come from the STARTUP snapshot, so they cannot shift mid-Apply.
-            // A row with no entry (a plan longer than it was at boot — impossible today,
-            // guarded anyway) reads as "nothing known", which is the permissive direction
-            // for a preference and the same stance merge_presences takes for presence.
-            let f = state.facts.get(i).copied().unwrap_or_default();
-            if !crate::ladder::rung_allows(rung, a, step.is_config, step.is_extension, &f) {
+            // ⭐ NO FACTS ARE READ HERE ANY MORE. Three rungs replaced six, and the three that
+            // went sorted upgrades by `uac` / `403` / `slow` — so this loop used to look each
+            // row's facts up from the startup snapshot. The rung now depends only on WHAT KIND
+            // of thing the row is, and the facts reach the user another way: `step_json` puts
+            // them on the wire per row and the panel writes them in words.
+            if !crate::ladder::rung_allows(rung, a, step.is_config, step.is_extension) {
                 continue;
             }
             visual_plan.push((i, a));
@@ -2900,28 +2900,27 @@ mod tests {
         // the new numbering — the only exposure is a stale front within one launch, which the
         // absent-means-everything case below already covers.
         assert_eq!(msg(r#"{"type":"apply","rung":1}"#), Rung::Extensions);
-        assert_eq!(msg(r#"{"type":"apply","rung":3}"#), Rung::Unattended);
-        assert_eq!(msg(r#"{"type":"apply","rung":5}"#), Rung::Everything);
+        assert_eq!(msg(r#"{"type":"apply","rung":2}"#), Rung::Apps);
         // THE case that matters: a client that says nothing about the rung must get
         // today's behaviour, not the smallest one. Doing silently LESS than the user asked
         // is the worse direction of error, and every front shipped before this change
         // omits the field.
         assert_eq!(
             msg(r#"{"type":"apply","on":[1],"off":[]}"#),
-            Rung::Everything,
+            Rung::Apps,
             "an absent rung must not shrink the Apply"
         );
         // And garbage is not trusted into a smaller rung either. `as_u64` returns None for
         // a string and for a negative, so both land on the default rather than on rung 0 —
         // which is only safe BECAUSE the default is the largest rung.
-        assert_eq!(msg(r#"{"type":"apply","rung":"config"}"#), Rung::Everything);
-        assert_eq!(msg(r#"{"type":"apply","rung":-1}"#), Rung::Everything);
-        assert_eq!(msg(r#"{"type":"apply","rung":99}"#), Rung::Everything);
+        assert_eq!(msg(r#"{"type":"apply","rung":"config"}"#), Rung::Apps);
+        assert_eq!(msg(r#"{"type":"apply","rung":-1}"#), Rung::Apps);
+        assert_eq!(msg(r#"{"type":"apply","rung":99}"#), Rung::Apps);
         // Not even a message that failed to parse at all: `unwrap_or_default` gives Null,
         // and Null has no `rung`. (The `apply` arm reaches this with the same value the
         // `type` match read, so a Null can never actually get here — asserted so the
         // function stays total if that ever changes.)
-        assert_eq!(msg("not json at all"), Rung::Everything);
+        assert_eq!(msg("not json at all"), Rung::Apps);
     }
 
     /// WHERE the filter is, and where it must NOT be. Text-level for the same reason as
@@ -2997,8 +2996,7 @@ mod tests {
         // `is_extension` was added — which is the guard working, not a nuisance: a rung
         // criterion read off the wrong value would filter the wrong rows, silently.
         assert!(
-            code[filters..]
-                .starts_with("rung_allows(rung, a, step.is_config, step.is_extension, &f)"),
+            code[filters..].starts_with("rung_allows(rung, a, step.is_config, step.is_extension)"),
             "the filter must be applied to `a` (the action action_for returned) and to THIS \
              step's own flags — re-check the argument order if this just started failing"
         );

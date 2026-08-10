@@ -623,18 +623,32 @@ let scanning = false;
 // that 🏗️ alone admits, "an update" only on a row excluded for its VERB. The titles say what
 // the slider can do about it, because that is the question a dimmed row raises.
 const RUNG_WHY = {
-  slow: "slow — allow time",
-  hand: "needs your hand",
-  blocked: "blocked here",
-  update: "an update",
-  install: "an install",
+  extension: "an extension",
+  app: "an app",
 };
 const RUNG_WHY_TITLE = {
-  slow: "This one takes a while. Move the slider to 🏗️ Everything to include it.",
-  hand: "This one will ask you for a password or a confirmation. Move to 👀 Stay nearby to include it.",
-  blocked: "This one was blocked by the network last time. Move to 👀 Stay nearby to include it.",
-  update: "This rung installs and removes, but runs no updates. Move right to include it.",
-  install: "This rung applies config only. Move right to include it.",
+  extension: "This rung applies config only. Move to 🧩 Extensions to include it.",
+  app: "This one installs on the machine. Move to 📦 Apps to include it.",
+};
+
+// ⭐ WHAT A ROW WILL DO TO YOU — always shown, at every rung, for every row that carries a
+// fact. These three words used to appear ONLY when the slider hid the row, because ☕ 👀 🏗️
+// sorted by exactly these facts. Those rungs are gone; the words stayed and moved here.
+//
+// The reasoning C gave, and it is the better design: a rung SORTS, a label INFORMS. Filtered,
+// the same information could only be discovered by dragging the slider until a row came back —
+// so the app knew something about the package and made the user hunt for it. Written on the
+// row, it is read before clicking and the decision stays per package.
+//
+// ⚠️ They are FACTS, not warnings, and the wording keeps that: "asks for your password" is
+// what will happen, not advice. Two of them are also imperfect and the copy must not overstate
+// — `uac` misses prompts (watch.rs samples Talos's own process tree while Windows' consent
+// dialog lives outside it), and `403` is a memory of one machine's last attempt, not a
+// prediction. Hence "last time" on the block.
+const ROW_FACTS = {
+  uac: { text: "asks for your password", title: "This one will ask you for a password or a confirmation when it runs." },
+  forbidden: { text: "was blocked", title: "The network blocked this one the last time it was tried. It may work now." },
+  slow: { text: "takes a while", title: "This one is slow on at least one machine of the fleet. Allow time." },
 };
 function refreshLiveness() {
   const busy = applyRunning || scanning; // no action while running OR still scanning
@@ -1040,6 +1054,20 @@ function render(steps, profiles = [], columns = 2) {
     // shape as the slider moves, only its classes do.
     const why = document.createElement("span");
     why.className = "rung-why";
+    // ⭐ The row's FACTS, always visible — what this package will do to you, independent of
+    // the slider. Built here once, from the plan, because these values arrive with the plan
+    // and never change during a session: the ladder no longer sorts by them, so nothing
+    // re-computes them either.
+    const facts = document.createElement("span");
+    facts.className = "row-facts";
+    for (const key of ["uac", "forbidden", "slow"]) {
+      if (!s[key]) continue;
+      const f = document.createElement("span");
+      f.className = "row-fact fact-" + key;
+      f.textContent = ROW_FACTS[key].text;
+      f.title = ROW_FACTS[key].title;
+      facts.append(f);
+    }
     const badge = document.createElement("span");
     badge.className = "badge checking";
     badge.textContent = "⠹"; // pre-scan spinner, not a verdict yet
@@ -1094,7 +1122,9 @@ function render(steps, profiles = [], columns = 2) {
     // Add button. "My extras" = the packages set to ✓ (manualToggle "in").
     // Each state word sits immediately AFTER the control it describes, so the pairing
     // is spatial and needs no legend: [scope switch][its word] │ [desire][its word].
-    sum.append(sc, swScope, chk, swDesire, badge, name, note, why, delta, st, apply);
+    // `facts` sits right after the name and BEFORE the version delta: it describes the
+    // package, so it belongs with the name rather than with the numbers.
+    sum.append(sc, swScope, chk, swDesire, badge, name, facts, note, why, delta, st, apply);
     const panel = document.createElement("div");
     panel.className = "panel";
     const copy = document.createElement("button");
