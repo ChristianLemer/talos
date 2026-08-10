@@ -261,12 +261,23 @@ pub fn rung_allows(
         // your hand", everything stays last. The table test asserts the whole grid, which is
         // what catches a threshold left behind.
         //
-        // ⬜ OPEN — an extension's UPGRADE takes this path, not the rung-1 arm above, so it
-        // currently needs rung 3+. Unreachable today (`scan_outdated` asks only winget/brew,
-        // so no plugin can ever be marked outdated — the plugin-drift plan fixes that), and
-        // arguably wrong once it IS reachable: an extension upgrade engages exactly what its
-        // install engages, so rung 1 is the consistent answer. Left as-is deliberately rather
-        // than guessed, because the day it becomes reachable is the day it can be measured.
+        // ⬜ OPEN — an extension's UPGRADE takes THIS path, not the rung-1 arm above, so it
+        // needs rung 4. That is arguably wrong: an extension upgrade engages exactly what its
+        // install engages, so rung 1 is the consistent answer.
+        //
+        // ⚠️ And "unreachable" is only half true — `action_for` has TWO routes to Upgrade, and
+        // they differ here:
+        //   - via `f.outdated`: genuinely closed. `system_id` is filled only from `winget:` or
+        //     `brew:` (bundles.rs), so `outdated_for` short-circuits on `system_id?` and a
+        //     plugin can never be marked outdated. The plugin-drift work is what opens it.
+        //   - via `f.pin`: OPEN TODAY. A `version:` in a plugin's YAML would fire an Upgrade
+        //     immediately — the installed version IS read for this route (detect.rs, from
+        //     installed_plugins.json), so `compare_versions` has both sides.
+        // What keeps it from happening is a CONTENT decision, not an engine limit: none of the
+        // five shipped plugins declares `version:`, and the plugin-drift spec rejects a
+        // per-plugin pin on purpose ("it duplicates a number the marketplace already
+        // declares"). So adding one tomorrow would drop a two-second plugin onto 👀 "it will
+        // want your hand" — the exact incoherence this note is about.
         Action::Upgrade => {
             let needed = if is_slow(f) {
                 5 // slow DOMINATES: the spec's last rung excludes "the slow ones", full stop
@@ -379,6 +390,22 @@ mod tests {
                 true,
                 elevates,
                 [false, true, true, true, true, true],
+            ),
+            // ⚠️ AN EXTENSION'S UPGRADE IS NOT ON RUNG 1, and that is a known incoherence
+            // rather than an oversight — pinned so it is a DECISION someone can revisit, not a
+            // surprise. It takes the Upgrade arm, so a quiet one needs rung 3.
+            //
+            // Reachable today via a `version:` pin (the `f.outdated` route is closed for
+            // plugins, but `f.pin` is not — see the arm's note). No shipped plugin declares
+            // one, so nothing hits this in practice; the day one does, this row is what says
+            // the ladder was asked and answered rather than never consulted.
+            (
+                "extension upgrade, quiet",
+                Action::Upgrade,
+                false,
+                true,
+                quiet,
+                [false, false, false, true, true, true],
             ),
             // a plain install: rung 1 onward. NOT rung 0 — a fresh install DOWNLOADS,
             // so it can be slow, elevate, or be blocked; "installs" and "fast" contradict
