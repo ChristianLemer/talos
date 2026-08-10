@@ -124,10 +124,33 @@ async fn emit_outdated_if(
     }
 }
 
-/// The server's shared state: the Plan scanned ONCE at startup (pure data,
-/// no pty/network), plus the current OS. Cloned (Arc) into each connection.
+/// The server's shared state: the Plan read from disk (pure data, no pty/network),
+/// plus the current OS. Cloned (Arc) into each connection.
 struct AppState {
-    plan: Plan,
+    /// The catalogue, re-read on every Refresh — a `RwLock` because it is read by
+    /// every scan and every action, and replaced only by `rescan`.
+    ///
+    /// ⭐ It used to be read ONCE at startup, so editing `catalog/` while Talos ran
+    /// changed nothing until a relaunch: a new yaml stayed invisible, a deleted one
+    /// stayed on screen, an edited command kept acting on its old value. That is the
+    /// wrong default for a tool whose whole doctrine is "detect, don't remember" — the
+    /// catalogue is an observation of the disk exactly as presence is an observation of
+    /// the machine.
+    ///
+    /// ⚠️ Replaced ONLY on `rescan`, never mid-Apply. `server.rs`'s startup note already
+    /// stated the rule for behaviour facts — neither the plan nor the facts may shift
+    /// under a running Apply — and it holds here for a harder reason: `last_seen` is a
+    /// POSITIONAL Vec and the front addresses rows by index, so a plan that grew or
+    /// shrank between the decision and the act would point a gesture at the wrong
+    /// package. What makes that safe is not a lock but the sequence: messages on a
+    /// connection are handled one at a time, so `rescan` cannot interleave with `apply`.
+    /// The front also disables Refresh while `applyRunning || scanning`.
+    plan: tokio::sync::RwLock<Plan>,
+    /// Where the plan came from, kept so a Refresh can read the same two folders again.
+    /// Resolved once at startup (beside the exe, or the cwd in dev) — the LOCATION is
+    /// not re-derived, only its contents are re-read.
+    catalog_dir: PathBuf,
+    bundles_dir: PathBuf,
     profiles: Profiles,
     os: Os,
     /// macOS App Management permission status, probed ONCE at startup. Not
@@ -438,7 +461,11 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
     };
     let last_seen = tokio::sync::Mutex::new(vec![None; plan.steps.len()]);
     let state = Arc::new(AppState {
-        plan,
+        plan: tokio::sync::RwLock::new(plan),
+        // Kept so Refresh can re-read the SAME two folders. The location is resolved once
+        // (beside the exe, or the cwd in dev); only its contents are re-read.
+        catalog_dir,
+        bundles_dir,
         profiles,
         os,
         last_seen,
@@ -587,12 +614,12 @@ fn step_json(
     })
 }
 
-async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
-    let steps = &state.plan.steps;
-
-    // 1) REAL plan — flat steps scanned from the catalog (no more hardcoding). Same keys
-    // the front expects (see app.js render/ws.onmessage). Bundles are the top cards,
-    // sent separately as `profiles` (profiles.rs) — steps no longer carry a bundle layer.
+/// The `plan` message: the whole catalogue as the front needs it.
+///
+/// ONE builder for both the connect send and the Refresh reload. Duplicating it is how the
+/// two drift — a field added for the reload but not at connect (or the reverse) is a defect
+/// nobody sees until a specific gesture, since both paths feed the same renderer.
+fn plan_message(state: &AppState, steps: &[crate::bundles::Step]) -> Value {
     let steps_json: Vec<_> = steps
         .iter()
         .enumerate()
@@ -613,9 +640,15 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
         })
         .collect();
     // REAL consent (read from the local store): undecided at 1st boot → the front
-    // opens the sharing dialog. REAL selection: the persisted toggles the
-    // front restores (yellow). Intent is remembered, presence is re-detected.
-    let plan = json!({
+    // opens the sharing dialog. REAL selection: the persisted toggles the front restores
+    // (yellow). Intent is remembered, presence is re-detected.
+    //
+    // ⭐ Re-read here rather than captured, which is what makes a reload correct: the
+    // selection is keyed by NAME (`selection.rs`), so a package added to the catalogue
+    // between two reads keeps whatever the user had already decided about the others. That
+    // property is why reloading the catalogue is safe at all — an index-keyed selection
+    // would shift under every insertion.
+    json!({
         "type": "plan",
         "steps": steps_json,
         "selection": read_selection(&state.data_dir),
@@ -624,8 +657,30 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
         "consent": read_consent(&state.consent),
         "build": crate::build_info::build_json(), // exact stamp of the source snapshot (no more hardcoding)
         "appmgmt": appmgmt_wire(state.appmgmt)
-    });
-    let _ = socket.send(Message::Text(plan.to_string())).await;
+    })
+}
+
+async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
+    // A SNAPSHOT, not a borrow of the lock. Every reader below awaits repeatedly (socket
+    // sends, spawn_blocking probes), and holding a read guard across those awaits would
+    // block the `rescan` writer for the length of a whole scan.
+    //
+    // ⭐ It is also the correct SEMANTICS, which is the better reason: a scan must reason
+    // about ONE version of the catalogue from its first row to its last. Reading through
+    // the lock would let a reload land mid-scan and split one scan across two catalogues —
+    // emitting row 7 of the old plan and row 8 of the new, with `last_seen` indices
+    // straddling both. The clone is 33 steps of pure data.
+    let steps = state.plan.read().await.steps.clone();
+    let steps = &steps;
+
+    // 1) REAL plan — flat steps read from the catalog (no more hardcoding). Same keys
+    // the front expects (see app.js render/ws.onmessage). Bundles are the top cards,
+    // sent separately as `profiles` (profiles.rs) — steps no longer carry a bundle layer.
+    let _ = socket
+        .send(Message::Text(
+            plan_message(state.as_ref(), steps).to_string(),
+        ))
+        .await;
 
     // 2) REAL SCAN — see scan_and_emit. Done at connect AND on every `rescan` (Refresh
     // button). "Detect, don't remember".
@@ -727,6 +782,58 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
             // Without this handler, the message fell into _ => {} and the UI stayed veiled
             // (steps-refreshing) without ever receiving a response → "refresh forever".
             "rescan" => {
+                // ⭐ Refresh re-reads the CATALOGUE, then the machine. Editing `catalog/`
+                // while Talos ran used to change nothing until a relaunch — a new yaml
+                // invisible, a deleted one still on screen, an edited command still acting
+                // on its old value. The catalogue is an observation of the disk exactly as
+                // presence is an observation of the machine, so "detect, don't remember"
+                // governs both.
+                //
+                // The reload comes FIRST and the scan after, in one gesture: scanning the
+                // old plan and then swapping it would paint verdicts for rows that are
+                // about to be replaced.
+                let reloaded = load_from_catalog(
+                    state.catalog_dir.to_str().unwrap_or("catalog"),
+                    state.bundles_dir.to_str().unwrap_or("bundles"),
+                    state.os,
+                    &|m| println!("[bundles] {m}"),
+                );
+                let n = reloaded.steps.len();
+                let before = {
+                    let mut plan = state.plan.write().await;
+                    let before = plan.steps.len();
+                    *plan = reloaded;
+                    before
+                };
+                // ⚠️ `last_seen` is POSITIONAL, so it is DISCARDED rather than remapped.
+                // Its indices refer to the plan that produced them; carrying them over a
+                // catalogue that gained or lost a package would point the Apply re-scan's
+                // narrowing (`seeds_for_rescan`) at the wrong rows — a real change made
+                // invisible, silently, which is the one failure mode that machinery exists
+                // to prevent. Everything is re-probed instead: that IS what Refresh does,
+                // and it is why the operator chose this over remapping by name — a carried
+                // presence is a memory, and this project detects.
+                {
+                    let mut seen = state.last_seen.lock().await;
+                    seen.clear();
+                    seen.resize(n, None);
+                }
+                if before == n {
+                    println!("[catalog] reloaded: {n} packages");
+                } else {
+                    // Named, not silent: a count that moved is the whole point of the
+                    // gesture, and it is what the operator will want to see confirmed.
+                    println!("[catalog] reloaded: {before} → {n} packages");
+                }
+                // The front re-renders from a fresh `plan` — rows appear, disappear, or
+                // change — and the selection travels with it, keyed by NAME so the user's
+                // decisions about the OTHER packages survive an insertion.
+                let steps = state.plan.read().await.steps.clone();
+                let _ = socket
+                    .send(Message::Text(
+                        plan_message(state.as_ref(), &steps).to_string(),
+                    ))
+                    .await;
                 scan_and_emit(&mut socket, &state).await;
             }
             // open-forbidden: the "Open blocked page" button of the 403 banner → opens
@@ -804,9 +911,12 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
 /// A step with no `check:` is a no-op here rather than an error: the caller emits `done`
 /// either way, so the UI never stays locked.
 async fn diff_step(socket: &mut WebSocket, state: &AppState, i: usize) {
-    let Some(step) = state.plan.steps.get(i) else {
+    // Cloned out of the lock rather than borrowed through it: what follows awaits on a
+    // pty, and a read guard held across that would stall a Refresh for its duration.
+    let Some(step) = state.plan.read().await.steps.get(i).cloned() else {
         return;
     };
+    let step = &step;
     let Some(check) = step.check.clone() else {
         return;
     };
@@ -868,7 +978,9 @@ async fn diff_step(socket: &mut WebSocket, state: &AppState, i: usize) {
 /// ("fewer processes, not more threads") — it runs first, serially, then the probes.
 async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
     let os = state.os;
-    let steps = &state.plan.steps;
+    // Snapshot, for the same reason as `handle_socket`: one scan, one catalogue.
+    let steps = state.plan.read().await.steps.clone();
+    let steps = &steps;
     let started = std::time::Instant::now();
     let scanned = tokio::task::spawn_blocking(move || scan_outdated(os))
         .await
@@ -1042,9 +1154,12 @@ fn rung_from_wire(v: &serde_json::Value) -> crate::ladder::Rung {
 /// downgrade is allowed (explicit manual click, the only destructive path outside the batch).
 async fn row_action(socket: &mut WebSocket, state: &AppState, i: usize, action: &str) {
     use crate::decision::Action;
-    let Some(step) = state.plan.steps.get(i) else {
+    // Cloned out of the lock: the action below runs a pty, and holding a read guard
+    // across it would block a Refresh for the whole install.
+    let Some(step) = state.plan.read().await.steps.get(i).cloned() else {
         return;
     };
+    let step = &step;
     // THE TEETH. A row the user put out of scope is not ours to touch — and this
     // path is the one the per-row button uses, so without this check the button
     // stays live on a row the panel already greyed out.
@@ -1200,7 +1315,12 @@ async fn apply_diff(
     use std::collections::HashSet;
 
     let os = state.os;
-    let steps = &state.plan.steps;
+    // Snapshot: an Apply must act on the plan it DECIDED from, start to finish. This is
+    // the site where a mid-flight reload would be worst — `last_seen` is positional and
+    // the front sends indices, so a plan that grew between the decision and the act would
+    // aim a gesture at the wrong package.
+    let steps = state.plan.read().await.steps.clone();
+    let steps = &steps;
     let want_on: HashSet<usize> = on.iter().copied().collect();
     let want_off: HashSet<usize> = off.iter().copied().collect();
     let out_of_scope: HashSet<usize> = unmanaged.iter().copied().collect();
@@ -2914,7 +3034,11 @@ mod tests {
     /// no socket, no pty — so the accumulator can be exercised for real.
     fn state_with_share(share: &std::path::Path) -> super::AppState {
         super::AppState {
-            plan: crate::bundles::Plan { steps: Vec::new() },
+            plan: tokio::sync::RwLock::new(crate::bundles::Plan { steps: Vec::new() }),
+            // Pointed at the share's own folder: nothing here reloads, and a bogus path
+            // would only surface if something did.
+            catalog_dir: share.join("catalog"),
+            bundles_dir: share.join("bundles"),
             profiles: crate::profiles::Profiles::default(),
             os: Os::Darwin,
             appmgmt: crate::platform::AppMgmtStatus::NotApplicable,

@@ -898,3 +898,52 @@ test("ladder: rungSeconds reads the LOCAL secs of exactly the rung's rows", () =
     assert.equal(rungSeconds(m, r).length, rungPlan(m, r).length, `rung ${r}`);
   }
 });
+
+test("a catalogue RELOAD replaces the plan — it does not accumulate", () => {
+  // ⭐ Refresh now re-reads catalog/ and sends a SECOND `plan` message. Until then
+  // loadPlan ran exactly once per session, so nothing had ever exercised what a second
+  // one does — and "it happens to work" is not a property, it is an absence of evidence.
+  //
+  // What must hold: the new plan REPLACES the old one. A package removed from the
+  // catalogue must be gone (not lingering with its last verdict), a package added must be
+  // there, and the count must be the NEW count rather than the sum of both.
+  const m = createModel();
+  loadPlan(m, [
+    { i: 0, name: "rg", canUninstall: true },
+    { i: 1, name: "bat", canUninstall: true },
+    { i: 2, name: "jq", canUninstall: true },
+  ]);
+  // The user decides something, and the machine answers — both kinds of state that could
+  // survive a reload if the model merged instead of replacing.
+  setDecision(m, 1, "in");
+  setStatusData(m, 2, "ok");
+  assert.equal(m.pkgs.size, 3);
+
+  // The catalogue changes on disk: `bat` is gone, `fd` appears. Indices SHIFT, which is
+  // exactly why the server discards its positional last_seen on a reload.
+  loadPlan(m, [
+    { i: 0, name: "rg", canUninstall: true },
+    { i: 1, name: "jq", canUninstall: true },
+    { i: 2, name: "fd", canUninstall: true },
+  ]);
+  assert.equal(m.pkgs.size, 3, "the new count, not 3 + 3");
+  const names = [...m.pkgs.values()].map((p) => p.name).sort();
+  assert.deepEqual(names, ["fd", "jq", "rg"], "bat is GONE and fd is present");
+  // ⚠️ And index 1 is now `jq`, not `bat`. A merge would have left `bat` at 1 carrying the
+  // decision made about it, so the next Apply would act on the wrong package — the exact
+  // failure the server's discard of last_seen prevents on its side.
+  assert.equal(m.pkgs.get(1).name, "jq");
+});
+
+test("a reload drops the traces of the previous plan", () => {
+  // `touched` is what makes a cancelled or undone gesture stay VISIBLE ("every gesture
+  // leaves a trace"). Across a RELOAD those traces are moot: they describe rows that may
+  // no longer exist, and keeping them would show a trace for a package that is gone.
+  const m = createModel();
+  loadPlan(m, [{ i: 0, name: "rg", canUninstall: true }]);
+  setDecision(m, 0, "in");
+  setDecision(m, 0, "auto"); // moved and put back → a trace, deliberately kept
+  assert.ok(m.touched.size > 0, "precondition: the trace exists");
+  loadPlan(m, [{ i: 0, name: "rg", canUninstall: true }]);
+  assert.equal(m.touched.size, 0, "a new plan is a new session's worth of rows");
+});

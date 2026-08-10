@@ -931,6 +931,19 @@ function applyAll() {
 
 function render(steps, profiles = [], columns = 2) {
   M.loadPlan(model, steps, profiles);
+  // ⭐ Wipe the previous rows FIRST. Until Refresh started re-reading the catalogue, this
+  // function ran exactly ONCE per session (a single `plan` message at connect), so nothing
+  // here ever needed clearing — appending into an empty list and filling an empty registry.
+  // A second `plan` would have appended a whole second copy of the catalogue below the
+  // first, and left `rows` holding the OLD elements for every index, so every later `state`
+  // would paint a row nobody was looking at.
+  //
+  // ⚠️ `rows` is keyed by index and the registry must be emptied, not overwritten: a
+  // catalogue that SHRANK leaves entries above the new length, and those indices no longer
+  // designate anything. Deleting the keys is what makes a removed package actually
+  // disappear rather than linger with a stale verdict.
+  stepsEl.replaceChildren();
+  for (const k of Object.keys(rows)) delete rows[k];
   // The scan starts now and won't settle until `state-done`. Freeze actions and
   // dim the panel until then: rows show "checking…", nothing is clickable, and
   // each lights up as its probe answers — no acting on an incomplete plan.
