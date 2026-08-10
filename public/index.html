@@ -1138,12 +1138,17 @@
            the announcement is "Everything, 6 items" — the same words the eye gets. -->
       <div id="ladder">
         <div class="ladder-q">How far do you want to go?</div>
-        <input id="ladder-range" type="range" min="0" max="4" step="1" value="4"
+        <!-- max=5 and six detents: ⚡ Config only · 🧩 Extensions · 📦 Add missing ·
+             ☕ Unattended · 👀 Stay nearby · 🏗️ Everything. `value` starts at the TOP, which
+             `renderLadder` re-asserts from RUNGS.length — the markup only has to not
+             contradict it. ⚠️ If a seventh rung is ever added, THIS is the attribute that
+             does not derive from RUNGS and will silently cap the slider one short. -->
+        <input id="ladder-range" type="range" min="0" max="5" step="1" value="5"
                aria-label="How far this Apply goes"
                list="ladder-detents">
         <datalist id="ladder-detents">
           <option value="0"></option><option value="1"></option><option value="2"></option>
-          <option value="3"></option><option value="4"></option>
+          <option value="3"></option><option value="4"></option><option value="5"></option>
         </datalist>
         <!-- THE SCALE, labelled. C, on seeing the full-width zone: "avec une telle largeur
              on peut mettre les différents mots sur l'échelle". It fixes a real gap — until

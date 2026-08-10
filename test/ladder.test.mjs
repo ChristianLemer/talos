@@ -29,30 +29,39 @@ const elevates = { uac: true, forbidden: false, slow: false };
 const blocked = { uac: false, forbidden: true, slow: false };
 const slow = { uac: false, forbidden: false, slow: true };
 
-test("the five rungs are cumulative, and the table shows it", () => {
-  // Columns: Config only · Add missing · Unattended · Stay nearby · Everything
+test("the six rungs are cumulative, and the table shows it", () => {
+  // Columns: Config only · Extensions · Add missing · Unattended · Stay nearby · Everything
+  // ⚠️ THIS TABLE IS THE TWIN of src/ladder.rs's. Change one, change the other — a drift
+  // costs a wrong COUNT under the slider while the server does something else.
   const cases = [
-    ["config atom", "install", true, quiet, [true, true, true, true, true]],
-    ["install", "install", false, quiet, [false, true, true, true, true]],
-    ["install, elevates", "install", false, elevates, [false, true, true, true, true]],
-    ["upgrade, quiet", "upgrade", false, quiet, [false, false, true, true, true]],
-    ["upgrade, uac", "upgrade", false, elevates, [false, false, false, true, true]],
-    ["upgrade, 403", "upgrade", false, blocked, [false, false, false, true, true]],
-    ["upgrade, slow", "upgrade", false, slow, [false, false, false, false, true]],
-    ["upgrade, slow+uac", "upgrade", false, { uac: true, forbidden: false, slow: true },
-      [false, false, false, false, true]],
+    ["config atom", "install", true, false, quiet, [true, true, true, true, true, true]],
+    // ⭐ An extension: rung 1. Above config-atoms (it downloads), below binaries (it never
+    // writes outside your profile and never elevates).
+    ["extension install", "install", false, true, quiet, [false, true, true, true, true, true]],
+    // …and it stays rung 1 even with an adverse fact: the ROUTE earns the rung. No shipped
+    // plugin or skill declares uac/403, so this row is about a fact that does not exist yet —
+    // pinned so the promise cannot be broken silently.
+    ["extension, elevates", "install", false, true, elevates, [false, true, true, true, true, true]],
+    ["install", "install", false, false, quiet, [false, false, true, true, true, true]],
+    ["install, elevates", "install", false, false, elevates, [false, false, true, true, true, true]],
+    ["upgrade, quiet", "upgrade", false, false, quiet, [false, false, false, true, true, true]],
+    ["upgrade, uac", "upgrade", false, false, elevates, [false, false, false, false, true, true]],
+    ["upgrade, 403", "upgrade", false, false, blocked, [false, false, false, false, true, true]],
+    ["upgrade, slow", "upgrade", false, false, slow, [false, false, false, false, false, true]],
+    ["upgrade, slow+uac", "upgrade", false, false, { uac: true, forbidden: false, slow: true },
+      [false, false, false, false, false, true]],
     // uninstall is NOT on the ladder — it honours the user's ✕ at every rung.
-    ["uninstall", "uninstall", false, quiet, [true, true, true, true, true]],
-    ["uninstall, everything bad", "uninstall", false, { uac: true, forbidden: true, slow: true },
-      [true, true, true, true, true]],
+    ["uninstall", "uninstall", false, false, quiet, [true, true, true, true, true, true]],
+    ["uninstall, everything bad", "uninstall", false, false, { uac: true, forbidden: true, slow: true },
+      [true, true, true, true, true, true]],
     // downgrade is never batched by Apply (mirrors AUTO_ACTS).
-    ["downgrade", "downgrade", false, quiet, [false, false, false, false, false]],
+    ["downgrade", "downgrade", false, false, quiet, [false, false, false, false, false, false]],
     // A null action (out of scope, or nothing to do) is never in any rung.
-    ["no action", null, false, quiet, [false, false, false, false, false]],
+    ["no action", null, false, false, quiet, [false, false, false, false, false, false]],
   ];
-  for (const [what, action, isConfig, facts, expected] of cases) {
+  for (const [what, action, isConfig, isExt, facts, expected] of cases) {
     expected.forEach((want, rung) => {
-      assert.equal(rungAllows(rung, action, isConfig, facts), want, `${what} at rung ${rung}`);
+      assert.equal(rungAllows(rung, action, isConfig, isExt, facts), want, `${what} at rung ${rung}`);
     });
     let seenTrue = false;
     for (const v of expected) {
@@ -62,8 +71,8 @@ test("the five rungs are cumulative, and the table shows it", () => {
   }
 });
 
-test("RUNGS carries five rungs, each with an emoji, a name and a promise", () => {
-  assert.equal(RUNGS.length, 5);
+test("RUNGS carries six rungs, each with an emoji, a name and a promise", () => {
+  assert.equal(RUNGS.length, 6);
   for (const r of RUNGS) {
     assert.ok(r.emoji && r.name && r.promise, `${r.name} needs all three`);
   }
@@ -71,12 +80,14 @@ test("RUNGS carries five rungs, each with an emoji, a name and a promise", () =>
   // because a satisfaction ramp (🙁→😀) is the tempting wrong answer and would assert
   // that Everything is the good end — rung 0 is the only one that cannot fail on the
   // network, so that assertion would be false.
-  assert.deepEqual(RUNGS.map((r) => r.emoji), ["⚡", "📦", "☕", "👀", "🏗️"]);
+  // 🧩 for extensions: a puzzle piece — something that slots INTO a thing that is already
+  // there, which is exactly what the rung means. It also carries no speed or quality claim.
+  assert.deepEqual(RUNGS.map((r) => r.emoji), ["⚡", "🧩", "📦", "☕", "👀", "🏗️"]);
   // And the KEYS are the names ladder.rs::Rung::as_str logs, index for index — so a log
   // line and a widget position can be compared by a human reading both.
   assert.deepEqual(
     RUNGS.map((r) => r.key),
-    ["config-only", "add-missing", "unattended", "stay-nearby", "everything"],
+    ["config-only", "extensions", "add-missing", "unattended", "stay-nearby", "everything"],
   );
 });
 
@@ -96,47 +107,59 @@ test("every promise is TRUE of what the rule does at that rung", () => {
   //
   // These assertions are shaped as "the promise says X, so X must hold", not as string
   // matches, so rewording is free and lying is not.
-  const [r0, r1, r2, r3, r4] = RUNGS;
+  const [r0, rExt, r1, r2, r3, r4] = RUNGS;
 
   // rung 0 says "adds config only" and "removals still run".
-  assert.equal(rungAllows(0, "install", true, quiet), true, "a config-atom is added");
-  assert.equal(rungAllows(0, "install", false, quiet), false, "…and nothing else is");
-  assert.equal(rungAllows(0, "upgrade", false, quiet), false);
-  assert.equal(rungAllows(0, "uninstall", false, quiet), true, "removals DO run at rung 0");
+  assert.equal(rungAllows(0, "install", true, false, quiet), true, "a config-atom is added");
+  assert.equal(rungAllows(0, "install", false, false, quiet), false, "…and nothing else is");
+  assert.equal(rungAllows(0, "upgrade", false, false, quiet), false);
+  assert.equal(rungAllows(0, "uninstall", false, false, quiet), true, "removals DO run at rung 0");
   assert.match(r0.promise, /[Rr]emovals/, "so the promise must say so, not deny it");
   assert.ok(!/\bInstant\b/.test(r0.promise),
     "and must not claim instant: a removal shells out to brew/winget");
   assert.ok(!/cannot fail on the network/.test(r0.promise),
     "nor offline: `winget uninstall --source winget` reaches a source");
 
-  // rung 1 says "installs what is absent. No updates" — both halves.
-  assert.equal(rungAllows(1, "install", false, quiet), true);
+  // ⭐ rung 1 (Extensions) says "plugins and skills, into your profile, never on the machine".
+  // The rule half: an extension install is admitted here and a BINARY install is not — which
+  // is the whole reason the rung exists.
+  assert.equal(rungAllows(1, "install", false, true, quiet), true, "an extension is added");
+  assert.equal(rungAllows(1, "install", false, false, quiet), false, "…a binary is NOT");
+  assert.equal(rungAllows(1, "upgrade", false, true, quiet), false, "and no updates yet");
+  // The words half: it must not claim speed (a clone can be slow on a bad line) and must say
+  // WHERE it writes, which is the part that is actually guaranteed.
+  assert.ok(!/\b[Ff]ast\b|\b[Ii]nstant\b/.test(rExt.promise),
+    "no speed claim: nothing has ever measured these routes");
+  assert.match(rExt.promise, /profile/i, "it must say where it writes");
+
+  // rung 2 says "installs what is absent. No updates" — both halves.
+  assert.equal(rungAllows(2, "install", false, false, quiet), true);
   for (const f of [quiet, elevates, blocked, slow]) {
-    assert.equal(rungAllows(1, "upgrade", false, f), false, "no updates means NO updates");
+    assert.equal(rungAllows(2, "upgrade", false, false, f), false, "no updates means NO updates");
   }
   assert.match(r1.promise, /[Nn]o updates/);
 
-  // rung 2 adds quiet upgrades and no others.
-  assert.equal(rungAllows(2, "upgrade", false, quiet), true);
-  assert.equal(rungAllows(2, "upgrade", false, elevates), false);
-  assert.equal(rungAllows(2, "upgrade", false, blocked), false);
-  assert.equal(rungAllows(2, "upgrade", false, slow), false);
+  // rung 3 adds quiet upgrades and no others.
+  assert.equal(rungAllows(3, "upgrade", false, false, quiet), true);
+  assert.equal(rungAllows(3, "upgrade", false, false, elevates), false);
+  assert.equal(rungAllows(3, "upgrade", false, false, blocked), false);
+  assert.equal(rungAllows(3, "upgrade", false, false, slow), false);
   // …but an elevating INSTALL is already through, from rung 1. So the promise must scope
   // itself to updates rather than promise an uninterrupted run.
-  assert.equal(rungAllows(2, "install", false, elevates), true, "the fact that forbids the words");
+  assert.equal(rungAllows(3, "install", false, false, elevates), true, "the fact that forbids the words");
   assert.match(r2.promise, /updates/,
     "the promise must be about UPDATES, since installs are not gated on uac at all");
   assert.ok(!/walk away/.test(r2.promise),
     "an elevating install runs here, so 'walk away' would be a promise the rung breaks");
 
-  // rung 3 adds uac/403 upgrades — and NOT the slow ones.
-  assert.equal(rungAllows(3, "upgrade", false, elevates), true);
-  assert.equal(rungAllows(3, "upgrade", false, blocked), true);
-  assert.equal(rungAllows(3, "upgrade", false, slow), false, "slow DOMINATES");
-  assert.ok(!/slow/i.test(r3.promise), "so rung 3 must not hint at the slow ones");
+  // rung 4 adds uac/403 upgrades — and NOT the slow ones.
+  assert.equal(rungAllows(4, "upgrade", false, false, elevates), true);
+  assert.equal(rungAllows(4, "upgrade", false, false, blocked), true);
+  assert.equal(rungAllows(4, "upgrade", false, false, slow), false, "slow DOMINATES");
+  assert.ok(!/slow/i.test(r3.promise), "so rung 4 must not hint at the slow ones");
 
-  // rung 4 adds the slow ones, and excludes nothing.
-  assert.equal(rungAllows(4, "upgrade", false, slow), true);
+  // rung 5 adds the slow ones, and excludes nothing.
+  assert.equal(rungAllows(5, "upgrade", false, false, slow), true);
   assert.match(r4.promise, /slow/i);
   for (const [a, cfg, f] of [["install", true, quiet], ["install", false, slow],
     ["upgrade", false, elevates], ["upgrade", false, blocked], ["uninstall", false, slow]]) {
@@ -180,16 +203,21 @@ test("rungFromInput yields an INTEGER NUMBER — a string on the wire would mean
   assert.ok(Number.isInteger(rungFromInput("2.5")));
   assert.equal(JSON.stringify({ rung: rungFromInput("2.9") }), '{"rung":2}');
   assert.equal(JSON.stringify({ rung: rungFromInput("4.0") }), '{"rung":4}');
+  assert.equal(JSON.stringify({ rung: rungFromInput("5.0") }), '{"rung":5}');
   // Clamped the SAME way Rung::from_wire clamps, and toward the same end: out of range or
   // unreadable → Everything, so what the widget shows and what the server does agree even
   // when the input is nonsense. (Doing silently LESS than asked is the worse error — the
   // reasoning is on ladder.rs's `impl Default for Rung`.)
+  // ⚠️ THE TOP MOVED, 4 → 5, when Extensions was inserted at 1. Read from RUNGS rather than
+  // written as a literal, so a seventh rung cannot leave these behind — the previous version
+  // hardcoded 4 and every one of these lines had to be edited by hand.
+  const top = RUNGS.length - 1;
   assert.equal(rungFromInput("0"), 0);
-  assert.equal(rungFromInput("4"), 4);
-  assert.equal(rungFromInput("9"), 4, "out of range → Everything");
+  assert.equal(rungFromInput(String(top)), top);
+  assert.equal(rungFromInput(String(top + 5)), top, "out of range → Everything");
   assert.equal(rungFromInput("-1"), 0, "below range → the first rung, not a crash");
-  assert.equal(rungFromInput(""), 4, "unreadable → Everything, like an absent field");
-  assert.equal(rungFromInput(undefined), 4);
+  assert.equal(rungFromInput(""), top, "unreadable → Everything, like an absent field");
+  assert.equal(rungFromInput(undefined), top);
   // And every clamped result must be a valid index into RUNGS — renderLadder reads
   // RUNGS[rung].emoji with no guard of its own.
   for (const v of ["-5", "0", "2", "4", "99", "", "x", null]) {
@@ -207,25 +235,25 @@ test("a row excluded by the rung says WHY, in the user's terms", () => {
   const quiet = { isConfig: false, uac: false, forbidden: false, slow: false };
 
   // At ☕ Unattended, an upgrade that drags is out — because it is slow.
-  assert.equal(rungReason(2, "upgrade", slowUp), "slow");
-  // …one that will ask for elevation is out for a different reason.
-  assert.equal(rungReason(2, "upgrade", uacUp), "hand");
-  assert.equal(rungReason(2, "upgrade", blocked), "blocked");
-  // A quiet upgrade is IN at ☕, so there is no reason to give.
-  assert.equal(rungReason(2, "upgrade", quiet), null);
-  // At 👀 the hand and the block are admitted; only slow remains out.
-  assert.equal(rungReason(3, "upgrade", uacUp), null);
-  assert.equal(rungReason(3, "upgrade", blocked), null);
   assert.equal(rungReason(3, "upgrade", slowUp), "slow");
+  // …one that will ask for elevation is out for a different reason.
+  assert.equal(rungReason(3, "upgrade", uacUp), "hand");
+  assert.equal(rungReason(3, "upgrade", blocked), "blocked");
+  // A quiet upgrade is IN at ☕, so there is no reason to give.
+  assert.equal(rungReason(3, "upgrade", quiet), null);
+  // At 👀 the hand and the block are admitted; only slow remains out.
+  assert.equal(rungReason(4, "upgrade", uacUp), null);
+  assert.equal(rungReason(4, "upgrade", blocked), null);
+  assert.equal(rungReason(4, "upgrade", slowUp), "slow");
   // At 🏗️ nothing is out, ever.
   for (const f of [slowUp, uacUp, blocked, quiet]) {
-    assert.equal(rungReason(4, "upgrade", f), null);
+    assert.equal(rungReason(5, "upgrade", f), null);
   }
   // An UPGRADE excluded at rung 1 is not excluded by a fact at all — it is excluded by
   // being an upgrade. That distinction must survive, or a quiet upgrade at 📦 would
   // claim to be "slow".
-  assert.equal(rungReason(1, "upgrade", quiet), "update");
-  assert.equal(rungReason(1, "upgrade", slowUp), "update",
+  assert.equal(rungReason(2, "upgrade", quiet), "update");
+  assert.equal(rungReason(2, "upgrade", slowUp), "update",
     "the ACTION is the reason here, not the fact — the fact is not why it is out");
   // An install is out at ⚡ for being an install, whatever its facts.
   assert.equal(rungReason(0, "install", quiet), "install");
@@ -254,17 +282,21 @@ test("rungReason and rungAllows cannot disagree — a reason means OUT, exhausti
   // the keys app.js has words for — an unknown key would render an empty <span>, i.e. a
   // dimmed row with no explanation, which is the "greyed out teaches nothing" failure.
   const known = new Set(["slow", "hand", "blocked", "update", "install"]);
+  // ⭐ isExtension joins the cross product rather than being spot-checked: the invariant is
+  // "a reason is present exactly when the rule refuses", and a new dimension that only some
+  // of the two functions read would break it in a way no chosen point would catch.
   for (const action of ["install", "uninstall", "upgrade", "downgrade", null]) {
     for (const isConfig of [false, true]) {
-      for (const uac of [false, true]) {
+      for (const isExtension of [false, true]) {
+        for (const uac of [false, true]) {
         for (const forbidden of [false, true]) {
           for (const slow of [false, true]) {
-            const p = { isConfig, uac, forbidden, slow };
-            const governed = rungAllows(RUNGS.length - 1, action, isConfig, p);
+            const p = { isConfig, isExtension, uac, forbidden, slow };
+            const governed = rungAllows(RUNGS.length - 1, action, isConfig, isExtension, p);
             for (let r = 0; r < RUNGS.length; r++) {
               const why = rungReason(r, action, p);
-              const allowed = rungAllows(r, action, isConfig, p);
-              const what = `${action} isConfig=${isConfig} uac=${uac} 403=${forbidden} slow=${slow} @${r}`;
+              const allowed = rungAllows(r, action, isConfig, isExtension, p);
+              const what = `${action} isConfig=${isConfig} isExt=${isExtension} uac=${uac} 403=${forbidden} slow=${slow} @${r}`;
               if (allowed) {
                 assert.equal(why, null, `${what}: IN the plan, so no reason may be given`);
               } else if (!governed) {
@@ -275,6 +307,7 @@ test("rungReason and rungAllows cannot disagree — a reason means OUT, exhausti
               }
             }
           }
+        }
         }
       }
     }
@@ -298,12 +331,16 @@ test("the reason names the fact that is ACTUALLY holding the row back", () => {
       if (why !== "slow" && why !== "hand" && why !== "blocked") continue;
       // The lowest rung that admits this row — the one the reason is a claim about.
       let first = RUNGS.length - 1;
-      while (first > 0 && rungAllows(first - 1, "upgrade", false, p)) first--;
+      while (first > 0 && rungAllows(first - 1, "upgrade", false, false, p)) first--;
+      // ⚠️ Derived from RUNGS, not written as 4 and 3: those literals were the top and
+      // top-minus-one, and inserting Extensions moved both. Naming them by position keeps the
+      // claim ("only 🏗️ admits it" / "👀 admits it") true through the next insertion too.
+      const top = RUNGS.length - 1;
       if (why === "slow") {
-        assert.equal(first, 4, `"slow" claims only 🏗️ admits it (facts ${JSON.stringify(f)})`);
+        assert.equal(first, top, `"slow" claims only 🏗️ admits it (facts ${JSON.stringify(f)})`);
         assert.equal(p.slow, true, `…and the row must really BE slow`);
       } else {
-        assert.equal(first, 3, `"${why}" claims 👀 admits it (facts ${JSON.stringify(f)})`);
+        assert.equal(first, top - 1, `"${why}" claims 👀 admits it (facts ${JSON.stringify(f)})`);
         assert.equal(why === "hand" ? p.uac : p.forbidden, true,
           `…and the row must really carry the fact "${why}" names`);
       }
@@ -320,12 +357,14 @@ test("every reason key is REACHABLE, and app.js's tooltip names a rung that real
   const reachable = new Set();
   for (const a of ["install", "uninstall", "upgrade", "downgrade", null]) {
     for (const isConfig of [false, true]) {
-      for (const uac of [false, true]) {
-        for (const forbidden of [false, true]) {
-          for (const slow of [false, true]) {
-            for (let r = 0; r < RUNGS.length; r++) {
-              const k = rungReason(r, a, { isConfig, uac, forbidden, slow });
-              if (k) reachable.add(k);
+      for (const isExtension of [false, true]) {
+        for (const uac of [false, true]) {
+          for (const forbidden of [false, true]) {
+            for (const slow of [false, true]) {
+              for (let r = 0; r < RUNGS.length; r++) {
+                const k = rungReason(r, a, { isConfig, isExtension, uac, forbidden, slow });
+                if (k) reachable.add(k);
+              }
             }
           }
         }
@@ -339,23 +378,31 @@ test("every reason key is REACHABLE, and app.js's tooltip names a rung that real
   //    three of those five were caught being false. So the named rung must really admit the
   //    row, and the one below it must really not.
   const F = (o) => ({ isConfig: false, uac: false, forbidden: false, slow: false, ...o });
+  const isExt = (p) => p.isExtension === true;
   const entersAt = (rung, action, p) =>
-    rungAllows(rung, action, p.isConfig, p) && !rungAllows(rung - 1, action, p.isConfig, p);
-  assert.ok(entersAt(4, "upgrade", F({ slow: true })),
+    rungAllows(rung, action, p.isConfig, isExt(p), p) &&
+    !rungAllows(rung - 1, action, p.isConfig, isExt(p), p);
+  // Positions named through RUNGS: 🏗️ is the top and 👀 the one below, which is what the
+  // tooltips claim. Literals here were 4 and 3 and both moved when Extensions was inserted.
+  const top = RUNGS.length - 1;
+  assert.ok(entersAt(top, "upgrade", F({ slow: true })),
     '"slow" says 🏗️ Everything — so 🏗️ must be exactly where a slow upgrade enters');
-  assert.ok(entersAt(3, "upgrade", F({ uac: true })),
+  assert.ok(entersAt(top - 1, "upgrade", F({ uac: true })),
     '"needs your hand" says 👀 Stay nearby — so that is where a uac upgrade must enter');
-  assert.ok(entersAt(3, "upgrade", F({ forbidden: true })),
+  assert.ok(entersAt(top - 1, "upgrade", F({ forbidden: true })),
     '"blocked here" says 👀 Stay nearby too');
+  // ⭐ And the new rung's own tooltip claim: an extension enters at 🧩, not before.
+  assert.ok(entersAt(1, "install", F({ isExtension: true })),
+    "an extension must enter exactly at 🧩 Extensions");
   // "an update": the tooltip says this rung "installs and removes, but runs no updates".
-  assert.ok(rungAllows(1, "install", false, F()) && rungAllows(1, "uninstall", false, F()),
+  assert.ok(rungAllows(2, "install", false, false, F()) && rungAllows(2, "uninstall", false, false, F()),
     "…installs and removes: both must be true at 📦, or the sentence is wrong");
-  assert.ok(!rungAllows(1, "upgrade", false, F()), "…but runs no updates");
-  assert.ok(rungAllows(2, "upgrade", false, F()), "…and 'move right' must actually work");
+  assert.ok(!rungAllows(2, "upgrade", false, false, F()), "…but runs no updates");
+  assert.ok(rungAllows(3, "upgrade", false, false, F()), "…and 'move right' must actually work");
   // "an install": the tooltip says this rung "applies config only".
-  assert.ok(rungAllows(0, "install", true, F()), "…a config atom IS applied at ⚡");
-  assert.ok(!rungAllows(0, "install", false, F()), "…and a plain install is not");
-  assert.ok(rungAllows(1, "install", false, F()), "…'move right' works here too");
+  assert.ok(rungAllows(0, "install", true, false, F()), "…a config atom IS applied at ⚡");
+  assert.ok(!rungAllows(0, "install", false, false, F()), "…and a plain install is not");
+  assert.ok(rungAllows(2, "install", false, false, F()), "…'move right' works here too");
 });
 
 // --- the estimate: minutes, and the unknowns beside them ----------------------

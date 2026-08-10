@@ -224,6 +224,18 @@ pub struct Step {
     pub detect: Option<String>,
     pub check: Option<String>,
     pub is_config: bool,
+    /// Does this install INTO a host rather than onto the machine? A Claude plugin, a
+    /// cross-agent skill — and, when its route lands, an editor extension.
+    ///
+    /// ⭐ DERIVED from the route (`is_extension_route`), never declared in YAML, exactly like
+    /// `is_config` above. It earns its own ladder rung because it carries a promise the two
+    /// neighbouring rungs do not: it TOUCHES THE NETWORK (a clone, a download) and it NEVER
+    /// TOUCHES THE MACHINE — nothing enters Program Files or /Applications, nothing elevates.
+    ///
+    /// ✅ That second half is a measured property of the corpus, not a hope: across the 34
+    /// shipped packages, no `claude-plugin` and no `skill` declares `uac` or `403`, while nine
+    /// binary packages declare `uac: true`.
+    pub is_extension: bool,
     pub version_regex: Option<String>,
     pub pin: Option<String>,
     #[allow(dead_code)]
@@ -530,6 +542,7 @@ pub fn load_from_catalog(
         });
         let is_config =
             p.check.is_some() && (cmd.route.is_none() || cmd.route.as_deref() == Some("run"));
+        let is_extension = is_extension_route(cmd.route.as_deref());
         steps.push(Step {
             id: cp.id.clone(),
             bundle: String::new(), // bundles don't own packages anymore
@@ -544,6 +557,7 @@ pub fn load_from_catalog(
             detect: p.detect.clone(),
             check: sub(p.check.clone()),
             is_config,
+            is_extension,
             version_regex: p.version_regex.clone(),
             pin: p.version.clone(),
             requires: p.requires.clone(),
@@ -559,6 +573,23 @@ pub fn load_from_catalog(
         });
     }
     Plan { steps }
+}
+
+/// Is this route one that installs INTO a host rather than onto the machine?
+///
+/// The single place the class is decided, so the ladder, the wire and the tests cannot drift
+/// apart. `claude-plugin` clones a marketplace into `~/.claude`; `skill` drops a SKILL.md into
+/// `~/.claude/skills` or `~/.agents/skills`. Neither writes outside the user's profile and
+/// neither can elevate.
+///
+/// ⚠️ A `run:` route is NOT here even though it also stays local: it is a config-atom, the rung
+/// BELOW, and its promise is stronger still (no network at all). The two classes are disjoint
+/// by construction — a config-atom is recognised by having a `check:`, which no extension has.
+///
+/// ⬜ When `code --install-extension` lands, it belongs in this list and nothing else changes.
+/// That is the whole reason this is one function rather than an inline `matches!`.
+pub fn is_extension_route(route: Option<&str>) -> bool {
+    matches!(route, Some("claude-plugin") | Some("skill"))
 }
 
 #[cfg(test)]
@@ -638,6 +669,74 @@ mod tests {
         ] {
             let caught = std::panic::catch_unwind(|| assert_shell_safe(bad, "mutant")).is_err();
             assert!(caught, "the checker must reject: {bad}");
+        }
+    }
+
+    #[test]
+    fn a_content_route_is_an_extension_and_a_binary_route_is_not() {
+        // ⭐ DERIVED from the ROUTE, never declared in YAML — the same discipline `is_config`
+        // follows, so a catalogue author cannot get it wrong or forget it.
+        //
+        // ⚠️ NOT derived from `requires:` being non-empty, which was the first idea and is
+        // wrong: `astral` requires Bun AND Claude Code, but a binary package could equally
+        // require Node. `requires` says "this needs something"; the ROUTE says "this installs
+        // INTO something". The route is the fact, `requires` is its consequence.
+        let mut p = pkg("Chiron");
+        p.claude_plugin = Some("chiron@tekton".into());
+        assert!(
+            is_extension_route(commands_for(&p, Os::Darwin).route.as_deref()),
+            "a claude-plugin installs into an agent, not onto the machine"
+        );
+        let mut s = pkg("Rust best practices");
+        s.skill = Some("owner/repo".into());
+        assert!(is_extension_route(
+            commands_for(&s, Os::Darwin).route.as_deref()
+        ));
+        // A binary is not: it writes to Program Files / /Applications and may elevate.
+        let mut q = pkg("Git");
+        q.brew = Some("git".into());
+        assert!(!is_extension_route(
+            commands_for(&q, Os::Darwin).route.as_deref()
+        ));
+        // Nor is a config-atom — it is the rung BELOW, and the two classes must not overlap
+        // (a config-atom has a `check:` and no manager route; an extension has neither).
+        let mut c = pkg("Starship config");
+        c.run = Some("nu patch.nu".into());
+        c.check = Some("test -f x".into());
+        assert!(!is_extension_route(
+            commands_for(&c, Os::Darwin).route.as_deref()
+        ));
+    }
+
+    /// The five members of the class in the SHIPPED catalogue, named on purpose.
+    ///
+    /// A content-shaped assertion, deliberately: naming them means DELETING a plugin turns
+    /// this red, which a "some package is an extension" check would sail past. Same reasoning
+    /// as `the_shipped_seed_reaches_overrides`. Adding a sixth extension does not fail it —
+    /// nothing here asserts a total.
+    #[test]
+    fn the_shipped_extensions_are_the_content_routes() {
+        let cat = crate::catalog::load_catalog(concat!(env!("CARGO_MANIFEST_DIR"), "/catalog"));
+        for (id, expected) in [
+            ("chiron", true),
+            ("astral", true),
+            ("jj-skills", true),
+            ("nushell-dev", true),
+            ("rust-best-practices", true),
+            // The controls: a binary, and a config-atom — the rungs on either side.
+            ("git", false),
+            ("starship-config", false),
+        ] {
+            let cp = cat
+                .values()
+                .find(|c| c.id == id)
+                .unwrap_or_else(|| panic!("{id} is shipped"));
+            let route = commands_for(&cp.pkg, Os::Darwin).route;
+            assert_eq!(
+                is_extension_route(route.as_deref()),
+                expected,
+                "{id}: route {route:?}"
+            );
         }
     }
 

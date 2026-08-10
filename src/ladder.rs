@@ -1,6 +1,6 @@
 //! ladder.rs — how FAR an Apply goes, and the facts that calibrate it.
 //!
-//! Apply used to be all-or-nothing. The ladder is one control with five CUMULATIVE
+//! Apply used to be all-or-nothing. The ladder is one control with six CUMULATIVE
 //! rungs, so a user can ask for "the fast harmless part now" or "everything that will
 //! not interrupt me" — C's framing, and the reason the behaviour telemetry exists at all.
 //!
@@ -97,7 +97,7 @@ pub fn is_slow(f: &Facts) -> bool {
     f.slow_secs >= SLOW_SECS
 }
 
-/// How far an Apply goes. FIVE CUMULATIVE rungs — each contains the previous, which is
+/// How far an Apply goes. SIX CUMULATIVE rungs — each contains the previous, which is
 /// why this is one control and not four checkboxes (C's design; the aspects are not
 /// independent).
 ///
@@ -114,6 +114,23 @@ pub enum Rung {
     /// this rung its place below "add missing" — a fresh install DOWNLOADS, so "installs"
     /// and "fast" contradict each other.
     ConfigOnly,
+    /// 🧩 extensions: plugins and skills — things that install INTO a host, not onto the
+    /// machine.
+    ///
+    /// Its promise is its own, which is what earns it a rung rather than a place in one of its
+    /// neighbours: it TOUCHES THE NETWORK (a clone, a download) and it NEVER TOUCHES THE
+    /// MACHINE — nothing enters Program Files or /Applications, nothing elevates, and undoing
+    /// it means deleting a folder inside your own profile.
+    ///
+    /// So it cannot share rung 0 with a config-atom, whose promise is strictly stronger (no
+    /// network at all), and it should not queue behind a binary that may want your hand for
+    /// nine minutes. That was C's observation: adding a two-second skill is boring when it
+    /// rides with Git.
+    ///
+    /// ✅ The "never elevates" half is a MEASURED property of the corpus, not an assumption:
+    /// across the 34 shipped packages no `claude-plugin` and no `skill` declares `uac` or
+    /// `403`, while nine binary packages declare `uac: true`.
+    Extensions,
     /// 📦 things arrive: every `install`, no `upgrade` at all.
     AddMissing,
     /// ☕ start it and walk away: upgrades with no `uac`, no `403`, not slow.
@@ -146,9 +163,13 @@ impl Rung {
     pub fn from_wire(n: u64) -> Rung {
         match n {
             0 => Rung::ConfigOnly,
-            1 => Rung::AddMissing,
-            2 => Rung::Unattended,
-            3 => Rung::StayNearby,
+            1 => Rung::Extensions,
+            2 => Rung::AddMissing,
+            3 => Rung::Unattended,
+            4 => Rung::StayNearby,
+            // ⚠️ THE CEILING MOVED from 4 to 5 when Extensions was inserted. The catch-all
+            // must stay a catch-all: an off-by-one here would make the LAST detent stop
+            // working, silently doing less than the user asked for.
             _ => Rung::Everything,
         }
     }
@@ -157,6 +178,7 @@ impl Rung {
     pub fn as_str(&self) -> &'static str {
         match self {
             Rung::ConfigOnly => "config-only",
+            Rung::Extensions => "extensions",
             Rung::AddMissing => "add-missing",
             Rung::Unattended => "unattended",
             Rung::StayNearby => "stay-nearby",
@@ -166,10 +188,16 @@ impl Rung {
     fn level(&self) -> u8 {
         match self {
             Rung::ConfigOnly => 0,
-            Rung::AddMissing => 1,
-            Rung::Unattended => 2,
-            Rung::StayNearby => 3,
-            Rung::Everything => 4,
+            Rung::Extensions => 1,
+            // ⚠️ EVERY LEVEL BELOW SHIFTED UP BY ONE when Extensions was inserted. Safe here
+            // because the rung is NOT PERSISTED (app.js says so in as many words), so no
+            // stored preference can be re-read under the new numbering — the only exposure is
+            // a stale front against a new server, within one launch, and `Default` already
+            // errs toward Everything for that case.
+            Rung::AddMissing => 2,
+            Rung::Unattended => 3,
+            Rung::StayNearby => 4,
+            Rung::Everything => 5,
         }
     }
 }
@@ -197,6 +225,7 @@ pub fn rung_allows(
     rung: Rung,
     action: crate::decision::Action,
     is_config: bool,
+    is_extension: bool,
     f: &Facts,
 ) -> bool {
     use crate::decision::Action;
@@ -212,14 +241,39 @@ pub fn rung_allows(
         // A config-atom is admitted from the first rung. Its action is always Install (a
         // `run:` route has no upgrade path), so this covers it whole.
         Action::Install if is_config => true,
-        Action::Install => rung.level() >= 1,
+        // ⭐ An extension: rung 1, above config-atoms and below binaries. Its own promise —
+        // touches the network, never touches the machine.
+        //
+        // ⚠️ The guard order is load-bearing even though the two classes are disjoint by
+        // construction (a config-atom is recognised by having a `check:`, which no extension
+        // has). Written config-first anyway, and pinned by the table: if the classes ever
+        // overlapped, a config-atom must keep its rung-0 admission rather than be demoted.
+        //
+        // ⚠️ It stays rung 1 EVEN IF a fact says it elevates, unlike the Upgrade arm below.
+        // The ROUTE is what earns the rung, not the observation — and today no content route
+        // declares `uac` or `403` in the whole catalogue. If one ever does, the promise is
+        // broken and THIS is the line to revisit, deliberately.
+        Action::Install if is_extension => rung.level() >= 1,
+        Action::Install => rung.level() >= 2,
+        // ⚠️ EVERY THRESHOLD HERE MOVED UP BY ONE when Extensions was inserted at level 1.
+        // The rungs are named by promise, not by number, so what must be preserved is the
+        // MEANING: unattended stays "start it and walk away", stay-nearby stays "it will want
+        // your hand", everything stays last. The table test asserts the whole grid, which is
+        // what catches a threshold left behind.
+        //
+        // ⬜ OPEN — an extension's UPGRADE takes this path, not the rung-1 arm above, so it
+        // currently needs rung 3+. Unreachable today (`scan_outdated` asks only winget/brew,
+        // so no plugin can ever be marked outdated — the plugin-drift plan fixes that), and
+        // arguably wrong once it IS reachable: an extension upgrade engages exactly what its
+        // install engages, so rung 1 is the consistent answer. Left as-is deliberately rather
+        // than guessed, because the day it becomes reachable is the day it can be measured.
         Action::Upgrade => {
             let needed = if is_slow(f) {
-                4 // slow DOMINATES: the spec's rung 3 excludes "the slow ones", full stop
+                5 // slow DOMINATES: the spec's last rung excludes "the slow ones", full stop
             } else if f.uac || f.forbidden {
-                3 // it will want your hand, or a page unblocked
+                4 // it will want your hand, or a page unblocked
             } else {
-                2 // start it and walk away
+                3 // start it and walk away
             };
             rung.level() >= needed
         }
@@ -258,6 +312,7 @@ mod tests {
             detect: None,
             check: None,
             is_config: false,
+            is_extension: false,
             version_regex: None,
             pin: None,
             requires: Vec::new(),
@@ -274,7 +329,7 @@ mod tests {
         // and reading it is the proof. An assertion in prose ("rung 3 contains rung 2")
         // would be a claim; this is a fixture that fails if it stops being true.
         //
-        // Columns: Config only · Add missing · Unattended · Stay nearby · Everything
+        // Columns: Config only · Extensions · Add missing · Unattended · Stay nearby · Everything
         let quiet = f(false, false, 0);
         let elevates = f(true, false, 0);
         let blocked = f(false, true, 0);
@@ -283,14 +338,47 @@ mod tests {
         // ones" full stop, so a package that is both lands on the last rung.
         let slow_and_elevates = f(true, false, 900);
 
-        let cases: &[(&str, Action, bool, Facts, [bool; 5])] = &[
+        // One row of the grid: what it is, the action, its two CLASS flags (config-atom /
+        // extension — derived from the route, never declared), the facts, and whether each of
+        // the six rungs admits it. Named because clippy is right that the bare tuple had
+        // grown unreadable — and a named row is what lets the table be read as a table.
+        type Case = (&'static str, Action, bool, bool, Facts, [bool; 6]);
+        let cases: &[Case] = &[
             // a config-atom: admitted from the very first rung, at every rung after
             (
                 "config atom",
                 Action::Install,
                 true,
+                false,
                 quiet,
-                [true, true, true, true, true],
+                [true, true, true, true, true, true],
+            ),
+            // ⭐ AN EXTENSION: rung 1 onward — above config-atoms, below binaries. Its promise
+            // is its own: it TOUCHES THE NETWORK (a clone) and NEVER TOUCHES THE MACHINE
+            // (nothing in Program Files, nothing elevated). That is why it cannot share rung 0
+            // with a config-atom, whose promise is stronger still (no network at all), and why
+            // it should not wait behind a Git that may want your hand for nine minutes.
+            (
+                "extension install",
+                Action::Install,
+                false,
+                true,
+                quiet,
+                [false, true, true, true, true, true],
+            ),
+            // ⚠️ And it stays rung 1 even if some fact says it elevates. Measured across the
+            // 34 shipped packages: no plugin and no skill declares `uac` or `403`, so this row
+            // is about a fact that does not exist today — answered deliberately, because the
+            // ROUTE is what earns the rung. If a content route ever did elevate, the promise
+            // would be broken and THIS LINE is where that decision must be revisited rather
+            // than discovered in the field.
+            (
+                "extension install, elevates",
+                Action::Install,
+                false,
+                true,
+                elevates,
+                [false, true, true, true, true, true],
             ),
             // a plain install: rung 1 onward. NOT rung 0 — a fresh install DOWNLOADS,
             // so it can be slow, elevate, or be blocked; "installs" and "fast" contradict
@@ -299,8 +387,9 @@ mod tests {
                 "install",
                 Action::Install,
                 false,
+                false,
                 quiet,
-                [false, true, true, true, true],
+                [false, false, true, true, true, true],
             ),
             // an install of something known to elevate is STILL rung 1: the rung 2/3/4
             // distinctions govern UPGRADES. An install was explicitly asked for.
@@ -308,24 +397,27 @@ mod tests {
                 "install, elevates",
                 Action::Install,
                 false,
+                false,
                 elevates,
-                [false, true, true, true, true],
+                [false, false, true, true, true, true],
             ),
             // a quiet upgrade: rung 2, "start it and walk away"
             (
                 "upgrade, quiet",
                 Action::Upgrade,
                 false,
+                false,
                 quiet,
-                [false, false, true, true, true],
+                [false, false, false, true, true, true],
             ),
             // an upgrade that will ask for your hand: rung 3
             (
                 "upgrade, uac",
                 Action::Upgrade,
                 false,
+                false,
                 elevates,
-                [false, false, false, true, true],
+                [false, false, false, false, true, true],
             ),
             // an upgrade the firewall blocks: rung 3 too — same promise ("you must stay"),
             // because a 403 needs a human to unblock a page
@@ -333,23 +425,26 @@ mod tests {
                 "upgrade, 403",
                 Action::Upgrade,
                 false,
+                false,
                 blocked,
-                [false, false, false, true, true],
+                [false, false, false, false, true, true],
             ),
             // an upgrade that drags: rung 4 only
             (
                 "upgrade, slow",
                 Action::Upgrade,
                 false,
+                false,
                 slow,
-                [false, false, false, false, true],
+                [false, false, false, false, false, true],
             ),
             (
                 "upgrade, slow+uac",
                 Action::Upgrade,
                 false,
+                false,
                 slow_and_elevates,
-                [false, false, false, false, true],
+                [false, false, false, false, false, true],
             ),
             // UNINSTALL IS NOT ON THE LADDER. It honours the user's ✕ at every rung,
             // including the first — the ladder governs how far to GO, not whether to
@@ -358,15 +453,17 @@ mod tests {
                 "uninstall",
                 Action::Uninstall,
                 false,
+                false,
                 quiet,
-                [true, true, true, true, true],
+                [true, true, true, true, true, true],
             ),
             (
                 "uninstall, slow+uac+403",
                 Action::Uninstall,
                 false,
+                false,
                 f(true, true, 900),
-                [true, true, true, true, true],
+                [true, true, true, true, true, true],
             ),
             // Downgrade is filtered out UPSTREAM (apply_diff matches only
             // Install|Uninstall|Upgrade), so this is unreachable — answered anyway so the
@@ -375,16 +472,17 @@ mod tests {
                 "downgrade",
                 Action::Downgrade,
                 false,
+                false,
                 quiet,
-                [false, false, false, false, false],
+                [false, false, false, false, false, false],
             ),
         ];
 
-        for (what, action, is_config, facts, expected) in cases {
+        for (what, action, is_config, is_extension, facts, expected) in cases {
             for (n, &want) in expected.iter().enumerate() {
                 let rung = Rung::from_wire(n as u64);
                 assert_eq!(
-                    rung_allows(rung, *action, *is_config, facts),
+                    rung_allows(rung, *action, *is_config, *is_extension, facts),
                     want,
                     "{what} at rung {n} ({})",
                     rung.as_str()
@@ -446,9 +544,17 @@ mod tests {
         // field, must get today's behaviour. Doing silently LESS than the user asked is
         // the worse direction of error.
         assert_eq!(Rung::from_wire(0), Rung::ConfigOnly);
-        assert_eq!(Rung::from_wire(4), Rung::Everything);
+        // ⚠️ THE CEILING MOVED, 4 → 5, when Extensions was inserted at 1. This assertion is
+        // the one that catches an off-by-one in the clamp — which would make the LAST detent
+        // stop working while everything else looked fine.
+        assert_eq!(Rung::from_wire(5), Rung::Everything, "the last real rung");
         assert_eq!(
-            Rung::from_wire(5),
+            Rung::from_wire(4),
+            Rung::StayNearby,
+            "and 4 is no longer the top — it is stay-nearby now"
+        );
+        assert_eq!(
+            Rung::from_wire(6),
             Rung::Everything,
             "out of range → everything"
         );

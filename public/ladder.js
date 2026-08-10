@@ -19,14 +19,14 @@
 // stops the two sides from drifting on a number.
 export const SLOW_SECS = 60;
 
-// The five rungs, in order. `promise` is the sentence under the thumb; `key` is the same
+// The six rungs, in order. `promise` is the sentence under the thumb; `key` is the same
 // word ladder.rs logs, so a log line and a widget position can be read against each other.
 //
 // ⚠️ The emojis answer "DO I HAVE TIME RIGHT NOW?", deliberately not "is this better?". A
 // satisfaction ramp (🙁→😀) would assert that Everything is the good end and it is not:
 // rung 0 is the only rung that CANNOT fail on the network, and on a Tuesday morning the
-// right answer is usually rung 2. ☕ vs 👀 carries the actual difference between rungs 2
-// and 3 — "you may leave" vs "you must stay" — better than any word would.
+// right answer is usually rung 3. ☕ vs 👀 carries the actual difference between rungs 3
+// and 4 — "you may leave" vs "you must stay" — better than any word would.
 // ⚠️ AND EVERY PROMISE MUST BE TRUE OF WHAT THE SERVER DOES AT THAT RUNG — the promise is
 // the only thing the user reads before committing, so an overstatement here is a lie the
 // code then tells. Rung 0's was caught being one: the plan wrote "Instant, and the only
@@ -37,6 +37,19 @@ export const SLOW_SECS = 60;
 export const RUNGS = [
   { key: "config-only", emoji: "⚡", name: "Config only",
     promise: "Adds config only — nothing is downloaded. Removals you asked for still run" },
+  // ⭐ Between ⚡ and 📦 because its promise sits between theirs: it DOES touch the network
+  // (a clone), and it NEVER touches the machine — nothing enters Program Files, nothing
+  // elevates, undoing it deletes a folder in your own profile. Config-only's promise is
+  // strictly stronger (no network at all), a binary's strictly weaker (may elevate, may take
+  // nine minutes). C's observation: adding a two-second skill is boring when it rides with Git.
+  //
+  // ⚠️ The promise names what it does NOT do, because that is the part the user is buying.
+  // "Fast" would be the wrong word — a clone can be slow on a bad line; what is guaranteed is
+  // WHERE it writes. And no duration is claimed: nothing has ever measured these routes
+  // (timings.yaml holds five brew entries and nothing else), so the widget will honestly
+  // count them as unknown.
+  { key: "extensions", emoji: "🧩", name: "Extensions",
+    promise: "Also plugins and skills. Downloaded into your profile — never installed on the machine" },
   { key: "add-missing", emoji: "📦", name: "Add missing",
     promise: "Installs what is absent. No updates" },
   { key: "unattended", emoji: "☕", name: "Unattended",
@@ -161,17 +174,21 @@ function duration(secs) {
 
 // May this action run at this rung? THE twin of ladder.rs::rung_allows.
 //   rung: 0..4  ·  action: "install"|"uninstall"|"upgrade"|"downgrade"|null
-export function rungAllows(rung, action, isConfig, facts) {
+export function rungAllows(rung, action, isConfig, isExtension, facts) {
   if (!action) return false; // no action (out of scope, nothing to do) is in no rung
   // NOT ON THE LADDER, at any rung: removing honours the user's ✕, and the ladder governs
   // how far to GO, not whether to honour a veto.
   if (action === "uninstall") return true;
   // Never batched by Apply (mirrors AUTO_ACTS and the server's Install|Uninstall|Upgrade).
   if (action === "downgrade") return false;
-  if (action === "install") return isConfig ? true : rung >= 1;
+  // An extension installs INTO a host: rung 1, above config-atoms and below binaries. It
+  // stays rung 1 even if a fact says it elevates — the ROUTE earns the rung, not the
+  // observation (the Rust twin's table says the same, and pins it).
+  if (action === "install") return isConfig ? true : isExtension ? rung >= 1 : rung >= 2;
   if (action === "upgrade") {
-    // slow DOMINATES: rung 3 excludes "the slow ones" full stop.
-    const needed = isSlow(facts) ? 4 : (facts?.uac || facts?.forbidden) ? 3 : 2;
+    // ⚠️ Every threshold moved up by one when Extensions was inserted at 1. slow DOMINATES:
+    // the last rung is the only one that includes "the slow ones".
+    const needed = isSlow(facts) ? 5 : (facts?.uac || facts?.forbidden) ? 4 : 3;
     return rung >= needed;
   }
   return false;

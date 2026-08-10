@@ -596,7 +596,8 @@ fn step_json(
     json!({
         "i": i, "name": s.name, "description": s.description, "bundle": s.bundle,
         "canUninstall": s.uninstall.is_some(), "posture": s.posture.as_str(),
-        "isConfig": s.is_config, "pin": s.pin, "categories": s.categories,
+        "isConfig": s.is_config, "isExtension": s.is_extension,
+        "pin": s.pin, "categories": s.categories,
         "requires": s.requires, // package names this one needs (B5 transitive pull, §8)
         "uac": f.uac, "forbidden": f.forbidden, "slow": crate::ladder::is_slow(&f),
         // How long this took HERE last time, for the ladder's minutes. 0 = no local
@@ -1562,7 +1563,7 @@ async fn apply_diff(
             // guarded anyway) reads as "nothing known", which is the permissive direction
             // for a preference and the same stance merge_presences takes for presence.
             let f = state.facts.get(i).copied().unwrap_or_default();
-            if !crate::ladder::rung_allows(rung, a, step.is_config, &f) {
+            if !crate::ladder::rung_allows(rung, a, step.is_config, step.is_extension, &f) {
                 continue;
             }
             visual_plan.push((i, a));
@@ -2354,6 +2355,7 @@ mod tests {
             detect: None,
             check: None,
             is_config: false,
+            is_extension: false,
             version_regex: None,
             pin: pin.map(|p| p.into()),
             requires: Vec::new(),
@@ -2892,8 +2894,14 @@ mod tests {
             super::rung_from_wire(&v)
         };
         assert_eq!(msg(r#"{"type":"apply","rung":0}"#), Rung::ConfigOnly);
-        assert_eq!(msg(r#"{"type":"apply","rung":2}"#), Rung::Unattended);
-        assert_eq!(msg(r#"{"type":"apply","rung":4}"#), Rung::Everything);
+        // ⚠️ THE NUMBERS SHIFTED when Extensions was inserted at 1: what used to be rung 2
+        // (unattended) is now 3, and 4 is no longer the top. Safe because the rung is NOT
+        // persisted (app.js says so explicitly), so no stored preference can be re-read under
+        // the new numbering — the only exposure is a stale front within one launch, which the
+        // absent-means-everything case below already covers.
+        assert_eq!(msg(r#"{"type":"apply","rung":1}"#), Rung::Extensions);
+        assert_eq!(msg(r#"{"type":"apply","rung":3}"#), Rung::Unattended);
+        assert_eq!(msg(r#"{"type":"apply","rung":5}"#), Rung::Everything);
         // THE case that matters: a client that says nothing about the rung must get
         // today's behaviour, not the smallest one. Doing silently LESS than the user asked
         // is the worse direction of error, and every front shipped before this change
@@ -2983,9 +2991,16 @@ mod tests {
              than the one the shared rule chose"
         );
         // And on THAT action, not on one reconstructed beside it.
+        //
+        // ⚠️ The literal call is pinned on purpose, so ADDING an argument turns this red and
+        // forces a human to confirm the new one is threaded from the right place. It bit when
+        // `is_extension` was added — which is the guard working, not a nuisance: a rung
+        // criterion read off the wrong value would filter the wrong rows, silently.
         assert!(
-            code[filters..].starts_with("rung_allows(rung, a, step.is_config, &f)"),
-            "the filter must be applied to `a` — the action action_for returned"
+            code[filters..]
+                .starts_with("rung_allows(rung, a, step.is_config, step.is_extension, &f)"),
+            "the filter must be applied to `a` (the action action_for returned) and to THIS \
+             step's own flags — re-check the argument order if this just started failing"
         );
     }
 

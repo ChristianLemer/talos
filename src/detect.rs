@@ -383,6 +383,7 @@ mod tests {
             detect: None,
             check: None,
             is_config: false,
+            is_extension: false,
             version_regex: None,
             pin: None,
             requires: vec![],

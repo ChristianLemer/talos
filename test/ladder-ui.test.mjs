@@ -15,6 +15,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { RUNGS } from "../public/ladder.js";
 
 const appjs = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
 const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
@@ -249,10 +250,18 @@ test("ladder: rungReason names the fact by ASKING the rule, not by reading the f
   const at = modeljs.indexOf("export function rungReason(");
   assert.notEqual(at, -1, "rungReason must exist in model.js, beside rungPlan");
   const body = modeljs.slice(at, modeljs.indexOf("\n}\n", at));
-  assert.match(body, /while \(first > 0 && rungAllows\(first - 1, action, isConfig, p\)\) first--/,
-    "the fact is named by walking down to the lowest rung that admits the row");
+  // ⚠️ The literal call is matched, so adding an argument turns this red and makes a human
+  // confirm the new one is threaded from the right place — which is the guard working. It bit
+  // when `isExtension` joined the rule.
+  assert.match(
+    body,
+    /while \(first > 0 && rungAllows\(first - 1, action, isConfig, isExt, p\)\) first--/,
+    "the fact is named by walking down to the lowest rung that admits the row",
+  );
   // Only ONE fact may be read directly, and it is the tie-break between 👀's two — which is
   // not a rung question at all (both sit on the same rung, so the rule cannot separate them).
+  // Still only ONE fact read directly. `p?.isExtension` is deliberately NOT in this pattern:
+  // it is a CLASS (what route installs this), not an adverse fact the rung walk could derive.
   const reads = body.match(/p\?\.(slow|uac|forbidden)/g) || [];
   assert.deepEqual(reads, ["p?.uac"],
     "the only fact read directly is the uac/403 tie-break — everything else asks rungAllows");
@@ -390,4 +399,29 @@ test("ladder: the estimate is ANNOUNCED, not visual-only", () => {
     "the announcement carries the word, the count AND the estimate, in that order");
   assert.match(body, /: `\$\{spec\.name\}, \$\{count\}`\)/,
     "…and falls back to the word and count alone when there is no estimate to announce");
+});
+
+test("ladder: the slider's max and detents match RUNGS — the one thing that cannot derive", () => {
+  // ⭐ `max` and the <option> detents are HTML ATTRIBUTES, so unlike every other position in
+  // this feature they cannot be computed from RUNGS. Adding a rung and forgetting them caps
+  // the slider one short: the last rung becomes unreachable, and the failure is silent — the
+  // widget just never offers Everything, which is the WORSE direction of error (doing less
+  // than the user asked). So it is pinned here rather than trusted.
+  const top = RUNGS.length - 1;
+  const max = html.match(/id="ladder-range"[^>]*max="(\d+)"/);
+  assert.ok(max, "#ladder-range must declare a max");
+  assert.equal(
+    Number(max[1]),
+    top,
+    `max="${max[1]}" but RUNGS has ${RUNGS.length} rungs — the top rung is unreachable`,
+  );
+  // One detent per rung, so the thumb snaps to every one of them.
+  const detents = html.match(/id="ladder-detents"[\s\S]*?<\/datalist>/);
+  assert.ok(detents, "the detent list must exist");
+  const values = [...detents[0].matchAll(/<option value="(\d+)">/g)].map((m) => Number(m[1]));
+  assert.deepEqual(
+    values,
+    RUNGS.map((_, i) => i),
+    "one detent per rung, in order",
+  );
 });

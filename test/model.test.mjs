@@ -809,30 +809,35 @@ test("ladder: rungPlan grows monotonically, and each row enters at ITS rung", ()
     // 0 — a config-atom to install: rung 0. canUninstall:false would derive it OUT of
     // scope, so it is given a route back; scope is a different gate and gates first.
     { i: 0, name: "Starship config", canUninstall: true, isConfig: true },
-    // 1 — a plain install: rung 1
-    { i: 1, name: "rg", canUninstall: true },
-    // 2 — a quiet upgrade: rung 2
-    { i: 2, name: "bat", canUninstall: true },
-    // 3 — an upgrade that elevates: rung 3
-    { i: 3, name: "AWS CLI", canUninstall: true, uac: true },
-    // 4 — an upgrade that drags: rung 4
-    { i: 4, name: "Xcode CLT", canUninstall: true, slow: true },
+    // 1 — an EXTENSION to install: rung 1. One row per rung, so the fixture demonstrates
+    // the whole scale — and this is the row that would have ridden with `rg` before.
+    { i: 1, name: "Chiron", canUninstall: true, isExtension: true },
+    // 2 — a plain install: rung 2
+    { i: 2, name: "rg", canUninstall: true },
+    // 3 — a quiet upgrade: rung 3
+    { i: 3, name: "bat", canUninstall: true },
+    // 4 — an upgrade that elevates: rung 4
+    { i: 4, name: "AWS CLI", canUninstall: true, uac: true },
+    // 5 — an upgrade that drags: rung 5
+    { i: 5, name: "Xcode CLT", canUninstall: true, slow: true },
   ]);
-  for (const i of [0, 1, 2, 3, 4]) setDecision(m, i, "in");
-  for (const i of [2, 3, 4]) {
+  for (const i of [0, 1, 2, 3, 4, 5]) setDecision(m, i, "in");
+  for (const i of [3, 4, 5]) {
     setStatusData(m, i, "ok");
     setOutdated(m, i, true, "9.9.9");
   }
-  assert.deepEqual([0, 1, 2, 3, 4].map((i) => actionOf(m, i)),
-    ["install", "install", "upgrade", "upgrade", "upgrade"], "the fixture is what it claims");
+  assert.deepEqual([0, 1, 2, 3, 4, 5].map((i) => actionOf(m, i)),
+    ["install", "install", "install", "upgrade", "upgrade", "upgrade"],
+    "the fixture is what it claims");
   assert.deepEqual(rungPlan(m, 0), [0]);
-  assert.deepEqual(rungPlan(m, 1), [0, 1]);
+  assert.deepEqual(rungPlan(m, 1), [0, 1], "🧩 adds the extension and NOT the binary");
   assert.deepEqual(rungPlan(m, 2), [0, 1, 2]);
   assert.deepEqual(rungPlan(m, 3), [0, 1, 2, 3]);
   assert.deepEqual(rungPlan(m, 4), [0, 1, 2, 3, 4]);
-  // The top rung is exactly the rows a plain Apply would touch — the widget's count at 4
+  assert.deepEqual(rungPlan(m, 5), [0, 1, 2, 3, 4, 5]);
+  // The top rung is exactly the rows a plain Apply would touch — the widget's count there
   // must equal what the diff view already shows, or the ladder contradicts the panel.
-  assert.deepEqual(rungPlan(m, 4), [0, 1, 2, 3, 4].filter((i) => isActionable(m, i)));
+  assert.deepEqual(rungPlan(m, 5), [0, 1, 2, 3, 4, 5].filter((i) => isActionable(m, i)));
 });
 
 test("ladder: a removal is in EVERY rung, and an out-of-scope row is in none", () => {
@@ -875,26 +880,31 @@ test("ladder: rungSeconds reads the LOCAL secs of exactly the rung's rows", () =
   const m = createModel();
   loadPlan(m, [
     { i: 0, name: "Starship config", canUninstall: true, isConfig: true, secs: 3 },
-    { i: 1, name: "rg", canUninstall: true, secs: 12 },
-    { i: 2, name: "bat", canUninstall: true }, // never measured here → 0, the unknown sentinel
-    { i: 3, name: "AWS CLI", canUninstall: true, uac: true, secs: 242 },
+    // ⭐ An extension with NO measurement — which is the real situation, not a convenience:
+    // nothing has ever timed a plugin or skill route (timings.yaml holds five brew entries),
+    // so rung 1 legitimately reads "unknown" and must COUNT the row rather than drop it.
+    { i: 1, name: "Chiron", canUninstall: true, isExtension: true },
+    { i: 2, name: "rg", canUninstall: true, secs: 12 },
+    { i: 3, name: "bat", canUninstall: true }, // never measured here → 0, the unknown sentinel
+    { i: 4, name: "AWS CLI", canUninstall: true, uac: true, secs: 242 },
     // slow for EVERYONE (last rung), and one second HERE. Not a contradiction: the shared
     // file classifies, the local file estimates.
-    { i: 4, name: "7-Zip", canUninstall: true, slow: true, secs: 1 },
+    { i: 5, name: "7-Zip", canUninstall: true, slow: true, secs: 1 },
   ]);
-  for (const i of [0, 1, 2, 3, 4]) setDecision(m, i, "in");
-  for (const i of [2, 3, 4]) {
+  for (const i of [0, 1, 2, 3, 4, 5]) setDecision(m, i, "in");
+  for (const i of [3, 4, 5]) {
     setStatusData(m, i, "ok");
     setOutdated(m, i, true, "9.9.9");
   }
   assert.deepEqual(rungSeconds(m, 0), [3]);
-  assert.deepEqual(rungSeconds(m, 1), [3, 12]);
-  assert.deepEqual(rungSeconds(m, 2), [3, 12, 0], "the unmeasured row is present as 0, not dropped");
-  assert.deepEqual(rungSeconds(m, 3), [3, 12, 0, 242]);
-  assert.deepEqual(rungSeconds(m, 4), [3, 12, 0, 242, 1], "…and the slow-for-everyone row is 1s HERE");
+  assert.deepEqual(rungSeconds(m, 1), [3, 0], "the extension is counted, at 0 = unknown");
+  assert.deepEqual(rungSeconds(m, 2), [3, 0, 12]);
+  assert.deepEqual(rungSeconds(m, 3), [3, 0, 12, 0], "the unmeasured row is present as 0, not dropped");
+  assert.deepEqual(rungSeconds(m, 4), [3, 0, 12, 0, 242]);
+  assert.deepEqual(rungSeconds(m, 5), [3, 0, 12, 0, 242, 1], "…and the slow-for-everyone row is 1s HERE");
   // One value per row the rung touches, always — a length mismatch is how "N items" and the
   // minutes beside it would come to describe different sets.
-  for (const r of [0, 1, 2, 3, 4]) {
+  for (const r of [0, 1, 2, 3, 4, 5]) {
     assert.equal(rungSeconds(m, r).length, rungPlan(m, r).length, `rung ${r}`);
   }
 });
