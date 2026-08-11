@@ -189,10 +189,13 @@ export function scopeReason(model, i) {
 }
 // Set (or clear, with null) the user's override. Unlike setDecision there is no
 // posture to refuse it: scope is the user's question, always theirs to answer.
-export function setScope(model, i, state) {
+export function setScope(model, i, state, { trace = true } = {}) {
   if (state === "in" || state === "out") model.scope.set(i, state);
   else model.scope.delete(i);
-  markTouched(model, i); // a scope gesture is a gesture: it leaves its trace too
+  // A scope gesture is a gesture: it leaves its trace too — unless it is a RESTORE. Same
+  // distinction as `setDecision`: `touched` is interface history, `scope` is intent, and replaying
+  // intent is not doing something.
+  if (trace) markTouched(model, i);
 }
 // Would pulling row i INTO scope be the risky direction? True only for a row we
 // did not install: managing it means Talos may remove a binary it never put
@@ -489,11 +492,21 @@ export function isTouched(model, i) {
 }
 
 // --- mutations --------------------------------------------------------------
-export function setDecision(model, i, state) {
+export function setDecision(model, i, state, { trace = true } = {}) {
   if (isLocked(model, i)) return false; // author's posture wins
   if (state === "in" || state === "out") model.decision.set(i, state);
   else model.decision.delete(i); // anything else clears to auto
-  markTouched(model, i); // returning to auto IS a gesture — it must leave its trace
+  // Returning to auto IS a gesture — it must leave its trace.
+  //
+  // ⚠️ EXCEPT when RESTORING a persisted decision, which is why `trace` exists. C, on the running
+  // app: "j'ai fait refresh et elle ne part pas". `applySavedSelection` replays every stored
+  // choice through here, so a Refresh cleared `touched` (loadPlan does) and then immediately
+  // re-marked every row that had ever been decided — the trace looked permanent and the Changes
+  // tab kept showing rows where nothing would happen.
+  //
+  // The distinction is the point: `touched` is INTERFACE HISTORY ("you did this, just now"), while
+  // `decision` is INTENT ("you want this, still"). Replaying intent is not doing something.
+  if (trace) markTouched(model, i);
   return true;
 }
 // The scan's verdict on provenance: present, but installed outside our manager.
@@ -688,7 +701,9 @@ export function applySavedSelection(model, sel) {
   for (const [key, state] of Object.entries(sel.pkgs || {})) {
     const i = byKey.get(key);
     if (i != null && (state === "in" || state === "out")) {
-      setDecision(model, i, state);
+      // ⚠️ `trace: false` — restoring a stored choice is NOT a gesture of this session. Without it
+      // a Refresh re-marked every previously decided row and the trace looked permanent.
+      setDecision(model, i, state, { trace: false });
     }
   }
 }
@@ -708,7 +723,8 @@ export function applySavedScope(model, sel) {
   for (const [i, p] of model.pkgs) byKey.set(p.key, i);
   for (const [key, state] of Object.entries(sel.scope || {})) {
     const i = byKey.get(key);
-    if (i != null && (state === "in" || state === "out")) setScope(model, i, state);
+    // `trace: false` — see `applySavedSelection`: a restore is not a gesture of this session.
+    if (i != null && (state === "in" || state === "out")) setScope(model, i, state, { trace: false });
   }
 }
 // Personal bundle members — the package NAMES the user added from the Catalog.

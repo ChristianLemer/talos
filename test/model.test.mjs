@@ -837,6 +837,46 @@ test("ladder: rungPlan grows monotonically, and each row enters at ITS rung", ()
   assert.deepEqual(rungPlan(m, 2), [0, 1, 2, 3, 4, 5].filter((i) => isActionable(m, i)));
 });
 
+test("a RESTORE leaves no trace — only a gesture of this session does", () => {
+  // ⭐ C, on the running app: "j'ai fait refresh et elle ne part pas". A Refresh reloads the plan,
+  // `loadPlan` clears `touched` — and then `applySavedSelection` replayed every stored choice
+  // through `setDecision`, which re-marked each one. So the trace looked PERMANENT and the Changes
+  // tab kept showing rows where nothing would happen.
+  //
+  // ⚠️ The distinction is the whole fix: `touched` is INTERFACE HISTORY ("you did this, just now")
+  // while `decision`/`scope` are INTENT ("you want this, still"). Replaying intent is not doing
+  // something. The trace itself stays deliberate — a cancelled row that VANISHED was a real bug,
+  // twice — so this narrows WHO marks, never whether marking happens.
+  const m = createModel();
+  loadPlan(m, [
+    { i: 0, name: "AWS CLI", canUninstall: true },
+    { i: 1, name: "rg", canUninstall: true },
+  ]);
+  // A real gesture marks.
+  setDecision(m, 0, "in");
+  assert.equal(isTouched(m, 0), true, "a click is a gesture: it leaves a trace");
+
+  // A RESTORE does not — the shape a Refresh takes.
+  const m2 = createModel();
+  loadPlan(m2, [
+    { i: 0, name: "AWS CLI", canUninstall: true },
+    { i: 1, name: "rg", canUninstall: true },
+  ]);
+  applySavedSelection(m2, { pkgs: { "AWS CLI": "in", rg: "out" } });
+  assert.equal(isTouched(m2, 0), false, "restoring a stored choice is not a gesture");
+  assert.equal(isTouched(m2, 1), false);
+  // …and the INTENT is restored all the same, which is the half that must not regress.
+  assert.equal(toggleOf(m2, 0), "in", "the decision itself is restored");
+  assert.equal(toggleOf(m2, 1), "out");
+
+  // Same for scope, which had the identical defect through setScope.
+  const m3 = createModel();
+  loadPlan(m3, [{ i: 0, name: "AWS CLI", canUninstall: true }]);
+  applySavedScope(m3, { scope: { "AWS CLI": "out" } });
+  assert.equal(isTouched(m3, 0), false, "a restored scope override leaves no trace either");
+  assert.equal(scopeOf(m3, 0), "out", "…while the override itself is restored");
+});
+
 test("ladder: a removal rides its KIND, and an out-of-scope row is in no rung at all", () => {
   // ⭐ THIS TEST ASSERTED THE OPPOSITE, and the reversal is C's: a removal used to be in every
   // rung ("the ladder governs how far to GO; a ✕ is honoured or it is not"). That was right

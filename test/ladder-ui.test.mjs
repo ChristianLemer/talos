@@ -20,149 +20,158 @@ import { RUNGS } from "../public/ladder.js";
 const appjs = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
 const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 
-test("dial: the three buttons are NESTED in the DOM, not painted to look nested", () => {
-  // ⭐ The containment is the whole message: 📦's frame starts left of ⚡ and runs to the end,
-  // so the eye reads "Apps contains the other two" with no copy at all. Real nesting is what
-  // makes that impossible to break — two frames drawn side by side would drift the day someone
-  // touches a padding, and a screen reader would walk a structure the eye does not see.
-  const dial = html.match(/<div id="dial"[\s\S]*?<\/div>\s*<!--/);
+test("dial: the ZONE is the button, and the zones are really nested", () => {
+  // ⭐ C's correction of a first version where each zone merely CONTAINED a button: the zone
+  // itself is clickable. That is what lets choosing the outer one light the inner ones, which is
+  // how the inclusion gets PAINTED instead of only drawn.
+  const dial = html.match(/<div id="dial"[\s\S]*?\n        <\/div>/);
   assert.ok(dial, "#dial must exist");
-  const at = (s) => dial[0].indexOf(s);
-  // ⚡ inside 🧩 inside 📦, checked by position rather than by parsing: each frame's opening
-  // tag must precede the next, and all three buttons must sit inside the outermost.
-  assert.ok(at("frame-apps") < at("frame-ext"), "🧩's frame opens inside 📦's");
-  assert.ok(at("frame-ext") < at("frame-cfg"), "⚡'s frame opens inside 🧩's");
-  // ⚠️ Buttons cannot nest in HTML — a <button> inside a <button> is invalid and browsers
-  // unnest it silently, which would flatten the whole design. So the FRAMES are divs and each
-  // rung's clickable surface is its own button.
-  // ⚠️ Checked by BALANCE, not by a regex looking for a nested tag: `<button …>[\s\S]*?<button`
-  // matches any two buttons in the block, however far apart, so it flagged three correct
-  // siblings. Walking the tags is what actually answers "is one inside another".
-  let depth = 0;
-  for (const tag of dial[0].match(/<button|<\/button>/g) ?? []) {
-    depth += tag === "<\/button>" ? -1 : 1;
-    assert.ok(depth <= 1, "no button may contain a button — browsers unnest them silently");
-  }
-  assert.equal(depth, 0, "every button must be closed");
+  const m = dial[0];
+  // Real DOM nesting, checked by position: 📦 opens, then 🧩 inside it, then ⚡ inside that.
+  assert.ok(m.indexOf("zone-apps") < m.indexOf("zone-ext"), "🧩's zone opens inside 📦's");
+  assert.ok(m.indexOf("zone-ext") < m.indexOf("zone-cfg"), "⚡'s zone opens inside 🧩's");
+  // Each zone carries its own rung AND its own clickable role — that is the difference from the
+  // version this replaced, where the frames were inert wrappers.
   for (const r of [0, 1, 2]) {
-    assert.match(dial[0], new RegExp(`data-rung="${r}"`), `rung ${r} needs a button`);
+    assert.match(m, new RegExp(`data-rung="${r}"`), `rung ${r} needs a zone`);
   }
+  assert.equal((m.match(/role="button"/g) ?? []).length, 3, "all three zones are buttons");
+  // ⚠️ A div with role=button gets no keyboard activation for free. Buttons cannot nest in HTML
+  // (browsers unnest them silently), so this is the unavoidable cost — and tabindex is what
+  // keeps the control reachable at all without a mouse.
+  assert.equal((m.match(/tabindex="0"/g) ?? []).length, 3, "each zone must be focusable");
+  assert.ok(!/<button/.test(m), "no real <button> here — they cannot nest, hence role=button");
 });
 
-test("dial: one button per rung, derived from RUNGS", () => {
-  // The one thing in this feature that cannot derive from RUNGS is the MARKUP — three buttons
-  // are written by hand. So a rung added or removed without touching the html leaves a scope
+test("dial: one zone per rung, derived from RUNGS", () => {
+  // The one thing in this feature that cannot derive from RUNGS is the MARKUP — three zones are
+  // written by hand. A rung added or removed without touching the html leaves a scope
   // unreachable, silently. Same guard the slider's `max` used to carry, for the same reason.
-  const buttons = [...html.matchAll(/data-rung="(\d+)"/g)].map((m) => Number(m[1]));
+  const zones = [...html.matchAll(/class="zone zone-\w+" data-rung="(\d+)"/g)].map((x) =>
+    Number(x[1]),
+  );
   assert.deepEqual(
-    buttons.sort(),
+    zones.sort(),
     RUNGS.map((_, i) => i),
-    `the markup has ${buttons.length} buttons but RUNGS has ${RUNGS.length} rungs`,
+    `the markup has ${zones.length} zones but RUNGS has ${RUNGS.length} rungs`,
   );
 });
 
-test("dial: the SECOND click applies — and only on the same, armed, non-empty scope", () => {
-  // ⭐ THE load-bearing behaviour of the whole control, and every clause of it is a decision:
-  //   - a different scope DISARMS, which is what makes the first click reversible without
-  //     inventing a cancel affordance — and the safety property: you cannot arm 🧩 and then
-  //     run 📦 with one click.
-  //   - an armed EMPTY scope refuses, quietly, rather than starting a run with nothing in it.
-  //   - only the armed path reaches applyAll.
-  const at = appjs.indexOf("function onDialClick(");
-  assert.notEqual(at, -1, "onDialClick must exist — one place decides what a click means");
+test("dial: choosing a scope lights it AND every zone inside it", () => {
+  // ⭐ THE property C asked for, and the reason the colour matters at all: with three zones lit,
+  // "📦 takes the other two with it" is read from the FILL rather than inferred from the geometry.
+  // `r <= rung` is the whole rule, derived from the rung NUMBER — not from the DOM — so it comes
+  // from the same source as the counts and cannot disagree with them.
+  const at = appjs.indexOf("function renderDial(");
   const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
-  assert.match(body, /if \(r !== rung\)/, "a different scope must take its own branch");
-  assert.match(body, /armed = false/, "…and disarm");
-  assert.match(body, /if \(!armed\)/, "the first click on the chosen scope arms it");
-  assert.match(body, /armed = true/);
-  assert.match(body, /rungPlan\(model, rung\)\.length === 0/, "an empty scope must be refused");
-  assert.match(body, /applyAll\(\)/, "and the armed second click runs");
-  // The order matters: the empty check must come BEFORE applyAll, or a click on an empty
-  // armed scope would start a run that has nothing to do — a full server round-trip to be
-  // told `done {nothing:true}`, which this app already paid for once at the 403 retry card.
+  assert.match(body, /const on = r <= rung;/,
+    "a zone is lit when it is the chosen one OR inside it — that is the cumulation, painted");
+  assert.match(body, /classList\.toggle\("on", on\)/, "…and the class follows that verdict");
+  // ⚠️ ONE class, not two. There was an `armed` class for a while, when the dial's own second click
+  // was the run; with Apply back in the bar there are only TWO states — in the scope or out of it —
+  // so a second class would be an alias for the first and the next reader would hunt for a
+  // difference that does not exist.
   assert.ok(
-    body.indexOf("length === 0") < body.indexOf("applyAll()"),
-    "the empty refusal must precede the run",
+    !/classList\.toggle\("armed"/.test(body),
+    "no `armed` class: the run left the dial, so the state it marked left with it",
   );
-  // Frozen while busy, like every other control: acting on an incomplete scan would count
-  // un-probed rows as absent.
+});
+
+test("dial: a click only SELECTS — the run belongs to the Apply button", () => {
+  // ⭐ C, once Apply was back: "ils ne peuvent pas déclencher le apply… il n'y a apply qui peut
+  // fonctionner". This replaces a two-click arming scheme, and dropping it is safer as well as
+  // simpler: a second click on the same spot is what people do when the first appears not to have
+  // worked, and there it installed software. The irreversible act now has exactly one door.
+  const at = appjs.indexOf("function onZoneClick(");
+  assert.notEqual(at, -1, "onZoneClick must exist — one place decides what a click means");
+  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
+  assert.match(body, /rung = r;/, "the clicked zone becomes the scope");
+  assert.match(body, /refreshLiveness\(\)/, "…and the whole panel repaints, rows included");
+  // ⚠️ THE load-bearing absence: no run may be reachable from a zone click.
+  assert.ok(!/applyAll\(\)/.test(body), "a zone click must never start a run");
+  assert.ok(!/armed/.test(body), "and there is no arming left to do");
   assert.match(body, /applyRunning \|\| scanning/, "a click during a run or a scan does nothing");
 });
 
-test("dial: `armed` is not the same state as `rung`", () => {
-  // A scope is ALWAYS chosen (the dial has no null state), so if `armed` were the same thing
-  // the very first paint would be a loaded gun: one click anywhere would install. Two
-  // variables, and the initial value of the second is what makes the control safe at rest.
-  assert.match(appjs, /let armed = false;/, "armed must start false, and be its own variable");
-});
-
-test("dial: the third line becomes a VERB when armed, and names the removals", () => {
-  // ⚠️ Without this the second click reads as a double-click that missed — and it installs
-  // software. The count turning into "▶ apply 7 · remove 2" is what distinguishes them.
-  //
-  // ⭐ And the removals are named SEPARATELY, because Apply does not only act on the scope: it
-  // also honours the rows the user unchecked. A button that said "Extensions" and quietly
-  // removed three things would be the button lying.
-  const at = appjs.indexOf("function renderDial(");
-  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
-  assert.match(body, /armed/, "the label must know whether this click would run");
-  assert.match(body, /▶ apply/, "an armed scope reads as a verb");
-  assert.match(body, /remove \$\{removes\}/, "…and names the removals it would also do");
-  assert.match(body, /actionOf\(model, i\) === "uninstall"/,
-    "the removal count comes from the ACTION, not from a guess about the row");
-  // The counts come from rungPlan — the same function the server's filter mirrors — so the
-  // button and the plan cannot disagree about what it would touch.
-  assert.match(body, /M\.rungPlan\(model, r\)/, "the count must come from the shared rule");
+test("dial: a click resolves the INNERMOST zone, never an ancestor", () => {
+  // ⚠️ The price of "the zone is the button": the zones are nested, so a click on ⚡ also lands on
+  // 🧩 and 📦 as it bubbles. Three separate listeners would fire three times and the outermost
+  // would win — clicking the small frame would choose 📦, the exact opposite of what the eye
+  // picked. One delegated listener + `closest` from the real target is the fix.
+  assert.match(appjs, /getElementById\("dial"\)\?\.addEventListener\(\s*"click"/,
+    "ONE delegated listener on the container, not one per zone");
+  assert.match(appjs, /e\.target\.closest\?\.\(".zone"\)/,
+    "the innermost zone under the pointer is what decides — closest, from the event target");
+  // The label must not intercept: a click on the text has to belong to its zone, and pointer
+  // events on a child could hand it to whichever ancestor the browser reports.
+  assert.match(html, /\.zone-label[^}]*pointer-events:none/,
+    "the label is transparent to the pointer so the ZONE always owns the click");
+  // Keyboard too — a div with role=button activates on nothing by default.
+  assert.match(appjs, /"keydown"/, "Enter/Space must work: role=button gets nothing for free");
+  assert.match(appjs, /e\.preventDefault\(\)/, "…and Space must not scroll the panel");
 });
 
 test("dial: an empty scope LOOKS unclickable and says so", () => {
-  // A green button with nothing in it, clicked, does nothing — and a gesture that leaves no
-  // trace is a defect in this app, not a no-op. So the state is visible in three ways: the
-  // `.empty` class, the words on the button, and the note under the dial.
+  // A filled zone with nothing in it, clicked, does nothing — and a gesture that leaves no trace
+  // is a defect in this app, not a no-op. So the state is visible three ways: the class, the
+  // words on the zone, and the note under the dial.
   const at = appjs.indexOf("function renderDial(");
   const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
   assert.match(body, /classList\.toggle\("empty"/, "an empty chosen scope must be marked");
-  assert.match(body, /nothing to do/, "…and say so on the button itself");
-  // ⚠️ NOT disabled: the other two buttons are how a user picks a wider scope, and disabling
-  // the chosen one would remove the affordance that fixes the situation.
-  assert.match(body, /btn\.disabled = busy;/,
-    "only busy disables a button — an empty scope stays clickable so the scope can be changed");
-  // And the CSS must actually mute it, or the class is decoration.
-  assert.match(html, /\.dial-btn\.chosen\.empty/, "the empty state needs a rule of its own");
+  assert.match(body, /nothing to do/, "…and say so on the zone itself");
+  // ⚠️ NOT disabled: the other zones are how a user picks a wider scope, so making the chosen one
+  // inert would remove the affordance that fixes the situation.
+  assert.ok(
+    !/zone\.disabled = /.test(body),
+    "an empty scope stays clickable so the scope can still be changed",
+  );
+  assert.match(html, /\.zone\.on\.empty/, "the empty state needs a rule of its own");
 });
 
-test("dial: the chosen scope is PLAIN BLUE — not green, not red", () => {
-  // ⭐ C: "do not change to green… just use the blue that is fine (plain blue)". And it is the
-  // better call for a reason worth keeping: #9ece6a means "a plain Apply would do this" on every
-  // ROW of the panel, so a green button sitting above green rows would read as one more verdict
-  // rather than as the control that CAUSES them. Blue is the app’s "this is what you adjust"
-  // hue, so the chosen scope becomes the SOLID form of what it was outlined in — nothing new
-  // enters the palette and no colour changes meaning.
-  const rules = html.match(/\.dial-btn \{[\s\S]*?\.dial-btn\.chosen\.empty \.dial-where[^}]*\}/);
-  assert.ok(rules, "the dial’s rules must exist");
-  assert.match(rules[0], /\.dial-btn\.chosen \{[^}]*background:#3d59a1/,
-    "the chosen button is FILLED with the selection blue");
-  // ⚠️ Neither verdict colour may appear: green is "would install", red is "would remove", and
-  // the dial is the control, not a verdict about a package.
-  for (const forbidden of ["#9ece6a", "#f7768e"]) {
-    assert.ok(!rules[0].includes(forbidden),
-      `the dial must not use ${forbidden} — that colour already means something about a ROW`);
-  }
-  // The frames carry the same blue as an outline, which is what makes "chosen" read as the same
-  // thing filled in rather than as a different state.
-  assert.match(html, /\.dial-frame[^}]*#3d59a1/, "the frames carry the selection blue");
-});
-
-test("dial: the button announces all three lines, and whether it would run", () => {
-  // A <button> announces its text content, which here is three separate spans — a screen
-  // reader would recite them without the relation between them. aria-label carries the same
-  // reading the eye gets, INCLUDING "click again to run", which is the one thing a blind user
-  // cannot infer from a colour.
-  const at = appjs.indexOf("function renderDial(");
-  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
-  assert.match(body, /setAttribute\(\s*"aria-label"/, "each button must carry an aria-label");
-  assert.match(body, /Click again to run/, "…and say when the next click acts");
-  assert.match(body, /aria-pressed/, "and which scope is chosen, as state not as colour");
+test("dial: a chosen zone is PLAIN BLUE — not green, not red", () => {
+  // ⭐ C: "do not change to green… just use the blue that is fine (plain blue)". The better call,
+  // and the reason is worth keeping: #9ece6a means "a plain Apply would do this" on every ROW of
+  // the panel, so a green zone above green rows reads as one more verdict rather than as the
+  // control that CAUSES them. Blue is the app's "this is what you adjust" hue, so a lit zone is
+  // simply the SOLID form of its own outline.
+  const rules = html.match(/\.zone \{[\s\S]*?\.dial\.busy \.zone[^}]*\}/);
+  assert.ok(rules, "the zone rules must exist");
+  // ⭐ A RAMP, light inside → dark outside, and it fixes a defect the rendered panel exposed: one
+  // flat blue merged all three lit zones into a single rectangle and the NESTING vanished exactly
+  // when it mattered most, at the widest scope. Asserted as an ORDER rather than as three literal
+  // values, so the palette can be retuned without touching this — what must hold is that each
+  // level differs from its parent.
+  const shade = (cls) => rules[0].match(new RegExp(`\\.zone-${cls}\\.on \\{[^}]*background:(#[0-9a-f]{6})`))?.[1];
+  const [cfg, ext, apps] = ["cfg", "ext", "apps"].map(shade);
+  assert.ok(cfg && ext && apps, "each level needs its own lit shade");
+  assert.equal(new Set([cfg, ext, apps]).size, 3, "three DISTINCT shades, or the nesting merges");
+  // ⚠️ DARK INSIDE → LIGHT OUTSIDE, and this direction was measured rather than chosen: the zones
+  // are 113px / 234px / 1050px wide, so the innermost has a fraction of the surface. A pale fill
+  // on 113px reads as an OUTLINE — clicking ⚡ looked like nothing had turned on at all. Small and
+  // dark shows; small and pale disappears. Area beats hue, which is why the first ramp (light
+  // inside) had to be reversed.
+  //
+  // Pinned as a RELATION via a brightness sum, so the palette can be retuned without touching
+  // this — what must hold is the direction.
+  const lum = (h) => parseInt(h.slice(1, 3), 16) + parseInt(h.slice(3, 5), 16) + parseInt(h.slice(5), 16);
+  assert.ok(lum(cfg) < lum(ext) && lum(ext) < lum(apps),
+    `dark inside → light outside: got ⚡${cfg} 🧩${ext} 📦${apps}`);
+  assert.match(rules[0], /\.zone \{[^}]*#3d59a1/, "and the outline stays the app's selection blue");
+  // ⚠️ Red must not appear at all: red is the diff language's word for "would remove", and the
+  // dial removes nothing by itself.
+  assert.ok(!rules[0].includes("#f7768e"), "the dial must not use red — red means remove");
+  // ⭐ NO GREEN AT ALL, and that is C's decision after seeing it: Apply is a BUTTON again, and
+  // green already means "a plain Apply would do this" on every ROW — a green scope would compete
+  // with both. The selected scope is the same blue at FULL strength instead, so the whole dial
+  // stays in the family of "this is what you adjust".
+  // ⚠️ Comments stripped first — for the THIRD time today a text-level guard matched its own
+  // documentation: the rule that explains why the row green is not used had to name it.
+  const decls = rules[0].replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.ok(!decls.includes("#9ece6a"),
+    "the dial must not use the row green — vivid blue carries selection instead");
+  // ⚠️ ONE ramp, not two. There were two for a while — muted for "included", vivid for "armed" —
+  // and the second went with the arming when the run moved to the Apply button. Two states only:
+  // in the scope (this ramp) or out of it (the base rule, barely there).
 });
 
 test("dial: it repaints from refreshLiveness — the one 'anything changed' hook", () => {
@@ -175,20 +184,31 @@ test("dial: it repaints from refreshLiveness — the one 'anything changed' hook
   assert.ok(body.includes("renderDial()"), "refreshLiveness must repaint the dial");
 });
 
-test("dial: Apply is GONE from the top bar, and nothing still reaches for it", () => {
-  // ⚠️ The dangerous half of removing a button is not the markup — it is a leftover
-  // `getElementById("install-all").onclick`, which throws on a null and takes every listener
-  // registered AFTER it down with it. That is how a removed Apply button silently unwires Quit.
-  assert.ok(!/id="install-all"/.test(html), "the Apply button must be gone from the bar");
-  // ⚠️ Comments are stripped first: the note that REPLACED the listener names it on purpose,
-  // so a naive search matches the very documentation of the removal.
-  const code = appjs.replace(/\/\/.*$/gm, "");
-  assert.ok(
-    !/getElementById\("install-all"\)\s*\./.test(code),
-    "nothing may dereference the removed button — a null here kills the listeners below it",
-  );
-  // applyAll itself stays: it is the single entry point, now called by the dial's second click.
-  assert.match(appjs, /function applyAll\(\)/, "applyAll must remain the one way to run");
+test("dial: Apply is BACK in the bar, and both paths reach the same run", () => {
+  // ⭐ C, after using it: "j'ai quand même un bouton apply". This test asserted the OPPOSITE an
+  // hour ago, and the reversal is the decision: folding "how far" and "go" into one object made
+  // the dial's second click carry an irreversible act that looked like a double-click, and left
+  // the panel with no single place meaning "do it".
+  assert.match(html, /id="install-all"/, "the Apply button must exist again");
+  assert.match(appjs, /getElementById\("install-all"\)\.onclick = \(\) => applyAll\(\)/,
+    "…and be wired");
+  // ⭐ AND IT IS THE ONLY DOOR. C: "il n'y a apply qui peut fonctionner" — the dial's own second
+  // click used to run too, and removing that is what makes this test the inverse of the one it
+  // replaced. One place performs the irreversible act, and it is the one labelled with the verb.
+  assert.match(appjs, /function applyAll\(\)/, "applyAll stays the single way to run");
+  const clickAt = appjs.indexOf("function onZoneClick(");
+  const clickBody = appjs.slice(clickAt, appjs.indexOf("\n}\n", clickAt));
+  assert.ok(!/applyAll\(\)/.test(clickBody), "a zone click must NOT run — only Apply does");
+  // The button must refuse an empty scope, asking the SAME question the dial asks — a second rule
+  // here is how the button and the zones would come to disagree about what "nothing" means.
+  const live = appjs.indexOf("function refreshLiveness()");
+  const liveBody = appjs.slice(live, appjs.indexOf("\n}\n", live));
+  assert.match(liveBody, /M\.rungPlan\(model, rung\)\.length === 0/,
+    "emptiness comes from the shared rule, not from a copy");
+  assert.match(liveBody, /g\.disabled = busy \|\| scopeEmpty/, "and an empty scope disables it");
+  // ⚠️ It applies the SELECTED scope, not everything — so the tooltip has to name which, or the
+  // word "Apply" quietly means something narrower than it says.
+  assert.match(liveBody, /L\.RUNGS\[rung\]\.name/, "the title must name the scope it would run");
 });
 
 test("ladder: applyAll sends `rung`, beside `unmanaged` and for the same reason", () => {

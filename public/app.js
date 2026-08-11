@@ -725,10 +725,21 @@ function refreshLiveness() {
   // 403 retry card that offered a download and did nothing. It also costs a full server
   // round-trip — re-scan, full-window veil — to be told `done {nothing:true}`.
   //
-   // ⚠️ THE APPLY BUTTON IS GONE from this function, and with it the empty-scope check and
-  // the note that explained it. Both moved into `renderDial`, which owns the dial’s three
-  // buttons and is the only place that knows which one is armed — leaving a copy here would be
-  // a second rule about when a run is refused, and the two would drift.
+   // ⭐ APPLY IS BACK, so its liveness is back too — and it asks the SAME question the dial does,
+  // through the same function, so the button and the zones cannot disagree about what "nothing"
+  // means. A button that offers an action with nothing to do is the dishonesty this app already
+  // paid for once at the 403 retry card.
+  const g = document.getElementById("install-all");
+  if (g) {
+    const scopeEmpty = M.rungPlan(model, rung).length === 0;
+    g.classList.toggle("live", ids.some(isActionable) && !scopeEmpty && !busy);
+    g.disabled = busy || scopeEmpty;
+    // It applies THE SELECTED SCOPE, not everything — so the title has to say which, or the
+    // button would quietly mean something narrower than its word.
+    g.title = scopeEmpty
+      ? "Nothing to do at this scope — pick a wider one"
+      : `Apply ${L.RUNGS[rung].name} — ${L.RUNGS[rung].where}`;
+  }
   // Reset is available only when it would do something (model.canReset decides:
   // a moved package or an active profile). The view just reflects that verdict.
   const reset = document.getElementById("reset-all");
@@ -775,70 +786,111 @@ function setRungOut(i, why) {
 
 /// Repaint the dial: three buttons, their counts, and which one is chosen.
 //
-// ⭐ THE SECOND CLICK IS THE APPLY. `armed` is what distinguishes the two clicks, and it is
-// deliberately NOT the same thing as `rung`: the scope is always set (something is always
-// chosen), while `armed` says "this scope has been confirmed once and the next click on it
-// runs". Conflating them would make the very first paint a loaded gun.
-let armed = false;
+// ⭐ NO `armed` STATE ANY MORE, and its removal is the simplification. C, once Apply was back in
+// the bar: "ils ne peuvent pas déclencher le apply… il n'y a apply qui peut fonctionner" — a zone
+// SELECTS, the button RUNS, and nothing else does. The two-click arming existed only because the
+// dial had to carry the run, and it was the fragile part: a second click on the same spot is what
+// people do when the first seems not to have worked, and here it installed software.
+//
+// So one variable is left, `rung`, and the whole dial is a picture of it. Fewer states, and the
+// irreversible act has exactly one door.
 
 function renderDial() {
   const host = document.getElementById("dial");
   if (!host) return;
   const busy = applyRunning || scanning;
-  for (const btn of host.querySelectorAll(".dial-btn")) {
-    const r = Number(btn.dataset.rung);
+  host.classList.toggle("busy", busy);
+  for (const zone of host.querySelectorAll(".zone")) {
+    const r = Number(zone.dataset.rung);
     const spec = L.RUNGS[r];
     if (!spec) continue;
     const plan = M.rungPlan(model, r);
-    // Split by VERB, because that is what the third line has to say once armed: "apply 7 ·
-    // remove 2" is a different promise from "9 items", and the removals are the half a user
-    // must not discover afterwards.
+    // Split by VERB: "3 to apply · 1 to remove" is a different promise from "4 items", and the
+    // removals are the half a user must not discover afterwards — Apply honours the rows you
+    // unchecked, so a scope that counted them silently would be the label lying.
     let removes = 0;
     for (const i of plan) if (M.actionOf(model, i) === "uninstall") removes++;
     const applies = plan.length - removes;
+    // ⭐ ON = this zone is the chosen one OR it is INSIDE the chosen one. Choosing 📦 lights all
+    // three, which is C's whole point: the inclusion is painted, not merely drawn. Derived from
+    // the rung NUMBER rather than from the DOM, so it comes from the same source as the counts.
+    const on = r <= rung;
     const chosen = r === rung;
     const empty = plan.length === 0;
 
-    btn.classList.toggle("chosen", chosen);
-    btn.classList.toggle("empty", chosen && empty);
-    // ⚠️ Disabled ONLY while busy. An empty scope stays clickable-looking but does nothing —
-    // the `.empty` class says so visually, and `#ladder-blocked` says it in words. Disabling
-    // it would remove the affordance that lets the user pick a WIDER scope from here.
-    btn.disabled = busy;
+    // ⭐ TWO STATES, both derived from `rung` alone: `on` = this zone is in the chosen scope
+    // (itself or inside it), painted vivid. Outside it, barely there.
+    //
+    // C: "quand apps est vert, extension doit être vert et config doit être vert aussi" — the
+    // selection is a property of the SCOPE, not of one button, so it spreads inward exactly like
+    // inclusion does. A vivid fill on 📦 alone would claim a smaller reach than the choice has.
+    //
+    // ⚠️ NOT gated on emptiness. That gate was a real defect C caught on the running app: 🧩's
+    // scope is empty on this machine, so the fill was withheld and clicking it looked like it had
+    // done nothing. Emptiness speaks in the WORDS and disables Apply; it must never hide the
+    // selection the user just made.
+    // ⚠️ ONE class, not two. With the run moved to the Apply button there are only TWO visual
+    // states left — in the chosen scope, or outside it — so a second class would be an alias for
+    // the first and the next reader would hunt for the difference.
+    zone.classList.toggle("on", on);
+    // ⚠️ NOT `empty` while the scan is still running, and this was a real defect caught on the
+    // rendered panel: during the scan nothing is actionable yet, so every rung looked empty and
+    // the fill drained out of all three zones — the dial read as "nothing selected" when in fact
+    // nothing was KNOWN. An un-probed row must never count as absent (the same rule the Apply
+    // button already follows), so emptiness is only asserted once the scan has settled.
+    zone.classList.toggle("empty", chosen && empty && !scanning);
 
-    btn.replaceChildren();
+    // Only the label of THIS zone — `querySelector` would reach into the nested ones and every
+    // zone would end up writing every label.
+    const label = [...zone.children].find((c) => c.classList.contains("zone-label"));
+    if (!label) continue;
+    label.replaceChildren();
     const name = document.createElement("span");
-    name.className = "dial-name";
+    name.className = "zone-name";
     name.textContent = `${spec.emoji} ${spec.name}`;
     const where = document.createElement("span");
-    where.className = "dial-where";
+    where.className = "zone-where";
     where.textContent = spec.where;
     const count = document.createElement("span");
-    count.className = "dial-count";
-    // ⭐ The third line changes NATURE when armed: a count becomes a verb. Without that, the
-    // second click reads as a double-click that missed — and it installs software.
-    if (chosen && armed && !empty) {
-      count.textContent = removes
-        ? `▶ apply ${applies} · remove ${removes}`
-        : `▶ apply ${applies}`;
+    count.className = "zone-count";
+    // ⚠️ NO VERB HERE ANY MORE. The chosen zone used to read "▶ apply 7 · remove 2", because its
+    // own second click was the run. With the run in the Apply button, a verb on a zone would
+    // promise a gesture the zone no longer performs — so the zone states the COUNT and the button
+    // states the act. The removals are still named, below, because Apply honours the rows you
+    // unchecked and a scope that hid them would be the label lying.
+    if (r > 0 && plan.length === M.rungPlan(model, r - 1).length && !empty) {
+      // ⭐ CUMULATIVE, and it has to SAY so. C: the counts read as three independent tallies when
+      // they are one running total — 📦's "5 items" already includes whatever ⚡ and 🧩 hold. So a
+      // zone that adds NOTHING to the one inside it says exactly that, rather than repeating a
+      // number that would look like its own.
+      count.textContent = "nothing more";
+    } else if (scanning) {
+      // ⚠️ "checking…", never "nothing to do": until the scan settles the count is not zero, it
+      // is UNKNOWN — and an un-probed row must not read as absent. Saying "nothing to do" here
+      // was the same defect the fill had, in words.
+      count.textContent = "checking…";
     } else if (empty) {
-      count.textContent = "nothing to do";
+      // The innermost zone has nothing INSIDE it to be cumulative about, so it says the plain
+      // thing. The outer two get "nothing more" (above) when they add nothing to their child.
+      count.textContent = r === 0 ? "nothing to do" : "nothing more";
     } else {
       count.textContent = removes
         ? `${applies} to apply · ${removes} to remove`
-        : `${applies} ${applies === 1 ? "item" : "items"}`;
+        : `${applies} ${applies === 1 ? "item" : "items"}${r > 0 ? " in all" : ""}`;
     }
-    btn.append(name, where, count);
-    // The announcement carries all three lines: a screen reader gets the same reading the eye
-    // does, including whether this click would RUN.
-    btn.setAttribute(
+    label.append(name, where, count);
+    // The announcement carries all three lines plus the state, because a screen reader cannot
+    // read a fill: "chosen" and "click again to run" are the two things colour alone says.
+    // No "click again to run" any more — the run lives in the Apply button, and saying otherwise
+    // would promise a gesture that no longer exists.
+    zone.setAttribute(
       "aria-label",
-      `${spec.name}. ${spec.where}. ${count.textContent}.` +
-        (chosen ? (armed && !empty ? " Click again to run." : " Chosen.") : ""),
+      `${spec.name}. ${spec.where}. ${count.textContent}.` + (chosen ? " Chosen." : ""),
     );
-    btn.setAttribute("aria-pressed", String(chosen));
+    zone.setAttribute("aria-pressed", String(on));
+    zone.setAttribute("aria-disabled", String(busy));
   }
-  // Why an armed scope would do nothing — the dial is both the cause and the fix, so the note
+  // Why Apply would do nothing at this scope — the dial is both the cause and the fix, so the note
   // lives with it and names the gesture that resolves it.
   const blocked = document.getElementById("ladder-blocked");
   if (blocked) {
@@ -852,36 +904,43 @@ function renderDial() {
   }
 }
 
-// One click on a dial button. FIRST click on a scope chooses it; SECOND click on the SAME
-// scope runs it.
+/// One click on a zone chooses that scope. Nothing else — the run lives in the Apply button.
 //
-// ⚠️ Choosing a DIFFERENT scope disarms. That is what makes the first click reversible without
-// inventing a cancel: the other two buttons stay visible and clicking one moves the scope
-// instead of running anything. It is also the safety property — you cannot arm 🧩 and then run
-// 📦 by clicking once.
-function onDialClick(r) {
+// ⭐ This function used to arm and then fire on a second click, and dropping that is C's call once
+// Apply was back in the bar. It is the safer shape as well as the simpler one: a second click on
+// the same spot is what people do when the first appears not to have worked, and here it installed
+// software. Now the irreversible act has exactly one door, and it is labelled.
+function onZoneClick(r) {
   if (applyRunning || scanning) return;
-  if (r !== rung) {
-    rung = r;
-    armed = false;
-    refreshLiveness();
-    return;
-  }
-  if (!armed) {
-    armed = true;
-    refreshLiveness();
-    return;
-  }
-  // ⚠️ Refuse an empty scope QUIETLY rather than starting a run with nothing in it — and stay
-  // armed, so the button keeps its state instead of silently resetting under the click. The
-  // note above already says where the work is.
-  if (M.rungPlan(model, rung).length === 0) return;
-  applyAll();
+  rung = r;
+  // ⚠️ refreshLiveness, not renderDial: the ROWS answer the scope too (dimmed, with a reason), and
+  // they are what C asked to see move. Repainting the dial alone would leave a zone saying
+  // "3 items" above rows that all look included.
+  refreshLiveness();
 }
 
-for (const btn of document.querySelectorAll("#dial .dial-btn")) {
-  btn.addEventListener("click", () => onDialClick(Number(btn.dataset.rung)));
-}
+// ⚠️ ONE listener on the container, and it resolves the INNERMOST zone under the pointer.
+//
+// This is the price of "the zone is the button": the zones are nested, so a click on ⚡ also
+// lands on 🧩 and 📦 as it bubbles. Three separate listeners would fire three times and the
+// outermost would win — clicking the small frame would choose 📦, the exact opposite of what the
+// eye picked. `closest` from the real target answers "which zone did the pointer actually hit",
+// innermost first, which is the only reading that matches the drawing.
+document.getElementById("dial")?.addEventListener("click", (e) => {
+  const zone = e.target.closest?.(".zone");
+  if (!zone) return;
+  onZoneClick(Number(zone.dataset.rung));
+});
+// A div with role=button gets no keyboard activation for free — that is what a real <button>
+// would have given us, and buttons cannot nest in HTML. So Enter and Space are wired by hand,
+// which is the whole cost of the nesting.
+document.getElementById("dial")?.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const zone = e.target.closest?.(".zone");
+  if (!zone) return;
+  e.preventDefault(); // Space would scroll the panel
+  onZoneClick(Number(zone.dataset.rung));
+});
 
 // The re-scan veil covers the WHOLE window (position:fixed, top-level), so the
 // class rides <body> — not #steps, whose containing block used to trap it over the
@@ -1652,11 +1711,8 @@ const ws = new WebSocket(`ws://${location.host}`);
 
 // Apply = enact your decisions (on/off) against the machine; auto is left
 // alone. Server acts only on the difference — every decided package, in one go.
-// ⚠️ No `install-all` listener any more — the button is gone from the bar and the dial's second
-// click calls `applyAll()` instead. Left as a note rather than deleted silently: a
-// `getElementById("install-all").onclick` on a null throws, and everything registered AFTER it
-// in this file would never be wired at all. That is how a removed button takes the Quit handler
-// with it.
+// Apply, back in the bar. ⚠️ It and the dial's second click BOTH land here — one entry point, so
+// there is no second rule about what a run includes. The dial says how far; this says go.
 
 // Reset = drop every user toggle AND active profile back to the author's
 // defaults (clearAllDecisions clears both). repaintAll refreshes chips too.
@@ -1682,7 +1738,7 @@ document.getElementById("quit-all").onclick = () => {
 // parsed through ladder.js's rungFromInput: a range input's `.value` is a string, and
 // `server::rung_from_wire`'s `as_u64` would read a string as absent → Everything.
 //
-// ⚠️ The dial's handler is `onDialClick`, wired where the dial is rendered, and it calls
+// ⚠️ The dial's handler is `onZoneClick`, wired where the dial is rendered, and it calls
 // `refreshLiveness` — NOT renderDial. The ROWS answer the scope too (`.rung-out` and its
 // reason), and they are what C asked to see move: "j'aurais voulu que les packages en dessous
 // réagissent". Repainting the dial alone would leave a button saying "3 items" above rows that
@@ -1691,6 +1747,7 @@ document.getElementById("quit-all").onclick = () => {
 // ⚠️ The slider that used to live here is gone, and with it its `input` listener. A
 // `getElementById("ladder-range")` left behind would throw on a null and take every listener
 // registered after it down with it — which is why this note replaces it rather than nothing.
+document.getElementById("install-all").onclick = () => applyAll();
 document.getElementById("reset-all").onclick = () =>
   resetConfirmEl.classList.add("show");
 document.getElementById("reset-confirm-no").onclick = () =>

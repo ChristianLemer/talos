@@ -102,53 +102,102 @@
       /* The question reads as the zone's title now that the zone has an edge: full-strength
          text, not the muted tone it wore when it was one line among many. */
       .ladder-q { font-size:12px; color:var(--fg); font-weight:600; }
-       /* THE DIAL — three nested frames, lateral. The nesting is DOM nesting, so the frames
-         cannot drift apart: 📦 wraps 🧩 wraps ⚡, and padding is what makes each visible as a
-         band around the next. `align-items:stretch` keeps all three the same height, which is
-         what makes the containment read as containment rather than as three loose boxes. */
+        /* THE DIAL — three nested ZONES, and each zone IS the button. Choosing one lights it and
+         every zone inside it, so the cumulation is painted rather than merely drawn.
+         `align-items:stretch` keeps all three the same height, which is what makes the
+         containment read as containment instead of three loose boxes. */
       .dial { display:flex; }
       /* Roomy on purpose — C: "a little more room between the buttons, to have more flesh". The
-         gap is what lets each frame read as a BAND around the next rather than as a hairline,
-         and the padding is what gives the nesting its thickness. */
-      .dial-frame { display:flex; align-items:stretch; gap:10px; flex:1;
-                    border:1px solid #3d59a1; border-radius:11px; padding:9px; }
-      /* Each frame is one step tighter, so the innermost still has room for three lines. */
-      .frame-ext { border-radius:9px; }
-      .frame-cfg { border-radius:7px; }
-      /* A button fills its slot. `text-align:left` because the label is three LINES — C's
-         constraint, and it is what makes a narrow inner frame legible at all: stacked text
-         needs far less width than one long line. */
-      .dial-btn { flex:1; min-width:0; display:flex; flex-direction:column; gap:1px;
-                  align-items:flex-start; justify-content:center; text-align:left;
-                  padding:7px 9px; border-radius:6px; cursor:pointer;
-                  border:1px solid transparent; background:rgba(61,89,161,.18);
-                  color:var(--fg); font-family:inherit; font-size:12px; line-height:1.3; }
-      .dial-btn:hover:not(:disabled) { background:rgba(61,89,161,.32); }
-      .dial-btn:disabled { cursor:default; opacity:.5; }
-      /* The three lines: what it is · where it lands · what it would do. The middle line is
-         the PROMISE, and it is the one that had to be corrected three times to stay true. */
-      .dial-name { font-weight:600; white-space:nowrap; }
-      .dial-where { font-size:11px; color:var(--on-accent); }
-      .dial-count { font-size:11px; color:var(--dim); }
-       /* ⭐ CHOSEN — PLAIN BLUE, filled. C: "do not change to green… just use the blue that is
-         fine (plain blue)". And it is the better call: green means "a plain Apply would do this"
-         on every ROW of the panel, so a green button beside green rows would read as one more
-         verdict rather than as the control that causes them. Blue is the app’s "this is what you
-         ADJUST" hue — the same #3d59a1 the frames and the switches already use — so the chosen
-         scope simply becomes the SOLID form of what it was outlined in. Nothing new enters the
-         palette, and no colour changes meaning. */
-      .dial-btn.chosen { background:#3d59a1; border-color:#7aa2f7; color:#fff; }
-      .dial-btn.chosen:hover:not(:disabled) { background:#4868b8; }
-      .dial-btn.chosen .dial-where { color:var(--on-accent); }
-      .dial-btn.chosen .dial-count { color:#fff; font-weight:600; }
-      /* ⚠️ An empty scope must LOOK unclickable, because clicking it does nothing: a second
-         click on a filled button with nothing in it would be a gesture that leaves no trace,
-         which this app treats as a defect rather than a no-op. Drained back to the outline,
-         which is exactly “not armed” in the same visual language. */
-      .dial-btn.chosen.empty { background:rgba(61,89,161,.10); border-color:var(--line);
-                               color:var(--fg); }
-      .dial-btn.chosen.empty .dial-count { color:var(--dim); font-weight:400; }
-      .dial-btn.chosen.empty .dial-where { color:var(--dim); }
+         gap is what lets each zone read as a BAND around the next rather than a hairline, and the
+         padding is what gives the nesting its thickness. */
+      /* ⚠️ `flex:0 1 auto`, NOT `flex:1`. With flex:1 on all three the INNERMOST zone absorbed
+         the whole row and squeezed 🧩 and 📦 against the right edge — measured on the real render.
+         Each zone must take only the width its own label needs plus whatever its children need;
+         the leftover space belongs to the OUTERMOST zone, which is what makes 📦 read as the band
+         that contains the rest. */
+      /* ⚠️ `flex:1` on every zone, and the two failures on either side of it are both measured:
+         `flex:1` on all three made the INNERMOST absorb the row (🧩 and 📦 squeezed right);
+         sizing to content made 📦 take two thirds for three lines of text. Equal thirds is C's
+         answer — nothing is squashed, nothing is empty, and the ramp above carries the
+         containment that the width no longer does. */
+      /* ⚠️ `flex:0 1 auto` — the nested child takes what it NEEDS, never the whole band. Both
+         other values were measured and both failed: `flex:1` on every zone let the innermost
+         absorb the row (📦 left with a 107px strip of itself out of 1050, so the darkest shade had
+         nowhere to show), and sizing the outer one to fill made it two thirds of empty blue. With
+         the label FIRST and the child auto-sized, each zone shows its own words and the widths
+         grow outward the way the containment does. */
+      .zone { display:flex; align-items:stretch; gap:10px; flex:1 1 0; min-width:0;
+              border:1px solid #3d59a1; border-radius:11px; padding:9px;
+              background:rgba(61,89,161,.10); cursor:pointer; }
+      /* ⭐ THE WHOLE WIDTH, SHARED — C: "tout est trop tassé, il faut que ça prenne toute la largeur
+         et que ça se répartisse". Every zone grows, and so does every label, so the three bands
+         spread across the dial instead of huddling at the left.
+         ⚠️ Three widths have now been measured and two failed. `flex:1` on zones only let the
+         innermost absorb the row (📦 down to a 107px strip of itself out of 1050 — the darkest
+         shade had nowhere to show). Sizing to content packed all three labels against the left and
+         left two thirds of empty blue. Growing BOTH the zone and its label is what balances them:
+         each zone keeps room for its own words AND for the zone it contains. */
+      .zone-apps { flex:1; }
+      .zone > .zone-label { flex:1 1 auto; }
+      .zone-ext { border-radius:9px; }
+      .zone-cfg { border-radius:7px; }
+      .zone:hover { background:rgba(61,89,161,.20); }
+      /* ⭐ ON — plain blue, filled. C: "do not change to green… just use the blue that is fine".
+         The better call, and the reason is worth keeping: #9ece6a means "a plain Apply would do
+         this" on every ROW of the panel, so a green zone above green rows would read as one more
+         verdict rather than as the control that CAUSES them. Blue is the app's "this is what you
+         adjust" hue, so a chosen zone is simply the SOLID form of its own outline. Nothing new
+         enters the palette, and no colour changes meaning.
+         ⚠️ `.on` is set on the chosen zone AND on every zone inside it — that is the whole
+         point, and it is why the rule is not `:has()` or a sibling selector: the JS decides
+         inclusion from the rung number, which is the same source the counts come from. */
+       /* ⭐ IN THE SCOPE — VIVID BLUE, one ramp, dark inside → light outside. C: "plutôt que le
+         vert tu utilises du bleu vif", once Apply came back to the bar. Green already means "a
+         plain Apply would do this" on every ROW and now on the button too, so a green scope would
+         compete with both; the dial stays entirely in the family of "this is what you adjust".
+         There were TWO ramps for a while (muted = included, vivid = armed). With the run moved to
+         the button there are only two states left — in the scope or out of it — so one ramp is the
+         whole vocabulary and a second would have been an alias.
+         ⚠️ THE DIRECTION IS MEASURED, not chosen: the zones are ~113px / 234px / 1050px wide, so a
+         pale fill on the innermost reads as an OUTLINE and the click looks like it did nothing.
+         Small and dark shows; small and pale disappears. Area beats hue — which is why the first
+         attempt (light inside) had to be reversed. */
+      .zone-cfg.on { background:#2d5bd7; }
+      .zone-ext.on { background:#3d6ee8; }
+      .zone-apps.on { background:#4d82f5; }
+      .zone.on { border-color:#a9c7ff; }
+      .zone-cfg.on:hover { background:#3767e3; }
+      .zone-ext.on:hover { background:#4a7cf5; }
+      .zone-apps.on:hover { background:#5d90ff; }
+      /* The label sits at the START of its own band — so ⚡'s text is leftmost, 🧩's begins after
+         ⚡'s frame, 📦's after 🧩's. Three lines: what it is · where it lands · what it would do.
+         `pointer-events:none` so a click on the text is a click on its ZONE and never gets
+         attributed to an ancestor by accident. */
+      .zone-label { display:flex; flex-direction:column; gap:1px; justify-content:center;
+                    padding:2px 10px; min-width:0; pointer-events:none;
+                    font-size:12px; line-height:1.3; color:var(--fg); }
+      .zone-name { font-weight:600; white-space:nowrap; }
+      .zone-where { font-size:11px; color:var(--on-accent); }
+      .zone-count { font-size:11px; color:var(--dim); }
+       /* THE LABEL OF A ZONE IN THE SCOPE — white on the vivid fill, and every line of it.
+         ⚠️ C, on the running app: "le texte devient gris… ce n'est pas lisible". Three defects had
+         piled up here and each one greyed a different line:
+           · a duplicate copy of these rules, so whichever came last won by order;
+           · a leftover `.zone.on.empty` block from when EMPTY drained the fill — it still set
+             `var(--dim)`, i.e. grey on vivid blue, which is the worst pairing in the palette;
+           · `--on-accent`, tuned for the muted bundle cards, too dark against #4d82f5.
+         So the whole block is stated ONCE, with literal light tints rather than theme tokens: the
+         fill is a fixed blue, so the text on it cannot follow a token that themes redefine.
+         `>` and not a descendant selector, or every zone would restyle the labels nested inside it. */
+      .zone.on > .zone-label { color:#fff; }
+      .zone.on > .zone-label .zone-where { color:#dbe6ff; }
+      .zone.on > .zone-label .zone-count { color:#fff; font-weight:600; }
+      /* ⚠️ An EMPTY scope stays fully legible — it is a selection the user just made. Emptiness is
+         said in the WORDS ("nothing to do") and by the disabled Apply button; dimming the text was
+         how it became unreadable. Only a hair softer than the rest, never grey. */
+      .zone.on.empty > .zone-label .zone-count { color:#e8eeff; font-weight:400; }
+      /* Frozen with everything else during a run or an incomplete scan. */
+      .dial.busy .zone { cursor:default; opacity:.55; }
       .ladder-blocked { font-size:11.5px; color:var(--dim); line-height:1.35; }
       /* THE LABELLED SCALE — each label centred on its OWN notch, which is not where a
          naive layout puts it.
@@ -1115,13 +1164,14 @@
         <div class="hero-buttons">
           <button id="refresh-all" class="resetbtn" title="Re-scan the machine — re-check what's installed right now (your choices are kept)">Refresh</button>
           <button id="reset-all" class="resetbtn" title="Reset every toggle to the author's default">Reset</button>
-          <!-- ⚠️ APPLY IS NOT HERE ANY MORE. It moved into the dial below: the second click on
-               a chosen (green) scope is what runs. C's decision, and the reason is that one
-               object now answers both "how far" and "go", rather than two that ignore each
-               other — the old Apply ran the WHOLE plan regardless of where the slider sat,
-               which is the contradiction the dial removes.
-               Reversible in one line if it reads wrong: put the button back and have it call
-               `applyAll()`, which is untouched and still the single entry point. -->
+           <!-- ⭐ APPLY IS BACK, after a spell where the dial's second click was the only way to
+               run. C, on using it: "j'ai quand même un bouton apply" — and the reason holds up.
+               The dial answers HOW FAR; Apply answers GO. Folding both into one object made the
+               second click carry an irreversible act that looked like a double-click, and it left
+               the panel with no single place that means "do it".
+               ⚠️ The dial's own second click still runs, deliberately: both reach `applyAll()`, so
+               there is one entry point and no second rule about what a run includes. -->
+          <button id="install-all" class="applybtn">Apply</button>
         </div>
         <span id="globalhint">Installs what you checked, updates what's outdated, removes what you unchecked.</span>
         <span id="overall">connecting…</span>
@@ -1172,15 +1222,36 @@
              ⚠️ Buttons cannot nest in HTML (a button inside a button is invalid and browsers
              unnest it), so the frames are DIVs and each rung's clickable surface is its own
              `.dial-btn`. The wrapper carries the border, the button carries the label. -->
+         <!-- ⭐ THE ZONE IS THE BUTTON. Each frame is itself clickable, and choosing one LIGHTS
+             IT AND EVERY FRAME INSIDE IT — which is C's correction of a first version where each
+             zone merely CONTAINED a button. It matters more than it looks: with three zones lit,
+             the inclusion is PAINTED rather than merely drawn, so "📦 takes the other two with
+             it" is read from the fill instead of inferred from the geometry.
+             C: "I was expecting the zone be the button… and when you select the outer the inner
+             turns on also… it is why you need to change color, from empty to selected."
+
+             ⚠️ Nested clickable regions mean a click on ⚡ also lands on 🧩 and 📦 as it bubbles.
+             The handler resolves the INNERMOST zone under the pointer (`closest`), so clicking
+             the small frame chooses 0 and never 2 — see `onZoneClick`.
+
+             ⚠️ Buttons still cannot nest in HTML, so these are divs with role=button and an
+             explicit tabindex. That costs keyboard handling by hand (Enter/Space), which the
+             handler does — a plain <button> would have been free but is not available. -->
         <div id="dial" class="dial" role="group" aria-label="How far this Apply goes">
-          <div class="dial-frame frame-apps">
-            <div class="dial-frame frame-ext">
-              <div class="dial-frame frame-cfg">
-                <button class="dial-btn" data-rung="0" type="button"></button>
+           <!-- ⚠️ THE LABEL COMES FIRST, BEFORE the nested child, and that order is the whole
+               layout. Written child-first, each zone's visible surface was only the narrow strip
+               that stuck out past its child — measured on the real render: 📦 had 107px of itself
+               out of 1050, ⚡ had 822. So the SMALLEST scope dominated the band and the colour ramp
+               had nowhere to show. Label first, and each zone reads left to right in the order it
+               contains: 📦's own words, then 🧩's, then ⚡. -->
+          <div class="zone zone-apps" data-rung="2" role="button" tabindex="0">
+            <div class="zone-label"></div>
+            <div class="zone zone-ext" data-rung="1" role="button" tabindex="0">
+              <div class="zone-label"></div>
+              <div class="zone zone-cfg" data-rung="0" role="button" tabindex="0">
+                <div class="zone-label"></div>
               </div>
-              <button class="dial-btn" data-rung="1" type="button"></button>
             </div>
-            <button class="dial-btn" data-rung="2" type="button"></button>
           </div>
         </div>
         <!-- Why Apply is refused, when the SCOPE is what emptied the plan. It lives here
