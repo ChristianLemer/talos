@@ -35,8 +35,12 @@ export const SLOW_SECS = 60;
 // neither instant nor offline. The promise now speaks about what the rung ADDS, and names
 // the removals rather than quietly contradicting them.
 export const RUNGS = [
+  // ⚠️ THE PROMISE CHANGED WITH THE RULE. It used to end "Removals you asked for still run",
+  // which was true when uninstall bypassed every rung and became a LIE the moment removals
+  // started riding their kind: at ⚡, an app you unchecked is NOT removed. Saying "your files
+  // only" is the honest form, and it is also the stronger claim.
   { key: "config-only", emoji: "⚡", name: "Config only",
-    promise: "Adds config only — nothing is downloaded. Removals you asked for still run" },
+    promise: "Your own files only — nothing is downloaded, nothing on the machine is touched" },
   // ⭐ Between ⚡ and 📦 because its promise sits between theirs: it DOES touch the network
   // (a clone), and it NEVER touches the machine — nothing enters Program Files, nothing
   // elevates, undoing it deletes a folder in your own profile. Config-only's promise is
@@ -171,22 +175,18 @@ function duration(secs) {
 
 // May this action run at this rung? THE twin of ladder.rs::rung_allows.
 //   rung: 0..4  ·  action: "install"|"uninstall"|"upgrade"|"downgrade"|null
-export function rungAllows(rung, action, isConfig, isExtension, facts) {
+export function rungAllows(rung, action, isConfig, isExtension) {
   if (!action) return false; // no action (out of scope, nothing to do) is in no rung
-  // NOT ON THE LADDER, at any rung: removing honours the user's ✕, and the ladder governs
-  // how far to GO, not whether to honour a veto.
-  if (action === "uninstall") return true;
   // Never batched by Apply (mirrors AUTO_ACTS and the server's Install|Uninstall|Upgrade).
   if (action === "downgrade") return false;
-  // ⭐ An action rides the rung of the KIND it acts on — your files, your profile, or the
-  // machine — and the FACTS no longer move it. `uac`/`403`/`slow` are shown on the row
-  // instead of filtering on the user's behalf.
+  // ⭐ ONE RULE FOR EVERY ACTION: it rides the rung of the KIND it acts on — your files, your
+  // profile, or the machine. Install, upgrade and uninstall are indistinguishable here.
   //
-  // ⚠️ `facts` is still a parameter and is deliberately unused for the verdict: `isSlow` is
-  // exported for the row labels and the estimate, and dropping the argument would break the
-  // twin's shape for no gain. If it ever becomes unused THERE too, remove both together.
-  if (action === "install" || action === "upgrade") {
-    return isConfig ? true : isExtension ? rung >= 1 : rung >= 2;
-  }
-  return false;
+  // ⚠️ Two reversals got it to this shape, and both were right about the axis they were written
+  // for (the Rust twin's doc carries the long version):
+  //   - the FACTS left: `uac`/`403`/`slow` used to pick the rung for an upgrade. They are shown
+  //     on the row now, so the rule no longer takes a `facts` argument at all.
+  //   - UNINSTALL joined: it used to bypass every rung, which was right when the axis was TIME
+  //     and wrong once it became WHERE IT LANDS — removing an app touches the machine.
+  return isConfig ? true : isExtension ? rung >= 1 : rung >= 2;
 }

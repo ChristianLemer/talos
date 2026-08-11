@@ -837,11 +837,17 @@ test("ladder: rungPlan grows monotonically, and each row enters at ITS rung", ()
   assert.deepEqual(rungPlan(m, 2), [0, 1, 2, 3, 4, 5].filter((i) => isActionable(m, i)));
 });
 
-test("ladder: a removal is in EVERY rung, and an out-of-scope row is in none", () => {
+test("ladder: a removal rides its KIND, and an out-of-scope row is in no rung at all", () => {
+  // ⭐ THIS TEST ASSERTED THE OPPOSITE, and the reversal is C's: a removal used to be in every
+  // rung ("the ladder governs how far to GO; a ✕ is honoured or it is not"). That was right
+  // while the axis was TIME. The axis is WHERE IT LANDS now, and removing an app touches the
+  // machine — so ⚡ Config only, whose whole promise is "your own files only", cannot be the
+  // rung that quietly uninstalls software.
+  //
+  // The facts on row 0 are kept deliberately: they no longer move it, which is the other half
+  // of the reshape.
   const m = createModel();
   loadPlan(m, [
-    // 0 — present, unwanted, and slow+uac+403: still removed at rung 0. The ladder governs
-    // how far to GO; a ✕ is honoured or it is not.
     { i: 0, name: "Miro", canUninstall: true, uac: true, forbidden: true, slow: true },
     // 1 — the Git hazard: present, unwanted, but installed outside our manager.
     { i: 1, name: "Git", canUninstall: true },
@@ -850,9 +856,9 @@ test("ladder: a removal is in EVERY rung, and an out-of-scope row is in none", (
   setExternal(m, 1, true);
   assert.equal(actionOf(m, 0), "uninstall");
   assert.equal(actionOf(m, 1), null, "scope gates before the rung does");
-  for (const r of [0, 1, 2, 3, 4]) {
-    assert.deepEqual(rungPlan(m, r), [0], `rung ${r}: the ✕ stands, the external row does not`);
-  }
+  assert.deepEqual(rungPlan(m, 0), [], "⚡ removes nothing from the machine");
+  assert.deepEqual(rungPlan(m, 1), [], "🧩 neither — Miro is an app, not an extension");
+  assert.deepEqual(rungPlan(m, 2), [0], "📦 honours the ✕ — and the external row still does not");
 });
 
 test("ladder: a downgrade is in NO rung — it mirrors AUTO_ACTS, not the ladder", () => {
@@ -863,7 +869,7 @@ test("ladder: a downgrade is in NO rung — it mirrors AUTO_ACTS, not the ladder
   setInstalledVersion(m, 0, "0.114.0"); // above the pin → downgrade, manual only
   assert.equal(actionOf(m, 0), "downgrade");
   assert.equal(isActionable(m, 0), false);
-  for (const r of [0, 1, 2, 3, 4]) assert.deepEqual(rungPlan(m, r), [], `rung ${r}`);
+  for (const r of [0, 1, 2]) assert.deepEqual(rungPlan(m, r), [], `rung ${r}`);
 });
 
 test("ladder: rungSeconds reads the LOCAL secs of exactly the rung's rows", () => {

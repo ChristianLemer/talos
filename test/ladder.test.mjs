@@ -51,8 +51,12 @@ test("the three rungs are cumulative, and the table shows it", () => {
     // 📦 An app: rung 2, and NOTHING is excluded there — no fact holds it back any more.
     ["install", "install", false, false, [false, false, true]],
     ["upgrade", "upgrade", false, false, [false, false, true]],
-    // uninstall is NOT on the ladder — it honours the user's ✕ at every rung.
-    ["uninstall", "uninstall", false, false, [true, true, true]],
+    // ⭐ UNINSTALL RIDES THE RUNG OF ITS KIND, like every other action — it used to bypass
+    // them all. Right when the axis was TIME, wrong once it became WHERE IT LANDS: removing an
+    // app touches the machine, so ⚡ cannot be the rung that quietly uninstalls software.
+    ["uninstall config atom", "uninstall", true, false, [true, true, true]],
+    ["uninstall extension", "uninstall", false, true, [false, true, true]],
+    ["uninstall app", "uninstall", false, false, [false, false, true]],
     // downgrade is never batched by Apply (mirrors AUTO_ACTS).
     ["downgrade", "downgrade", false, false, [false, false, false]],
     // A null action (out of scope, or nothing to do) is never in any rung.
@@ -99,8 +103,14 @@ test("every promise is TRUE of what the rule does at that rung", () => {
   assert.equal(rungAllows(0, "install", true, false), true, "a config-atom is added");
   assert.equal(rungAllows(0, "upgrade", true, false), true, "…and updated");
   assert.equal(rungAllows(0, "install", false, false), false, "…and nothing else is");
-  assert.equal(rungAllows(0, "uninstall", false, false), true, "removals DO run at rung 0");
-  assert.match(r0.promise, /[Rr]emovals/, "so the promise must say so, not deny it");
+  assert.equal(rungAllows(0, "uninstall", true, false), true, "a config-atom removal runs at ⚡");
+  assert.equal(rungAllows(0, "uninstall", false, false), false, "…an APP removal does NOT");
+  // ⚠️ The promise must NOT mention removals any more: it used to end "Removals you asked for
+  // still run", true while uninstall bypassed every rung and a LIE once removals ride their
+  // kind — at ⚡ an app you unchecked is NOT removed. "Your own files only" is the honest form.
+  assert.ok(!/[Rr]emovals/.test(r0.promise),
+    "⚡ no longer removes apps, so the promise must stop claiming removals run");
+  assert.match(r0.promise, /files/i, "…and must say what it DOES touch: your own files");
   assert.ok(!/\bInstant\b/.test(r0.promise),
     "and must not claim instant: a removal shells out to brew/winget");
 
@@ -223,8 +233,15 @@ test("a row the LADDER does not govern gets no reason at all", () => {
   for (let r = 0; r < RUNGS.length; r++) {
     assert.equal(rungReason(r, null, { isExtension: false }), null, `null action @${r}`);
     assert.equal(rungReason(r, "downgrade", { isExtension: false }), null, `downgrade @${r}`);
-    // An uninstall runs at every rung, so it is never out of reach either.
-    assert.equal(rungReason(r, "uninstall", { isExtension: false }), null, `uninstall @${r}`);
+  }
+  // ⚠️ An UNINSTALL is no longer exempt: it rides its kind like everything else, so an app
+  // removal held out of ⚡ or 🧩 gets a reason like any other row. Only the rungs that ADMIT it
+  // are silent.
+  for (const r of [0, 1]) {
+    assert.equal(rungReason(r, "uninstall", { isExtension: false }), "app", `app removal @${r}`);
+  }
+  {
+    assert.equal(rungReason(2, "uninstall", { isExtension: false }), null, "…admitted at 📦");
   }
 });
 

@@ -209,6 +209,22 @@ impl Rung {
 ///
 /// `Facts` is still very much alive next door: `is_slow` classifies for the row labels and for
 /// the estimate. It simply has no say in whether a rung admits an action.
+///
+/// ⭐ TWO DECISIONS WERE REVERSED to get here, and both are recorded because each was RIGHT
+/// about the axis it was written for — a reader finding only the current form would re-derive
+/// them:
+///
+/// 1. **The facts left.** Three more rungs (☕ unattended, 👀 stay nearby, 🏗️ everything) sorted
+///    upgrades by `uac` / `403` / `slow`. A rung SORTS; a label INFORMS. Those are per-package
+///    truths, and the front already had words for them — shown ONLY when the slider hid the row.
+///    So the app knew something about a package and made the user drag a slider until the row
+///    came back to find out what. On the row, always visible, it is read before clicking.
+///
+/// 2. **Uninstall joined.** It used to bypass every rung: *"the ladder governs how far to GO,
+///    never whether to honour a veto"*. True of an axis made of TIME — delaying a removal for
+///    being slow is nonsense. The axis is now WHERE IT LANDS, and removing an app touches the
+///    machine, so ⚡ Config only would have quietly uninstalled software while promising to touch
+///    nothing but your own files.
 pub fn rung_allows(
     rung: Rung,
     action: crate::decision::Action,
@@ -217,49 +233,32 @@ pub fn rung_allows(
 ) -> bool {
     use crate::decision::Action;
     match action {
-        // NOT ON THE LADDER, at any rung. Removing a package is driven by the user's ✕,
-        // not by how much time they have. The ladder governs how far to GO; a veto is
-        // honoured or it is not.
-        Action::Uninstall => true,
+        // ⭐ UNINSTALL RIDES THE RUNG OF ITS KIND — the same rule as every other action, which
+        // is why there is no arm of its own for it any more (see the shared arm below).
+        //
+        // ⚠️ THIS REVERSES A DOCUMENTED DECISION, and the reasoning is worth keeping because
+        // the old one was not wrong — it was right about a DIFFERENT axis. It read: "removing a
+        // package is driven by the user's ✕, not by how much time they have; the ladder governs
+        // how far to GO, never whether to honour a veto." True while the axis was TIME. The axis
+        // is now WHERE IT LANDS, and removing an app touches the machine — so ⚡ Config only
+        // would have quietly uninstalled software while promising to touch nothing but your own
+        // files. C's call, and the visual reshape makes it unavoidable: the smallest frame on
+        // screen cannot be the one that removes the most.
         // Never batched by Apply at all (apply_diff matches Install|Uninstall|Upgrade), so
         // this arm is unreachable today. Answered so the function is total, and pinned by a
         // test so "unreachable" cannot quietly become "allowed".
         Action::Downgrade => false,
-        // A config-atom is admitted from the first rung. Its action is always Install (a
-        // `run:` route has no upgrade path), so this covers it whole.
-        Action::Install if is_config => true,
-        // ⚠️ The guard order is load-bearing even though the two classes are disjoint by
+        // ⭐ ONE RULE FOR EVERY ACTION: it rides the rung of the KIND it acts on. Install,
+        // upgrade and uninstall are now indistinguishable here, which is why they share an arm
+        // — three arms saying the same thing would invite one of them to drift.
+        //
+        // ⚠️ The guard order is load-bearing even though the classes are disjoint by
         // construction (a config-atom is recognised by having a `check:`, which no extension
         // has). Written config-first anyway, and pinned by the table: if the classes ever
         // overlapped, a config-atom must keep its rung-0 admission rather than be demoted.
-        Action::Install if is_extension => rung.level() >= 1,
-        Action::Install => rung.level() >= 2,
-        // ⭐ AN UPGRADE SITS WITH ITS OWN KIND, and the facts no longer move it.
-        //
-        // There were three more rungs here — ☕ unattended, 👀 stay nearby, 🏗️ everything —
-        // sorting upgrades by `uac` / `403` / `slow`. C removed them, and the reasoning is
-        // worth keeping because it reverses a design decision:
-        //
-        //   A rung SORTS; a label INFORMS. Those three facts are per-package truths, and the
-        //   front already has words for them (`RUNG_WHY`: "needs your hand", "blocked here",
-        //   "slow — allow time"). Shown on the row, always, the user reads them BEFORE
-        //   clicking and decides per package. Kept as rungs instead, they filtered on the
-        //   user's behalf and the same information had to be discovered by dragging a slider
-        //   until a row reappeared. Six rungs was more machinery than the question deserved.
-        //
-        // So an upgrade rides the rung of the THING it upgrades: a config-atom's at 0, an
-        // extension's at 1 — which also settles the incoherence the previous version left
-        // open, where a `version:` pin on a plugin dropped a two-second install onto 👀 — and
-        // a binary's at 2, with its facts written on the row.
-        //
-        // ⚠️ WHAT THIS GIVES UP, stated rather than discovered later: nothing in the ladder
-        // any more separates "I can walk away" from "it will ask for my password". An Apply at
-        // 📦 can stop on a prompt twenty minutes after you left. That is the trade C accepted
-        // for three rungs a user understands without explanation — and the row labels are what
-        // has to carry it, so they must be visible and true.
-        Action::Upgrade if is_config => true,
-        Action::Upgrade if is_extension => rung.level() >= 1,
-        Action::Upgrade => rung.level() >= 2,
+        _ if is_config => true,
+        _ if is_extension => rung.level() >= 1,
+        _ => rung.level() >= 2,
     }
 }
 
@@ -393,14 +392,35 @@ mod tests {
                 false,
                 [false, false, true],
             ),
-            // UNINSTALL IS NOT ON THE LADDER. It honours the user's ✕ at every rung: the
-            // ladder governs how far to GO, never whether to honour a veto.
+            // ⭐ UNINSTALL RIDES THE RUNG OF ITS KIND, like every other action. C's decision,
+            // and it closes a hole the reshape opened rather than adding a rule.
+            //
+            // `Uninstall => true` was RIGHT while the axis was TIME: delaying a removal because
+            // it is slow makes no sense, so "the ladder governs how far to GO, never whether to
+            // honour a veto" followed. The axis is now WHERE IT LANDS — and removing an app
+            // touches the machine. So ⚡ Config only would have quietly uninstalled software
+            // while claiming to touch nothing but your own files, which is the one promise the
+            // bottom rung makes.
             (
-                "uninstall",
+                "uninstall config atom",
+                Action::Uninstall,
+                true,
+                false,
+                [true, true, true],
+            ),
+            (
+                "uninstall extension",
+                Action::Uninstall,
+                false,
+                true,
+                [false, true, true],
+            ),
+            (
+                "uninstall app",
                 Action::Uninstall,
                 false,
                 false,
-                [true, true, true],
+                [false, false, true],
             ),
             // Downgrade is filtered UPSTREAM (apply_diff matches Install|Uninstall|Upgrade),
             // so this is unreachable — answered anyway so the function is total, and pinned so
