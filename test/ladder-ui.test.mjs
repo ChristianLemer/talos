@@ -20,21 +20,175 @@ import { RUNGS } from "../public/ladder.js";
 const appjs = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
 const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 
-test("ladder: the rung crosses the wire through rungFromInput, never as `.value`", () => {
-  // THE defect that would make the widget lie. `server::rung_from_wire` reads the field
-  // with serde's `as_u64`, which rejects a JSON string AND a JSON float, and its None arm
-  // lands on `Rung::Everything`. So `rung: e.target.value` (a string) or `Number(v)` on a
-  // "2.0" would run EVERYTHING while the label read "Unattended · walk away" — doing more
-  // than asked, silently, which is the direction a user cannot detect until it is done.
-  const handler = appjs.match(/getElementById\("ladder-range"\)\s*\.addEventListener\(\s*"input"[\s\S]{0,300}?\}\);/);
-  assert.ok(handler, "the range input must be wired on `input` (live, not on release)");
-  assert.match(handler[0], /rung = L\.rungFromInput\(/,
-    "the string `.value` must go through ladder.js's parse+clamp, nothing else");
-  // And nothing anywhere may assign the raw value to `rung`.
-  assert.ok(
-    !/rung = (e\.target|r)\.value/.test(appjs),
-    "a raw `.value` is a STRING on the wire → the server reads Everything",
+test("dial: the three buttons are NESTED in the DOM, not painted to look nested", () => {
+  // ⭐ The containment is the whole message: 📦's frame starts left of ⚡ and runs to the end,
+  // so the eye reads "Apps contains the other two" with no copy at all. Real nesting is what
+  // makes that impossible to break — two frames drawn side by side would drift the day someone
+  // touches a padding, and a screen reader would walk a structure the eye does not see.
+  const dial = html.match(/<div id="dial"[\s\S]*?<\/div>\s*<!--/);
+  assert.ok(dial, "#dial must exist");
+  const at = (s) => dial[0].indexOf(s);
+  // ⚡ inside 🧩 inside 📦, checked by position rather than by parsing: each frame's opening
+  // tag must precede the next, and all three buttons must sit inside the outermost.
+  assert.ok(at("frame-apps") < at("frame-ext"), "🧩's frame opens inside 📦's");
+  assert.ok(at("frame-ext") < at("frame-cfg"), "⚡'s frame opens inside 🧩's");
+  // ⚠️ Buttons cannot nest in HTML — a <button> inside a <button> is invalid and browsers
+  // unnest it silently, which would flatten the whole design. So the FRAMES are divs and each
+  // rung's clickable surface is its own button.
+  // ⚠️ Checked by BALANCE, not by a regex looking for a nested tag: `<button …>[\s\S]*?<button`
+  // matches any two buttons in the block, however far apart, so it flagged three correct
+  // siblings. Walking the tags is what actually answers "is one inside another".
+  let depth = 0;
+  for (const tag of dial[0].match(/<button|<\/button>/g) ?? []) {
+    depth += tag === "<\/button>" ? -1 : 1;
+    assert.ok(depth <= 1, "no button may contain a button — browsers unnest them silently");
+  }
+  assert.equal(depth, 0, "every button must be closed");
+  for (const r of [0, 1, 2]) {
+    assert.match(dial[0], new RegExp(`data-rung="${r}"`), `rung ${r} needs a button`);
+  }
+});
+
+test("dial: one button per rung, derived from RUNGS", () => {
+  // The one thing in this feature that cannot derive from RUNGS is the MARKUP — three buttons
+  // are written by hand. So a rung added or removed without touching the html leaves a scope
+  // unreachable, silently. Same guard the slider's `max` used to carry, for the same reason.
+  const buttons = [...html.matchAll(/data-rung="(\d+)"/g)].map((m) => Number(m[1]));
+  assert.deepEqual(
+    buttons.sort(),
+    RUNGS.map((_, i) => i),
+    `the markup has ${buttons.length} buttons but RUNGS has ${RUNGS.length} rungs`,
   );
+});
+
+test("dial: the SECOND click applies — and only on the same, armed, non-empty scope", () => {
+  // ⭐ THE load-bearing behaviour of the whole control, and every clause of it is a decision:
+  //   - a different scope DISARMS, which is what makes the first click reversible without
+  //     inventing a cancel affordance — and the safety property: you cannot arm 🧩 and then
+  //     run 📦 with one click.
+  //   - an armed EMPTY scope refuses, quietly, rather than starting a run with nothing in it.
+  //   - only the armed path reaches applyAll.
+  const at = appjs.indexOf("function onDialClick(");
+  assert.notEqual(at, -1, "onDialClick must exist — one place decides what a click means");
+  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
+  assert.match(body, /if \(r !== rung\)/, "a different scope must take its own branch");
+  assert.match(body, /armed = false/, "…and disarm");
+  assert.match(body, /if \(!armed\)/, "the first click on the chosen scope arms it");
+  assert.match(body, /armed = true/);
+  assert.match(body, /rungPlan\(model, rung\)\.length === 0/, "an empty scope must be refused");
+  assert.match(body, /applyAll\(\)/, "and the armed second click runs");
+  // The order matters: the empty check must come BEFORE applyAll, or a click on an empty
+  // armed scope would start a run that has nothing to do — a full server round-trip to be
+  // told `done {nothing:true}`, which this app already paid for once at the 403 retry card.
+  assert.ok(
+    body.indexOf("length === 0") < body.indexOf("applyAll()"),
+    "the empty refusal must precede the run",
+  );
+  // Frozen while busy, like every other control: acting on an incomplete scan would count
+  // un-probed rows as absent.
+  assert.match(body, /applyRunning \|\| scanning/, "a click during a run or a scan does nothing");
+});
+
+test("dial: `armed` is not the same state as `rung`", () => {
+  // A scope is ALWAYS chosen (the dial has no null state), so if `armed` were the same thing
+  // the very first paint would be a loaded gun: one click anywhere would install. Two
+  // variables, and the initial value of the second is what makes the control safe at rest.
+  assert.match(appjs, /let armed = false;/, "armed must start false, and be its own variable");
+});
+
+test("dial: the third line becomes a VERB when armed, and names the removals", () => {
+  // ⚠️ Without this the second click reads as a double-click that missed — and it installs
+  // software. The count turning into "▶ apply 7 · remove 2" is what distinguishes them.
+  //
+  // ⭐ And the removals are named SEPARATELY, because Apply does not only act on the scope: it
+  // also honours the rows the user unchecked. A button that said "Extensions" and quietly
+  // removed three things would be the button lying.
+  const at = appjs.indexOf("function renderDial(");
+  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
+  assert.match(body, /armed/, "the label must know whether this click would run");
+  assert.match(body, /▶ apply/, "an armed scope reads as a verb");
+  assert.match(body, /remove \$\{removes\}/, "…and names the removals it would also do");
+  assert.match(body, /actionOf\(model, i\) === "uninstall"/,
+    "the removal count comes from the ACTION, not from a guess about the row");
+  // The counts come from rungPlan — the same function the server's filter mirrors — so the
+  // button and the plan cannot disagree about what it would touch.
+  assert.match(body, /M\.rungPlan\(model, r\)/, "the count must come from the shared rule");
+});
+
+test("dial: an empty scope LOOKS unclickable and says so", () => {
+  // A green button with nothing in it, clicked, does nothing — and a gesture that leaves no
+  // trace is a defect in this app, not a no-op. So the state is visible in three ways: the
+  // `.empty` class, the words on the button, and the note under the dial.
+  const at = appjs.indexOf("function renderDial(");
+  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
+  assert.match(body, /classList\.toggle\("empty"/, "an empty chosen scope must be marked");
+  assert.match(body, /nothing to do/, "…and say so on the button itself");
+  // ⚠️ NOT disabled: the other two buttons are how a user picks a wider scope, and disabling
+  // the chosen one would remove the affordance that fixes the situation.
+  assert.match(body, /btn\.disabled = busy;/,
+    "only busy disables a button — an empty scope stays clickable so the scope can be changed");
+  // And the CSS must actually mute it, or the class is decoration.
+  assert.match(html, /\.dial-btn\.chosen\.empty/, "the empty state needs a rule of its own");
+});
+
+test("dial: the chosen scope is PLAIN BLUE — not green, not red", () => {
+  // ⭐ C: "do not change to green… just use the blue that is fine (plain blue)". And it is the
+  // better call for a reason worth keeping: #9ece6a means "a plain Apply would do this" on every
+  // ROW of the panel, so a green button sitting above green rows would read as one more verdict
+  // rather than as the control that CAUSES them. Blue is the app’s "this is what you adjust"
+  // hue, so the chosen scope becomes the SOLID form of what it was outlined in — nothing new
+  // enters the palette and no colour changes meaning.
+  const rules = html.match(/\.dial-btn \{[\s\S]*?\.dial-btn\.chosen\.empty \.dial-where[^}]*\}/);
+  assert.ok(rules, "the dial’s rules must exist");
+  assert.match(rules[0], /\.dial-btn\.chosen \{[^}]*background:#3d59a1/,
+    "the chosen button is FILLED with the selection blue");
+  // ⚠️ Neither verdict colour may appear: green is "would install", red is "would remove", and
+  // the dial is the control, not a verdict about a package.
+  for (const forbidden of ["#9ece6a", "#f7768e"]) {
+    assert.ok(!rules[0].includes(forbidden),
+      `the dial must not use ${forbidden} — that colour already means something about a ROW`);
+  }
+  // The frames carry the same blue as an outline, which is what makes "chosen" read as the same
+  // thing filled in rather than as a different state.
+  assert.match(html, /\.dial-frame[^}]*#3d59a1/, "the frames carry the selection blue");
+});
+
+test("dial: the button announces all three lines, and whether it would run", () => {
+  // A <button> announces its text content, which here is three separate spans — a screen
+  // reader would recite them without the relation between them. aria-label carries the same
+  // reading the eye gets, INCLUDING "click again to run", which is the one thing a blind user
+  // cannot infer from a colour.
+  const at = appjs.indexOf("function renderDial(");
+  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
+  assert.match(body, /setAttribute\(\s*"aria-label"/, "each button must carry an aria-label");
+  assert.match(body, /Click again to run/, "…and say when the next click acts");
+  assert.match(body, /aria-pressed/, "and which scope is chosen, as state not as colour");
+});
+
+test("dial: it repaints from refreshLiveness — the one 'anything changed' hook", () => {
+  // A count that goes stale is worse than no count: the user reads "3 items", toggles a row,
+  // and the number still says 3. Every path that changes what a scope would touch (a toggle, a
+  // scan verdict, an `outdated` pill, a Reset) already routes through refreshLiveness.
+  const at = appjs.indexOf("function refreshLiveness()");
+  assert.notEqual(at, -1);
+  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
+  assert.ok(body.includes("renderDial()"), "refreshLiveness must repaint the dial");
+});
+
+test("dial: Apply is GONE from the top bar, and nothing still reaches for it", () => {
+  // ⚠️ The dangerous half of removing a button is not the markup — it is a leftover
+  // `getElementById("install-all").onclick`, which throws on a null and takes every listener
+  // registered AFTER it down with it. That is how a removed Apply button silently unwires Quit.
+  assert.ok(!/id="install-all"/.test(html), "the Apply button must be gone from the bar");
+  // ⚠️ Comments are stripped first: the note that REPLACED the listener names it on purpose,
+  // so a naive search matches the very documentation of the removal.
+  const code = appjs.replace(/\/\/.*$/gm, "");
+  assert.ok(
+    !/getElementById\("install-all"\)\s*\./.test(code),
+    "nothing may dereference the removed button — a null here kills the listeners below it",
+  );
+  // applyAll itself stays: it is the single entry point, now called by the dial's second click.
+  assert.match(appjs, /function applyAll\(\)/, "applyAll must remain the one way to run");
 });
 
 test("ladder: applyAll sends `rung`, beside `unmanaged` and for the same reason", () => {
@@ -45,149 +199,6 @@ test("ladder: applyAll sends `rung`, beside `unmanaged` and for the same reason"
   const msg = appjs.slice(at, appjs.indexOf("}));", at));
   assert.match(msg, /\brung,/, "the apply message must carry the rung");
   assert.match(msg, /unmanaged:/, "…beside unmanaged, which is sent for the same reason");
-});
-
-test("ladder: the fill is grey → GREEN, never red → green", () => {
-  // Red is the diff language's word for "would remove" on every row and every button. NO
-  // position of this control changes how much gets removed — `uninstall` is on every rung,
-  // including 0 — so a red end would encode an axis the widget does not have. (The plan's
-  // stated reason, "the leftmost rung removes nothing", is false; the conclusion survives
-  // the correction, the premise does not. See index.html's #ladder rules.) Green already
-  // means "a plain Apply would install/update this"; at this scale it means "more will be
-  // applied", which is the same meaning at a different size, not a competing one.
-  const rule = html.match(/#ladder-range\s*\{[^}]*\}/);
-  assert.ok(rule, "#ladder-range needs a rule");
-  assert.match(rule[0], /linear-gradient/, "the fill is one gradient stopped at --fill%");
-  assert.match(rule[0], /#9ece6a/, "the same green the rows and buttons already use");
-  assert.match(rule[0], /var\(--line\)/, "and plain grey for the part not included");
-  // The red the diff language reserves for removal, in any of its shipped forms.
-  for (const red of ["#f7768e", "red", "#ff"]) {
-    assert.ok(!rule[0].includes(red), `the ladder fill must not use ${red} — red means remove`);
-  }
-  // The green must come FIRST in the gradient: reversed, the track would empty as you
-  // asked for more, which reads as the opposite of what the control does.
-  const stops = rule[0].slice(rule[0].indexOf("linear-gradient"));
-  assert.ok(stops.indexOf("#9ece6a") < stops.indexOf("var(--line)"),
-    "green is the LEFT half of the gradient (0% → --fill), grey the right");
-});
-
-test("ladder: the word, the emoji and the COUNT all read the same rung", () => {
-  // The count is the only number on screen, and it is the reason the widget exists — "how
-  // many, before I commit". Two live mutation survivors motivated this: `rungPlan(model, 4)`
-  // and `rungPlan(model, rung + 1)` both passed everything else, and either would put a
-  // number under a word it does not belong to — the widget saying "Unattended · 12 items"
-  // while rung 2 touches 3. Worse than no count, because it is confidently wrong.
-  const at = appjs.indexOf("function renderLadder()");
-  assert.notEqual(at, -1, "renderLadder() must exist");
-  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
-  assert.match(body, /const spec = L\.RUNGS\[rung\]/, "the word comes from the chosen rung");
-  assert.match(body, /M\.rungPlan\(model, rung\)/,
-    "…and so must the count: any other argument decorates the wrong word");
-  // The fill too: it is the same one number, so it must be derived from it and not tracked
-  // separately (a second source of truth would drift silently).
-  assert.match(body, /setProperty\("--fill", `\$\{\(rung \//,
-    "the fill percentage is computed from `rung`, not stored beside it");
-});
-
-test("ladder: it repaints from refreshLiveness — the one 'anything changed' hook", () => {
-  // A count that goes stale is worse than no count: the user reads "3 items", toggles a
-  // row, and the number still says 3. Every path that can change what a rung would touch
-  // (a toggle, a scan verdict, an `outdated` pill, a Reset) already routes through
-  // refreshLiveness, so the ladder hangs off that rather than off each caller.
-  const at = appjs.indexOf("function refreshLiveness()");
-  assert.notEqual(at, -1);
-  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
-  assert.ok(body.includes("renderLadder()"), "refreshLiveness must repaint the ladder");
-  // …and the widget must freeze with everything else: acting on an incomplete scan would
-  // count un-probed rows as absent, and moving the rung mid-run would mean nothing.
-  const rl = appjs.slice(appjs.indexOf("function renderLadder()"));
-  assert.match(rl.slice(0, rl.indexOf("\n}\n")), /disabled = applyRunning \|\| scanning/);
-});
-
-test("ladder: the announcement is the WORD, not the number under it", () => {
-  // A range input announces its `value`. On this control that is "4" — the one thing on
-  // screen that carries no meaning at all, since the whole point of the widget is that
-  // position alone does not read (the lesson the scope work paid for). `aria-valuetext`
-  // overrides it with the reading a sighted user gets.
-  //
-  // Pinned because it is invisible: nothing about the app LOOKS wrong if this line is
-  // deleted, so only a test notices. Set inside renderLadder rather than in the markup
-  // because it changes on every move, exactly like the text it mirrors.
-  const at = appjs.indexOf("function renderLadder()");
-  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
-  assert.match(body, /setAttribute\("aria-valuetext"/,
-    "renderLadder must override the announced value with the word and the count");
-  // It must be the SAME name and count the eye gets — the variables, never a second literal.
-  // (The estimate joined this reading later; its own test pins the full shape, including the
-  // no-estimate fallback. This one stays about the name and the count, which are never absent.)
-  const vt = body.slice(body.indexOf('setAttribute("aria-valuetext"'));
-  assert.match(vt.slice(0, vt.indexOf("\n")), /\$\{spec\.name\}, \$\{count\}/,
-    "…and it must be the SAME name and count the eye gets, not a second wording");
-});
-
-test("ladder: moving the rung repaints the ROWS, not only the widget", () => {
-  // THE stale-panel bug, and the reason this task exists at all. The widget said "3 items" —
-  // a number — while the truth sat on screen in rows that did not move, and a summary that
-  // contradicts what it summarises is worse than no summary. C: "j'aurais voulu que les
-  // packages en dessous réagissent".
-  //
-  // `renderLadder()` repaints the word, the fill and the count and NOTHING about a row, so
-  // the handler must call `refreshLiveness()` — the "anything changed" hook, which repaints
-  // every row and then calls renderLadder itself. Pinned as source text because the failure
-  // is invisible to every other test: the count would still be right.
-  const handler = appjs.match(
-    /getElementById\("ladder-range"\)\s*\.addEventListener\(\s*"input"[\s\S]{0,300}?\}\);/,
-  );
-  assert.ok(handler, "the range input must be wired on `input`");
-  assert.match(handler[0], /refreshLiveness\(\)/,
-    "the rung handler must repaint the ROWS — renderLadder alone leaves the panel stale");
-  // And refreshLiveness must in fact be the hook that paints the third state, or the line
-  // above would be satisfied by a function that no longer does it.
-  const at = appjs.indexOf("function refreshLiveness()");
-  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
-  assert.match(body, /setRungOut\(i, M\.rungReason\(rung,/,
-    "…and refreshLiveness is where a row learns whether it is out of the rung's reach");
-});
-
-test("ladder: `rung-out` is DERIVED from rungReason, never from a second rule", () => {
-  // A copied rule would drift and eventually dim a row that IS in the plan — the one failure
-  // that turns the dimming from a hint into a lie. model.js's rungReason asks `rungAllows`
-  // and is exhaustively pinned against it in ladder.test.mjs, so app.js must ask IT and must
-  // not read a fact of its own.
-  const at = appjs.indexOf("function setRungOut(");
-  assert.notEqual(at, -1, "setRungOut() must exist — one place sets the class and the word");
-  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
-  assert.match(body, /classList\.toggle\("rung-out", !!why\)/,
-    "the class follows the reason exactly: no reason → not dimmed");
-  assert.match(body, /r\.why\.textContent = why \? RUNG_WHY\[why\] : ""/,
-    "and the WORD comes from the same reason, so the two cannot disagree");
-  // No second rule anywhere in app.js: the facts must not be consulted to decide dimming.
-  const paint = appjs.slice(appjs.indexOf("function refreshLiveness()"));
-  const upTo = paint.slice(0, paint.indexOf("\n}\n"));
-  for (const fact of ["\\.slow", "\\.uac", "\\.forbidden"]) {
-    assert.ok(!new RegExp(`rung-out[\\s\\S]{0,200}${fact}`).test(upTo),
-      `the dimming must not read ${fact} directly — that is rungAllows's job`);
-  }
-  // The reason keys and the words must be in lockstep: an unknown key renders an empty
-  // label, i.e. a dimmed row that explains nothing.
-  const why = appjs.match(/const RUNG_WHY = \{[^}]*\}/);
-  assert.ok(why, "RUNG_WHY must hold the user-facing words");
-  // ⭐ TWO keys where there were five. "slow", "hand" and "blocked" left this map when the
-  // rungs that sorted by those facts were cut — a fact can no longer hold a row out of a rung,
-  // so it can no longer be the reason one is dimmed. They did not leave the APP: see ROW_FACTS,
-  // which shows them on every row at every rung.
-  for (const k of ["extension", "app"]) {
-    assert.match(why[0], new RegExp(`\\b${k}:`), `RUNG_WHY needs a word for "${k}"`);
-  }
-  // And the facts' words are still said in the USER's terms, not the mechanism's — that
-  // discipline moved to ROW_FACTS with them.
-  const facts = appjs.match(/const ROW_FACTS = \{[\s\S]*?\n\}/);
-  assert.ok(facts, "ROW_FACTS must hold the per-row fact words");
-  assert.match(facts[0], /asks for your password/, "the uac case must be in the user's terms");
-  assert.match(facts[0], /uac: \{/, "…keyed by the wire field, which is where `uac` may appear");
-  for (const k of ["uac", "forbidden", "slow"]) {
-    assert.match(facts[0], new RegExp(`${k}: \\{`), `ROW_FACTS needs an entry for "${k}"`);
-  }
 });
 
 test("ladder: a row out of reach is DIMMED, never hidden", () => {
@@ -214,33 +225,6 @@ test("ladder: a row out of reach is DIMMED, never hidden", () => {
   // widen every row by summary's gap.
   assert.match(html, /\.rung-why \{ display:none; \}/,
     "the reason label is hidden until .rung-out, not created and destroyed");
-});
-
-test("ladder: the control OWNS its zone — full width, framed in the selection blue", () => {
-  // C: "je voudrais que le curseur prenne la totalité en large, parce que c'est quand même la
-  // partie la plus importante pour les gens… elle devrait être encadrée dans une zone bleue".
-  // The reasoning holds: this one control decides what every row below does, so it must
-  // out-rank them visually, and BLUE is the only hue free to mean "this is what you ADJUST" —
-  // green ("would add"), red ("would remove") and grey ("untouched") are spoken for by the
-  // diff, so a control tinted with a verdict colour would read as a verdict about a package.
-  const range = html.match(/#ladder-range \{[\s\S]*?\}/);
-  assert.ok(range, "#ladder-range needs a rule");
-  assert.match(range[0], /width:100%/);
-  assert.ok(!/max-width/.test(range[0]),
-    "no max-width: the width is what says 'this is the important part'");
-  const zone = html.match(/#ladder \{[\s\S]*?\}/);
-  assert.ok(zone, "#ladder needs a rule");
-  assert.match(zone[0], /border:1px solid #3d59a1/, "a real edge, in the app's selection blue");
-  assert.match(zone[0], /background:rgba\(61,89,161,/, "and a wash of the same blue");
-  // Not a NEW colour: #3d59a1 is already what a checked switch is painted with, so the
-  // palette gains nothing and the blue already means "chosen / adjustable" in this app.
-  assert.match(html, /input:checked \+ \.slider \{[^}]*#3d59a1/,
-    "#3d59a1 must still be the switch's blue — if that moves, the frame's reasoning moves");
-  // The diff's verdict colours must stay OUT of the frame.
-  for (const verdict of ["#9ece6a", "#f7768e"]) {
-    assert.ok(!zone[0].includes(verdict),
-      `the zone must not be tinted ${verdict} — that is a verdict about a package`);
-  }
 });
 
 test("ladder: rungReason reads the KIND and no fact at all", () => {
@@ -275,158 +259,23 @@ built on it would describe something the rule does not do`,
   assert.match(code, /isExtension/, "the kind is what decides, so the kind is what it reads");
 });
 
-test("ladder: the scale carries all five words, built from RUNGS", () => {
-  // C, on seeing the full-width zone: "avec une telle largeur on peut mettre les
-  // différents mots sur l'échelle". The gap it closes is real — before this, the four
-  // rungs you were NOT on were invisible, so choosing meant dragging to discover.
+test("dial: the note under it names WHERE the work is, and only when that helps", () => {
+  // C, at the second sighting of the old slider: "le apply reste actif même s’il semble ne plus
+  // rien y avoir à exécuter — est-ce normal?". It was not, and the answer survives the widget
+  // that prompted it: a control that offers an action with nothing to do is the dishonesty this
+  // app already paid for once (the 403 retry card that promised a download and did nothing).
   //
-  // Built from RUNGS rather than written into the HTML, so the scale cannot drift from
-  // the rule it labels. A hand-written list would be a second source of truth for the
-  // words, and the words are a contract: three of the five promises were LIES until they
-  // were checked against rungAllows.
-  const at = appjs.indexOf("function renderLadderScale()");
-  assert.notEqual(at, -1, "renderLadderScale() must exist");
+  // The button half is covered above (`.empty`, "nothing to do", still clickable so the scope
+  // can be widened). What is left here is the NOTE, and its condition.
+  const at = appjs.indexOf("function renderDial(");
   const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
-  assert.match(body, /L\.RUNGS\.entries\(\)/,
-    "the labels come from RUNGS — never a literal list, which would drift");
-  assert.match(body, /classList\.toggle\("on", i === rung\)/,
-    "exactly one label is marked, and it is the chosen rung");
-  // Built once, then only re-marked: rebuilding mid-drag would drop the click targets and
-  // re-layout five nodes at pointer rate.
-  assert.match(body, /if \(!host\.childElementCount\)/,
-    "the nodes are created once, not on every move");
-  // Clicking a label must go through the INPUT's event, so there is one path that changes
-  // the rung — a second would be a second place to forget the row repaint.
-  assert.match(body, /dispatchEvent\(new Event\("input"/,
-    "a label click reuses the input's own event path");
-  assert.match(body, /if \(!r \|\| r\.disabled\) return/,
-    "…and it stays frozen during a run or an incomplete scan, like the slider");
-  // renderLadder must actually call it, or the scale never marks anything.
-  const rl = appjs.slice(appjs.indexOf("function renderLadder()"));
-  assert.ok(rl.slice(0, rl.indexOf("\n}\n")).includes("renderLadderScale()"),
-    "renderLadder must repaint the scale");
-});
-
-test("ladder: Apply refuses an EMPTY rung, and says the rung is why", () => {
-  // C, at the second sighting: "le apply reste actif même s'il semble ne plus rien y avoir
-  // à exécuter — est-ce normal?". It was not. A button that promises an action with nothing
-  // to do is the dishonesty this app already paid for once (the 403 retry card that offered
-  // a download and did nothing), and clicking it costs a full server round-trip — re-scan,
-  // full-window veil — to be told `done {nothing:true}`.
-  const at = appjs.indexOf("const g = document.getElementById(\"install-all\")");
-  assert.notEqual(at, -1, "the Apply button's liveness block must exist");
-  const body = appjs.slice(at, at + 1400);
-  // The emptiness must come from rungPlan, not from a second rule: the button, the count
-  // under the thumb and the server's own filter have to agree about what "nothing" means.
+  // Emptiness comes from rungPlan, never a second rule: the button, the note and the server’s
+  // own filter have to agree about what "nothing" means.
   assert.match(body, /M\.rungPlan\(model, rung\)\.length === 0/,
-    "emptiness is asked of rungPlan — a second rule would drift from the count");
-  assert.match(body, /g\.disabled = busy \|\| rungEmpty/,
-    "Apply is refused when the rung has no work, not only while busy");
-  assert.match(body, /toggle\("live", .*!rungEmpty/,
-    "…and it must not glow `live` either, or a dead button still invites the click");
-  // And the reason is shown ONLY when a wider rung would help. With nothing to do at all,
-  // the empty panel is already the message.
-  assert.match(body, /rungEmpty && ids\.some\(isActionable\)/,
-    "the note appears only when the RUNG is what emptied the plan");
-  assert.match(body, /Nothing to do at this level/,
-    "the note names the state, and the slider as the fix");
-});
-
-test("ladder: the ESTIMATE comes from the local secs of the same rung, unknowns included", () => {
-  // Four ways a number this small could mislead, all invisible to the pure tests because they
-  // pin `estimate`/`formatEstimate` and cannot see what the widget FEEDS them:
-  //
-  //   1. the wrong rung  → "☕ Unattended · 3 items · ~40 min" (the minutes of 🏗️)
-  //   2. the SHARED `slow` instead of the LOCAL `secs` → minutes invented from a boolean
-  //   3. the unknowns dropped → a confident "~4 min" for a plan mostly unmeasured
-  //   4. a second traversal of model.pkgs → minutes for rows the count does not include
-  const at = appjs.indexOf("function renderLadder()");
-  assert.notEqual(at, -1, "renderLadder() must exist");
-  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
-  assert.match(body, /L\.formatEstimate\(L\.estimate\(M\.rungSeconds\(model, rung\)\)\)/,
-    "the estimate reads the chosen rung's LOCAL durations — any other argument is a wrong number");
-  // The phrase must never be assembled here: `formatEstimate` is where the wording and its
-  // limits live (no "at most", "<1 min" not "~0 min", the unknowns named), and a second
-  // formatter in the view would be a second wording to keep true. Comments stripped first —
-  // the comments quote the phrase on purpose, to say what the code must NOT do, and a guard
-  // that forbids explaining itself is a guard that gets the explanation deleted.
-  const code = body.replace(/\/\/.*$/gm, "");
-  assert.ok(!/min for|unknown`|\bat most\b/.test(code),
-    "app.js must not phrase the estimate itself — ladder.js owns the words and their limits");
-  // `p.slow` is a fleet-wide max reduced to a boolean; minutes from it could only be an
-  // invented constant, and a row is legitimately `slow: true, secs: 1` on a warm machine.
-  const modeljs = readFileSync(new URL("../public/model.js", import.meta.url), "utf8");
-  const rs = modeljs.indexOf("export function rungSeconds(");
-  assert.notEqual(rs, -1, "rungSeconds must live in model.js, beside rungPlan");
-  const rsBody = modeljs.slice(rs, modeljs.indexOf("\n}\n", rs));
-  assert.match(rsBody, /rungPlan\(model, rung\)/,
-    "…and it must walk rungPlan, so the minutes and the count describe the same rows");
-  assert.match(rsBody, /\.secs \|\| 0/, "the LOCAL last-seen duration");
-  assert.ok(!/\.slow\b/.test(rsBody.replace(/\/\/.*$/gm, "")),
-    "never the shared classification — that is a boolean and a different question");
-});
-
-test("ladder: an ABSENT estimate takes its separator with it", () => {
-  // At ⚡ on a machine whose config is already applied, the rung is empty: there is no
-  // duration and no unknown to report, and `#ladder-blocked` already says "Nothing to do at
-  // this level" two lines below. So the estimate goes quiet — but a "·" left behind would
-  // read as a value that failed to load, which is the "greyed out teaches nothing" failure
-  // in miniature. The separator is a ::before on the element, so hiding one hides both.
-  const rule = html.match(/\.ladder-est::before \{[^}]*\}/);
-  assert.ok(rule, ".ladder-est::before must carry the separator");
-  assert.match(rule[0], /content:"· "/, "…so that hiding the element removes it too");
-  const at = appjs.indexOf("function renderLadder()");
-  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
-  // The separator lives in ONE place. A "· " added in the JS as well would render "· · 3
-  // unknown" — a MEASURED mutation survivor (`estEl.textContent = est ? "· " + est : ""`
-  // passed every other test), and one that reads as a broken template rather than as a value.
-  // So the estimate's text is exactly what formatEstimate returned, unpunctuated.
-  assert.match(body, /estEl\.textContent = est;/,
-    "the estimate's text is the formatted phrase itself — no punctuation added here");
-  assert.ok(!body.includes('"· "') && !body.includes("'· '"),
-    "the '·' belongs to the ::before only; a second one would print twice");
-  assert.match(body, /estEl\.hidden = !est/, "an empty estimate hides the element");
-  // And the estimate must be its own element: folded into #ladder-count it could not be
-  // hidden without hiding the row count, which is never absent.
-  assert.match(html, /id="ladder-est"/, "the estimate needs its own node");
-  assert.match(html, /id="ladder-est"[^>]*hidden/,
-    "…starting hidden, so the first paint before any plan shows no stray separator");
-});
-
-test("ladder: the estimate is ANNOUNCED, not visual-only", () => {
-  // "How long will this take me" is the question the whole telemetry chain exists to answer,
-  // and a user who cannot see the widget has it too. `aria-valuetext` is already the reading
-  // for this control (a range would otherwise announce "4"), so the estimate belongs in it —
-  // in the same order as on screen, punctuated for speech.
-  const at = appjs.indexOf("function renderLadder()");
-  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
-  assert.match(body, /aria-valuetext",\s*est \? `\$\{spec\.name\}, \$\{count\}, \$\{est\}`/,
-    "the announcement carries the word, the count AND the estimate, in that order");
-  assert.match(body, /: `\$\{spec\.name\}, \$\{count\}`\)/,
-    "…and falls back to the word and count alone when there is no estimate to announce");
-});
-
-test("ladder: the slider's max and detents match RUNGS — the one thing that cannot derive", () => {
-  // ⭐ `max` and the <option> detents are HTML ATTRIBUTES, so unlike every other position in
-  // this feature they cannot be computed from RUNGS. Adding a rung and forgetting them caps
-  // the slider one short: the last rung becomes unreachable, and the failure is silent — the
-  // widget just never offers Everything, which is the WORSE direction of error (doing less
-  // than the user asked). So it is pinned here rather than trusted.
-  const top = RUNGS.length - 1;
-  const max = html.match(/id="ladder-range"[^>]*max="(\d+)"/);
-  assert.ok(max, "#ladder-range must declare a max");
-  assert.equal(
-    Number(max[1]),
-    top,
-    `max="${max[1]}" but RUNGS has ${RUNGS.length} rungs — the top rung is unreachable`,
-  );
-  // One detent per rung, so the thumb snaps to every one of them.
-  const detents = html.match(/id="ladder-detents"[\s\S]*?<\/datalist>/);
-  assert.ok(detents, "the detent list must exist");
-  const values = [...detents[0].matchAll(/<option value="(\d+)">/g)].map((m) => Number(m[1]));
-  assert.deepEqual(
-    values,
-    RUNGS.map((_, i) => i),
-    "one detent per rung, in order",
-  );
+    "emptiness is asked of the shared rule — a second one would drift from the count");
+  // ⚠️ Shown ONLY when a wider scope would actually do something. With nothing to do at all,
+  // the empty panel is already the message and a note would be noise.
+  assert.match(body, /wider > 0/, "the note appears only when a wider scope has work");
+  assert.match(body, /further right/, "…and it names where that work is");
+  assert.match(body, /blocked\.hidden = !show/, "otherwise it is hidden, not left stale");
 });

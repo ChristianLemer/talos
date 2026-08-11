@@ -19,27 +19,28 @@
 // stops the two sides from drifting on a number.
 export const SLOW_SECS = 60;
 
-// The six rungs, in order. `promise` is the sentence under the thumb; `key` is the same
-// word ladder.rs logs, so a log line and a widget position can be read against each other.
+// The three rungs, in order. Each entry carries the three LINES the dial button shows:
+// `name` (what it is), `where` (where it lands), and `promise` — the long form, used as the
+// title. `key` is the same word ladder.rs logs, so a log line and a button can be read against
+// each other.
 //
-// ⚠️ The emojis answer "DO I HAVE TIME RIGHT NOW?", deliberately not "is this better?". A
-// satisfaction ramp (🙁→😀) would assert that Everything is the good end and it is not:
-// rung 0 is the only rung that CANNOT fail on the network, and on a Tuesday morning the
-// right answer is usually rung 3. ☕ vs 👀 carries the actual difference between rungs 3
-// and 4 — "you may leave" vs "you must stay" — better than any word would.
-// ⚠️ AND EVERY PROMISE MUST BE TRUE OF WHAT THE SERVER DOES AT THAT RUNG — the promise is
-// the only thing the user reads before committing, so an overstatement here is a lie the
-// code then tells. Rung 0's was caught being one: the plan wrote "Instant, and the only
-// rung that cannot fail on the network", which is false, because `uninstall` is on EVERY
-// rung (see `rungAllows`) and `brew uninstall` / `winget uninstall --source winget` is
-// neither instant nor offline. The promise now speaks about what the rung ADDS, and names
-// the removals rather than quietly contradicting them.
+// ⚠️ THE AXIS IS "WHERE DOES THIS LAND?", not "do I have time?". It was the latter when there
+// were six rungs sorting upgrades by `uac`/`403`/`slow`; those facts are shown on the ROW now,
+// and the emojis answer the surviving question — your files, your profile, the machine.
+//
+// ⚠️ AND EVERY PROMISE MUST BE TRUE OF WHAT THE SERVER DOES AT THAT RUNG. The promise is the
+// only thing a user reads before committing, so an overstatement here is a lie the code then
+// tells — and four of them have been caught being one, always in the same direction: promising
+// more calm than the rung gives. Rung 0 alone was corrected twice ("Instant, and the only rung
+// that cannot fail on the network" — false, a removal shells out; then "Removals you asked for
+// still run" — false once removals started riding their kind).
 export const RUNGS = [
   // ⚠️ THE PROMISE CHANGED WITH THE RULE. It used to end "Removals you asked for still run",
   // which was true when uninstall bypassed every rung and became a LIE the moment removals
   // started riding their kind: at ⚡, an app you unchecked is NOT removed. Saying "your files
   // only" is the honest form, and it is also the stronger claim.
   { key: "config-only", emoji: "⚡", name: "Config only",
+    where: "your files",
     promise: "Your own files only — nothing is downloaded, nothing on the machine is touched" },
   // ⭐ Between ⚡ and 📦 because its promise sits between theirs: it DOES touch the network
   // (a clone), and it NEVER touches the machine — nothing enters Program Files, nothing
@@ -53,6 +54,7 @@ export const RUNGS = [
   // (timings.yaml holds five brew entries and nothing else), so the widget will honestly
   // count them as unknown.
   { key: "extensions", emoji: "🧩", name: "Extensions",
+    where: "your profile",
     promise: "Also plugins and skills. Downloaded into your profile — never installed on the machine" },
   // 📦 The machine, and NOTHING is excluded here — not the slow ones, not the ones that will
   // ask for your hand. Three rungs replaced six: ☕ Unattended, 👀 Stay nearby and 🏗️
@@ -63,6 +65,7 @@ export const RUNGS = [
   // ⚠️ So this promise must NOT claim you can walk away — it can stop on a password prompt.
   // It says where things land, which is the one thing all three rungs answer.
   { key: "apps", emoji: "📦", name: "Apps",
+    where: "the machine",
     promise: "Also apps on the machine — every install and update. Some will ask for your hand" },
 ];
 

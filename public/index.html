@@ -102,44 +102,53 @@
       /* The question reads as the zone's title now that the zone has an edge: full-strength
          text, not the muted tone it wore when it was one line among many. */
       .ladder-q { font-size:12px; color:var(--fg); font-weight:600; }
-      #ladder-range { -webkit-appearance:none; appearance:none; width:100%;
-                      /* UNCAPPED width: the control OWNS its zone — C's first request, and
-                         the reason is that its size is what says "this is the important
-                         part". It was capped at 320px when it shipped; that read as one more
-                         field in a form. */
-                      height:6px; border-radius:999px; cursor:pointer;
-                      background:linear-gradient(90deg,
-                        #9ece6a 0%, #9ece6a var(--fill,100%),
-                        var(--line) var(--fill,100%), var(--line) 100%); }
-      #ladder-range::-webkit-slider-thumb { -webkit-appearance:none; appearance:none;
-                        width:16px; height:16px; border-radius:50%; background:#c0caf5;
-                        border:2px solid var(--bg); cursor:pointer; }
-      #ladder-range:disabled { cursor:default; opacity:.5; }
-      .ladder-read { display:flex; align-items:baseline; gap:8px; font-size:13px; }
-      .ladder-emoji { font-size:15px; line-height:1; }
-      .ladder-name { font-weight:600; }
-      .ladder-count { color:var(--dim); font-size:12px; font-family:"JetBrains Mono",monospace; }
-      /* The estimate, in the count's own tone and typeface — it is the same kind of fact
-         (a measurement of the chosen rung), so giving it a second style would suggest a
-         second status. The "·" lives here rather than in the JS so that hiding the element
-         removes the separator with it: an empty rung has no duration to report, and a
-         dangling "items ·" would read as a value that failed to load.
-         ⚠️ There is deliberately NO `.ladder-est[hidden] { display:none; }` here. One was
-         written and then MEASURED away: with the rule deleted and the app rebuilt, the
-         computed display at ⚡ was still `none` and the box still 0px wide — the UA sheet's
-         own `[hidden]` rule does the job, exactly as `#ladder-blocked` two elements below
-         has always relied on. It survived every mutation (delete it, nothing failed), which
-         is the signature of a line that does nothing; kept as a note instead, so the next
-         reader does not add it back believing the flex item needs it. */
-      .ladder-est { color:var(--dim); font-size:12px; font-family:"JetBrains Mono",monospace; }
-      .ladder-est::before { content:"· "; }
-      .ladder-promise { font-size:11.5px; color:var(--dim); line-height:1.35; max-width:60ch; }
-      /* Quiet, NOT an alert. C: "pas obligé de mettre une alerte jaune car c'est normal" —
-         and that is the right call. An empty rung is a perfectly ordinary state (⚡ on a
-         machine whose config is already applied), so gold would raise an alarm about
-         nothing, and red is the diff's word for "would remove". It reads as a note, in the
-         same tone as the promise above it, and the disabled button is what actually carries
-         the consequence. */
+       /* THE DIAL — three nested frames, lateral. The nesting is DOM nesting, so the frames
+         cannot drift apart: 📦 wraps 🧩 wraps ⚡, and padding is what makes each visible as a
+         band around the next. `align-items:stretch` keeps all three the same height, which is
+         what makes the containment read as containment rather than as three loose boxes. */
+      .dial { display:flex; }
+      /* Roomy on purpose — C: "a little more room between the buttons, to have more flesh". The
+         gap is what lets each frame read as a BAND around the next rather than as a hairline,
+         and the padding is what gives the nesting its thickness. */
+      .dial-frame { display:flex; align-items:stretch; gap:10px; flex:1;
+                    border:1px solid #3d59a1; border-radius:11px; padding:9px; }
+      /* Each frame is one step tighter, so the innermost still has room for three lines. */
+      .frame-ext { border-radius:9px; }
+      .frame-cfg { border-radius:7px; }
+      /* A button fills its slot. `text-align:left` because the label is three LINES — C's
+         constraint, and it is what makes a narrow inner frame legible at all: stacked text
+         needs far less width than one long line. */
+      .dial-btn { flex:1; min-width:0; display:flex; flex-direction:column; gap:1px;
+                  align-items:flex-start; justify-content:center; text-align:left;
+                  padding:7px 9px; border-radius:6px; cursor:pointer;
+                  border:1px solid transparent; background:rgba(61,89,161,.18);
+                  color:var(--fg); font-family:inherit; font-size:12px; line-height:1.3; }
+      .dial-btn:hover:not(:disabled) { background:rgba(61,89,161,.32); }
+      .dial-btn:disabled { cursor:default; opacity:.5; }
+      /* The three lines: what it is · where it lands · what it would do. The middle line is
+         the PROMISE, and it is the one that had to be corrected three times to stay true. */
+      .dial-name { font-weight:600; white-space:nowrap; }
+      .dial-where { font-size:11px; color:var(--on-accent); }
+      .dial-count { font-size:11px; color:var(--dim); }
+       /* ⭐ CHOSEN — PLAIN BLUE, filled. C: "do not change to green… just use the blue that is
+         fine (plain blue)". And it is the better call: green means "a plain Apply would do this"
+         on every ROW of the panel, so a green button beside green rows would read as one more
+         verdict rather than as the control that causes them. Blue is the app’s "this is what you
+         ADJUST" hue — the same #3d59a1 the frames and the switches already use — so the chosen
+         scope simply becomes the SOLID form of what it was outlined in. Nothing new enters the
+         palette, and no colour changes meaning. */
+      .dial-btn.chosen { background:#3d59a1; border-color:#7aa2f7; color:#fff; }
+      .dial-btn.chosen:hover:not(:disabled) { background:#4868b8; }
+      .dial-btn.chosen .dial-where { color:var(--on-accent); }
+      .dial-btn.chosen .dial-count { color:#fff; font-weight:600; }
+      /* ⚠️ An empty scope must LOOK unclickable, because clicking it does nothing: a second
+         click on a filled button with nothing in it would be a gesture that leaves no trace,
+         which this app treats as a defect rather than a no-op. Drained back to the outline,
+         which is exactly “not armed” in the same visual language. */
+      .dial-btn.chosen.empty { background:rgba(61,89,161,.10); border-color:var(--line);
+                               color:var(--fg); }
+      .dial-btn.chosen.empty .dial-count { color:var(--dim); font-weight:400; }
+      .dial-btn.chosen.empty .dial-where { color:var(--dim); }
       .ladder-blocked { font-size:11.5px; color:var(--dim); line-height:1.35; }
       /* THE LABELLED SCALE — each label centred on its OWN notch, which is not where a
          naive layout puts it.
@@ -154,27 +163,7 @@
          The ACTIVE label is the only one at full strength: five equally-bright words would
          compete with the reading below and leave the choice unmarked. Dim for the rest, so
          the scale is a menu and the bright one is the answer. */
-      .ladder-scale { position:relative; height:30px; font-size:10.5px; line-height:1.25;
-                      color:var(--dim); margin-top:-2px; }
-      .ladder-scale > span { position:absolute; top:0; transform:translateX(-50%);
-                             text-align:center; display:flex; flex-direction:column;
-                             align-items:center; gap:1px; cursor:pointer;
-                             white-space:nowrap; }
-      /* Centred on notch 0 and notch 4, the outer two labels hang half their width past
-         the track's ends. Anchor them to their edge instead: the label still reads as
-         belonging to the extreme notch (nothing else is near it), and nothing spills out
-         of the blue frame — which would look like a layout bug rather than a scale. */
-      .ladder-scale > span:first-child { transform:none; left:0 !important; align-items:flex-start; }
-      .ladder-scale > span:last-child { transform:none; left:auto !important; right:0; align-items:flex-end; }
-      /* The emoji stays legible when dim — it is the "do I have time?" signal, and a
-         greyed-out emoji is just a smaller emoji. Only the WORD carries the emphasis. */
-      .ladder-scale .sc-word { padding:0 2px; }
-      .ladder-scale > span.on { color:var(--fg); }
-      .ladder-scale > span.on .sc-word { font-weight:600; }
-      /* Clicking a label moves the thumb — the label IS the target the eye picked, and
-         making it inert would be a small lie about what looks clickable. */
-      .ladder-scale > span:hover .sc-word { color:var(--fg); }
-      /* Catalog tab has no Apply bar (it is the BROWSE view), so it has nothing for a
+       /* Catalog tab has no Apply bar (it is the BROWSE view), so it has nothing for a
          ladder to calibrate either. Mirrors `body.tab-catalog .hero-apply`, which lives
          with the other tab-scoped rules further down. */
       body.tab-catalog #ladder { display:none; }
@@ -1126,7 +1115,13 @@
         <div class="hero-buttons">
           <button id="refresh-all" class="resetbtn" title="Re-scan the machine — re-check what's installed right now (your choices are kept)">Refresh</button>
           <button id="reset-all" class="resetbtn" title="Reset every toggle to the author's default">Reset</button>
-          <button id="install-all" class="applybtn">Apply</button>
+          <!-- ⚠️ APPLY IS NOT HERE ANY MORE. It moved into the dial below: the second click on
+               a chosen (green) scope is what runs. C's decision, and the reason is that one
+               object now answers both "how far" and "go", rather than two that ignore each
+               other — the old Apply ran the WHOLE plan regardless of where the slider sat,
+               which is the contradiction the dial removes.
+               Reversible in one line if it reads wrong: put the button back and have it call
+               `applyAll()`, which is untouched and still the single entry point. -->
         </div>
         <span id="globalhint">Installs what you checked, updates what's outdated, removes what you unchecked.</span>
         <span id="overall">connecting…</span>
@@ -1148,56 +1143,51 @@
            NOT the reading, though: a range announces its VALUE, and "4" is the one thing
            here that means nothing. `renderLadder` sets `aria-valuetext` on every move so
            the announcement is "Everything, 6 items" — the same words the eye gets. -->
+       <!-- THE SCOPE DIAL — three NESTED buttons, replacing a 3-detent slider.
+           C's design, and the reason it beats the slider is that the CUMULATION becomes
+           visible instead of being explained: 📦's frame starts left of ⚡ and runs to the
+           end, so the eye reads "Apps contains the other two" without a word of copy. Six
+           rungs, then three, never managed to say that.
+
+           ⚠️ Lateral, not concentric — also C's call, and it costs nothing to state why:
+           concentric frames stack three rows high and steal space from the package list,
+           while lateral keeps ONE band and preserves the slider's left→right reading, so
+           the gesture people already learned still applies.
+
+           TWO CLICKS, and the second is the Apply. First click: the chosen button turns
+           green and the list below filters to its scope. Second click on the SAME green
+           button: it runs. The other two stay visible and clickable throughout — clicking
+           one of them moves the scope instead of running anything, which is what makes the
+           first click reversible without inventing a cancel affordance.
+
+           ⚠️ There is no Apply in the top bar any more. That was the panel's oldest habit,
+           and C decided against keeping both: one object answers "how far" and "go", rather
+           than two that ignore each other. Reversible in one line if it reads wrong. -->
       <div id="ladder">
         <div class="ladder-q">How far do you want to go?</div>
-        <!-- max=2 and three detents: ⚡ Config only · 🧩 Extensions · 📦 Apps. `value` starts
-             at the TOP, which `renderLadder` re-asserts from RUNGS.length — the markup only
-             has to not contradict it. ⚠️ THIS attribute is the one thing in the feature that
-             does not derive from RUNGS, so a rung added or removed without touching it caps
-             the slider silently. Guarded by ladder-ui.test.mjs. -->
-        <input id="ladder-range" type="range" min="0" max="2" step="1" value="2"
-               aria-label="How far this Apply goes"
-               list="ladder-detents">
-        <datalist id="ladder-detents">
-          <option value="0"></option><option value="1"></option><option value="2"></option>
-        </datalist>
-        <!-- THE SCALE, labelled. C, on seeing the full-width zone: "avec une telle largeur
-             on peut mettre les différents mots sur l'échelle". It fixes a real gap — until
-             now the four rungs you were NOT on were invisible, so choosing meant dragging
-             the thumb to discover what existed. Now the options are readable before the
-             choice, and the reading below states its consequence after.
-             Populated by renderLadder from RUNGS, so the scale cannot drift from the rule.
-             aria-hidden: the slider already announces the same words through
-             `aria-valuetext`, and a screen reader reciting five labels it cannot act on
-             would be noise, not information. -->
-        <div id="ladder-scale" class="ladder-scale" aria-hidden="true"></div>
-        <!-- THE WORD, under the thumb. Position alone does not read — that is the lesson
-             the scope work paid for: a multi-detent control must READ unambiguously, and
-             five unlabelled notches do not. Kept alongside the scale rather than replaced
-             by it: the scale says what the OPTIONS are, this says what the chosen one DOES
-             (the count, and a promise that had to be corrected three times to stay true). -->
-        <div class="ladder-read">
-          <span id="ladder-emoji" class="ladder-emoji"></span>
-          <span id="ladder-name" class="ladder-name"></span>
-          <span id="ladder-count" class="ladder-count"></span>
-          <!-- HOW LONG, beside how many: the two halves of "what am I committing to?", so
-               they sit on one line rather than in two places. Its own element and not part of
-               #ladder-count because it can be ABSENT (an empty rung has no duration to
-               report) and the "·" separator has to disappear with it — hence the ::before.
+        <!-- The nesting is real DOM nesting, not a painted illusion: 📦 CONTAINS 🧩 contains
+             ⚡. So the frames cannot drift out of alignment, and a screen reader walks the
+             same containment a sighted user sees.
 
-               ⚠️ These minutes come from THIS MACHINE's last-seen durations, not from the
-               shared classification the rungs are built on. So they are neither a worst case
-               nor an average, which is why the text says "~4 min for 6 and 3 unknown" and
-               never "at most": the number can genuinely be exceeded, and the unknown count
-               is what tells the reader how much of the plan it does not cover. -->
-          <span id="ladder-est" class="ladder-est" hidden></span>
+             ⚠️ Buttons cannot nest in HTML (a button inside a button is invalid and browsers
+             unnest it), so the frames are DIVs and each rung's clickable surface is its own
+             `.dial-btn`. The wrapper carries the border, the button carries the label. -->
+        <div id="dial" class="dial" role="group" aria-label="How far this Apply goes">
+          <div class="dial-frame frame-apps">
+            <div class="dial-frame frame-ext">
+              <div class="dial-frame frame-cfg">
+                <button class="dial-btn" data-rung="0" type="button"></button>
+              </div>
+              <button class="dial-btn" data-rung="1" type="button"></button>
+            </div>
+            <button class="dial-btn" data-rung="2" type="button"></button>
+          </div>
         </div>
-        <div id="ladder-promise" class="ladder-promise"></div>
-        <!-- Why Apply is refused, when the RUNG is what emptied the plan. It lives here
-             rather than beside the button because the slider is the cause and the fix — the
-             note names the gesture that resolves it. Shown only when there IS work that a
-             wider rung would do: with nothing to do at all, the empty panel is the message
-             and this would be noise. -->
+        <!-- Why Apply is refused, when the SCOPE is what emptied the plan. It lives here
+             rather than beside a button because the dial is both the cause and the fix — the
+             note names the gesture that resolves it. Shown only when there IS work a wider
+             scope would do: with nothing to do at all, the empty panel is the message and
+             this would be noise. -->
         <div id="ladder-blocked" class="ladder-blocked" hidden></div>
       </div>
       <!-- App Management banner: some app updates need the macOS permission and

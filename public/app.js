@@ -725,23 +725,10 @@ function refreshLiveness() {
   // 403 retry card that offered a download and did nothing. It also costs a full server
   // round-trip — re-scan, full-window veil — to be told `done {nothing:true}`.
   //
-  // `rungPlan` rather than a second rule, so the button, the count under the thumb and the
-  // server's own filter cannot disagree about what "nothing" means.
-  const g = document.getElementById("install-all");
-  const rungEmpty = M.rungPlan(model, rung).length === 0;
-  g.classList.toggle("live", ids.some(isActionable) && !rungEmpty && !busy);
-  g.disabled = busy || rungEmpty;
-  // …and SAY why, rather than leaving a dead button to be puzzled over. Only when the rung
-  // is what emptied it: with nothing to do at all, the panel's own emptiness is the message
-  // and a note would be noise.
-  const why = document.getElementById("ladder-blocked");
-  if (why) {
-    const rungIsTheReason = rungEmpty && ids.some(isActionable);
-    // Stated, not scolded: an empty rung is ordinary, so the note says where the work is
-    // rather than telling the user to fix something.
-    why.textContent = rungIsTheReason ? "Nothing to do at this level. There is more further right." : "";
-    why.hidden = !rungIsTheReason;
-  }
+   // ⚠️ THE APPLY BUTTON IS GONE from this function, and with it the empty-scope check and
+  // the note that explained it. Both moved into `renderDial`, which owns the dial’s three
+  // buttons and is the only place that knows which one is armed — leaving a copy here would be
+  // a second rule about when a run is refused, and the two would drift.
   // Reset is available only when it would do something (model.canReset decides:
   // a moved package or an active profile). The view just reflects that verdict.
   const reset = document.getElementById("reset-all");
@@ -764,7 +751,7 @@ function refreshLiveness() {
   // The ladder's counts follow the same facts every button above does, so it repaints from
   // the same hook rather than from each caller: a toggle, a scan verdict and an `outdated`
   // pill all change what a rung would touch, and all of them already route through here.
-  renderLadder();
+  renderDial();
 }
 
 // The chosen rung, 0..4. NOT PERSISTED, deliberately: the question the ladder asks is "do I
@@ -786,99 +773,114 @@ function setRungOut(i, why) {
   r.why.title = why ? RUNG_WHY_TITLE[why] || "" : "";
 }
 
-// Repaint the ladder's word, counts and fill. Called from refreshLiveness (the "anything
-// changed" hook) and from the input handler.
-function renderLadder() {
-  const r = document.getElementById("ladder-range");
-  if (!r) return;
-  const spec = L.RUNGS[rung];
-  r.value = String(rung);
-  // grey → green, stopped at the thumb. NOT red → green — the reasoning, and a correction
-  // to it, are on index.html's #ladder rules.
-  r.style.setProperty("--fill", `${(rung / (L.RUNGS.length - 1)) * 100}%`);
-  r.disabled = applyRunning || scanning; // nothing moves during a run or an incomplete scan
-  document.getElementById("ladder-emoji").textContent = spec.emoji;
-  document.getElementById("ladder-name").textContent = spec.name;
-  document.getElementById("ladder-promise").textContent = spec.promise;
-  const items = M.rungPlan(model, rung);
-  const count = items.length === 1 ? "1 item" : `${items.length} items`;
-  document.getElementById("ladder-count").textContent = count;
-  // …and HOW LONG, from this machine's own last-seen durations. Same rung as the count and
-  // via the same `rungPlan`, so the two can never describe different sets of rows.
-  //
-  // ⚠️ `rungSeconds` reads the LOCAL `secs`, never the shared `slow` boolean — those answer
-  // two different questions (see model.js's note). And the unknowns are part of the phrase:
-  // an unmeasured row adds nothing to the total, so a bare "~4 min" would under-report and
-  // teach the user to distrust every later number.
-  const est = L.formatEstimate(L.estimate(M.rungSeconds(model, rung)));
-  const estEl = document.getElementById("ladder-est");
-  if (estEl) {
-    estEl.textContent = est;
-    // Empty rung → no estimate AND no separator. `#ladder-blocked` two lines below already
-    // says "Nothing to do at this level", so a second phrase here would repeat it; the "·"
-    // is a CSS ::before on this element, so hiding it takes the punctuation with it.
-    estEl.hidden = !est;
-  }
-  // A range input announces its VALUE — "4" — which is the one thing on this control that
-  // carries no meaning. The word, the count and the estimate are the reading; `aria-valuetext`
-  // overrides the number with them, so a screen reader says "Everything, 6 items, ~4 min for 6
-  // and 3 unknown" rather than "4". Set here rather than in the markup because it changes on
-  // every move, exactly like the visible text it mirrors.
-  //
-  // Comma-joined where the eye gets a "·": the same WORDS in the same order, punctuated for
-  // speech instead of for the page. The estimate is included rather than left visual-only —
-  // "how long will this take me" is not decoration, and a user who cannot see the widget has
-  // the same question.
-  r.setAttribute("aria-valuetext", est ? `${spec.name}, ${count}, ${est}` : `${spec.name}, ${count}`);
-  renderLadderScale();
-}
-
-// The five labels under the scale, built ONCE from RUNGS and then only re-marked.
-// Built from RUNGS rather than written in the HTML so the scale cannot drift from the rule
-// it labels — the same reason the reading above comes from `spec` and not from a literal.
+/// Repaint the dial: three buttons, their counts, and which one is chosen.
 //
-// Rebuilding the nodes on every move would throw away the click targets mid-drag and
-// re-run layout for five elements 30 times a second, so the DOM is created on first call
-// and afterwards only the `on` class moves.
-function renderLadderScale() {
-  const host = document.getElementById("ladder-scale");
+// ⭐ THE SECOND CLICK IS THE APPLY. `armed` is what distinguishes the two clicks, and it is
+// deliberately NOT the same thing as `rung`: the scope is always set (something is always
+// chosen), while `armed` says "this scope has been confirmed once and the next click on it
+// runs". Conflating them would make the very first paint a loaded gun.
+let armed = false;
+
+function renderDial() {
+  const host = document.getElementById("dial");
   if (!host) return;
-  if (!host.childElementCount) {
-    for (const [i, s] of L.RUNGS.entries()) {
-      const cell = document.createElement("span");
-      const emoji = document.createElement("span");
-      emoji.textContent = s.emoji;
-      const word = document.createElement("span");
-      word.className = "sc-word";
-      word.textContent = s.name;
-      cell.append(emoji, word);
-      // Clicking the label is the same gesture as dragging to it. It goes through the
-      // input's own event so there is ONE path that changes the rung — a second one would
-      // be a second place to forget `refreshLiveness`, which is what repaints the rows.
-      cell.addEventListener("click", () => {
-        const r = document.getElementById("ladder-range");
-        if (!r || r.disabled) return; // frozen during a run or an incomplete scan
-        r.value = String(i);
-        r.dispatchEvent(new Event("input", { bubbles: true }));
-      });
-      host.append(cell);
+  const busy = applyRunning || scanning;
+  for (const btn of host.querySelectorAll(".dial-btn")) {
+    const r = Number(btn.dataset.rung);
+    const spec = L.RUNGS[r];
+    if (!spec) continue;
+    const plan = M.rungPlan(model, r);
+    // Split by VERB, because that is what the third line has to say once armed: "apply 7 ·
+    // remove 2" is a different promise from "9 items", and the removals are the half a user
+    // must not discover afterwards.
+    let removes = 0;
+    for (const i of plan) if (M.actionOf(model, i) === "uninstall") removes++;
+    const applies = plan.length - removes;
+    const chosen = r === rung;
+    const empty = plan.length === 0;
+
+    btn.classList.toggle("chosen", chosen);
+    btn.classList.toggle("empty", chosen && empty);
+    // ⚠️ Disabled ONLY while busy. An empty scope stays clickable-looking but does nothing —
+    // the `.empty` class says so visually, and `#ladder-blocked` says it in words. Disabling
+    // it would remove the affordance that lets the user pick a WIDER scope from here.
+    btn.disabled = busy;
+
+    btn.replaceChildren();
+    const name = document.createElement("span");
+    name.className = "dial-name";
+    name.textContent = `${spec.emoji} ${spec.name}`;
+    const where = document.createElement("span");
+    where.className = "dial-where";
+    where.textContent = spec.where;
+    const count = document.createElement("span");
+    count.className = "dial-count";
+    // ⭐ The third line changes NATURE when armed: a count becomes a verb. Without that, the
+    // second click reads as a double-click that missed — and it installs software.
+    if (chosen && armed && !empty) {
+      count.textContent = removes
+        ? `▶ apply ${applies} · remove ${removes}`
+        : `▶ apply ${applies}`;
+    } else if (empty) {
+      count.textContent = "nothing to do";
+    } else {
+      count.textContent = removes
+        ? `${applies} to apply · ${removes} to remove`
+        : `${applies} ${applies === 1 ? "item" : "items"}`;
+    }
+    btn.append(name, where, count);
+    // The announcement carries all three lines: a screen reader gets the same reading the eye
+    // does, including whether this click would RUN.
+    btn.setAttribute(
+      "aria-label",
+      `${spec.name}. ${spec.where}. ${count.textContent}.` +
+        (chosen ? (armed && !empty ? " Click again to run." : " Chosen.") : ""),
+    );
+    btn.setAttribute("aria-pressed", String(chosen));
+  }
+  // Why an armed scope would do nothing — the dial is both the cause and the fix, so the note
+  // lives with it and names the gesture that resolves it.
+  const blocked = document.getElementById("ladder-blocked");
+  if (blocked) {
+    const wider = M.rungPlan(model, L.RUNGS.length - 1).length;
+    const show = M.rungPlan(model, rung).length === 0 && wider > 0;
+    blocked.hidden = !show;
+    if (show) {
+      blocked.textContent =
+        `Nothing to do at this scope. ${wider} ${wider === 1 ? "row" : "rows"} further right.`;
     }
   }
-  // Place each label on its OWN notch. ⚠️ A range's thumb centre is INSET by half a thumb
-  // at each end, so notch n is at (thumb/2) + n/4 × (width − thumb) — NOT at n/4 of the
-  // width. Measured after getting it wrong with equal columns: the outer two labels sat
-  // ~90px off at 900px, far enough that the leftmost read as belonging to the second
-  // detent. Recomputed on every paint because the zone is full-width and therefore
-  // responsive; `offsetWidth` is 0 while the panel is hidden, and then the loop is a no-op
-  // that the next repaint fixes.
-  const track = document.getElementById("ladder-range");
-  const w = track ? track.offsetWidth : 0;
-  const thumb = 16; // keep in step with #ladder-range::-webkit-slider-thumb
-  const n = L.RUNGS.length - 1;
-  for (const [i, cell] of [...host.children].entries()) {
-    cell.classList.toggle("on", i === rung);
-    if (w) cell.style.left = `${thumb / 2 + (i / n) * (w - thumb)}px`;
+}
+
+// One click on a dial button. FIRST click on a scope chooses it; SECOND click on the SAME
+// scope runs it.
+//
+// ⚠️ Choosing a DIFFERENT scope disarms. That is what makes the first click reversible without
+// inventing a cancel: the other two buttons stay visible and clicking one moves the scope
+// instead of running anything. It is also the safety property — you cannot arm 🧩 and then run
+// 📦 by clicking once.
+function onDialClick(r) {
+  if (applyRunning || scanning) return;
+  if (r !== rung) {
+    rung = r;
+    armed = false;
+    refreshLiveness();
+    return;
   }
+  if (!armed) {
+    armed = true;
+    refreshLiveness();
+    return;
+  }
+  // ⚠️ Refuse an empty scope QUIETLY rather than starting a run with nothing in it — and stay
+  // armed, so the button keeps its state instead of silently resetting under the click. The
+  // note above already says where the work is.
+  if (M.rungPlan(model, rung).length === 0) return;
+  applyAll();
+}
+
+for (const btn of document.querySelectorAll("#dial .dial-btn")) {
+  btn.addEventListener("click", () => onDialClick(Number(btn.dataset.rung)));
 }
 
 // The re-scan veil covers the WHOLE window (position:fixed, top-level), so the
@@ -1650,7 +1652,11 @@ const ws = new WebSocket(`ws://${location.host}`);
 
 // Apply = enact your decisions (on/off) against the machine; auto is left
 // alone. Server acts only on the difference — every decided package, in one go.
-document.getElementById("install-all").onclick = () => applyAll();
+// ⚠️ No `install-all` listener any more — the button is gone from the bar and the dial's second
+// click calls `applyAll()` instead. Left as a note rather than deleted silently: a
+// `getElementById("install-all").onclick` on a null throws, and everything registered AFTER it
+// in this file would never be wired at all. That is how a removed button takes the Quit handler
+// with it.
 
 // Reset = drop every user toggle AND active profile back to the author's
 // defaults (clearAllDecisions clears both). repaintAll refreshes chips too.
@@ -1676,16 +1682,15 @@ document.getElementById("quit-all").onclick = () => {
 // parsed through ladder.js's rungFromInput: a range input's `.value` is a string, and
 // `server::rung_from_wire`'s `as_u64` would read a string as absent → Everything.
 //
-// ⚠️ refreshLiveness, NOT renderLadder: the ROWS answer the rung too (`.rung-out` and its
-// reason), and they are what C actually asked to see move — "j'aurais voulu que les packages
-// en dessous réagissent". renderLadder alone would repaint the count and leave the panel
-// stale, i.e. a widget saying "3 items" above rows that all look included. That is the exact
-// contradiction this task exists to remove, so calling the narrower function would silently
-// rebuild the bug. refreshLiveness repaints the rows AND calls renderLadder.
-document.getElementById("ladder-range").addEventListener("input", (e) => {
-  rung = L.rungFromInput(e.target.value);
-  refreshLiveness();
-});
+// ⚠️ The dial's handler is `onDialClick`, wired where the dial is rendered, and it calls
+// `refreshLiveness` — NOT renderDial. The ROWS answer the scope too (`.rung-out` and its
+// reason), and they are what C asked to see move: "j'aurais voulu que les packages en dessous
+// réagissent". Repainting the dial alone would leave a button saying "3 items" above rows that
+// all look included — the exact contradiction this control exists to remove.
+//
+// ⚠️ The slider that used to live here is gone, and with it its `input` listener. A
+// `getElementById("ladder-range")` left behind would throw on a null and take every listener
+// registered after it down with it — which is why this note replaces it rather than nothing.
 document.getElementById("reset-all").onclick = () =>
   resetConfirmEl.classList.add("show");
 document.getElementById("reset-confirm-no").onclick = () =>
