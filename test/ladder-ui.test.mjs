@@ -221,30 +221,31 @@ test("ladder: applyAll sends `rung`, beside `unmanaged` and for the same reason"
   assert.match(msg, /unmanaged:/, "…beside unmanaged, which is sent for the same reason");
 });
 
-test("ladder: a row out of reach is DIMMED, never hidden", () => {
-  // "Every gesture leaves a trace" has been paid for twice in this app — a cancelled row
-  // that VANISHED was a real bug, twice — and a plan that silently drops rows is that same
-  // defect at a larger scale: the user would have no way to learn that a package exists but
-  // costs too much for this rung. Dimming is the whole point: moving the slider teaches
-  // which packages cost what.
+test("ladder: a row out of scope is HIDDEN — but never hidden without being counted", () => {
+  // ⭐ C: "ajouts ou retraits hors scope ne doivent pas être présentés". The list answers ONE
+  // question — what will this Apply do — and a row that will not be touched is not an answer to it.
+  //
+  // ⚠️ THIS REVERSES "dimmed, never hidden", and the distinction that makes the reversal safe is
+  // the whole point. That rule was bought by a real defect, twice: a row VANISHING right after a
+  // gesture the user had just made on it. Nothing vanishes from a gesture here — the row is absent
+  // from a SCOPE the user chose, and one click on a wider zone brings it straight back. Choosing a
+  // filter is not losing a trace.
   const rule = html.match(/details\.rung-out\s*\{[^}]*\}/);
   assert.ok(rule, "details.rung-out needs a rule");
-  assert.match(rule[0], /opacity:/, "dimmed…");
-  assert.ok(!/display\s*:\s*none/.test(rule[0]), "…and NOT hidden");
-  assert.ok(!/visibility\s*:\s*hidden/.test(rule[0]), "…nor invisible, which is the same thing");
-  // And it must actually dim: the .plan-add/.plan-remove rule sets opacity:1 at the same
-  // specificity, so `details.rung-out` has to come AFTER it in the sheet or it loses — and
-  // an in-plan row is the ONLY kind that can be out of a rung's reach, so losing there means
-  // losing everywhere. (Live mutation survivor: moved above, every test still passed and
-  // nothing dimmed on screen.)
-  assert.ok(html.indexOf("details.plan-add, details.plan-remove { opacity:1; }")
-      < html.indexOf("details.rung-out {"),
-    "details.rung-out must come after the plan rows' opacity:1, or it never applies");
-  // The row's DOM does not change shape as the slider moves — the label exists on every row
-  // and is revealed by the class, like .untouched-note. An empty flex item would otherwise
-  // widen every row by summary's gap.
-  assert.match(html, /\.rung-why \{ display:none; \}/,
-    "the reason label is hidden until .rung-out, not created and destroyed");
+  assert.match(rule[0], /display:none/, "out of scope means out of the list");
+
+  // ⚠️ AND THE COUNTS ARE WHAT KEEP IT HONEST. Hiding is only acceptable because the dial says how
+  // many rows wait further out — otherwise the panel would be silently incomplete, which is the
+  // failure the old rule was guarding against. So the counts must come from the same shared rule
+  // the hiding does.
+  const at = appjs.indexOf("function renderDial(");
+  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
+  assert.match(body, /M\.rungPlan\(model, r\)/,
+    "every zone counts its own scope, so what is hidden is still announced");
+  // …and the empty state names the rows waiting further out, for the case where the chosen scope
+  // hides everything.
+  assert.match(body, /waiting further out/,
+    "with nothing in scope, the list must say how much is out of it");
 });
 
 test("ladder: rungReason reads the KIND and no fact at all", () => {
@@ -279,23 +280,33 @@ built on it would describe something the rule does not do`,
   assert.match(code, /isExtension/, "the kind is what decides, so the kind is what it reads");
 });
 
-test("dial: the note under it names WHERE the work is, and only when that helps", () => {
-  // C, at the second sighting of the old slider: "le apply reste actif même s’il semble ne plus
-  // rien y avoir à exécuter — est-ce normal?". It was not, and the answer survives the widget
-  // that prompted it: a control that offers an action with nothing to do is the dishonesty this
-  // app already paid for once (the 403 retry card that promised a download and did nothing).
-  //
-  // The button half is covered above (`.empty`, "nothing to do", still clickable so the scope
-  // can be widened). What is left here is the NOTE, and its condition.
+test("dial: the EMPTY STATE lives in the list, not under the dial", () => {
+  // ⭐ C: "je n'aime pas trop que quand il n'y a rien à envoyer, tu fais décaler en dessous des
+  // boutons un texte, je préférerais que ce soit le panneau de sélection en dessous qui indique
+  // qu'il n'y a rien à envoyer". Two faults in one note: it was in the wrong place — the LIST is
+  // what is empty — and it PUSHED the whole panel down as it appeared, so the layout moved while
+  // you were still choosing.
+  assert.ok(!/ladder-blocked/.test(html), "the note under the dial must be gone");
+  assert.ok(!/ladder-blocked/.test(appjs), "…and nothing may still write to it");
+  assert.match(html, /id="steps-empty"/, "the list owns its own empty state");
+  // It must sit in the LIST's space, before the rows, so the message replaces rows instead of
+  // displacing everything above them.
+  assert.ok(
+    html.indexOf('id="steps-empty"') < html.indexOf('id="steps"'),
+    "the empty state belongs with the list, above its rows",
+  );
   const at = appjs.indexOf("function renderDial(");
   const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
-  // Emptiness comes from rungPlan, never a second rule: the button, the note and the server’s
-  // own filter have to agree about what "nothing" means.
-  assert.match(body, /M\.rungPlan\(model, rung\)\.length === 0/,
-    "emptiness is asked of the shared rule — a second one would drift from the count");
-  // ⚠️ Shown ONLY when a wider scope would actually do something. With nothing to do at all,
-  // the empty panel is already the message and a note would be noise.
-  assert.match(body, /wider > 0/, "the note appears only when a wider scope has work");
-  assert.match(body, /further right/, "…and it names where that work is");
-  assert.match(body, /blocked\.hidden = !show/, "otherwise it is hidden, not left stale");
+  // Emptiness comes from the shared rule, never a copy: the zones, the Apply button and this
+  // message have to agree about what "nothing" means.
+  assert.match(body, /M\.rungPlan\(model, rung\)\.length/,
+    "emptiness is asked of the shared rule");
+  // ⚠️ And NOT during the scan — an un-probed row must never count as absent, which is the same
+  // rule the fill follows. Saying "nothing to send" mid-scan would be a verdict without evidence.
+  assert.match(body, /hint\.hidden = here !== 0 \|\| scanning/,
+    "the hint must stay hidden while the scan is still running");
+  // It says where to go when a wider scope has work, and states the plain fact when none does.
+  assert.match(body, /widen the scope above/, "…and names the gesture that resolves it");
+  assert.match(body, /already matches what you asked for/,
+    "with nothing anywhere, the message is a fact rather than an instruction");
 });

@@ -890,16 +890,22 @@ function renderDial() {
     zone.setAttribute("aria-pressed", String(on));
     zone.setAttribute("aria-disabled", String(busy));
   }
-  // Why Apply would do nothing at this scope — the dial is both the cause and the fix, so the note
-  // lives with it and names the gesture that resolves it.
-  const blocked = document.getElementById("ladder-blocked");
-  if (blocked) {
+  // ⭐ THE EMPTY STATE LIVES IN THE LIST, not under the dial. C: "je préférerais que ce soit le
+  // panneau de sélection en dessous qui indique qu'il n'y a rien à envoyer" — and the note under
+  // the dial had a second fault beyond being misplaced: it PUSHED the whole panel down as it
+  // appeared, so the layout moved while you were choosing.
+  //
+  // It says what is true and where to go, without scolding: an empty scope is ordinary.
+  const hint = document.getElementById("steps-empty");
+  if (hint) {
+    const here = M.rungPlan(model, rung).length;
     const wider = M.rungPlan(model, L.RUNGS.length - 1).length;
-    const show = M.rungPlan(model, rung).length === 0 && wider > 0;
-    blocked.hidden = !show;
-    if (show) {
-      blocked.textContent =
-        `Nothing to do at this scope. ${wider} ${wider === 1 ? "row" : "rows"} further right.`;
+    hint.hidden = here !== 0 || scanning;
+    if (!hint.hidden) {
+      hint.innerHTML = wider > 0
+        ? `Nothing to send at <b>${L.RUNGS[rung].name}</b>.<br>` +
+          `${wider} ${wider === 1 ? "row" : "rows"} waiting further out — widen the scope above.`
+        : "Nothing to send — this machine already matches what you asked for.";
     }
   }
 }

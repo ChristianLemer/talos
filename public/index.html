@@ -198,7 +198,12 @@
       .zone.on.empty > .zone-label .zone-count { color:#e8eeff; font-weight:400; }
       /* Frozen with everything else during a run or an incomplete scan. */
       .dial.busy .zone { cursor:default; opacity:.55; }
-      .ladder-blocked { font-size:11.5px; color:var(--dim); line-height:1.35; }
+      /* The list's own empty state. Sits INSIDE the list's space, so nothing above it moves — the
+         message replaces rows rather than displacing them. Centred and quiet: an empty scope is
+         ordinary, not an error. */
+      .steps-empty { padding:28px 12px; text-align:center; font-size:12.5px; color:var(--dim);
+                     line-height:1.5; }
+      .steps-empty b { color:var(--fg); font-weight:600; }
       /* THE LABELLED SCALE — each label centred on its OWN notch, which is not where a
          naive layout puts it.
          ⚠️ MEASURED, after getting it wrong: five equal grid columns put label n at
@@ -427,7 +432,18 @@
          exactly the rows it is about (an in-plan row is the ONLY kind that can be out of
          reach). Found by mutation: moving this block up passed every test and dimmed
          nothing on screen. */
-      details.rung-out { opacity:.42; }
+      /* ⭐ OUT OF SCOPE = OUT OF THE LIST. C: "si on décide de garder le scope, on n'occupe pas le
+         design, et ça ne devrait pas être présent… ajouts ou retraits hors scope ne doivent pas
+         être présentés." The list answers ONE question — what will this Apply do — and a row that
+         will not be touched is not an answer to it.
+         ⚠️ This reverses "dimmed, never hidden", and the distinction that makes it safe is worth
+         stating: that rule was bought by a real defect, twice — a row VANISHING after a gesture the
+         user had just made. Here nothing vanishes from a gesture ON THE ROW; the row is absent from
+         a SCOPE the user chose, and one click on a wider zone brings it back. Choosing a filter is
+         not losing a trace.
+         The dial's counts are what keep it honest: 📦 says how many rows exist further out, so
+         nothing is hidden WITHOUT BEING COUNTED. */
+      details.rung-out { display:none; }
       /* The REASON label. `display:none` here is about the label of an in-reach row, not
          about the row — the row is always present, which is the rule that matters. It must
          be display:none and not merely empty: `summary` is a flex row with `gap:10px`, so an
@@ -1259,7 +1275,6 @@
              note names the gesture that resolves it. Shown only when there IS work a wider
              scope would do: with nothing to do at all, the empty panel is the message and
              this would be noise. -->
-        <div id="ladder-blocked" class="ladder-blocked" hidden></div>
       </div>
       <!-- App Management banner: some app updates need the macOS permission and
            it's missing. Shown only when appmgmtStatus === "missing". -->
@@ -1288,6 +1303,13 @@
            identical, so a source hiccup showed a screen of reassuring green rows.
            This says the check did not happen, and quotes the machine. -->
       <div id="outdated-warn" class="warn-banner"></div>
+      <!-- ⚠️ THE EMPTY STATE BELONGS HERE, not under the dial. C: "je n'aime pas trop que quand
+           il n'y a rien à envoyer, tu fais décaler en dessous des boutons un texte, je préférerais
+           que ce soit le panneau de sélection en dessous qui indique qu'il n'y a rien à envoyer".
+           A note under the dial PUSHED the whole panel down when it appeared — a layout that moves
+           under you as you choose. And it was in the wrong place besides: the list is what is
+           empty, so the list is what should say so. -->
+      <div id="steps-empty" class="steps-empty" hidden></div>
       <div id="steps"></div>
     </div>
 
