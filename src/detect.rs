@@ -191,11 +191,11 @@ fn detect_vscode_extension(step: &Step, snap: Option<&crate::vscode::VscodeSnaps
     // finds it just as absent.
     //
     // ⭐ An empty id is a missing declaration in the CATALOGUE, not a fact about the MACHINE, and
-    // only facts about the machine may earn `Some(false)`. The `detect:` fallback that would make
-    // this unreachable for shipped packages WILL live in `load_from_catalog` (Task 6) — today
-    // `bundles.rs` carries `detect:` through verbatim, so this is not yet the belt to a fitted
-    // brace but the only guard there is. It stays either way: a hand-written YAML is free to omit
-    // both fields.
+    // only facts about the machine may earn `Some(false)`. `load_from_catalog` now falls back
+    // `detect: p.detect.or(p.vscode_extension)`, so a package loaded from a catalogue file can no
+    // longer reach this branch — it is a belt to that brace. It stays anyway: a hand-written YAML
+    // that declares the route and omits BOTH fields still arrives here, and so does any caller
+    // building a `Step` directly.
     if id.is_empty() {
         return Presence {
             present: None,

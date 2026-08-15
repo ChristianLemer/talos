@@ -367,6 +367,22 @@ mod tests {
                 true,
                 [false, true, true],
             ),
+            // A VS Code extension: same class, same rung, and the table is where that is
+            // PROVEN rather than asserted in prose.
+            (
+                "vscode extension install",
+                Action::Install,
+                false,
+                true,
+                [false, true, true],
+            ),
+            (
+                "vscode extension removal",
+                Action::Uninstall,
+                false,
+                true,
+                [false, true, true],
+            ),
             // 📦 rung 2 — the machine. NOTHING is excluded here, and that is the whole point of
             // the reshape: `uac`, `403` and `slow` are written on the ROW instead of filtering
             // on the user's behalf.

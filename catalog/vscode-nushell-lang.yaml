@@ -1,0 +1,26 @@
+# Nushell language support — a VS Code extension, and the worked example of the
+# `vscode-extension` route. Pairs with the Nushell package the catalogue already ships.
+name: Nushell language support
+description: Syntax and language support for Nushell in VS Code
+# ⚠️ LOWERCASE ON PURPOSE. The marketplace spells this publisher
+# `TheNuProjectContributors`, but the profile manifest Talos reads lowercases every id
+# (measured), and `code --list-extensions` prints the lowercase form too. The lookup is
+# case-insensitive (`vscode.rs` compares with `eq_ignore_ascii_case`), so either form
+# works — this file shows the form the tool itself prints, because it is an EXAMPLE
+# others copy.
+vscode-extension: thenuprojectcontributors.vscode-nushell-lang
+category: [editors]
+# No `detect:` — and that is the design, not an omission. `claude-plugin` and `skill` need one
+# because the display name and the lookup name differ ("Rust best practices" vs
+# "rust-best-practices"); here the id above IS what the profile manifest holds, so repeating it
+# would be a second place to get it wrong. `load_from_catalog` falls back to the id.
+#
+# No `version:` either: `code --install-extension id@<version>` exits 1 once the gallery stops
+# serving that version, so a pin would be a command built to fail.
+requires:
+  # The host. `deps.rs` reasons over the FUTURE state, so declaring the editor here is what
+  # orders a fresh machine's Apply: VS Code first, then its extensions, in one pass.
+  - Visual Studio Code
+  # The language this extension is FOR. Not a hard dependency of the install — the extension
+  # installs fine without nu — but a package the row would be pointless without.
+  - Nushell

@@ -596,7 +596,12 @@ pub fn load_from_catalog(
             downgrade: sub(cmd.downgrade),
             route: cmd.route,
             system_id,
-            detect: p.detect.clone(),
+            // For a content route the `detect:` field means "the NAME to look for", not a
+            // command. A VS Code extension's name IS its id, so the id is the default and an
+            // explicitly declared `detect:` still wins. Filling it here rather than adding a
+            // field to `Step` is deliberate: Step is filled at four literal sites (here plus
+            // three test builders), so every new field costs four edits.
+            detect: p.detect.clone().or_else(|| p.vscode_extension.clone()),
             check: sub(p.check.clone()),
             is_config,
             is_extension,
@@ -916,6 +921,7 @@ mod tests {
             ("jj-skills", true),
             ("nushell-dev", true),
             ("rust-best-practices", true),
+            ("vscode-nushell-lang", true),
             // The controls: a binary, and a config-atom — the rungs on either side.
             ("git", false),
             ("starship-config", false),
@@ -931,6 +937,35 @@ mod tests {
                 "{id}: route {route:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_shipped_vscode_extension_detects_by_its_id_without_declaring_one() {
+        let plan = load_from_catalog(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/catalog"),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/bundles"),
+            Os::Darwin,
+            &|_| {},
+        );
+        let s = plan
+            .steps
+            .iter()
+            .find(|s| s.id == "vscode-nushell-lang")
+            .expect("the shipped example must be there");
+        assert_eq!(s.route.as_deref(), Some("vscode-extension"));
+        assert!(s.is_extension, "🧩, so an Apply at ⚡ must not fetch it");
+        assert!(!s.is_config);
+        // The id reaches `detect` even though the YAML declares no `detect:` — that fallback is
+        // what lets the catalogue author avoid writing the id twice.
+        assert_eq!(
+            s.detect.as_deref(),
+            Some("thenuprojectcontributors.vscode-nushell-lang")
+        );
+        assert!(
+            s.requires.iter().any(|r| r == "Visual Studio Code"),
+            "the host must be declared so topo_sort orders it first: {:?}",
+            s.requires
+        );
     }
 
     fn pkg(name: &str) -> RawPkg {
