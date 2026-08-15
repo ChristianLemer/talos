@@ -175,6 +175,98 @@ fn detect_agent_content(step: &Step) -> Presence {
     }
 }
 
+/// Presence of a VS Code extension, from the scan's snapshot.
+///
+/// ⭐ Three of the four verdicts are NOT `Some(false)`, and that is deliberate. `Some(false)`
+/// makes `action_for` return `Install`, so a wrong "absent" is not a cosmetic mislabel — it is
+/// an action Talos takes. Only "the host answered and its manifest does not list the id" earns
+/// it; every other uncertainty stays indeterminate and gets re-probed.
+fn detect_vscode_extension(step: &Step, snap: Option<&crate::vscode::VscodeSnapshot>) -> Presence {
+    use crate::vscode::HostedVerdict;
+    let id = step.detect.as_deref().unwrap_or("").trim();
+    // ⚠️ No id to look for ⇒ indeterminate, NOT absent. Stage 3b fires on the ROUTE alone
+    // (unlike stage 2, which requires a `detect:`), so a package declaring the route and no id
+    // arrives here with an empty string — and the manifest lookup would honestly find nothing,
+    // which reads as Absent and makes Apply install on every pass for ever, since the next scan
+    // finds it just as absent.
+    //
+    // ⭐ An empty id is a missing declaration in the CATALOGUE, not a fact about the MACHINE, and
+    // only facts about the machine may earn `Some(false)`. The `detect:` fallback that makes this
+    // unreachable for shipped packages lives in `load_from_catalog`; this is the belt to that
+    // brace, because a hand-written YAML is free to omit both.
+    if id.is_empty() {
+        return Presence {
+            present: None,
+            reason: Some("no extension id to look for".into()),
+            diag: Some(ProbeResult {
+                ok: false,
+                code: 1,
+                output: "this package declares the vscode-extension route but no id".into(),
+                cmdline: "read extensions.json".into(),
+            }),
+            ..Default::default()
+        };
+    }
+    // No snapshot (the post-action re-probe path) ⇒ nothing is known. Honest, and re-probed by
+    // seeds_for_rescan on the next Apply.
+    let Some(snap) = snap else {
+        return Presence {
+            present: None,
+            reason: Some("VS Code not consulted in this pass".into()),
+            diag: Some(ProbeResult {
+                ok: false,
+                code: 1,
+                output: format!("{id}: no VS Code snapshot for this probe"),
+                cmdline: "read extensions.json".into(),
+            }),
+            ..Default::default()
+        };
+    };
+    // ⭐ ONE call, destructured once. Asking twice (verdict for the tuple, verdict again for the
+    // version) invites the two readings to drift, and the second would silently disagree.
+    let (present, reason, version, evidence) = match snap.verdict(id) {
+        HostedVerdict::Present(v) => {
+            let evidence = format!("{id}  version {v}");
+            (Some(true), None, v, evidence)
+        }
+        HostedVerdict::Absent => (
+            Some(false),
+            None,
+            String::new(),
+            format!("{id}: not in extensions.json"),
+        ),
+        // The manifest OUTLIVES the host: ~/.vscode is a user folder that survives
+        // uninstalling the editor, so a manifest hit proves nothing without the host.
+        HostedVerdict::NoHost => (
+            None,
+            Some("VS Code not found".into()),
+            String::new(),
+            format!("{id}: VS Code did not answer — the manifest cannot be trusted alone"),
+        ),
+        // ⚠️ Worded for what is KNOWN, not for the likeliest cause. `read_installed` collapses a
+        // locked file, an EACCES and unparseable text into one `Err(())`, so "exists and was not
+        // understood" would send an operator hunting for corruption on a permissions problem.
+        HostedVerdict::Unreadable => (
+            None,
+            Some("extensions.json could not be read".into()),
+            String::new(),
+            format!("{id}: extensions.json could not be read"),
+        ),
+    };
+    Presence {
+        present,
+        reason,
+        version: Some(version),
+        diag: Some(ProbeResult {
+            ok: present == Some(true),
+            code: i32::from(present != Some(true)),
+            output: evidence,
+            cmdline: "read extensions.json".into(),
+        }),
+        ..Default::default()
+    }
+}
+
 fn presence_probe(detect_cmd: Option<&str>, os: Os) -> Option<Probe> {
     let cmd = detect_cmd.unwrap_or("").trim();
     if cmd.is_empty() {
@@ -266,6 +358,20 @@ pub fn detect_present_detailed(step: &Step, os: Os) -> Presence {
 /// unreadable listing degrades to today's behaviour, never to a screen of false
 /// absents (which would make Apply offer to install what is already there).
 pub fn detect_present_detailed_with(step: &Step, os: Os, bulk: Option<&BulkPresence>) -> Presence {
+    detect_present_detailed_with_vscode(step, os, bulk, None)
+}
+
+/// Presence, with the optional machine-wide listing AND the optional VS Code snapshot.
+///
+/// Both extra arguments are `Option`: `None` ⇒ probe/answer exactly as before. That is what
+/// keeps this reversible, and it is not hypothetical — the post-action re-probe goes through
+/// `detect_present_detailed`, which passes None for both.
+pub fn detect_present_detailed_with_vscode(
+    step: &Step,
+    os: Os,
+    bulk: Option<&BulkPresence>,
+    vscode: Option<&crate::vscode::VscodeSnapshot>,
+) -> Presence {
     // 1. check (config-atom) — verbatim, exit 0 = converged.
     if let Some(check) = &step.check {
         let probe = shell_probe(os, check);
@@ -277,9 +383,18 @@ pub fn detect_present_detailed_with(step: &Step, os: Os, bulk: Option<&BulkPrese
         };
     }
     // 2. binary (non content-detected route) — 2 combined probes.
-    if step.detect.is_some()
-        && !matches!(step.route.as_deref(), Some("claude-plugin") | Some("skill"))
-    {
+    //
+    // ⚠️ THE PREDICATE, NOT A LIST. This guard used to enumerate the content routes it
+    // excludes — an allowlist-by-NEGATION, so every future content route was wrong BY DEFAULT
+    // until someone remembered to extend it here. And "wrong" is loud: a content route's
+    // `detect:` holds an id, not a command, so the binary probe would run `publisher.name` as
+    // an executable, read "command not found", and report installed software as ABSENT.
+    //
+    // ⭐ Of the three route enumerations in this file, only this one is dangerous. The other two
+    // DISPATCH — a missing route there means "not handled", which reads as unknown. A missing
+    // route HERE means "handled WRONG". So this is the site that must consult
+    // `bundles::is_extension_route`, the single place the class is decided.
+    if step.detect.is_some() && !crate::bundles::is_extension_route(step.route.as_deref()) {
         let bin = presence_probe(step.detect.as_deref(), os).map(|p| run_probe_detailed(&p));
         let bin_ok = bin.as_ref().map(|d| d.ok).unwrap_or(false);
         // The MANAGER half. A machine-wide listing answers it without a process; no
@@ -334,6 +449,11 @@ pub fn detect_present_detailed_with(step: &Step, os: Os, bulk: Option<&BulkPrese
     //    `detect:` carries the name (plugin id "chiron@tekton"/"chiron", or skill name).
     if matches!(step.route.as_deref(), Some("claude-plugin") | Some("skill")) {
         return detect_agent_content(step);
+    }
+    // 3b. vscode-extension → the once-per-scan snapshot (host verdict + profile manifest).
+    //     No shell-out here at all: the host was probed once, for every row.
+    if step.route.as_deref() == Some("vscode-extension") {
+        return detect_vscode_extension(step, vscode);
     }
     // 4. exit-code (system manager without a binary detect). This stage is a pure
     //    manager probe, so the listing replaces it whole — there is no binary half
@@ -528,6 +648,137 @@ mod tests {
         assert_eq!(merge_streams("out\n", "err"), "out\nerr"); // already newline-terminated
         assert_eq!(merge_streams("out", ""), "out"); // stderr empty → no trailing sep
         assert_eq!(merge_streams("", "err"), "err"); // stdout empty → stderr verbatim
+    }
+
+    #[test]
+    fn a_vscode_extension_reads_its_presence_from_the_snapshot() {
+        use crate::vscode::{Extension, VscodeSnapshot};
+        let mut s = step();
+        s.route = Some("vscode-extension".into());
+        s.detect = Some("thenuprojectcontributors.vscode-nushell-lang".into());
+        let snap = VscodeSnapshot {
+            host_present: true,
+            installed: Ok(vec![Extension {
+                id: "thenuprojectcontributors.vscode-nushell-lang".into(),
+                version: "2.0.5".into(),
+            }]),
+        };
+        let p = detect_present_detailed_with_vscode(&s, Os::Darwin, None, Some(&snap));
+        assert_eq!(p.present, Some(true));
+        assert_eq!(p.version.as_deref(), Some("2.0.5"));
+    }
+
+    #[test]
+    fn a_vscode_extension_without_its_host_is_indeterminate_with_a_reason() {
+        use crate::vscode::{Extension, VscodeSnapshot};
+        let mut s = step();
+        s.route = Some("vscode-extension".into());
+        s.detect = Some("some.ext".into());
+        // The manifest still lists it — VS Code was uninstalled, ~/.vscode survived.
+        let snap = VscodeSnapshot {
+            host_present: false,
+            installed: Ok(vec![Extension {
+                id: "some.ext".into(),
+                version: "1.0".into(),
+            }]),
+        };
+        let p = detect_present_detailed_with_vscode(&s, Os::Darwin, None, Some(&snap));
+        // ⭐ None, NOT Some(false). Some(false) makes action_for return Install, so a wrong
+        // "absent" is not a mislabel — it is an action Talos would take. None is rendered by the
+        // front already (app.js: `if (msg.present === null && msg.reason)`) and re-probed by
+        // seeds_for_rescan.
+        assert_eq!(p.present, None);
+        let reason = p.reason.expect("an indeterminate row must say why");
+        assert!(reason.to_lowercase().contains("code"), "reason: {reason}");
+    }
+
+    #[test]
+    fn an_unreadable_manifest_is_indeterminate_never_absent() {
+        use crate::vscode::VscodeSnapshot;
+        let mut s = step();
+        s.route = Some("vscode-extension".into());
+        s.detect = Some("some.ext".into());
+        let snap = VscodeSnapshot {
+            host_present: true,
+            installed: Err(()),
+        };
+        let p = detect_present_detailed_with_vscode(&s, Os::Darwin, None, Some(&snap));
+        assert_eq!(
+            p.present, None,
+            "an unreadable manifest must never blank the machine"
+        );
+        assert!(p.reason.is_some());
+        // ⚠️ And the wording must not diagnose a cause it cannot know. `read_installed` returns
+        // Err(()) for a LOCKED file, an EACCES and a truncated one alike, so "not understood"
+        // would send an operator hunting for corruption on a permissions problem.
+        let reason = p.reason.unwrap();
+        assert!(
+            !reason.contains("not understood"),
+            "the cause is unknown at this layer: {reason}"
+        );
+    }
+
+    #[test]
+    fn a_host_that_answers_and_a_manifest_that_does_not_list_it_is_honestly_absent() {
+        use crate::vscode::VscodeSnapshot;
+        let mut s = step();
+        s.route = Some("vscode-extension".into());
+        s.detect = Some("nosuch.ext".into());
+        let snap = VscodeSnapshot {
+            host_present: true,
+            installed: Ok(vec![]),
+        };
+        let p = detect_present_detailed_with_vscode(&s, Os::Darwin, None, Some(&snap));
+        // The ONLY actionable verdict: the host answered and its manifest genuinely lacks the id.
+        assert_eq!(p.present, Some(false));
+    }
+
+    #[test]
+    fn an_extension_row_with_no_id_to_look_for_is_indeterminate_not_absent() {
+        // ⚠️ Stage 3b fires on the ROUTE alone, unlike stage 2 which needs a `detect:`. So a
+        // package that declares the route and no id lands here with an empty string — and
+        // `extension_version("", …)` correctly finds nothing, which would read as Absent and
+        // make Apply install something on every single pass, for ever, since the next scan finds
+        // it just as absent.
+        //
+        // ⭐ An empty id is not a fact about the MACHINE, it is a missing declaration in the
+        // CATALOGUE, and only facts about the machine may earn `Some(false)`.
+        use crate::vscode::{Extension, VscodeSnapshot};
+        let mut s = step();
+        s.route = Some("vscode-extension".into());
+        s.detect = None;
+        let snap = VscodeSnapshot {
+            host_present: true,
+            installed: Ok(vec![Extension {
+                id: "some.ext".into(),
+                version: "1.0".into(),
+            }]),
+        };
+        let p = detect_present_detailed_with_vscode(&s, Os::Darwin, None, Some(&snap));
+        assert_eq!(p.present, None, "a missing id must not read as absent");
+        assert!(p.reason.is_some(), "and it must say why");
+    }
+
+    #[test]
+    fn a_vscode_extension_never_falls_into_the_binary_probe_branch() {
+        // ⚠️ THE TRAP. detect.rs's stage 2 fires on `detect.is_some() && !is_extension_route(…)`,
+        // so without the exclusion a vscode-extension package would shell out its own ID as a
+        // COMMAND — `thenuprojectcontributors.vscode-nushell-lang` — read "command not found",
+        // and report a perfectly installed extension as absent. The id is not a command.
+        let mut s = step();
+        s.route = Some("vscode-extension".into());
+        s.detect = Some("definitely.not-a-command-xyz".into());
+        // No snapshot: the fallback path (the post-action re-probe at server.rs:2229 uses it).
+        let p = detect_present_detailed_with_vscode(&s, Os::Darwin, None, None);
+        // Without a snapshot nothing is known — which is honest. What must NOT happen is
+        // Some(false) obtained by running the id as a command.
+        assert_eq!(p.present, None);
+        let diag = p.diag.expect("evidence");
+        assert!(
+            !diag.cmdline.contains("definitely.not-a-command-xyz"),
+            "the id must never be executed: {}",
+            diag.cmdline
+        );
     }
 
     #[test]

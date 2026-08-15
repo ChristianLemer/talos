@@ -16,13 +16,6 @@
 //! `deleteExtensionsNotInProfiles()` on a third-party edit, so a running instance would delete
 //! folders it judges orphaned. All writes go through the CLI.
 
-// TEMPORARY, and it covers the WHOLE module for exactly ONE reason: this is the read half,
-// landed on its own, and the only callers so far are its tests. The detection branch that
-// reaches it comes next; the gesture that lands it DELETES this line, and clippy then names
-// anything that stayed unreached. Six per-item allows would say the same thing six times and
-// each would have to be found again to be removed.
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 
 /// An installed extension, as the profile manifest records it.
@@ -154,6 +147,91 @@ pub fn extension_version(id: &str, installed: &[Extension]) -> Option<String> {
         .iter()
         .find(|e| e.id.eq_ignore_ascii_case(id))
         .map(|e| e.version.clone())
+}
+
+/// What one scan learned about the VS Code host, shared read-only across every row.
+///
+/// Built ONCE per scan beside the bulk presence listing, for the same reason that exists:
+/// fewer processes, not more threads. Probing the host per row would cost one `code --version`
+/// (~0.2 s) per extension on a scan that is serial on purpose, and would walk into
+/// microsoft/vscode#302026 — where `code` resolved to `Code.exe`, the GUI, and OPENED A WINDOW
+/// instead of printing — once per row rather than once per scan.
+#[derive(Debug, Clone)]
+pub struct VscodeSnapshot {
+    /// Did the host answer? A shell-out, the only one this route makes.
+    pub host_present: bool,
+    /// The profile manifest, or the fact that it could not be read.
+    pub installed: Result<Vec<Extension>, ()>,
+}
+
+/// What can honestly be said about one extension id.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HostedVerdict {
+    /// Listed in the manifest, host present. Carries the installed version.
+    Present(String),
+    /// Host present, manifest read, id not in it. The only ACTIONABLE verdict.
+    Absent,
+    /// No host ⇒ nothing can be claimed. The manifest outlives the editor.
+    NoHost,
+    /// The manifest is there and could not be read (unreadable OR not understood —
+    /// `read_installed` collapses both into `Err(())`, so this layer cannot tell them apart
+    /// and must not claim to).
+    Unreadable,
+}
+
+impl VscodeSnapshot {
+    /// The verdict for one id.
+    ///
+    /// ⭐ Order matters: the HOST is asked first. The rule is "not up to date if the tool is not
+    /// there", and it is structural rather than pedantic, because `~/.vscode/extensions` is a
+    /// USER folder that survives uninstalling VS Code itself. A manifest-first reading would
+    /// paint a green row per extension for an editor that is gone.
+    pub fn verdict(&self, id: &str) -> HostedVerdict {
+        if !self.host_present {
+            return HostedVerdict::NoHost;
+        }
+        match &self.installed {
+            Err(()) => HostedVerdict::Unreadable,
+            Ok(list) => match extension_version(id, list) {
+                Some(v) => HostedVerdict::Present(v),
+                None => HostedVerdict::Absent,
+            },
+        }
+    }
+}
+
+/// Build the snapshot: probe the host, then read the manifest.
+///
+/// ⚠️ The host probe goes through `platform::shell_probe` — the ONE shell wrapping. Never a
+/// hand-built command line (it would bypass the Windows PATH refresh, and the installer writes
+/// `{app}\bin` to the registry PATH, which is exactly what that refresh picks up), and never
+/// `std::process::Command::new("code")`: Rust does not apply PATHEXT, so it would not find
+/// `code.cmd` on Windows at all.
+///
+/// ⚠️ TEMPORARY, and DELIBERATELY on this ONE item rather than the module. When the detection
+/// branch landed, clippy named exactly five items unreached — and all five are rooted HERE:
+/// `extensions_dir`, `manifest_path`, `parse_installed_extensions` and `read_installed` are
+/// reached only through this function, so allowing it re-livens the whole read half. The other
+/// half of the module (`Extension`, `VscodeSnapshot`, `HostedVerdict::*`, `verdict`,
+/// `extension_version`) needs no allow: `detect_vscode_extension` reaches it for real. That
+/// split is the measurement the module-wide allow was traded away to obtain — it says precisely
+/// which subtree still has no non-test caller.
+///
+/// The only caller is the scan, which lives in `server.rs`. The gesture that wires it there
+/// DELETES this attribute; if it survives that, the function is genuinely dead.
+#[allow(dead_code)]
+pub fn snapshot(os: crate::platform::Os, home: &Path) -> VscodeSnapshot {
+    let probe = crate::platform::shell_probe(os, "code --version");
+    let d = crate::detect::run_probe_detailed(&probe);
+    let dir = extensions_dir(
+        home,
+        std::env::var("VSCODE_EXTENSIONS").ok(),
+        std::env::var("VSCODE_PORTABLE").ok(),
+    );
+    VscodeSnapshot {
+        host_present: d.ok,
+        installed: read_installed(&dir),
+    }
 }
 
 #[cfg(test)]
@@ -338,6 +416,41 @@ mod tests {
             extensions_dir(&home, None, None),
             PathBuf::from("/home/u/.vscode/extensions")
         );
+    }
+
+    #[test]
+    fn a_snapshot_carries_the_host_verdict_and_the_manifest_together() {
+        // ⭐ ONE object, because both facts are once-per-SCAN: the manifest is one file for every
+        // extension, and "is VS Code here?" is one question for every extension. Same shape as
+        // `fetch_bulk_presence`, which beta.20 introduced to stop asking per package.
+        let s = VscodeSnapshot {
+            host_present: true,
+            installed: Ok(vec![Extension {
+                id: "a.b".into(),
+                version: "1.0".into(),
+            }]),
+        };
+        assert_eq!(s.verdict("a.b"), HostedVerdict::Present("1.0".into()));
+        assert_eq!(s.verdict("c.d"), HostedVerdict::Absent);
+
+        // Host gone ⇒ INDETERMINATE, never present and never absent. The manifest OUTLIVES the
+        // host (~/.vscode is a user folder, independent of the app), so a manifest-only reading
+        // would paint thirty green rows for an editor that is no longer installed.
+        let gone = VscodeSnapshot {
+            host_present: false,
+            installed: Ok(vec![Extension {
+                id: "a.b".into(),
+                version: "1.0".into(),
+            }]),
+        };
+        assert_eq!(gone.verdict("a.b"), HostedVerdict::NoHost);
+
+        // Manifest unreadable ⇒ indeterminate too, with its own verdict so the row can say WHY.
+        let broken = VscodeSnapshot {
+            host_present: true,
+            installed: Err(()),
+        };
+        assert_eq!(broken.verdict("a.b"), HostedVerdict::Unreadable);
     }
 
     #[test]
