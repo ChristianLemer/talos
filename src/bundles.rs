@@ -262,7 +262,7 @@ pub struct Commands {
 }
 
 /// The NAMED ROUTE TABLE — port of commandsFor. Family 1 (system manager, arbitrated by
-/// OS) first, then cargo/npm/bun/run/claude-plugin/skill.
+/// OS) first, then cargo/npm/bun/run/claude-plugin/skill/vscode-extension.
 fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
     let ver = pkg.version.as_deref().unwrap_or("").trim().to_string();
     let none = Commands {
@@ -525,12 +525,18 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
         // version for many extensions. A pin here would build a command designed to fail, so
         // `ver` is deliberately not consulted in this branch.
         //
+        // ⭐ Ignoring `ver` HERE is only half the job: a pin reaches `Action::Upgrade` by a
+        // second road, through `Step.pin` and `action_for`, which consults the pin BEFORE
+        // `outdated`. `load_from_catalog` is where that half is closed — it refuses to carry a
+        // pin for any extension route. Both halves are needed; neither alone suffices.
+        //
         // ⚠️ NO UPGRADE. `scan_outdated` asks the native manager only, so `f.outdated` is
-        // always false for this route and `action_for` can never return Upgrade — a wired
-        // `upgrade:` would be unreachable, exactly as the claude-plugin route's is. The
-        // install is idempotent (measured: exit 0 on an already-current extension), so a
-        // re-Apply is safe and no freshness is claimed. `--update-extensions` is refused for
-        // a different reason: it updates EVERYTHING, which contradicts the per-package model.
+        // always false for this route — the `outdated` road to Upgrade is closed, and the pin
+        // road is closed at `Step.pin`. A wired `upgrade:` would be unreachable, exactly as the
+        // claude-plugin route's is. The install is idempotent (measured: exit 0 on an
+        // already-current extension), so a re-Apply is safe and no freshness is claimed.
+        // `--update-extensions` is refused for a different reason: it updates EVERYTHING,
+        // which contradicts the per-package model.
         return Commands {
             route: Some("vscode-extension".into()),
             install: Some(format!("code --install-extension {id} --force")),
@@ -595,7 +601,27 @@ pub fn load_from_catalog(
             is_config,
             is_extension,
             version_regex: p.version_regex.clone(),
-            pin: p.version.clone(),
+            // ⚠️ A PIN IS ONLY CARRIED IF THE ROUTE CAN HONOUR IT. `action_for` consults the
+            // pin BEFORE `outdated` (decision.rs:90), so a pin on a route with no `upgrade:`
+            // command yields Action::Upgrade → `do_step` resolves it to None → a SILENT SKIP:
+            // no step message, no terminal line, no reason. That is the one outcome this repo
+            // refuses ("every gesture leaves a trace"), and the front would draw an update
+            // button that does nothing.
+            //
+            // A `vscode-extension` cannot be pinned at all: MEASURED, `code
+            // --install-extension id@<version>` exits 1 once the gallery stops serving that
+            // version. So dropping the pin here is not a limitation being hidden — it is the
+            // catalogue declaring something the route has no way to mean.
+            //
+            // ⭐ This closes the SAME latent hole in `claude-plugin` and `skill`, which are
+            // extension routes and which likewise never consult `ver` when building their
+            // commands. Reusing the already-derived `is_extension` is deliberate: one
+            // derivation site, and it reads as "an extension carries no pin".
+            pin: if is_extension {
+                None
+            } else {
+                p.version.clone()
+            },
             requires: p.requires.clone(),
             posture: Posture::OptIn, // catalog default: free + out-by-default
             // (bundle-driven: the bundle pull decides "in", not the posture).
@@ -780,9 +806,11 @@ mod tests {
             "nothing to force away: {uninstall}"
         );
         // ⬜ No upgrade: `scan_outdated` asks only winget/brew, so `outdated` is structurally
-        // false for this route and `action_for` can never choose Upgrade. Wiring one would make
-        // it unreachable — the mistake the claude-plugin route made, whose `upgrade:` has never
-        // once been chosen.
+        // false for this route. Wiring one would make it unreachable — the mistake the
+        // claude-plugin route made, whose `upgrade:` has never once been chosen.
+        //
+        // ⚠️ That closes only the `outdated` road to Upgrade. The PIN road is closed separately,
+        // in `load_from_catalog` — see `an_extension_route_carries_no_pin_because_it_cannot_honour_one`.
         assert_eq!(c.upgrade, None, "an unreachable command is worse than none");
         assert_eq!(c.downgrade, None);
     }
@@ -828,6 +856,49 @@ mod tests {
         p.brew = Some("git".into());
         p.vscode_extension = Some("some.ext".into());
         assert_eq!(commands_for(&p, Os::Darwin).route.as_deref(), Some("brew"));
+
+        // And the boundary on the other side: the branch is LAST, so any other route also wins.
+        // Not a safety property like the system-manager case above — but the comment claims
+        // "last", and an unpinned claim drifts.
+        let mut n = pkg("Also confused");
+        n.npm = Some("some-pkg".into());
+        n.vscode_extension = Some("some.ext".into());
+        assert_eq!(commands_for(&n, Os::Darwin).route.as_deref(), Some("npm"));
+    }
+
+    #[test]
+    fn an_extension_route_carries_no_pin_because_it_cannot_honour_one() {
+        // ⚠️ `action_for` consults the pin BEFORE `outdated` (decision.rs:90), and no
+        // extension route builds an `upgrade:` command. A carried pin would therefore produce
+        // Action::Upgrade with nothing to run — `do_step` returns a default outcome and the
+        // row is SKIPPED IN SILENCE, which is the one thing this codebase refuses.
+        //
+        // Measured for the vscode route: `code --install-extension id@<version>` exits 1 once
+        // the gallery drops that version, so the pin is not merely unsupported — it is
+        // unmeanable.
+        let plan = load_from_catalog(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/catalog"),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/bundles"),
+            Os::Darwin,
+            &|_| {},
+        );
+        for s in &plan.steps {
+            if s.is_extension {
+                assert!(
+                    s.pin.is_none(),
+                    "{}: an extension route carries a pin it cannot honour",
+                    s.name
+                );
+            }
+        }
+        // And a synthetic package, so the guard does not depend on what the catalogue happens
+        // to ship today.
+        let mut p = pkg("Pinned extension");
+        p.vscode_extension = Some("some.ext".into());
+        p.version = Some("1.2.3".into());
+        let c = commands_for(&p, Os::Darwin);
+        assert!(is_extension_route(c.route.as_deref()));
+        assert_eq!(c.upgrade, None, "no upgrade command exists to honour a pin");
     }
 
     /// The five members of the class in the SHIPPED catalogue, named on purpose.
