@@ -200,7 +200,23 @@ impl VscodeSnapshot {
     }
 }
 
-/// Build the snapshot: probe the host, then read the manifest.
+/// The snapshot, from facts already gathered. PURE — no process, no environment.
+///
+/// Split out from `snapshot` so the half that CAN be tested is: the host verdict arrives as a
+/// boolean, so both sides of "presence needs the host" are reachable without uninstalling VS Code,
+/// and the directory arrives as an argument, so the read can be pointed at a fixture.
+pub fn snapshot_from(host_present: bool, extensions_dir: &Path) -> VscodeSnapshot {
+    VscodeSnapshot {
+        host_present,
+        installed: read_installed(extensions_dir),
+    }
+}
+
+/// Build the snapshot for the machine we are running on: probe the host, resolve the directory
+/// from the environment, then delegate to `snapshot_from`.
+///
+/// The IMPURE shim, and it holds everything untestable so that nothing else has to: one process
+/// and two environment reads. Everything it decides afterwards lives in `snapshot_from`.
 ///
 /// ⚠️ The host probe goes through `platform::shell_probe` — the ONE shell wrapping. Never a
 /// hand-built command line (it would bypass the Windows PATH refresh, and the installer writes
@@ -208,14 +224,24 @@ impl VscodeSnapshot {
 /// `std::process::Command::new("code")`: Rust does not apply PATHEXT, so it would not find
 /// `code.cmd` on Windows at all.
 ///
-/// ⚠️ TEMPORARY, and DELIBERATELY on this ONE item rather than the module. When the detection
-/// branch landed, clippy named exactly five items unreached — and all five are rooted HERE:
-/// `extensions_dir`, `manifest_path`, `parse_installed_extensions` and `read_installed` are
-/// reached only through this function, so allowing it re-livens the whole read half. The other
-/// half of the module (`Extension`, `VscodeSnapshot`, `HostedVerdict::*`, `verdict`,
-/// `extension_version`) needs no allow: `detect_vscode_extension` reaches it for real. That
-/// split is the measurement the module-wide allow was traded away to obtain — it says precisely
-/// which subtree still has no non-test caller.
+/// ⚠️ NO TIMEOUT, because `run_probe_detailed` uses `.output()` and none of the probes have one.
+/// Pre-existing and shared, but newly pointed at a command KNOWN to misbehave: this module's own
+/// header cites microsoft/vscode#302026, where `code` resolved to the GUI. A `code --version`
+/// that opens a window instead of printing would stall a scan that is serial on purpose — one
+/// hang, the whole scan. Not fixed here (a timeout belongs to `run_probe_detailed`, where it
+/// would change every probe in the app); named so the next reader does not have to rediscover it.
+///
+/// ⚠️ TEMPORARY allow, on ONE item rather than the module — but be precise about what that buys,
+/// because the obvious reading is wrong. rustc treats an `allow(dead_code)` item as a LIVE ROOT,
+/// so this single attribute re-livens everything reachable from it: MEASURED by deleting it, the
+/// read half (`extensions_dir`, `manifest_path`, `parse_installed_extensions`, `read_installed`,
+/// `snapshot_from`) is named unreached along with `snapshot`. Tests do not count — they are a
+/// separate compilation, so the composition test cannot make them live in the bin build.
+///
+/// So the gain over the module-wide allow is NOT a smaller silenced set; it is that the attribute
+/// sits on the one item whose wiring is owed, next to the sentence saying who owes it, instead of
+/// at the top of a file where it outlives its reason. It cannot be narrowed further while
+/// `snapshot` has no non-test caller: every function above is reached only through it.
 ///
 /// The only caller is the scan, which lives in `server.rs`. The gesture that wires it there
 /// DELETES this attribute; if it survives that, the function is genuinely dead.
@@ -228,10 +254,7 @@ pub fn snapshot(os: crate::platform::Os, home: &Path) -> VscodeSnapshot {
         std::env::var("VSCODE_EXTENSIONS").ok(),
         std::env::var("VSCODE_PORTABLE").ok(),
     );
-    VscodeSnapshot {
-        host_present: d.ok,
-        installed: read_installed(&dir),
-    }
+    snapshot_from(d.ok, &dir)
 }
 
 #[cfg(test)]
@@ -451,6 +474,57 @@ mod tests {
             installed: Err(()),
         };
         assert_eq!(broken.verdict("a.b"), HostedVerdict::Unreadable);
+    }
+
+    #[test]
+    fn the_snapshot_composes_a_real_directory_with_either_host_verdict() {
+        // ⭐ The FIRST test that runs the composition rather than a hand-built struct: the
+        // fixtures directory really is read, and both host values are reachable because
+        // `snapshot_from` takes the verdict as a boolean instead of probing for it.
+        //
+        // ⚠️ The fixtures dir holds new-format.json etc., NOT extensions.json — so the read is a
+        // legitimate NotFound, which is the EMPTY answer. That makes this a test of the wiring
+        // (host verdict + directory → snapshot), and the manifest parsing is covered above.
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/vscode");
+        let with_host = snapshot_from(true, &dir);
+        assert!(with_host.host_present);
+        assert_eq!(
+            with_host.installed,
+            Ok(Vec::new()),
+            "no extensions.json here"
+        );
+        assert_eq!(with_host.verdict("a.b"), HostedVerdict::Absent);
+
+        // ⭐ The same directory, the host gone: the verdict FLIPS from actionable to
+        // indeterminate. That is the whole design in one assertion — presence needs the host,
+        // and it is now reachable without uninstalling VS Code.
+        assert_eq!(
+            snapshot_from(false, &dir).verdict("a.b"),
+            HostedVerdict::NoHost
+        );
+
+        // And a real manifest in a real directory, to prove the read is wired to the argument
+        // and not to a constant path: copy a fixture in under the name the reader looks for.
+        // ⚠️ pid-suffixed, like the unreadable-manifest test: two concurrent `cargo test` runs
+        // by the same user would otherwise race on one fixed path.
+        let tmp =
+            std::env::temp_dir().join(format!("talos-vscode-snapshot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).expect("a temp profile");
+        std::fs::write(manifest_path(&tmp), fixture("new-format.json")).expect("a manifest");
+        let s = snapshot_from(true, &tmp);
+        assert_eq!(
+            s.verdict("ms-python.python"),
+            HostedVerdict::Present("2026.4.0".into()),
+            "the manifest in the directory PASSED IN must be the one read"
+        );
+        // Host gone ⇒ that same present extension is no longer a claim we make.
+        assert_eq!(
+            snapshot_from(false, &tmp).verdict("ms-python.python"),
+            HostedVerdict::NoHost,
+            "the manifest OUTLIVES the host, so a hit in it proves nothing alone"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

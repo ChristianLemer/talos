@@ -191,9 +191,11 @@ fn detect_vscode_extension(step: &Step, snap: Option<&crate::vscode::VscodeSnaps
     // finds it just as absent.
     //
     // ⭐ An empty id is a missing declaration in the CATALOGUE, not a fact about the MACHINE, and
-    // only facts about the machine may earn `Some(false)`. The `detect:` fallback that makes this
-    // unreachable for shipped packages lives in `load_from_catalog`; this is the belt to that
-    // brace, because a hand-written YAML is free to omit both.
+    // only facts about the machine may earn `Some(false)`. The `detect:` fallback that would make
+    // this unreachable for shipped packages WILL live in `load_from_catalog` (Task 6) — today
+    // `bundles.rs` carries `detect:` through verbatim, so this is not yet the belt to a fitted
+    // brace but the only guard there is. It stays either way: a hand-written YAML is free to omit
+    // both fields.
     if id.is_empty() {
         return Presence {
             present: None,
@@ -477,8 +479,21 @@ pub fn detect_present_detailed_with_vscode(
             ..Default::default()
         };
     }
+    // Nothing above could answer. ⚠️ Reachable for a CONTENT ROUTE THAT HAS NO DISPATCH ARM —
+    // the stage-2 guard excludes every extension route by class (`is_extension_route`), so a
+    // future one arrives here rather than being run as a command. That is the safe direction
+    // and it is deliberate, but a row with no reason teaches nothing, so name it.
+    //
+    // ⭐ Only when there IS a route: a package with no `check:`, no `detect:` and no route at all
+    // also lands here, and "no way to detect a  package" would be noise about a row that simply
+    // declares nothing. `requires_reason` still outranks this at the wire (server.rs:1491), so a
+    // dependency explanation is never displaced by it.
     Presence {
         present: None,
+        reason: step
+            .route
+            .as_deref()
+            .map(|r| format!("no way to detect a {r} package")),
         ..Default::default()
     }
 }
@@ -695,9 +710,10 @@ mod tests {
     #[test]
     fn an_unreadable_manifest_is_indeterminate_never_absent() {
         use crate::vscode::VscodeSnapshot;
+        let id = "some.ext";
         let mut s = step();
         s.route = Some("vscode-extension".into());
-        s.detect = Some("some.ext".into());
+        s.detect = Some(id.into());
         let snap = VscodeSnapshot {
             host_present: true,
             installed: Err(()),
@@ -707,14 +723,36 @@ mod tests {
             p.present, None,
             "an unreadable manifest must never blank the machine"
         );
-        assert!(p.reason.is_some());
         // ⚠️ And the wording must not diagnose a cause it cannot know. `read_installed` returns
         // Err(()) for a LOCKED file, an EACCES and a truncated one alike, so "not understood"
         // would send an operator hunting for corruption on a permissions problem.
-        let reason = p.reason.unwrap();
+        let reason = p.reason.expect("an indeterminate row must say why");
         assert!(
             !reason.contains("not understood"),
             "the cause is unknown at this layer: {reason}"
+        );
+        let diag = p.diag.expect("evidence, even when nothing is known");
+        // ⚠️ The diag is what the row's TERMINAL prints, and it was the half of Presence with
+        // no coverage: `ok: true, code: 0` for a machine that was never asked would read as a
+        // successful probe. Derived from the verdict, so it cannot disagree with it.
+        assert!(
+            !diag.ok,
+            "an indeterminate verdict is not a successful probe"
+        );
+        assert_ne!(diag.code, 0);
+        // ⚠️ And the EVIDENCE must not name a cause this layer cannot know either — the
+        // `reason` assertion above pins only one of the two strings the operator reads.
+        assert!(
+            !diag.output.contains("not understood"),
+            "the evidence must not name a cause read_installed cannot distinguish: {}",
+            diag.output
+        );
+        // The cmdline names the gesture that decided. Never a command line — this route
+        // shells out NOTHING; the host was probed once, for the whole scan.
+        assert!(
+            !diag.cmdline.contains("--list-extensions") && !diag.cmdline.contains(id),
+            "no command was run to decide this: {}",
+            diag.cmdline
         );
     }
 
@@ -778,6 +816,41 @@ mod tests {
             !diag.cmdline.contains("definitely.not-a-command-xyz"),
             "the id must never be executed: {}",
             diag.cmdline
+        );
+    }
+
+    #[test]
+    fn a_content_route_with_no_dispatch_arm_says_so_instead_of_going_silent() {
+        // ⚠️ The dead end the widened stage-2 guard made reachable. `is_extension_route` excludes
+        // the whole CLASS, so a future `code-insiders` route — excluded at stage 2, matched by no
+        // dispatch arm, no manager probe — falls all the way through. That is the safe direction
+        // (silent unknown beats running `publisher.name` as a command), but a row drawn "—" with
+        // nothing to explain it brushes "every gesture leaves a trace".
+        // A route no arm handles — which no catalogue declares yet, so it is built directly here.
+        // `code-insiders` is the concrete candidate `is_extension_route`'s own doc names as the
+        // next one to arrive.
+        let mut s = step();
+        s.route = Some("code-insiders".into());
+        let p = detect_present_detailed_with_vscode(&s, Os::Darwin, None, None);
+        assert_eq!(p.present, None, "unknown, not absent");
+        let reason = p.reason.expect("a dead end must still name itself");
+        assert!(
+            reason.contains("code-insiders"),
+            "the reason must name the route that has no detection: {reason}"
+        );
+    }
+
+    #[test]
+    fn a_package_that_declares_nothing_gets_no_invented_reason() {
+        // ⭐ The other side of the line above. A step with no route, no `check:` and no `detect:`
+        // reaches the same fall-through, and "no way to detect a  package" would be noise about a
+        // row that simply declares nothing to detect. Silence is right HERE and wrong there.
+        let s = step(); // route: None, check: None, detect: None
+        let p = detect_present_detailed_with_vscode(&s, Os::Darwin, None, None);
+        assert_eq!(p.present, None);
+        assert_eq!(
+            p.reason, None,
+            "nothing was declared, so there is nothing to explain"
         );
     }
 
