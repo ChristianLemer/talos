@@ -24,6 +24,7 @@ mod pty;
 mod selection;
 mod server;
 mod timings;
+mod vscode;
 mod watch;
 
 fn main() {
