@@ -136,12 +136,23 @@ pub fn read_installed(extensions_dir: &Path) -> Result<Vec<Extension>, ()> {
 
 /// The installed version of `id`, or None if the manifest does not list it.
 ///
-/// ⚠️ EXACT match. A prefix comparison would make `ms-python` find `ms-python.python`, and an
-/// extension id is `publisher.name` — prefixes collide by construction.
+/// ⚠️ EXACT id, but case-INSENSITIVELY. A prefix comparison would make `ms-python` find
+/// `ms-python.python`, so `starts_with` is out — an id is `publisher.name` and prefixes collide
+/// by construction. But the case must NOT be exact: MEASURED on a real profile, the manifest
+/// lowercases every id (30/30) while the marketplace keeps the publisher's own casing —
+/// `TheNuProjectContributors.vscode-nushell-lang` is stored `thenuprojectcontributors.…`, and
+/// the extension's own package.json agrees with the marketplace, not the manifest. An author
+/// copying the id off the marketplace page would otherwise get a false ABSENT — and a false
+/// absent makes Apply install what is already there. The `code` CLI is itself case-insensitive
+/// here (measured: an all-caps id matched the installed one), so exact casing would be stricter
+/// than the host we model.
+///
+/// ⚠️ `eq_ignore_ascii_case`, not a `to_lowercase()` comparison: it allocates nothing, and
+/// extension ids are ASCII by the marketplace's own naming rules.
 pub fn extension_version(id: &str, installed: &[Extension]) -> Option<String> {
     installed
         .iter()
-        .find(|e| e.id == id)
+        .find(|e| e.id.eq_ignore_ascii_case(id))
         .map(|e| e.version.clone())
 }
 
@@ -225,13 +236,70 @@ mod tests {
         // what is already there.
         //
         // A directory standing where extensions.json belongs is the portable way to provoke
-        // a non-NotFound io error: no chmod (root ignores mode bits), no permissions games,
-        // and it behaves the same on Windows.
-        let tmp = std::env::temp_dir().join("talos-vscode-unreadable-manifest");
+        // a non-NotFound io error: no chmod (root ignores mode bits) and no permissions games.
+        // ⭐ What makes it portable is that the test does not care WHICH kind comes back — any
+        // kind other than NotFound satisfies it. (Measured here: `IsADirectory`, errno 21 on
+        // macOS; Windows reports a different kind, and the assertion holds either way.)
+        // ⚠️ pid-suffixed: two concurrent `cargo test` runs by the same user would otherwise
+        // race on one fixed path, and one would delete the other's directory mid-assert.
+        let tmp = std::env::temp_dir().join(format!(
+            "talos-vscode-unreadable-manifest-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(manifest_path(&tmp)).expect("a directory where the file goes");
         assert_eq!(read_installed(&tmp), Err(()));
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_marketplace_cased_id_still_matches_the_lowercased_manifest() {
+        // MEASURED on a real profile: all 30 manifest ids are lowercase, while the marketplace
+        // API and the extension's own package.json both spell this publisher
+        // `TheNuProjectContributors`. The shipped example package uses this id, so exact-case
+        // matching would make its own row read falsely absent — and a false absent makes Apply
+        // install what is already there.
+        let exts = vec![Extension {
+            id: "thenuprojectcontributors.vscode-nushell-lang".into(),
+            version: "2.0.5".into(),
+        }];
+        assert_eq!(
+            extension_version("TheNuProjectContributors.vscode-nushell-lang", &exts),
+            Some("2.0.5".into())
+        );
+        // ⚠️ And case-insensitive must not become loose: a prefix is still not an id.
+        assert_eq!(extension_version("TheNuProjectContributors", &exts), None);
+    }
+
+    #[test]
+    fn json_that_is_not_an_array_is_an_error_not_an_empty_profile() {
+        // The OTHER half of "Err ≠ empty": valid JSON of the wrong shape. Only the
+        // unparseable case was pinned, so this branch could have returned Ok(vec![]) —
+        // thirty rows to absent, and Apply offering what is already installed.
+        for text in ["{}", "null", "42", "\"[]\""] {
+            assert!(parse_installed_extensions(text).is_err(), "shape {text}");
+        }
+    }
+
+    #[test]
+    fn the_manifest_is_named_extensions_json_inside_the_dir() {
+        // ⚠️ A typo in this ONE string fails SILENTLY: every read becomes NotFound, which is
+        // the deliberate empty answer, so every extension row would read absent and nothing
+        // would report an error. The filename is the aim of the whole module.
+        assert!(manifest_path(Path::new("/x/exts")).ends_with("exts/extensions.json"));
+    }
+
+    #[test]
+    fn an_entry_without_an_id_is_skipped_and_its_neighbours_survive() {
+        // The promise the skip makes: one malformed record must not blank a machine — and
+        // must not invent a blank-id row either.
+        let exts = parse_installed_extensions(
+            r#"[{"version":"1"},{"identifier":{},"version":"2"},{"identifier":{"id":"a.b"},"version":"3"}]"#,
+        )
+        .expect("recognised");
+        assert_eq!(exts.len(), 1, "only the well-formed entry: {exts:?}");
+        assert_eq!(extension_version("a.b", &exts), Some("3".into()));
+        assert_eq!(extension_version("", &exts), None, "no blank-id ghost row");
     }
 
     #[test]
