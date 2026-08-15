@@ -67,6 +67,10 @@ pub struct RawPkg {
     pub skill: Option<String>,
     #[serde(default, rename = "skillName")]
     pub skill_name: Option<String>,
+    /// A VS Code extension id, `publisher.name`. The YAML key is `vscode-extension`; Rust
+    /// cannot hold the hyphen, hence the rename — same as `claude-plugin` above.
+    #[serde(default, rename = "vscode-extension")]
+    pub vscode_extension: Option<String>,
     #[serde(default)]
     pub detect: Option<String>,
     #[serde(default)]
@@ -503,6 +507,38 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
             downgrade: None,
         };
     }
+    if let Some(id) = &pkg.vscode_extension {
+        // The `code` CLI is the only way to fetch from the gallery, so the WRITE half shells
+        // out — while presence is read from the profile manifest (vscode.rs). Not an
+        // inconsistency: it is brew's own asymmetry, where `detect:` tells the truth and the
+        // manager acts.
+        //
+        // ⭐ `--force` on the install, and it is load-bearing. MEASURED: without it, an
+        // install of an already-present extension prints "Extension '…' v… is already
+        // installed. Use '--force' option to update…" and EXITS 0 having done nothing. A
+        // silent no-op that exits 0 is the worst shape available here — convergence logic
+        // reads it as success. It is also the documented flag "to avoid prompts", which
+        // matters because a prompting command deadlocks a display-only row.
+        //
+        // ⚠️ NO `version:` SUPPORT. Measured: `--install-extension id@<version>` exits 1
+        // when the gallery no longer serves that version, and the gallery serves exactly one
+        // version for many extensions. A pin here would build a command designed to fail, so
+        // `ver` is deliberately not consulted in this branch.
+        //
+        // ⚠️ NO UPGRADE. `scan_outdated` asks the native manager only, so `f.outdated` is
+        // always false for this route and `action_for` can never return Upgrade — a wired
+        // `upgrade:` would be unreachable, exactly as the claude-plugin route's is. The
+        // install is idempotent (measured: exit 0 on an already-current extension), so a
+        // re-Apply is safe and no freshness is claimed. `--update-extensions` is refused for
+        // a different reason: it updates EVERYTHING, which contradicts the per-package model.
+        return Commands {
+            route: Some("vscode-extension".into()),
+            install: Some(format!("code --install-extension {id} --force")),
+            uninstall: Some(format!("code --uninstall-extension {id}")),
+            upgrade: None,
+            downgrade: None,
+        };
+    }
     none
 }
 
@@ -586,10 +622,19 @@ pub fn load_from_catalog(
 /// BELOW, and its promise is stronger still (no network at all). The two classes are disjoint
 /// by construction — a config-atom is recognised by having a `check:`, which no extension has.
 ///
-/// ⬜ When `code --install-extension` lands, it belongs in this list and nothing else changes.
-/// That is the whole reason this is one function rather than an inline `matches!`.
+/// ✅ `vscode-extension` landed on 2026-08-15 and cost exactly one arm here, which is what the
+/// function existed to make true. It writes into `~/.vscode/extensions` — the user's profile,
+/// never `Program Files` — downloads from the gallery (measured 4.3 s fresh), and cannot
+/// elevate.
+///
+/// ⬜ A `code-insiders` or Cursor host would be a DIFFERENT route (different binary, different
+/// profile folder, and Cursor does not even use the same gallery), and would join this list the
+/// same way.
 pub fn is_extension_route(route: Option<&str>) -> bool {
-    matches!(route, Some("claude-plugin") | Some("skill"))
+    matches!(
+        route,
+        Some("claude-plugin") | Some("skill") | Some("vscode-extension")
+    )
 }
 
 #[cfg(test)]
@@ -706,6 +751,83 @@ mod tests {
         assert!(!is_extension_route(
             commands_for(&c, Os::Darwin).route.as_deref()
         ));
+    }
+
+    #[test]
+    fn a_vscode_extension_installs_with_force_and_uninstalls_without() {
+        let mut p = pkg("Nushell language support");
+        p.vscode_extension = Some("thenuprojectcontributors.vscode-nushell-lang".into());
+        let c = commands_for(&p, Os::Darwin);
+        assert_eq!(c.route.as_deref(), Some("vscode-extension"));
+        let install = c.install.expect("an install command");
+        // ⭐ --force is NOT optional. MEASURED: without it, `code --install-extension` on an
+        // already-present extension LOGS "already installed" and exits 0 having done nothing —
+        // a silent no-op that convergence logic reads as success. It is also the documented
+        // flag that avoids prompts, which a display-only terminal requires (a command that
+        // PROMPTS deadlocks the step).
+        assert!(
+            install.contains("--install-extension thenuprojectcontributors.vscode-nushell-lang")
+                && install.contains("--force"),
+            "install: {install}"
+        );
+        let uninstall = c.uninstall.expect("an uninstall command");
+        assert!(
+            uninstall.contains("--uninstall-extension"),
+            "uninstall: {uninstall}"
+        );
+        assert!(
+            !uninstall.contains("--force"),
+            "nothing to force away: {uninstall}"
+        );
+        // ⬜ No upgrade: `scan_outdated` asks only winget/brew, so `outdated` is structurally
+        // false for this route and `action_for` can never choose Upgrade. Wiring one would make
+        // it unreachable — the mistake the claude-plugin route made, whose `upgrade:` has never
+        // once been chosen.
+        assert_eq!(c.upgrade, None, "an unreachable command is worse than none");
+        assert_eq!(c.downgrade, None);
+    }
+
+    #[test]
+    fn a_vscode_extension_ignores_a_pin_rather_than_building_a_command_that_fails() {
+        // MEASURED: `code --install-extension id@0.21.1` exits 1 when the gallery no longer
+        // serves that version — and the gallery serves ONE version for many extensions (checked:
+        // 1 available version for even-better-toml). So a pin cannot be honoured, and a pinned
+        // command would be a command built to fail.
+        let mut p = pkg("Nushell language support");
+        p.vscode_extension = Some("thenuprojectcontributors.vscode-nushell-lang".into());
+        p.version = Some("2.0.4".into());
+        let c = commands_for(&p, Os::Darwin);
+        let install = c.install.expect("an install command");
+        assert!(
+            !install.contains("2.0.4"),
+            "a pin must not reach the command: {install}"
+        );
+        assert!(
+            !install.contains('@'),
+            "no version suffix at all: {install}"
+        );
+    }
+
+    #[test]
+    fn a_vscode_extension_is_an_extension_and_not_a_config_atom() {
+        let mut p = pkg("Nushell language support");
+        p.vscode_extension = Some("thenuprojectcontributors.vscode-nushell-lang".into());
+        let route = commands_for(&p, Os::Darwin).route;
+        // 🧩, not ⚡: it DOWNLOADS from the gallery (measured 4.3 s for a fresh install), so the
+        // "no network at all" promise of rung 0 does not hold. It never elevates and writes only
+        // inside the user's profile, which is what rung 1 promises.
+        assert!(is_extension_route(route.as_deref()), "route {route:?}");
+    }
+
+    #[test]
+    fn a_system_route_still_wins_over_a_vscode_extension_declaration() {
+        // Route arbitration is ORDERED, and the system manager is family 1. A package declaring
+        // both must not silently become an extension — the rung would then promise "never
+        // elevates" about a winget install that can.
+        let mut p = pkg("Confused");
+        p.brew = Some("git".into());
+        p.vscode_extension = Some("some.ext".into());
+        assert_eq!(commands_for(&p, Os::Darwin).route.as_deref(), Some("brew"));
     }
 
     /// The five members of the class in the SHIPPED catalogue, named on purpose.
