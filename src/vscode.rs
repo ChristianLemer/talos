@@ -113,12 +113,24 @@ pub fn parse_installed_extensions(json: &str) -> Result<Vec<Extension>, ()> {
 ///
 /// A MISSING file is `Ok(vec![])`, not an error: a profile that never installed an extension
 /// has no manifest, and treating that as unreadable would leave a normal machine indeterminate
-/// forever. Only text that exists and cannot be understood is `Err`.
+/// forever. Everything else — a manifest that is there but unreadable, or there and not
+/// understood — is `Err`. The two halves of that distinction are pinned by a test each.
 #[allow(clippy::result_unit_err)] // same shape as parse_installed_extensions
 pub fn read_installed(extensions_dir: &Path) -> Result<Vec<Extension>, ()> {
     match std::fs::read_to_string(manifest_path(extensions_dir)) {
         Ok(text) => parse_installed_extensions(&text),
-        Err(_) => Ok(Vec::new()),
+        // ⚠️ NotFound ALONE is the empty answer. Every other io error means the manifest is
+        // THERE and we could not read it — a locked file, EACCES, a directory where a file
+        // belongs, an I/O error on a cloud-backed profile — and answering "nothing installed"
+        // to those is the exact defect this Result exists to prevent: thirty rows flipping to
+        // absent, and Apply offering to install software that is already there.
+        //
+        // ⚠️ Deliberately UNLIKE timings.rs and behaviour_io.rs, which both collapse every io
+        // error to empty. Those read CACHES, where empty is a good answer ("we know nothing
+        // about this package yet"); this reads an OBSERVATION of the machine, where empty is a
+        // false claim about it. Do not "align" this branch with theirs.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(_) => Err(()),
     }
 }
 
@@ -203,6 +215,23 @@ mod tests {
         // "unreadable" would leave a normal machine indeterminate forever.
         let dir = Path::new("/definitely/not/a/real/path/xyz");
         assert_eq!(read_installed(dir), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn a_manifest_that_exists_but_cannot_be_read_is_an_error_not_an_empty_profile() {
+        // ⭐ The distinction NotFound draws. A missing manifest means "no extensions yet";
+        // an UNREADABLE one means we know nothing — and answering "nothing installed" to the
+        // second would flip every extension row to absent and make Apply offer to install
+        // what is already there.
+        //
+        // A directory standing where extensions.json belongs is the portable way to provoke
+        // a non-NotFound io error: no chmod (root ignores mode bits), no permissions games,
+        // and it behaves the same on Windows.
+        let tmp = std::env::temp_dir().join("talos-vscode-unreadable-manifest");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(manifest_path(&tmp)).expect("a directory where the file goes");
+        assert_eq!(read_installed(&tmp), Err(()));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
