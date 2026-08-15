@@ -16,7 +16,10 @@ use crate::consent::{
     append_history, clear_history, read_consent, read_history, write_consent, ConsentStore,
     HistEntry,
 };
-use crate::detect::{detect_present_detailed, detect_present_detailed_with};
+// ⚠️ The two scans call `detect_present_detailed_with_vscode` by its full path rather than
+// importing it: the name is long enough that an import would read as an alias, and the full path
+// says at the call site which of the three arities is being used.
+use crate::detect::detect_present_detailed;
 use crate::outdated::{outdated_for, scan_outdated};
 use crate::platform::{current_os, local_data_dir, Os};
 use crate::profiles::{load_profiles, Profiles};
@@ -1029,12 +1032,49 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
     // Shared read-only across the per-package tasks: cloning the table per package
     // would undo exactly the saving this is here for.
     let bulk = std::sync::Arc::new(bulk);
+    // The VS Code host + its profile manifest, fetched ONCE for the whole scan beside the
+    // presence listing and for the same reason: fewer processes, not more threads. Probing the
+    // host per row would cost ~0.2 s of Electron start per extension on a scan that is serial on
+    // purpose, and would walk into microsoft/vscode#302026 — where `code` resolved to the GUI and
+    // OPENED A WINDOW instead of printing — once per row rather than once per scan.
+    //
+    // ⭐ NO threshold here, unlike the bulk listing (which is gated at three rows because one
+    // `winget list` costs ~3.7 s against ~1.3 s for a per-package probe). One `code --version`
+    // plus one file read is ~0.2 s, so there is no break-even below which it is a loss — and the
+    // alternative is not "probe per row" but "no answer at all": without the snapshot every
+    // extension row reads unknown. The missing threshold is the design, not an oversight.
+    let vscode_started = std::time::Instant::now();
+    let home = crate::detect::user_home();
+    let vs = tokio::task::spawn_blocking(move || crate::vscode::snapshot(os, &home))
+        .await
+        .ok();
+    match &vs {
+        Some(s) => println!(
+            "[scan] vscode host={} manifest={} in {:?}",
+            s.host_present,
+            match &s.installed {
+                Ok(v) => format!("{} extensions", v.len()),
+                Err(()) => "UNREADABLE".to_string(),
+            },
+            vscode_started.elapsed()
+        ),
+        None => eprintln!("[scan] vscode snapshot UNAVAILABLE — extension rows read unknown"),
+    }
+    // Shared read-only across the per-package probes, same as `bulk`: the manifest holds ~30
+    // entries and cloning it per row would undo the saving this is here for.
+    let vs = std::sync::Arc::new(vs);
     for (i, step) in steps.iter().enumerate() {
         let step_owned = step.clone();
         let bulk_c = std::sync::Arc::clone(&bulk);
+        let vs_c = std::sync::Arc::clone(&vs);
         let probe_started = std::time::Instant::now();
         let p = tokio::task::spawn_blocking(move || {
-            detect_present_detailed_with(&step_owned, os, bulk_c.as_ref().as_ref())
+            crate::detect::detect_present_detailed_with_vscode(
+                &step_owned,
+                os,
+                bulk_c.as_ref().as_ref(),
+                vs_c.as_ref().as_ref(),
+            )
         })
         .await
         .unwrap_or_default();
@@ -1422,6 +1462,17 @@ async fn apply_diff(
     } else {
         std::sync::Arc::new(None)
     };
+    // ⭐ NO threshold for this one, unlike the bulk listing right above. The snapshot costs one
+    // `code --version` plus one file read (~0.2 s measured), where a `winget list` costs ~3.7 s —
+    // so there is no break-even below which it is a loss, and the fast path stays fast. And the
+    // alternative is not "probe per row" but "no answer at all": without it every extension row
+    // in the diff reads unknown, which is precisely the row Apply is about to act on.
+    let home = crate::detect::user_home();
+    let vs = std::sync::Arc::new(
+        tokio::task::spawn_blocking(move || crate::vscode::snapshot(os, &home))
+            .await
+            .ok(),
+    );
     for (nth, &i) in to_probe.iter().enumerate() {
         // Narrate BEFORE probing: the veil says which package is being checked while
         // it is being checked (`nth of total`) — the same honesty the splash got, now
@@ -1438,8 +1489,14 @@ async fn apply_diff(
             .await;
         let step_owned = steps[i].clone();
         let bulk_c = std::sync::Arc::clone(&bulk);
+        let vs_c = std::sync::Arc::clone(&vs);
         let p = tokio::task::spawn_blocking(move || {
-            detect_present_detailed_with(&step_owned, os, bulk_c.as_ref().as_ref())
+            crate::detect::detect_present_detailed_with_vscode(
+                &step_owned,
+                os,
+                bulk_c.as_ref().as_ref(),
+                vs_c.as_ref().as_ref(),
+            )
         })
         .await
         .unwrap_or_default();
@@ -2678,6 +2735,85 @@ mod tests {
                 code[at..(at + 1600).min(code.len())].contains("remember_presence(state"),
                 "{site} observes a presence but does not record it → the next Apply \
                  narrows against a stale `last_seen` and a real action becomes invisible"
+            );
+        }
+    }
+
+    #[test]
+    fn the_vscode_snapshot_is_taken_once_per_scan_not_once_per_row() {
+        // Text-level, same technique and the same reason as the guard above: both scans live in
+        // async WebSocket handlers that need a live socket and a live pty, so no unit test can
+        // reach them — but the defect here is a call in the WRONG PLACE, which the source shows
+        // exactly. And the wrong place is cheap to reach: `snapshot` takes `os` and a home, both
+        // of which are in scope inside the loops too, so moving the call one block down compiles,
+        // passes every other test, and costs one `code --version` per package on a scan that is
+        // serial on purpose (~0.2 s × 33 rows) while risking microsoft/vscode#302026 — a GUI
+        // window — once per row.
+        let src = include_str!("server.rs");
+        // Ignore this test module, or its own mentions would satisfy the assertions.
+        let code = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+
+        // Two scans OBSERVE presence with the snapshot; the third site (do_step's post-action
+        // re-probe) deliberately does not — it goes through `detect_present_detailed`, which
+        // passes None, and the row is re-probed by `seeds_for_rescan` on the next Apply. So the
+        // expected count is 2, not 3: a 3 here means someone threaded it into the per-row probe.
+        assert_eq!(
+            code.matches("crate::vscode::snapshot(").count(),
+            2,
+            "the snapshot must be built exactly twice — once per scan. A third build means it \
+             moved into a per-row path; two builds in one scan means the other scan lost its own."
+        );
+        // The log line is Task 7's evidence at a real click: it must print once per scan.
+        assert_eq!(
+            code.matches("[scan] vscode host=").count(),
+            1,
+            "the once-per-scan log line is how the property is verified at a real click"
+        );
+
+        // ⚠️ Anchored by a UNIQUE marker first, then by the loop header, because
+        // `for (i, step) in steps.iter().enumerate()` occurs TWICE in this file (the scan and
+        // the visual plan). A bare `find` on it happens to hit the scan today only because the
+        // scan comes first — an ordering, not a fact, and the guard would then be checking a
+        // loop that probes nothing.
+        for (site, unique_marker, loop_header) in [
+            (
+                "the connect / Refresh scan",
+                "[scan] vscode host=",
+                "for (i, step) in steps.iter().enumerate() {",
+            ),
+            (
+                "the Apply re-scan",
+                "// SERIAL live re-scan (presence).",
+                "for (nth, &i) in to_probe.iter().enumerate() {",
+            ),
+        ] {
+            let from = code
+                .find(unique_marker)
+                .unwrap_or_else(|| panic!("{site}: anchor `{unique_marker}` gone — re-point this"));
+            let at = from
+                + code[from..].find(loop_header).unwrap_or_else(|| {
+                    panic!("{site}: the loop header moved — re-point this test")
+                });
+            assert!(
+                code[..at].contains("crate::vscode::snapshot("),
+                "{site}: the snapshot must be built BEFORE the per-package loop it feeds"
+            );
+            // From the loop header to the probe call: the whole prologue of one iteration. A
+            // per-row snapshot would have to be built in there.
+            let probe = code[at..]
+                .find("detect_present_detailed_with_vscode(")
+                .unwrap_or_else(|| {
+                    panic!("{site}: does not pass the snapshot to the probe at all")
+                });
+            let prologue = &code[at..at + probe];
+            assert!(
+                !prologue.contains("crate::vscode::snapshot("),
+                "{site} builds the snapshot INSIDE its loop → one `code --version` per row on a \
+                 serial scan, which is exactly what taking it once was for"
+            );
+            assert!(
+                prologue.contains("std::sync::Arc::clone(&vs)"),
+                "{site} must share the one snapshot by Arc rather than rebuild or clone it"
             );
         }
     }

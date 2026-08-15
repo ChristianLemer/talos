@@ -231,21 +231,13 @@ pub fn snapshot_from(host_present: bool, extensions_dir: &Path) -> VscodeSnapsho
 /// hang, the whole scan. Not fixed here (a timeout belongs to `run_probe_detailed`, where it
 /// would change every probe in the app); named so the next reader does not have to rediscover it.
 ///
-/// ⚠️ TEMPORARY allow, on ONE item rather than the module — but be precise about what that buys,
-/// because the obvious reading is wrong. rustc treats an `allow(dead_code)` item as a LIVE ROOT,
-/// so this single attribute re-livens everything reachable from it: MEASURED by deleting it, the
-/// read half (`extensions_dir`, `manifest_path`, `parse_installed_extensions`, `read_installed`,
-/// `snapshot_from`) is named unreached along with `snapshot`. Tests do not count — they are a
-/// separate compilation, so the composition test cannot make them live in the bin build.
-///
-/// So the gain over the module-wide allow is NOT a smaller silenced set; it is that the attribute
-/// sits on the one item whose wiring is owed, next to the sentence saying who owes it, instead of
-/// at the top of a file where it outlives its reason. It cannot be narrowed further while
-/// `snapshot` has no non-test caller: every function above is reached only through it.
-///
-/// The only caller is the scan, which lives in `server.rs`. The gesture that wires it there
-/// DELETES this attribute; if it survives that, the function is genuinely dead.
-#[allow(dead_code)]
+/// ⭐ The `#[allow(dead_code)]` this carried until the wiring landed is GONE, and its absence is
+/// the proof the wiring is real: rustc treats an `allow(dead_code)` item as a LIVE ROOT, so that
+/// one attribute re-livened the whole read half of this module (`extensions_dir`,
+/// `manifest_path`, `parse_installed_extensions`, `read_installed`, `snapshot_from`) — tests do
+/// not count, they are a separate compilation. Both scans in `server.rs` now call this, so the
+/// chain is reached from the bin and clippy is silent without any allow. If a future refactor
+/// unwires it, clippy will name the whole chain rather than one function — that is the signal.
 pub fn snapshot(os: crate::platform::Os, home: &Path) -> VscodeSnapshot {
     let probe = crate::platform::shell_probe(os, "code --version");
     let d = crate::detect::run_probe_detailed(&probe);

@@ -110,7 +110,7 @@ pub fn version_from(step: &Step, output: &str) -> String {
 
 /// The user's HOME (Mac/Linux $HOME, Windows %USERPROFILE%). The .app/.exe runs
 /// in the user's HOME, so the agent content (~/.claude, ~/.agents) is relative to it.
-fn user_home() -> std::path::PathBuf {
+pub fn user_home() -> std::path::PathBuf {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(std::path::PathBuf::from)
