@@ -668,6 +668,57 @@ pub fn is_extension_route(route: Option<&str>) -> bool {
     )
 }
 
+/// What a catalogue author DECLARED in `version:`.
+///
+/// ⭐ One classification, consumed by two sides with opposite needs:
+///   · `commands_for` must never see a keyword — `install_pinned` would emit
+///     `brew install --yes git@pending`, a command built to fail;
+///   · `action_for` must see it — the keyword is a statement about policy ("hold this", "take
+///     the newest"), which is exactly what decides whether to act.
+/// Reading the raw string twice is how those two would come to disagree.
+#[allow(dead_code)] // Tasks 3, 4, 5 will consume this
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PinKind {
+    /// An exact version to converge on. The only variant a command may interpolate.
+    Exact(String),
+    /// "I decided: the newest." Behaves as today's silence — and is NOT redundant with it:
+    /// the difference between an intention and an absence of decision is what a catalogue
+    /// meant to be copied from must be able to express.
+    Latest,
+    /// "Nobody has decided yet." Held out of the batch; the gap stays visible.
+    Pending,
+    /// ⚠️ Anything else, carrying the word so the caller can name it in a log line. NEVER
+    /// interpreted as a version: MEASURED, `compare_versions("2.50.1", "current") == 1`
+    /// because a word has no leading digits and reads as 0.0.0 — so `action_for` would return
+    /// Downgrade and offer the only destructive path in the app.
+    Invalid(String),
+}
+
+/// Classify `version:`. `None` ⇒ nothing was declared (today's behaviour: chase the newest).
+///
+/// The discriminator for an exact version is "starts with a digit", deliberately NOT a semver
+/// parse: this codebase does not do semver (`compare_versions` compares numeric prefixes), and
+/// real versions here look like `2026.72.0` and `1.0-beta`.
+#[allow(dead_code)] // Tasks 3, 4, 5 will consume this
+pub fn classify_pin(declared: Option<&str>) -> Option<PinKind> {
+    let raw = declared?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    // Case-insensitive: a maintainer who types `Pending` means the keyword. `eq_ignore_ascii_case`
+    // allocates nothing, and both words are ASCII by construction.
+    if raw.eq_ignore_ascii_case("latest") {
+        return Some(PinKind::Latest);
+    }
+    if raw.eq_ignore_ascii_case("pending") {
+        return Some(PinKind::Pending);
+    }
+    if raw.starts_with(|c: char| c.is_ascii_digit()) {
+        return Some(PinKind::Exact(raw.to_string()));
+    }
+    Some(PinKind::Invalid(raw.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1651,5 +1702,81 @@ slow: true
         let cc = plan.steps.iter().find(|s| s.name == "Claude Code").unwrap();
         assert_eq!(cc.requires, vec!["Bun"]);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_declared_version_is_classified_once_and_only_once() {
+        // ⭐ ONE classification, because the value has TWO consumers with opposite needs: the
+        // command builder must NEVER see a keyword (it would emit `brew install git@pending`),
+        // while `action_for` MUST see it (it decides whether to act at all). Two readings of the
+        // same string is how they would come to disagree.
+        assert_eq!(classify_pin(None), None, "nothing declared is not a pin");
+        assert_eq!(
+            classify_pin(Some("")),
+            None,
+            "an empty value is nothing declared"
+        );
+        assert_eq!(
+            classify_pin(Some("   ")),
+            None,
+            "whitespace is nothing declared"
+        );
+        assert_eq!(
+            classify_pin(Some("0.113.1")),
+            Some(PinKind::Exact("0.113.1".into()))
+        );
+        assert_eq!(
+            classify_pin(Some(" 1.10 ")),
+            Some(PinKind::Exact("1.10".into())),
+            "trimmed"
+        );
+        assert_eq!(classify_pin(Some("latest")), Some(PinKind::Latest));
+        assert_eq!(classify_pin(Some("pending")), Some(PinKind::Pending));
+        // Case-insensitive: a maintainer typing `Pending` means the keyword, not a version.
+        assert_eq!(classify_pin(Some("Pending")), Some(PinKind::Pending));
+        assert_eq!(classify_pin(Some("LATEST")), Some(PinKind::Latest));
+    }
+
+    #[test]
+    fn an_unknown_word_is_invalid_never_a_version() {
+        // ⚠️ THE LOAD-BEARING CASE. MEASURED: `compare_versions("2.50.1", "current") == 1` and
+        // `compare_versions("0.0.0", "current") == 0` — a word's leading digits are absent, so it
+        // reads as 0.0.0, `action_for` concludes "installed is ABOVE the pin" and returns
+        // Downgrade. That surfaces the manual downgrade button, whose command is
+        // `uninstall && install pkg@current` — the only destructive path in the app, reachable by
+        // writing one innocent word.
+        //
+        // ⚠️ AND WORSE: `bundles.rs`'s `ver` binding feeds `install_pinned`, so the word also
+        // reaches `brew install --yes git@current` / `winget install --version current` — a
+        // command built to fail, on install AND upgrade AND downgrade.
+        assert_eq!(
+            classify_pin(Some("current")),
+            Some(PinKind::Invalid("current".into()))
+        );
+        assert_eq!(
+            classify_pin(Some("stable")),
+            Some(PinKind::Invalid("stable".into()))
+        );
+        assert_eq!(
+            classify_pin(Some("pendign")),
+            Some(PinKind::Invalid("pendign".into())),
+            "a typo must be caught, not silently treated as 0.0.0"
+        );
+    }
+
+    #[test]
+    fn a_version_that_merely_starts_with_a_digit_is_exact() {
+        // The discriminator is "does it start with a digit", not a semver parse: this codebase
+        // deliberately does NOT do full semver (compare_versions takes numeric prefixes), and
+        // real catalogue versions include shapes like `2026.72.0` and `1.0-beta`.
+        assert_eq!(
+            classify_pin(Some("2026.72.0")),
+            Some(PinKind::Exact("2026.72.0".into()))
+        );
+        assert_eq!(
+            classify_pin(Some("1.0-beta")),
+            Some(PinKind::Exact("1.0-beta".into()))
+        );
+        assert_eq!(classify_pin(Some("7")), Some(PinKind::Exact("7".into())));
     }
 }
