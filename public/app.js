@@ -1817,12 +1817,14 @@ document.getElementById("reset-confirm-yes").onclick = () => {
 // ⚠️ The headers say "here" DELIBERATELY. A clipboard travels further than a screen, so the
 // "this machine only" warning must live IN THE DATA, not only above the list.
 //
-// ⚠️ NO `route` COLUMN. Measured: `step_json` does not send `route` and the front model does
-// not carry it, so a route column would have to be invented — and the arbiter would be reading
-// a fabricated field. The bundle is real (`bundle` IS on the wire) and answers the same
-// "which family is this?" question well enough.
+// ⚠️ NEITHER `route` NOR `bundle` is a column, and for the same reason twice: `route` is not on
+// the wire at all (`step_json` does not send it), and `bundle` IS on the model but is assigned
+// `String::new()` at exactly one place (`bundles.rs:623`, "bundles don't own packages anymore") —
+// so it renders blank for every package, forever. A column that is always empty is decoration,
+// and an arbiter reading a blank field is no better off than one reading an invented one. The
+// package name and the two versions are the fields that are real.
 document.getElementById("arb-copy").onclick = async () => {
-  const lines = ["package\tbundle\tinstalled here\tavailable here"];
+  const lines = ["package\tinstalled here\tavailable here"];
   const ids = Object.keys(rows).map(Number);
   for (const i of ids) {
     const r = rows[i];
@@ -1830,7 +1832,6 @@ document.getElementById("arb-copy").onclick = async () => {
     const p = model.pkgs.get(i);
     lines.push([
       p.name,
-      p.bundle || "",
       p.installedVersion || "",
       p.available || "",
     ].join("\t"));
