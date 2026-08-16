@@ -320,9 +320,11 @@ export function versionSummary(model, i) {
     // ⭐ `pending` and `latest` are POLICY, not versions — comparing them would read them as
     // 0.0.0 (measured) and claim the machine is "above the pin".
     if (held) {
-      // Show the gap when there is one, GREYED: seen, quantified, not pushed. That is what
-      // makes this a hold rather than a blindfold — and it is what the arbiter reads.
-      if (p.outdated && p.available) {
+      // Show the gap when there is one and it is FORWARD, GREYED: seen, quantified, not
+      // pushed. That is what makes this a hold rather than a blindfold — and it is what
+      // the arbiter reads. BACKWARDS (available < installed) is drift from receipt lag;
+      // calling it arbitration would assert a decision exists when the machine is ahead.
+      if (p.outdated && p.available && compareVersions(p.available, inst) > 0) {
         return { from: inst, to: p.available, pinned: null, muted: true, held: true };
       }
       return { from: inst, to: null, pinned: null, muted: false, held: false };

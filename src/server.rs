@@ -90,16 +90,21 @@ fn is_outdated_now(od: Option<&crate::managers::Outdated>) -> bool {
 
 /// For an Upgrade on a brew CASK, the forced command (`brew upgrade --cask
 /// --force --yes`) that absorbs the receipt drift (else brew's anti-clobber
-/// guard → exit 1). Returns None for formulae, non-brew routes, and PINNED
-/// steps (a pin owns the direction — keep its precomputed install-pinned cmd).
+/// guard → exit 1). Returns None for formulae, non-brew routes, and steps with
+/// an EXACT pin (an exact pin owns the direction — keep its precomputed
+/// install-pinned cmd). Keywords (pending, latest) do NOT own a direction, so
+/// they still need the forced command.
 /// `is_cask` comes from the brew outdated scan bucket (the single source).
 fn forced_cask_upgrade_cmd(
     step: &crate::bundles::Step,
     os: crate::platform::Os,
     is_cask: bool,
 ) -> Option<String> {
+    use crate::bundles::{classify_pin, PinKind};
     use crate::managers::{native_manager, IdField};
-    if !is_cask || step.pin.is_some() {
+    // An EXACT pin owns the direction (install-pinned command), so return None.
+    // Keywords (pending, latest) do not own a direction, so fall through.
+    if !is_cask || matches!(classify_pin(step.pin.as_deref()), Some(PinKind::Exact(_))) {
         return None;
     }
     let mgr = native_manager(os)?;
@@ -1418,14 +1423,18 @@ async fn apply_diff(
             .map(|s| is_outdated_now(outdated_for(s.system_id.as_deref(), &scan)))
             .unwrap_or(false)
     };
-    // A pin makes the installed VERSION the deciding fact, and presence cannot report
-    // it — so a pinned row is always probed. `trim` because the pin is author-written
-    // YAML: `version: "0.113.1 "` is one keystroke away.
+    // An EXACT pin makes the installed VERSION the deciding fact, and presence cannot
+    // report it — so an exact-pinned row is always probed. Keywords (pending, latest)
+    // do NOT make version the deciding fact, so they must NOT seed — seeding them
+    // would re-introduce the serial scan cost the batching work removed. `trim`
+    // reasoning stays (the pin is author-written YAML), but is now inside classify_pin.
     let is_pinned_row = |i: usize| -> bool {
-        steps
-            .get(i)
-            .and_then(|s| s.pin.as_deref())
-            .is_some_and(|p| !p.trim().is_empty())
+        steps.get(i).is_some_and(|s| {
+            matches!(
+                crate::bundles::classify_pin(s.pin.as_deref()),
+                Some(crate::bundles::PinKind::Exact(_))
+            )
+        })
     };
     // The guard is BOUND, not passed as a temporary: a temporary would live to the end
     // of the statement while the closures run, which is one refactor away from a
@@ -2585,9 +2594,25 @@ mod tests {
         );
         // formula → None (trusts the precomputed step.upgrade)
         assert_eq!(forced_cask_upgrade_cmd(&s, Os::Darwin, false), None);
-        // pinned cask → None (a pin owns the direction, keep install-pinned cmd)
-        let pinned = brew_step("visual-studio-code", Some("1.130.0"));
-        assert_eq!(forced_cask_upgrade_cmd(&pinned, Os::Darwin, true), None);
+        // EXACT pin → None (an exact pin owns the direction, keep install-pinned cmd)
+        let exact_pinned = brew_step("visual-studio-code", Some("1.130.0"));
+        assert_eq!(
+            forced_cask_upgrade_cmd(&exact_pinned, Os::Darwin, true),
+            None
+        );
+        // KEYWORD pins (pending, latest) → forced command (they don't own a direction)
+        let pending = brew_step("visual-studio-code", Some("pending"));
+        assert_eq!(
+            forced_cask_upgrade_cmd(&pending, Os::Darwin, true),
+            Some("brew upgrade --cask --force --yes visual-studio-code".to_string()),
+            "pending is a pin but does not own a direction, so the cask needs the forced cmd"
+        );
+        let latest = brew_step("visual-studio-code", Some("latest"));
+        assert_eq!(
+            forced_cask_upgrade_cmd(&latest, Os::Darwin, true),
+            Some("brew upgrade --cask --force --yes visual-studio-code".to_string()),
+            "latest is a pin but does not own a direction, so the cask needs the forced cmd"
+        );
     }
 
     /// The shape the UI ACTUALLY sends: every index carries a desired state, so
@@ -2638,33 +2663,46 @@ mod tests {
     }
 
     #[test]
-    fn a_pinned_row_is_always_a_seed() {
-        // A pin REPLACES "latest" as the reference, so `action_for` ignores the
-        // machine-wide `outdated` flag when a pin is set. Consequence: a pinned row
-        // that is present and wanted present looks converged to a presence-only test
-        // and was never re-probed — while the thing that actually decides is its
-        // installed VERSION, read from `last_seen`.
+    fn an_exact_pinned_row_is_always_a_seed() {
+        // An EXACT pin replaces "latest" as the reference, so `action_for` ignores the
+        // machine-wide `outdated` flag when an exact pin is set. Consequence: a row
+        // with an exact pin that is present and wanted present looks converged to a
+        // presence-only test and was never re-probed — while the thing that actually
+        // decides is its installed VERSION, read from `last_seen`.
         //
-        // The pin itself cannot go stale (it is a literal in the YAML). The remembered
-        // version can. Upgrade Nushell by hand between the connect scan and an Apply
-        // and Talos answers "satisfied" against the old number. The reverse is worse:
-        // a remembered version ABOVE the pin yields Downgrade — the only destructive
-        // path, uninstall+reinstall — decided on data nobody re-checked.
+        // The exact pin itself cannot go stale (it is a literal in the YAML). The
+        // remembered version can. Upgrade Nushell by hand between the connect scan and
+        // an Apply and Talos answers "satisfied" against the old number. The reverse is
+        // worse: a remembered version ABOVE the pin yields Downgrade — the only
+        // destructive path, uninstall+reinstall — decided on data nobody re-checked.
+        //
+        // ⚠️ Keywords (pending, latest) do NOT make version the deciding fact, so they
+        // must NOT seed — seeding them would re-introduce the serial scan cost the
+        // batching work removed.
         let last_seen = vec![Some(seen(true, "0.113.0"))];
+        // Simulate an exact pin: predicate returns true for index 0
+        let is_exact_pinned = |i: usize| i == 0;
         assert_eq!(
-            seeds_for_rescan(&[0], &[], &last_seen, &|_| false, &|i| i == 0),
+            seeds_for_rescan(&[0], &[], &last_seen, &|_| false, &is_exact_pinned),
             vec![0],
-            "a pinned row must be re-probed even when presence matches and it is not outdated"
+            "an EXACT-pinned row must be re-probed even when presence matches and not outdated"
         );
-        // Unpinned, present, wanted, not outdated → still excluded. The pin clause
+        // Unpinned, present, wanted, not outdated → excluded. The exact-pin clause
         // must not widen the scoping back into probing everything.
         assert!(seeds_for_rescan(&[0], &[], &last_seen, &|_| false, &|_| false).is_empty());
-        // A pinned row wanted ABSENT is governed by presence, not by the pin: it is
-        // already a seed via the desire mismatch, and the pin is irrelevant to an
+        // Keyword pins (pending, latest) → excluded. They do not make version the
+        // deciding fact, so they must not seed.
+        let not_pinned = |_: usize| false; // simulates pending or latest (not exact)
+        assert!(
+            seeds_for_rescan(&[0], &[], &last_seen, &|_| false, &not_pinned).is_empty(),
+            "a keyword pin (pending/latest) must NOT seed — it does not own a version"
+        );
+        // An exact-pinned row wanted ABSENT is governed by presence, not by the pin: it
+        // is already a seed via the desire mismatch, and the pin is irrelevant to an
         // uninstall. No special case needed — assert it stays out of double-counting.
         let present = vec![Some(seen(true, "0.113.0"))];
         assert_eq!(
-            seeds_for_rescan(&[], &[0], &present, &|_| false, &|i| i == 0),
+            seeds_for_rescan(&[], &[0], &present, &|_| false, &is_exact_pinned),
             vec![0]
         );
     }

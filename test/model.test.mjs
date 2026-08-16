@@ -1040,6 +1040,22 @@ test("versionSummary: a pending row with nothing newer shows one number", () => 
   assert.equal(v.held, false);
 });
 
+test("versionSummary: a pending row with a BACKWARDS gap shows one number, not held", () => {
+  // ⚠️ MEASURED: installed 1.133.0, available 1.132.0 (brew's receipt lagging the disk).
+  // The defect shipped as "1.133.0 → 1.132.0  arbitration" and counted in the tab.
+  // Fix: only treat as held when available is GREATER than installed.
+  const model = createModel();
+  loadPlan(model, [{ i: 0, name: "VS Code", pin: "pending", canUninstall: true }]);
+  setPresence(model, 0, true);
+  setInstalledVersion(model, 0, "1.133.0");
+  setOutdated(model, 0, true, "1.132.0"); // backwards — available < installed
+  const v = versionSummary(model, 0);
+  assert.equal(v.from, "1.133.0");
+  assert.equal(v.to, null, "a backwards gap is NOT arbitration — show one number");
+  assert.equal(v.muted, false, "not muted");
+  assert.equal(v.held, false, "not held");
+});
+
 test("isPending: only a held row with a real gap counts", () => {
   // ⚠️ The COUNT in the tab must be the number of rows with something to decide, not the
   // number of packages carrying the keyword. 25 packages declare `pending`; if only 6 have a
@@ -1067,4 +1083,7 @@ test("isPending: an absent pending row is not awaiting arbitration — it is awa
   loadPlan(model, [{ i: 0, name: "Git", pin: "pending", canUninstall: true }]);
   setPresence(model, 0, false);
   assert.equal(isPending(model, 0), false);
+  // Adding outdated + available still does NOT make it pending — presence guards first.
+  setOutdated(model, 0, true, "2.51.0");
+  assert.equal(isPending(model, 0), false, "absent with a gap is still not pending");
 });

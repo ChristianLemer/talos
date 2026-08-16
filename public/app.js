@@ -1936,6 +1936,11 @@ const advToggle = document.getElementById("advanced-toggle");
 function applyAdvanced(on) {
   document.body.classList.toggle("advanced", on);
   advToggle.checked = on;
+  // If turning off advanced while on the Arbitration tab, return to the default Bundles tab.
+  // Otherwise the operator is stranded on an invisible view until relaunch.
+  if (!on && document.body.classList.contains("tab-arbitration")) {
+    setTab("bundles");
+  }
 }
 advToggle.onchange = (e) => {
   applyAdvanced(e.target.checked);
