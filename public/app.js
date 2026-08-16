@@ -518,8 +518,20 @@ function paintVersion(i) {
   const cur = (t) => `<span class="v-cur">${t}</span>`;
   const push = (t) => `<span class="v-push">${t}</span>`;
   const remove = (t) => `<span class="v-remove">${t}</span>`;
-  const muted = (t) =>
-    `<span class="v-muted" title="available — not pushed (manual)">${t}</span>`;
+  // The word the operator reads when a gap is shown but not pushed.
+  //
+  // ⚠️ `arbitration`, and NOT "to arbitrate" / "à examiner": the reader of this screen is NOT
+  // the arbiter and has no power to be — the decision lands in the catalogue, in git. A label
+  // that ordered them would name the wrong person. And not "in arbitration" either, which
+  // would promise work is underway; on day one it is underway for none of them.
+  //
+  // Length is not the constraint it looked like: this screen already carries
+  // `blocked by firewall` (19 chars) in a row label, against `arbitration`'s 11.
+  const muted = (t, held) =>
+    held
+      ? `<span class="v-muted" title="arbitration pending — seen, not pushed">${t}</span>` +
+        ` <span class="v-held">arbitration</span>`
+      : `<span class="v-muted" title="available — not pushed (manual)">${t}</span>`;
   const pin = (t) => `📌${t}`;
 
   // A PENDING uninstall reads current(blue) → absent(red) — same red as its
@@ -543,7 +555,7 @@ function paintVersion(i) {
   // there: muted (downgrade / upgrade-past-pin) → grey; else a real push → green.
   const left = cur(v.pinned === "from" ? pin(v.from) : v.from);
   const rightTxt = v.pinned === "to" ? pin(v.to) : v.to;
-  const right = v.muted ? muted(rightTxt) : push(rightTxt);
+  const right = v.muted ? muted(rightTxt, v.held) : push(rightTxt);
   r.delta.innerHTML = `${left} → ${right}`;
 }
 function setToggle(i, state, opts = {}) {
@@ -1149,7 +1161,17 @@ function render(steps, profiles = [], columns = 2) {
     const cats = Array.isArray(s.categories) && s.categories.length
       ? ` <span class="cat-tag">${s.categories.join(" · ")}</span>`
       : "";
-    name.innerHTML = `${s.name}` + cats + profTags +
+    // The row's CLASS, as a glyph: 📦 an application · 🧩 an extension · ⚡ a config-atom.
+    //
+    // ⚠️ On the ROW, never on the category header. Measured, categories are MIXED — `editors`
+    // is 3 apps + 1 extension, `foundation` is 4 apps + 1 config, `legacy` is 7 apps + 1
+    // route-less — so a keyword in front of a header would lie about one member in four. And
+    // grouping by the full pair gives 15 groups for 34 packages: more headers than content.
+    //
+    // The class is already on the wire (`isConfig` / `isExtension` in step_json), so this is a
+    // glyph, not new data.
+    const classGlyph = s.isConfig ? "⚡" : s.isExtension ? "🧩" : "📦";
+    name.innerHTML = `${classGlyph} ${s.name}` + cats + profTags +
       (s.description ? ` <span class="desc">— ${s.description}</span>` : "");
     const delta = document.createElement("span"); // version delta on upgrade, e.g. 2.54 → 2.55
     delta.className = "verdelta";

@@ -309,32 +309,51 @@ export function actionOf(model, i) {
 // migration target (we don't push past your pin) — it's shown greyed so you can
 // still choose to test it. See talos-version-pin.
 export function versionSummary(model, i) {
-  const none = { from: "", to: null, pinned: null, muted: false };
+  const none = { from: "", to: null, pinned: null, muted: false, held: false };
   const p = model.pkgs.get(i);
   if (!p) return none;
   const inst = p.present === true ? (p.installedVersion || "") : "";
   if (!inst) return none;
   if (p.pin) {
+    const held = String(p.pin).toLowerCase() === "pending";
+    const chasing = String(p.pin).toLowerCase() === "latest";
+    // ⭐ `pending` and `latest` are POLICY, not versions — comparing them would read them as
+    // 0.0.0 (measured) and claim the machine is "above the pin".
+    if (held) {
+      // Show the gap when there is one, GREYED: seen, quantified, not pushed. That is what
+      // makes this a hold rather than a blindfold — and it is what the arbiter reads.
+      if (p.outdated && p.available) {
+        return { from: inst, to: p.available, pinned: null, muted: true, held: true };
+      }
+      return { from: inst, to: null, pinned: null, muted: false, held: false };
+    }
+    if (chasing) {
+      // Same display as declaring nothing: an ordinary push when something is newer.
+      if (p.outdated && p.available) {
+        return { from: inst, to: p.available, pinned: null, muted: false, held: false };
+      }
+      return { from: inst, to: null, pinned: null, muted: false, held: false };
+    }
     const cmp = compareVersions(inst, p.pin);
     if (cmp !== 0) {
       // Off the pin → migration TO the pin. BELOW (cmp<0) is an upgrade Apply
       // runs → not muted (a push). ABOVE (cmp>0) is a downgrade — manual only,
       // never batched by Apply → muted, same "not pushed" grey as an upgrade
       // past a pin. Mirrors AUTO_ACTS excluding downgrade. See talos-version-pin.
-      return { from: inst, to: p.pin, pinned: "to", muted: cmp > 0 };
+      return { from: inst, to: p.pin, pinned: "to", muted: cmp > 0, held: false };
     }
     // At the pin: normally just the pinned number. But if the machine-wide scan
     // found something newer, SHOW it greyed (muted) — visible to test, not pushed.
     if (p.outdated && p.available && compareVersions(p.available, p.pin) > 0) {
-      return { from: inst, to: p.available, pinned: "from", muted: true };
+      return { from: inst, to: p.available, pinned: "from", muted: true, held: false };
     }
-    return { from: inst, to: null, pinned: "from", muted: false };
+    return { from: inst, to: null, pinned: "from", muted: false, held: false };
   }
   // Unpinned: show the machine-wide available only when actually outdated.
   if (p.outdated && p.available) {
-    return { from: inst, to: p.available, pinned: null, muted: false };
+    return { from: inst, to: p.available, pinned: null, muted: false, held: false };
   }
-  return { from: inst, to: null, pinned: null, muted: false };
+  return { from: inst, to: null, pinned: null, muted: false, held: false };
 }
 // Would a PLAIN APPLY act here? Mirrors the server's AUTO_ACTS filter exactly:
 // install/uninstall/upgrade are batched by Apply; "downgrade" is NOT (it's the
@@ -344,6 +363,21 @@ export function versionSummary(model, i) {
 const AUTO_ACTS = ["install", "uninstall", "upgrade"];
 export function isActionable(model, i) {
   return AUTO_ACTS.includes(actionOf(model, i));
+}
+// Is this row's version HELD, with something to decide?
+//
+// ⚠️ The count this feeds is "rows with something to arbitrate", NOT "packages carrying the
+// keyword". 25 packages may declare `pending` while only a handful have a newer version
+// available — a tab reading `Arbitration (25)` would send someone to look at nineteen rows
+// with nothing on them.
+//
+// Absent is excluded deliberately: there is no held version of a thing that is not there, and
+// `action_for` returns `install` for that row (it is ordinary work, not a decision).
+export function isPending(model, i) {
+  const p = model.pkgs.get(i);
+  if (!p || p.present !== true) return false;
+  if (String(p.pin || "").toLowerCase() !== "pending") return false;
+  return !!(p.outdated && p.available);
 }
 // Which rows a given rung would touch, in catalogue order. The FRONT needs this only to
 // show the choice; the SERVER is what filters (see ladder.js's header).

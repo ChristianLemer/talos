@@ -504,6 +504,9 @@
       .verdelta .v-push   { color:#9ece6a; }
       .verdelta .v-remove { color:#f7768e; }
       .verdelta .v-muted  { color:var(--dim); }
+      /* The word on a row whose version is held for arbitration. Same dim as the greyed
+         version it sits beside — it explains that grey, so it must not shout louder than it. */
+      .v-held { color:var(--dim); font-size:11px; letter-spacing:.3px; }
       .absent       { color:var(--dim); }
       /* An out-of-scope row (a config-atom the user turned off, an external
          binary, a route with no way back): neutral dim — Talos won't touch it, so

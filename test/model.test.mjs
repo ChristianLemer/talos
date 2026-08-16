@@ -18,6 +18,7 @@ import {
   isActionable,
   isDeviated,
   isInPersonal,
+  isPending,
   isLocked,
   isProfileActive,
   isTouched,
@@ -38,6 +39,7 @@ import {
   setExternal,
   setInstalledVersion,
   setOutdated,
+  setPresence,
   setScope,
   setStatusData,
   toggleOf,
@@ -297,6 +299,7 @@ test("versionSummary: unpinned + up to date → just the installed version, no a
     to: null,
     pinned: null,
     muted: false,
+    held: false,
   });
 });
 
@@ -310,6 +313,7 @@ test("versionSummary: unpinned + outdated → cur→avail ONCE, not muted (a rea
     to: "26.5.0",
     pinned: null,
     muted: false,
+    held: false,
   });
 });
 
@@ -322,6 +326,7 @@ test("versionSummary: pinned AT the pin, NO upgrade → single number, marked pi
     to: null,
     pinned: "from",
     muted: false,
+    held: false,
   });
 });
 
@@ -338,6 +343,7 @@ test("versionSummary: pinned AT the pin, upgrade AVAILABLE → 📌pin → avail
     to: "2.5",
     pinned: "from",
     muted: true,
+    held: false,
   });
 });
 
@@ -350,6 +356,7 @@ test("versionSummary: pinned BELOW → installed→pin, pin on target, not muted
     to: "1.8",
     pinned: "to",
     muted: false,
+    held: false,
   });
 });
 
@@ -365,6 +372,7 @@ test("versionSummary: pinned ABOVE → installed→pin, MUTED (downgrade is manu
     to: "1.8",
     pinned: "to",
     muted: true,
+    held: false,
   });
 });
 
@@ -376,6 +384,7 @@ test("versionSummary: absent → empty (nothing installed to show)", () => {
     to: null,
     pinned: null,
     muted: false,
+    held: false,
   });
 });
 
@@ -1002,4 +1011,60 @@ test("a reload drops the traces of the previous plan", () => {
   assert.ok(m.touched.size > 0, "precondition: the trace exists");
   loadPlan(m, [{ i: 0, name: "rg", canUninstall: true }]);
   assert.equal(m.touched.size, 0, "a new plan is a new session's worth of rows");
+});
+
+test("versionSummary: a pending row shows the gap, greyed, and says it is held", () => {
+  // ⭐ The display ALREADY EXISTS for a pinned row whose scan found something newer
+  // (model.js: `muted: true`). `pending` reuses it — no new channel, no new message. What
+  // changes is that the row can say WHY it is not moving.
+  const model = createModel();
+  loadPlan(model, [{ i: 0, name: "Git", pin: "pending", canUninstall: true }]);
+  setPresence(model, 0, true);
+  setInstalledVersion(model, 0, "2.50.1");
+  setOutdated(model, 0, true, "2.51.0");
+  const v = versionSummary(model, 0);
+  assert.equal(v.from, "2.50.1");
+  assert.equal(v.to, "2.51.0", "the gap is SHOWN — a hold, not a blindfold");
+  assert.equal(v.muted, true, "…and greyed, because Apply will not push it");
+  assert.equal(v.held, true, "…and it says it is held, not merely 'available'");
+});
+
+test("versionSummary: a pending row with nothing newer shows one number", () => {
+  const model = createModel();
+  loadPlan(model, [{ i: 0, name: "Git", pin: "pending", canUninstall: true }]);
+  setPresence(model, 0, true);
+  setInstalledVersion(model, 0, "2.50.1");
+  const v = versionSummary(model, 0);
+  assert.equal(v.from, "2.50.1");
+  assert.equal(v.to, null, "no arbitration is pending when there is no gap to arbitrate");
+  assert.equal(v.held, false);
+});
+
+test("isPending: only a held row with a real gap counts", () => {
+  // ⚠️ The COUNT in the tab must be the number of rows with something to decide, not the
+  // number of packages carrying the keyword. 25 packages declare `pending`; if only 6 have a
+  // newer version available, the queue is 6.
+  const model = createModel();
+  loadPlan(model, [
+    { i: 0, name: "Git", pin: "pending", canUninstall: true },
+    { i: 1, name: "Node.js", pin: "pending", canUninstall: true },
+    { i: 2, name: "Nushell", pin: "0.113.1", canUninstall: true },
+  ]);
+  setPresence(model, 0, true);
+  setInstalledVersion(model, 0, "2.50.1");
+  setOutdated(model, 0, true, "2.51.0");
+  setPresence(model, 1, true);
+  setInstalledVersion(model, 1, "24.4.0"); // present, nothing newer
+  setPresence(model, 2, true);
+  setInstalledVersion(model, 2, "0.113.1");
+  assert.equal(isPending(model, 0), true);
+  assert.equal(isPending(model, 1), false, "held, but nothing to arbitrate");
+  assert.equal(isPending(model, 2), false, "an exact pin is a decision already taken");
+});
+
+test("isPending: an absent pending row is not awaiting arbitration — it is awaiting install", () => {
+  const model = createModel();
+  loadPlan(model, [{ i: 0, name: "Git", pin: "pending", canUninstall: true }]);
+  setPresence(model, 0, false);
+  assert.equal(isPending(model, 0), false);
 });
