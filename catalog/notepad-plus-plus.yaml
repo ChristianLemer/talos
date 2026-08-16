@@ -7,3 +7,9 @@ category: [legacy]
 # The watcher missed it — it samples every 1.2 s and does not see consent.exe,
 # which is outside Talos's process tree. A report beats its silence.
 uac: true
+
+# Held for arbitration: nobody has decided which upgrade of this application is worth taking,
+# so Apply does not push one. ⚠️ NOT a blindfold — the row still SHOWS a newer version, greyed,
+# and the per-row button still offers it. Replace this with `latest` or an exact version once
+# the decision is made; `grep -c 'version: "pending"' catalog/*.yaml` is then the work left.
+version: "pending"

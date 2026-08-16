@@ -8,3 +8,9 @@ category: [vcs]
 # Asks for an authorisation on Windows via winget, and takes ~9 min — the slowest
 # thing in the catalogue. Promoted from behaviour/ (fleet, 2026-08-06).
 uac: true
+
+# Held for arbitration: nobody has decided which upgrade of this application is worth taking,
+# so Apply does not push one. ⚠️ NOT a blindfold — the row still SHOWS a newer version, greyed,
+# and the per-row button still offers it. Replace this with `latest` or an exact version once
+# the decision is made; `grep -c 'version: "pending"' catalog/*.yaml` is then the work left.
+version: "pending"
