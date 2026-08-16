@@ -141,9 +141,40 @@ re-scans and shows the real state — it never lies about what's on the machine)
 you sit *at* the pin, nothing runs, so an unavailable versioned formula is harmless
 until you actually drift.
 
-There's no "floor" mode — a pin is exact. If you don't want to track a moving latest,
-pin; if you want latest, omit `version:` and Talos flags "outdated" from the manager's
-own scan.
+There's no "floor" mode — an exact pin is exact.
+
+### `version:` takes three forms, and the two words are not decoration
+
+| written | meaning | what Apply does |
+|---|---|---|
+| `version: "0.113.1"` | **exactly that one** | converges to it (upgrade / downgrade / satisfied) |
+| `version: "latest"` | **I decided: the newest** | upgrades when the manager reports it outdated |
+| `version: "pending"` | **nobody has decided yet** | **nothing** — the row is held out of the batch |
+| *(omitted)* | nobody wrote anything | same as `latest` |
+
+⭐ **`latest` is not redundant with omitting the field.** It is the difference between an
+intention and an absence of decision — and in a catalogue meant to be copied from, a
+maintainer must be able to say "yes, newest here" rather than merely leave a blank.
+
+**`pending` is a HOLD, not a blindfold.** The row still *shows* the newer version, greyed,
+with the word `arbitration` beside it; the **per-row button still offers the update**. What
+disappears is only the batched action in Apply. Use it when a package costs enough to
+install that somebody should decide, and nobody has yet. Replace it with `latest` or an
+exact version once the decision is made — then
+`grep -c 'version: "pending"' catalog/*.yaml` is the work still left.
+
+⚠️ **Anything else is REFUSED at load**, named in the log, and the package behaves as if
+nothing was declared. That guard is not politeness: a word has no leading digits, so the
+version comparison reads it as `0.0.0`, concludes the machine is *above* the pin, and
+offers a **downgrade** — the only destructive path there is. A typo used to be enough.
+
+⚠️ **An extension route (`claude-plugin`, `skill`, `vscode-extension`) carries no pin at
+all**, keyword included. None of them builds an upgrade command, so a pin would produce an
+action with nothing to run — a row skipped in silence, which this engine refuses.
+
+⚠️ Quote the value. Not because the parser needs it (the field is typed as a string, so
+`1.10` will not be read as a float here), but because the field now holds two natures —
+a number and a word — and the quotes say which one you meant.
 
 ## Config-atoms — shipping a config, not a package
 
