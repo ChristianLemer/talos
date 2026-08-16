@@ -775,6 +775,28 @@ function refreshLiveness() {
   // the same hook rather than from each caller: a toggle, a scan verdict and an `outdated`
   // pill all change what a rung would touch, and all of them already route through here.
   renderDial();
+  refreshArbitration();
+}
+
+// Mark the rows the Arbitration tab shows, and put the count in the tab's own label.
+//
+// ⭐ The tab IS the counter — which is why no separate banner exists. One number, one place.
+//
+// ⚠️ The count is rows with something to DECIDE (`M.isPending`), not packages carrying the
+// keyword: 25 may declare it while only a handful have a newer version available, and a tab
+// reading `Arbitration (25)` would send the arbiter to look at nineteen empty rows.
+function refreshArbitration() {
+  let n = 0;
+  const ids = Object.keys(rows).map(Number);
+  for (const i of ids) {
+    const r = rows[i];
+    if (!r) continue;
+    const held = M.isPending(model, i);
+    r.details.classList.toggle("is-pending", held);
+    if (held) n += 1;
+  }
+  const tab = document.querySelector('.tab[data-view="arbitration"]');
+  if (tab) tab.textContent = n ? `Arbitration (${n})` : "Arbitration";
 }
 
 // The chosen rung, 0..4. NOT PERSISTED, deliberately: the question the ladder asks is "do I
@@ -1785,6 +1807,41 @@ document.getElementById("reset-confirm-yes").onclick = () => {
   resetAll();
 };
 
+// Copy the queue as TSV. ⭐ `copyText` already exists (app.js) with its non-secure-context
+// fallback — the front is served over plain http://127.0.0.1, where navigator.clipboard is
+// often absent, and that was solved and commented long ago.
+//
+// TSV rather than Markdown: pasting into a spreadsheet is the likely destination and TSV
+// survives it as a table, where Markdown is three times as verbose and pastes as text.
+//
+// ⚠️ The headers say "here" DELIBERATELY. A clipboard travels further than a screen, so the
+// "this machine only" warning must live IN THE DATA, not only above the list.
+//
+// ⚠️ NO `route` COLUMN. Measured: `step_json` does not send `route` and the front model does
+// not carry it, so a route column would have to be invented — and the arbiter would be reading
+// a fabricated field. The bundle is real (`bundle` IS on the wire) and answers the same
+// "which family is this?" question well enough.
+document.getElementById("arb-copy").onclick = async () => {
+  const lines = ["package\tbundle\tinstalled here\tavailable here"];
+  const ids = Object.keys(rows).map(Number);
+  for (const i of ids) {
+    const r = rows[i];
+    if (!r || !M.isPending(model, i)) continue;
+    const p = model.pkgs.get(i);
+    lines.push([
+      p.name,
+      p.bundle || "",
+      p.installedVersion || "",
+      p.available || "",
+    ].join("\t"));
+  }
+  const btn = document.getElementById("arb-copy");
+  const ok = await copyText(lines.join("\n"));
+  // Confirm in a word: without it, nobody knows whether it worked.
+  btn.textContent = ok ? "copied" : "copy failed";
+  setTimeout(() => (btn.textContent = "Copy"), 1500);
+};
+
 // Refresh: re-scan the machine on demand. Freezes + dims the panel like the
 // initial scan (scanning=true), sets every row back to "checking…", and asks the
 // server to re-detect. Touches ONLY detection — the user's selection is untouched
@@ -1861,6 +1918,7 @@ function setTab(v) {
   document.getElementById("view-log").classList.toggle("active", isLog);
   document.body.classList.toggle("tab-bundles", v === "bundles");
   document.body.classList.toggle("tab-catalog", v === "catalog");
+  document.body.classList.toggle("tab-arbitration", v === "arbitration");
   if (isLog) ws.send(JSON.stringify({ type: "get-log" }));
 }
 document.querySelectorAll(".tab").forEach((tab) => {

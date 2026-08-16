@@ -775,6 +775,20 @@
       .list-sep-toggle .sep-toggle-label { font-size:12px; color:var(--dim); }
       body.tab-catalog #list-sep { display:none; }
       body.applying #list-sep { display:none; }
+      /* Advanced-only tabs: hidden entirely in simple mode. */
+      body:not(.advanced) .tab-adv-only { display:none; }
+      /* The Arbitration view is the SAME list, filtered — rows are never duplicated, exactly
+         as tab-bundles / tab-catalog work. */
+      body.tab-arbitration #steps > details:not(.is-pending) { display:none; }
+      body.tab-arbitration .cat-header { display:none; }
+      body.tab-arbitration #profiles { display:none; }
+      body.tab-arbitration .hero-apply { display:none; }
+      body.tab-arbitration #list-sep { display:none; }
+      /* The header of the tab: what it is, what it does NOT know, and the Copy button. */
+      #arb-head { display:none; padding:8px 12px; border-bottom:1px solid var(--line); }
+      body.tab-arbitration #arb-head { display:flex; align-items:center;
+        justify-content:space-between; gap:8px; }
+      #arb-head .arb-note { font-size:11px; color:var(--dim); }
       /* Settings rows + history */
       #settings { padding:14px 14px 4px; }
       .set-row { display:flex; align-items:center; gap:14px; padding:12px 0; border-bottom:1px solid var(--line); }
@@ -1171,6 +1185,10 @@
            would touch ~40 selectors for no gain. -->
       <button class="tab active" data-view="bundles">Changes</button>
       <button class="tab" data-view="catalog">Catalog</button>
+      <!-- ⚠️ ADVANCED ONLY. The majority state must stay silent: an empty tab for 39
+           colleagues in 40 is noise, and this is an administration surface. Same lesson the
+           scope controls learned — C caught it twice. -->
+      <button class="tab tab-adv-only" data-view="arbitration">Arbitration</button>
       <button class="tab" data-view="log">Log &amp; settings</button>
     </nav>
 
@@ -1313,6 +1331,13 @@
            under you as you choose. And it was in the wrong place besides: the list is what is
            empty, so the list is what should say so. -->
       <div id="steps-empty" class="steps-empty" hidden></div>
+      <!-- ⚠️ "as seen on this machine" is NOT a footnote. This tab lists what the CATALOGUE
+           declares held (complete, reliable), but the GAP it shows is this machine's. Without
+           the warning, someone arbitrates for forty machines while reading a sample of one. -->
+      <div id="arb-head">
+        <span class="arb-note">versions as seen on this machine</span>
+        <button id="arb-copy" class="btn">Copy</button>
+      </div>
       <div id="steps"></div>
     </div>
 
