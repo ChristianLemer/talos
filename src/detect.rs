@@ -425,7 +425,26 @@ pub fn detect_present_detailed_with_vscode(
             // Presence established by the SYSTEM probe → IT is the evidence to show
             // (not the binary, which may have failed). diag follows the verdict.
             let sd = sd.unwrap();
-            let v = version_from(step, &sd.output);
+            // ⭐ Field-reported defect (beta.32): A manager listing is UNORDERED and
+            // reports every installed version, but a binary reports what actually RUNS.
+            // When the binary probe answered (bin_ok), the VERSION comes from IT,
+            // because "what executes" is singular and known, while "what is installed"
+            // is plural and can only guess. Presence stays unchanged: bin_ok || system_ok.
+            // If the binary answered but printed no parseable version, fall back to
+            // the table rather than losing information.
+            let bin_version = bin.as_ref().and_then(|d| {
+                let v = version_from(step, &d.output);
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(v)
+                }
+            });
+            let v = if bin_ok {
+                bin_version.unwrap_or_else(|| version_from(step, &sd.output))
+            } else {
+                version_from(step, &sd.output)
+            };
             return Presence {
                 present: Some(true),
                 version: Some(v),
@@ -600,6 +619,31 @@ mod tests {
             p.diag
         );
         assert!(p.external, "present, but not through its manager");
+    }
+
+    #[test]
+    fn when_binary_and_table_disagree_on_version_the_binary_decides() {
+        // ⭐ Field-reported defect (beta.31 fixed sorting, beta.32 fixes precedence):
+        // the bulk table is UNORDERED and reports every installed version, but the
+        // binary reports what actually RUNS. A manager listing says "what is installed"
+        // (plural), a binary says "what executes" (singular). When the binary probe
+        // answered, the VERSION must come from it — presence stays `bin_ok || system_ok`.
+        if cfg!(target_os = "windows") {
+            return;
+        }
+        let mut s = step();
+        s.route = Some("brew".into());
+        s.system_id = Some("nushell".into());
+        s.detect = Some("printf 0.113.1".into()); // binary reports 0.113.1
+        let mut bulk = std::collections::HashMap::new();
+        bulk.insert("nushell".to_string(), "0.114.0".to_string()); // table reports 0.114.0
+        let p = detect_present_detailed_with(&s, Os::Darwin, Some(&bulk));
+        assert_eq!(p.present, Some(true), "present is unchanged");
+        assert_eq!(
+            p.version.as_deref(),
+            Some("0.113.1"),
+            "version comes from the BINARY, not the table"
+        );
     }
 
     #[test]

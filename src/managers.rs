@@ -340,7 +340,13 @@ fn parse_winget_list(raw: &str) -> Result<HashMap<String, String>, ()> {
         .or_else(|| header.find("Source"))
         .filter(|&e| e > ver_pos);
 
-    let mut map = HashMap::new();
+    // Field-reported defect (beta.32): two installed versions of the same id
+    // appeared on separate rows → the last one silently overwrote the first.
+    // The fix: collect ALL versions per id, then keep the MAXIMUM by
+    // `compare_versions` (same reasoning as parse_brew_list and the parsers
+    // fixed in beta.31). ⚠️ This is the symmetric twin of parse_brew_list that
+    // was missed in beta.31: bulk scan calls THIS parser, not the per-package one.
+    let mut versions_by_id: HashMap<String, Vec<String>> = HashMap::new();
     for line in &lines[h + 1..] {
         // ⚠️ `continue`, not `break` as the upgrade parser does: there every row
         // after a blank is noise, here a short MSIX row must not end the table.
@@ -368,7 +374,21 @@ fn parse_winget_list(raw: &str) -> Result<HashMap<String, String>, ()> {
         if id.is_empty() {
             continue;
         }
-        map.insert(id.to_lowercase(), version);
+        let key = id.to_lowercase();
+        versions_by_id.entry(key).or_default().push(version);
+    }
+    // Now pick the MAXIMUM version for each id.
+    let mut map = HashMap::new();
+    for (id, mut versions) in versions_by_id {
+        // Filter out empty versions, sort by compare_versions, take the first (max).
+        versions.retain(|v| !v.is_empty());
+        if versions.is_empty() {
+            continue;
+        }
+        versions.sort_by(|a, b| crate::decision::compare_versions(b, a).cmp(&0));
+        if let Some(max) = versions.first() {
+            map.insert(id, max.clone());
+        }
     }
     Ok(map)
 }
@@ -722,6 +742,39 @@ Nushell   Nushell.Nushell  0.111.1              winget
         assert_eq!(
             parse_winget_version("Nushell.Nushell", output_rev),
             "0.114.0",
+            "must return MAX regardless of order"
+        );
+    }
+
+    #[test]
+    fn winget_list_returns_maximum_when_multiple_versions_installed() {
+        // Field-reported defect (beta.31 fixed parse_winget_version but missed
+        // parse_winget_list, which is the twin that matters — bulk scan calls it).
+        // Two versions of the same id on separate ROWS → parser must return the MAX,
+        // because the newest is what PATH resolves to.
+        let output = "\
+Name                                                         Id                                                                                    Version                    Available           Source
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Nushell                                                      Nushell.Nushell                                                                       0.111.1                                        winget
+Nushell                                                      Nushell.Nushell                                                                       0.114.0                                        winget
+";
+        let m = parse_winget_list(output).expect("recognised");
+        assert_eq!(
+            m.get("nushell.nushell").map(String::as_str),
+            Some("0.114.0")
+        );
+
+        // Reversed: higher version FIRST.
+        let output_rev = "\
+Name                                                         Id                                                                                    Version                    Available           Source
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Nushell                                                      Nushell.Nushell                                                                       0.114.0                                        winget
+Nushell                                                      Nushell.Nushell                                                                       0.111.1                                        winget
+";
+        let m = parse_winget_list(output_rev).expect("recognised");
+        assert_eq!(
+            m.get("nushell.nushell").map(String::as_str),
+            Some("0.114.0"),
             "must return MAX regardless of order"
         );
     }
