@@ -186,33 +186,69 @@ fn strip_ansi(s: &str) -> String {
 }
 
 // winget: "name  Id  Version" — the token after the id (must start with a digit).
+// ⚠️ When MULTIPLE VERSIONS are installed for the same id (field-hit: two Nushell
+// versions on Windows, pin between them → wrong action direction), returns the
+// MAXIMUM by `compare_versions`, because the newest is what PATH resolves and what
+// a pin must be compared against. `winget list` prints one line per version.
 fn parse_winget_version(id: &str, output: &str) -> String {
     let clean = strip_ansi(output);
     let lc = id.to_lowercase();
+    let mut versions: Vec<String> = Vec::new();
     for line in clean.lines() {
         let cols: Vec<&str> = line.split_whitespace().collect();
         if let Some(at) = cols.iter().position(|c| c.to_lowercase() == lc) {
             if let Some(next) = cols.get(at + 1) {
-                if next.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-                    return next.to_string();
+                // ⚠️ winget marks a held/pinned entry with `> ` in its own column before
+                // the version. Strip it if present (the parse_winget_list test exercises
+                // that case; this parser shares the same shape).
+                let v = next.trim_start_matches('>').trim();
+                if v.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                    versions.push(v.to_string());
                 }
             }
         }
     }
-    String::new()
+    // Return the MAXIMUM by `compare_versions`. This relies on numeric comparison
+    // (2.10 > 2.9) segment by segment, which works for dot-version schemes and brew
+    // dates (2026-07-16), but a brew revision suffix (`_1`) or a tap suffix are
+    // compared only by accident. That limit is KNOWN and named here rather than
+    // hidden: a proper version-comparison overhaul is separate work.
+    versions.sort_by(|a, b| crate::decision::compare_versions(b, a).cmp(&0));
+    versions.first().cloned().unwrap_or_default()
 }
 
-// brew: "git 2.50.1" — token after the id, must start with a digit (rejects "version").
+// brew: "git 2.50.1" or "git 2.50.1 2.51.0" — multiple versions in later columns on
+// the SAME line. Returns the MAXIMUM by `compare_versions` for the same reason as
+// the winget parser: the newest is what PATH resolves and what a pin compares against.
 fn parse_brew_version(id: &str, output: &str) -> String {
     let lc = id.to_lowercase();
     for line in output.lines() {
         let cols: Vec<&str> = line.split_whitespace().collect();
-        if cols.first().is_some_and(|c| c.to_lowercase() == lc)
-            && cols
+        if cols.first().is_some_and(|c| c.to_lowercase() == lc) {
+            // ⚠️ The line must match the expected shape: "name version..." where the
+            // SECOND token starts with a digit. Reject "git version 2.50.1" (the word
+            // "version" is not a version token). This preserves the original behavior.
+            if !cols
                 .get(1)
                 .is_some_and(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
-        {
-            return cols[1].to_string();
+            {
+                continue;
+            }
+            // Collect ALL version tokens (cols[1..]), keeping only those that start with a digit.
+            let mut versions: Vec<String> = cols
+                .iter()
+                .skip(1)
+                .filter(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
+                .map(|v| v.to_string())
+                .collect();
+            if versions.is_empty() {
+                continue;
+            }
+            // Return the MAXIMUM. Sorting relies on `compare_versions`, which handles
+            // numeric segments and brew dates, but brew revisions (`_1`) and tap suffixes
+            // are compared only by accident — a known limit, named here.
+            versions.sort_by(|a, b| crate::decision::compare_versions(b, a).cmp(&0));
+            return versions.first().cloned().unwrap_or_default();
         }
     }
     String::new()
@@ -337,20 +373,40 @@ fn parse_winget_list(raw: &str) -> Result<HashMap<String, String>, ()> {
     Ok(map)
 }
 
-// `brew list --versions`: one package per line, "name v1 v2…". The first version is
-// the current one. Recognition is structural — at least one line shaped that way —
-// because brew prints no header to key on.
+// `brew list --versions`: one package per line, "name v1 v2…". Multiple versions in
+// later columns. Returns the MAXIMUM for each package. Recognition is structural —
+// at least one line shaped that way — because brew prints no header to key on.
 fn parse_brew_list(raw: &str) -> Result<HashMap<String, String>, ()> {
     let mut map = HashMap::new();
     for line in raw.lines() {
-        let mut cols = line.split_whitespace();
-        let (Some(name), Some(v)) = (cols.next(), cols.next()) else {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        let Some(name) = cols.first() else {
             continue;
         };
-        if !v.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        // The line must match the expected shape: the SECOND token must start with a
+        // digit. This rejects warnings and prompts that aren't "name version..." lines.
+        if !cols
+            .get(1)
+            .is_some_and(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        {
+            continue;
+        }
+        // Collect ALL version tokens (cols[1..]), keeping only those that start with a digit.
+        let mut versions: Vec<String> = cols
+            .iter()
+            .skip(1)
+            .filter(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
+            .map(|v| v.to_string())
+            .collect();
+        if versions.is_empty() {
             continue; // not a "name version" line (a warning, a prompt…)
         }
-        map.insert(name.to_lowercase(), v.to_string());
+        // Return the MAXIMUM. Same sorting as `parse_brew_version`, same limit on
+        // revisions and tap suffixes.
+        versions.sort_by(|a, b| crate::decision::compare_versions(b, a).cmp(&0));
+        if let Some(max) = versions.first() {
+            map.insert(name.to_lowercase(), max.clone());
+        }
     }
     if map.is_empty() {
         Err(()) // nothing recognised: cannot claim the machine is empty
@@ -399,6 +455,7 @@ fn parse_brew_outdated(output: &str) -> HashMap<String, Outdated> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decision::{action_for, Action, Desired, MachineFacts};
 
     #[test]
     fn presence_scan_reads_the_captured_windows_listing() {
@@ -634,6 +691,94 @@ mod tests {
         assert!(
             !m.keys().any(|k| k.contains("aim-tams")),
             "an MSIX row without Available must not be an upgrade"
+        );
+    }
+
+    #[test]
+    fn winget_version_returns_maximum_when_multiple_versions_installed() {
+        // ⚠️ Field-reported defect (Windows, two Nushell versions: 0.111.x and
+        // 0.114.x, catalogue pins 0.113.1): the parser returned whichever version
+        // came FIRST in `winget list` output, so when 0.111 was first, Talos
+        // compared the pin against the WRONG number and reported an upgrade when
+        // a downgrade was needed. The fix: return the MAXIMUM of all versions
+        // found for the id, because the newest is what PATH resolves and what
+        // the pin must be compared against.
+        let output = "\
+Name      Id               Version   Available  Source
+-------------------------------------------------------
+Nushell   Nushell.Nushell  0.111.1              winget
+Nushell   Nushell.Nushell  0.114.0              winget
+";
+        // The higher version is SECOND — must still return the higher one.
+        assert_eq!(parse_winget_version("Nushell.Nushell", output), "0.114.0");
+
+        // Reversed: higher version FIRST.
+        let output_rev = "\
+Name      Id               Version   Available  Source
+-------------------------------------------------------
+Nushell   Nushell.Nushell  0.114.0              winget
+Nushell   Nushell.Nushell  0.111.1              winget
+";
+        assert_eq!(
+            parse_winget_version("Nushell.Nushell", output_rev),
+            "0.114.0",
+            "must return MAX regardless of order"
+        );
+    }
+
+    #[test]
+    fn brew_version_returns_maximum_when_multiple_versions_installed() {
+        // `brew list --versions` prints extra versions in later columns on the
+        // SAME line: "nushell 0.111.1 0.114.0". The parser must return the MAX.
+        assert_eq!(
+            parse_brew_version("nushell", "nushell 0.111.1 0.114.0"),
+            "0.114.0"
+        );
+        // Reversed order.
+        assert_eq!(
+            parse_brew_version("nushell", "nushell 0.114.0 0.111.1"),
+            "0.114.0",
+            "must return MAX regardless of order"
+        );
+    }
+
+    #[test]
+    fn brew_list_returns_maximum_when_multiple_versions_installed() {
+        // Machine-wide scan: same as the per-package probe, must return MAX.
+        let output = "git 2.50.1\nnushell 0.111.1 0.114.0\njq 1.8.2\n";
+        let m = parse_brew_list(output).expect("recognised");
+        assert_eq!(m.get("nushell").map(String::as_str), Some("0.114.0"));
+
+        // Reversed.
+        let output_rev = "git 2.50.1\nnushell 0.114.0 0.111.1\njq 1.8.2\n";
+        let m = parse_brew_list(output_rev).expect("recognised");
+        assert_eq!(
+            m.get("nushell").map(String::as_str),
+            Some("0.114.0"),
+            "must return MAX regardless of order"
+        );
+    }
+
+    #[test]
+    fn the_operators_case_two_versions_pin_between_them() {
+        // ⚠️ THE DEFECT AS REPORTED: two versions installed, an exact pin
+        // BETWEEN them. The parser returned whichever version came first,
+        // so the action was wrong. Field-hit: Windows, Nushell 0.111.x and
+        // 0.114.x, pin 0.113.1 → should be a DOWNGRADE, was reported as upgrade.
+        let f = MachineFacts {
+            present: true,
+            outdated: false,
+            can_uninstall: false,
+            pin: Some("0.113.1"),
+            // ⭐ Installed version is the MAXIMUM of what the parser found.
+            // Before the fix, this would have been 0.111.x (the first line),
+            // producing Action::Upgrade. After: 0.114.0 → Downgrade.
+            installed_version: "0.114.0",
+        };
+        assert_eq!(
+            action_for(Desired::Present, &f),
+            Some(Action::Downgrade),
+            "pin 0.113.1 against installed 0.114.0 is a downgrade"
         );
     }
 }
