@@ -264,7 +264,26 @@ pub struct Commands {
 /// The NAMED ROUTE TABLE — port of commandsFor. Family 1 (system manager, arbitrated by
 /// OS) first, then cargo/npm/bun/run/claude-plugin/skill/vscode-extension.
 fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
-    let ver = pkg.version.as_deref().unwrap_or("").trim().to_string();
+    // The version to INTERPOLATE INTO A COMMAND — empty unless the author declared an exact
+    // one.
+    //
+    // ⚠️ A KEYWORD MUST NEVER LAND HERE. Before this, the binding was
+    // `pkg.version.as_deref().unwrap_or("").trim().to_string()` and the branch below is
+    // `if !ver.is_empty()`, so `version: "pending"` took the PINNED path and
+    // `install_pinned` emitted `brew install --yes git@pending` /
+    // `winget install --id Git.Git -e --version pending` — a command built to fail, on
+    // install AND upgrade AND downgrade. Measured, not feared.
+    //
+    // ⭐ `latest` and `pending` are statements about POLICY (take the newest / hold this),
+    // not about which version to fetch. `action_for` consults them through `Step.pin`; the
+    // command builder must not see them at all. One classification (`classify_pin`), two
+    // consumers, opposite needs.
+    let ver = match classify_pin(pkg.version.as_deref()) {
+        Some(PinKind::Exact(v)) => v,
+        // Latest / Pending / Invalid → build the PLAIN command, exactly as an undeclared
+        // version does.
+        _ => String::new(),
+    };
     let none = Commands {
         route: None,
         install: None,
@@ -676,7 +695,6 @@ pub fn is_extension_route(route: Option<&str>) -> bool {
 ///   · `action_for` must see it — the keyword is a statement about policy ("hold this", "take
 ///     the newest"), which is exactly what decides whether to act.
 /// Reading the raw string twice is how those two would come to disagree.
-#[allow(dead_code)] // Tasks 3, 4, 5 will consume this
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PinKind {
     /// An exact version to converge on. The only variant a command may interpolate.
@@ -699,7 +717,6 @@ pub enum PinKind {
 /// The discriminator for an exact version is "starts with a digit", deliberately NOT a semver
 /// parse: this codebase does not do semver (`compare_versions` compares numeric prefixes), and
 /// real versions here look like `2026.72.0` and `1.0-beta`.
-#[allow(dead_code)] // Tasks 3, 4, 5 will consume this
 pub fn classify_pin(declared: Option<&str>) -> Option<PinKind> {
     let raw = declared?.trim();
     if raw.is_empty() {
@@ -1778,5 +1795,65 @@ slow: true
             Some(PinKind::Exact("1.0-beta".into()))
         );
         assert_eq!(classify_pin(Some("7")), Some(PinKind::Exact("7".into())));
+    }
+
+    #[test]
+    fn a_keyword_never_reaches_an_install_command() {
+        // ⚠️ MEASURED BEFORE THE FIX: `bundles.rs`'s `if !ver.is_empty()` sent any non-empty word
+        // down the PINNED path, so `install_pinned` produced, verbatim:
+        //     brew install --yes git@pending
+        //     winget install --id Git.Git -e --version pending …
+        // A command built to fail, on install AND upgrade AND downgrade. The keyword is a
+        // statement about POLICY, not about which version to fetch, so it must be stripped before
+        // any command is built.
+        for word in ["pending", "latest", "Pending"] {
+            let mut p = pkg("Git");
+            p.brew = Some("git".into());
+            p.version = Some(word.to_string());
+            let c = commands_for(&p, Os::Darwin);
+            let install = c.install.expect("an install command");
+            assert!(
+                !install.contains(word) && !install.contains('@'),
+                "{word} reached the command: {install}"
+            );
+            assert_eq!(
+                install, "brew install --yes git",
+                "the plain, unpinned install"
+            );
+            // The pinned path also produces a `downgrade`; an unpinned package has none.
+            assert_eq!(
+                c.downgrade, None,
+                "{word} must not fabricate a downgrade path"
+            );
+        }
+    }
+
+    #[test]
+    fn an_invalid_word_never_reaches_a_command_either() {
+        // An unknown word is refused (Task 4 logs it), but `commands_for` must not depend on that
+        // refusal: defence at the point of use, so a future caller cannot bypass the load-time check.
+        let mut p = pkg("Git");
+        p.brew = Some("git".into());
+        p.version = Some("current".into());
+        let install = commands_for(&p, Os::Darwin)
+            .install
+            .expect("an install command");
+        assert_eq!(install, "brew install --yes git", "no @current: {install}");
+    }
+
+    #[test]
+    fn an_exact_version_still_pins_the_command() {
+        // The guard must not break the feature it guards. This is the existing behaviour, pinned
+        // here because the `ver` binding is what Task 3 changes.
+        let mut p = pkg("Nushell");
+        p.brew = Some("nushell".into());
+        p.version = Some("0.113.1".into());
+        let c = commands_for(&p, Os::Darwin);
+        let install = c.install.expect("an install command");
+        assert!(install.contains("nushell@0.113.1"), "install: {install}");
+        assert!(
+            c.downgrade.is_some(),
+            "an exact pin keeps its manual downgrade path"
+        );
     }
 }
