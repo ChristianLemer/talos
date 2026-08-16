@@ -238,3 +238,24 @@ test("actionFor: a keyword is never compared as a version", () => {
     "never a downgrade",
   );
 });
+
+test("actionFor: `latest` and an undeclared version are INDISTINGUISHABLE", () => {
+  // The twin of `latest_and_an_undeclared_version_are_INDISTINGUISHABLE` in decision.rs, and
+  // for the same reason: `latest` falls THROUGH to the shared `outdated` check rather than
+  // answering for itself. Equivalence is what a test can see; "one code path" is structural
+  // and rests on review.
+  for (const present of [true, false]) {
+    for (const outdated of [true, false]) {
+      for (const installedVersion of ["", "1.0"]) {
+        for (const desired of ["present", "absent"]) {
+          const facts = (pin) => ({ present, outdated, canUninstall: true, pin, installedVersion });
+          assert.equal(
+            actionFor(desired, facts("latest")),
+            actionFor(desired, facts(null)),
+            `latest diverged from silence at present=${present} outdated=${outdated} installed=${JSON.stringify(installedVersion)}`,
+          );
+        }
+      }
+    }
+  }
+});

@@ -364,4 +364,39 @@ mod tests {
         };
         assert_eq!(action_for(Desired::Absent, &f), Some(Action::Uninstall));
     }
+
+    #[test]
+    fn latest_and_an_undeclared_version_are_indistinguishable() {
+        // ⭐ `latest` states an INTENTION where silence states nothing — but they must RESOLVE
+        // identically, because `latest` deliberately falls through to the same `outdated` check
+        // instead of answering for itself. That is the "exactly one place decides newest ⇒
+        // upgrade" shape.
+        //
+        // ⚠️ WHAT THIS CAN AND CANNOT PROVE. "One code path" is structural: no black-box test
+        // can see it, and a test asserting merely that both return Upgrade would pass just as
+        // happily against two duplicated branches — a guard in appearance only. What IS
+        // observable is EQUIVALENCE across every combination, and a duplicated check that ever
+        // drifts fails here on the row where it drifted. The structural half rests on review.
+        for present in [true, false] {
+            for outdated in [true, false] {
+                for installed in ["", "1.0"] {
+                    for desired in [Desired::Present, Desired::Absent] {
+                        let facts = |pin: Option<&'static str>| MachineFacts {
+                            present,
+                            outdated,
+                            can_uninstall: true,
+                            pin,
+                            installed_version: installed,
+                        };
+                        assert_eq!(
+                            action_for(desired, &facts(Some("latest"))),
+                            action_for(desired, &facts(None)),
+                            "latest diverged from silence at present={present} \
+                             outdated={outdated} installed={installed:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
