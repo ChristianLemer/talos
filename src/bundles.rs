@@ -1928,7 +1928,7 @@ slow: true
         // ⚠️ Refused, never interpreted. A typo must not become 0.0.0 → Downgrade → the only
         // destructive path in the app. The package still LOADS (a catalogue with one bad field
         // must not vanish from the screen); it simply behaves as if nothing was declared.
-        let (_, logged) = load_from_catalog_with_pkgs(
+        let (steps, logged) = load_from_catalog_with_pkgs(
             &[("weird", {
                 let mut p = pkg("Weird");
                 p.brew = Some("weird".into());
@@ -1943,6 +1943,18 @@ slow: true
                 .any(|l| l.contains("weird") && l.contains("current")),
             "the refusal must NAME the package and the word: {logged:?}"
         );
+        // ⚠️ The package must STILL LOAD. A catalogue with one bad field must not lose a row
+        // from the screen — the row simply behaves as if nothing was declared.
+        assert_eq!(
+            steps.len(),
+            1,
+            "a refused version must not drop the package"
+        );
+        // ⚠️ AND IT MUST CARRY NO PIN. This assertion is the one the test's own name promised
+        // and did not make: a mutation letting `Invalid(w)` through as `Some(w)` passed the
+        // whole suite, which would re-open the 0.0.0 → Downgrade path the refusal exists to
+        // close (measured: `compare_versions("2.50.1", "current") == 1`).
+        assert_eq!(steps[0].pin, None, "an invalid word carries no pin");
     }
 
     #[test]
