@@ -71,12 +71,39 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
 | run | `run:` + optional `runUninstall:` | raw command escape hatch |
 | claude-plugin | `claude-plugin: plugin@marketplace` + optional `marketplace:` | Claude Code plugin |
 | skill | `skill: source` + optional `skillName:` | cross-agent SKILL.md via `npx skills` |
+| vscode-extension | `vscode-extension: publisher.name` | a VS Code extension |
 
 **`detect:`** — how Talos knows a package is already present.
 - A binary route: the command whose exit 0 = present, e.g. `detect: code --version`.
   Its output also yields the installed version (free, source-agnostic — the best signal).
 - `claude-plugin` / `skill`: `detect:` is the **name the tool lists the item under**
   (not a PATH binary) — Talos parses `claude plugin list` / `npx skills list`.
+- `vscode-extension`: **omit it.** The id you declared *is* the lookup name, so writing
+  it twice is a second place to get it wrong. Talos reads the profile manifest
+  (`~/.vscode/extensions/extensions.json`) — never `code --list-extensions`, whose output
+  is polluted on Windows, and never the sub-directories, which **survive an uninstall**.
+
+### `vscode-extension` — the host answers first
+
+```yaml
+  - name: Nushell language support
+    vscode-extension: thenuprojectcontributors.vscode-nushell-lang
+    requires: [Visual Studio Code, Nushell]
+```
+
+- **Write the id lowercase.** The marketplace page spells the publisher
+  `TheNuProjectContributors`; the manifest lowercases every id. The lookup is
+  case-insensitive so either works, but the lowercase form is what `code
+  --list-extensions` prints.
+- **Declare the host in `requires:`.** `~/.vscode/` is a *user* folder that survives
+  uninstalling VS Code, so a manifest hit alone proves nothing: presence = **the host
+  answered AND the manifest lists the id**. Without the host, the row reads
+  indeterminate, not absent.
+- **No `version:`** — `code --install-extension id@1.2.3` exits 1 once the gallery stops
+  serving that version, so a pin here builds a command designed to fail.
+- **No upgrade, deliberately.** VS Code auto-updates its own extensions
+  (`extensions.autoUpdate` defaults to true), so Talos installs and removes; keeping
+  them current is the editor's job.
 
 **`requires:`** — names a package (or a bare command) that must be present first.
 Resolved against the whole plan: a plugin that `requires: [Claude Code]` stays

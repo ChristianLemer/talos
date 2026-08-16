@@ -1271,6 +1271,46 @@ async fn row_action(socket: &mut WebSocket, state: &AppState, i: usize, action: 
         .await;
 }
 
+/// Decide whether an outdated row is worth re-probing. A row is outdated AND an upgrade
+/// is reachable when:
+/// - The pin is `latest` (or absent): `action_for` will return `Upgrade`.
+/// - The pin is an exact version: `action_for` ignores `outdated` entirely; the row seeds
+///   via the `pinned` path instead, so this path is irrelevant (but harmless if true).
+/// - ⚠️ The pin is `pending`: `action_for` returns `None` for a present pending row, so
+///   being outdated produces no action at all. Must return `false` to avoid spending a
+///   process on a row that will do nothing.
+///
+/// ⭐ Measurement: 4 rows on this machine right now (AWS CLI, Obsidian, uv, VS Code) are
+/// outdated + pending, so all four would be seeded for nothing. That number grows as the
+/// estate drifts — up to 24 in the worst case. The Apply re-scan is serial on purpose, so
+/// each one is a real process.
+///
+/// ⭐ The seventh of a family: every guard written when "a pin is a number" or "outdated ⇒
+/// upgrade" was always true has silently inherited the keyword pins.
+fn should_seed_outdated_row(pin: Option<&str>, outdated: bool) -> bool {
+    if !outdated {
+        return false;
+    }
+    // If there is a pin, classify it to see if an upgrade is reachable.
+    if let Some(kind) = crate::bundles::classify_pin(pin) {
+        match kind {
+            // `pending` → held out of the batch, `action_for` returns None → no upgrade.
+            crate::bundles::PinKind::Pending => false,
+            // `latest` behaves as declaring nothing → outdated DOES mean upgrade.
+            crate::bundles::PinKind::Latest => true,
+            // Exact pin → `action_for` ignores `outdated`, seeds via `is_pinned_row` instead.
+            // Returning `true` here is harmless (the row seeds anyway), but the outdated path
+            // is irrelevant for exact pins.
+            crate::bundles::PinKind::Exact(_) => true,
+            // Invalid → treat as `latest` (the safer default: probe rather than skip).
+            crate::bundles::PinKind::Invalid(_) => true,
+        }
+    } else {
+        // No pin declared → behaves as `latest` → outdated means upgrade.
+        true
+    }
+}
+
 /// WHICH rows the Apply re-scan must actually probe — the seeds, before `requires`
 /// pulls transitively.
 ///
@@ -1417,11 +1457,18 @@ async fn apply_diff(
     // for rows we are about to touch: probing Miro to install Bun buys nothing and
     // costs a process. Requirements are in, because will_be_present decides both the
     // `requires` reasons and the execution order. Dependents are out — untouched.
+    //
+    // ⚠️ An outdated row is only a seed when an upgrade is actually reachable. A `pending`
+    // pin makes it unreachable (`action_for` returns None), so being outdated produces no
+    // action at all. Measured: 4 rows here (AWS CLI, Obsidian, uv, VS Code) are outdated +
+    // pending, so all four would be seeded for nothing — up to 24 as the estate drifts.
+    // The seventh of a family: every guard written when "outdated ⇒ upgrade" was always
+    // true has silently inherited the keyword pins.
     let is_outdated_row = |i: usize| -> bool {
-        steps
-            .get(i)
-            .map(|s| is_outdated_now(outdated_for(s.system_id.as_deref(), &scan)))
-            .unwrap_or(false)
+        steps.get(i).is_some_and(|s| {
+            let outdated = is_outdated_now(outdated_for(s.system_id.as_deref(), &scan));
+            should_seed_outdated_row(s.pin.as_deref(), outdated)
+        })
     };
     // An EXACT pin makes the installed VERSION the deciding fact, and presence cannot
     // report it — so an exact-pinned row is always probed. Keywords (pending, latest)
@@ -2899,6 +2946,71 @@ mod tests {
         assert_eq!(
             seeds_for_rescan(&[0], &[], &last_seen, &|i| i == 0, &|_| false),
             vec![0]
+        );
+    }
+
+    #[test]
+    fn should_seed_outdated_row_rejects_pending_pins() {
+        // Direct test of the production rule: a `pending` pin makes an upgrade unreachable,
+        // so an outdated row with `pending` must NOT seed.
+        assert!(!should_seed_outdated_row(Some("pending"), true));
+        assert!(!should_seed_outdated_row(Some("Pending"), true)); // case-insensitive
+        assert!(!should_seed_outdated_row(Some("PENDING"), true));
+    }
+
+    #[test]
+    fn should_seed_outdated_row_accepts_latest_and_no_pin() {
+        // `latest` and no pin both mean "chase the newest", so outdated DOES mean upgrade.
+        assert!(should_seed_outdated_row(Some("latest"), true));
+        assert!(should_seed_outdated_row(Some("Latest"), true)); // case-insensitive
+        assert!(should_seed_outdated_row(None, true)); // no pin declared
+    }
+
+    #[test]
+    fn should_seed_outdated_row_accepts_exact_pins() {
+        // An exact pin makes version the deciding fact. `action_for` ignores `outdated`
+        // entirely, and the row seeds via `is_pinned_row` instead, so this path is
+        // irrelevant. Returning `true` here is harmless.
+        assert!(should_seed_outdated_row(Some("2.50.1"), true));
+        assert!(should_seed_outdated_row(Some("1.0-beta"), true));
+    }
+
+    #[test]
+    fn should_seed_outdated_row_false_when_not_outdated() {
+        // If the row is NOT outdated, the pin is irrelevant — never seed.
+        assert!(!should_seed_outdated_row(Some("pending"), false));
+        assert!(!should_seed_outdated_row(Some("latest"), false));
+        assert!(!should_seed_outdated_row(Some("2.50.1"), false));
+        assert!(!should_seed_outdated_row(None, false));
+    }
+
+    #[test]
+    fn a_pending_outdated_row_does_not_seed() {
+        // A row marked `pending` has no reachable upgrade (action_for returns None),
+        // so being outdated does NOT make it worth re-probing. This prevents spending
+        // serial processes on rows that will do nothing. Measured: 4 rows here (AWS CLI,
+        // Obsidian, uv, VS Code), up to 24 as the estate drifts.
+        //
+        // ⭐ The seventh of a family: every guard written when "a pin is a number" or
+        // "outdated ⇒ upgrade" was always true has silently inherited the keyword pins.
+        let last_seen = vec![Some(seen(true, "1.0"))];
+        // With `latest` (or no pin), outdated DOES seed.
+        assert_eq!(
+            seeds_for_rescan(&[0], &[], &last_seen, &|i| i == 0, &|_| false),
+            vec![0]
+        );
+        // But the same row, when the pin is `pending`, does NOT seed despite being outdated.
+        // The test closure here models the production `is_outdated_row` that now checks the pin.
+        let is_outdated_with_pending = |i: usize| {
+            if i == 0 {
+                should_seed_outdated_row(Some("pending"), true)
+            } else {
+                false
+            }
+        };
+        assert!(
+            seeds_for_rescan(&[0], &[], &last_seen, &is_outdated_with_pending, &|_| false)
+                .is_empty()
         );
     }
 
