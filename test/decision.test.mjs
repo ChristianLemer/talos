@@ -13,6 +13,7 @@ import {
   profileState,
   toggleState,
 } from "../public/decision.js";
+import { compareVersions } from "../public/version.js";
 
 test("403 recovery: Retry while paused RETRIES — it does not just continue", () => {
   // The bug this pins: the button labelled "Retry" (and the modal step that says
@@ -195,5 +196,45 @@ test("model A: an opt-in left untouched but PRESENT resolves to uninstall", () =
   assert.equal(
     actionFor(desired, { present: true, canUninstall: true }),
     "uninstall",
+  );
+});
+
+test("actionFor: the two keywords resolve as a table — the SAME rows as decision.rs", () => {
+  // ⭐ The twin of `the_two_keywords_resolve_as_a_table` in src/decision.rs. One rule, two
+  // callers: the server EXECUTES it, the front PREVIEWS it. If they disagree, the screen
+  // promises an action the server refuses — and for `pending` the disagreement is not
+  // cosmetic: the front would offer a DOWNGRADE (a word compares as 0.0.0).
+  const rows = [
+    ["pending, present, newer exists", "pending", true, true, "1.0", null],
+    ["pending, present, current", "pending", true, false, "1.0", null],
+    ["pending, absent", "pending", false, false, "", "install"],
+    ["latest, present, newer exists", "latest", true, true, "1.0", "upgrade"],
+    ["latest, present, current", "latest", true, false, "1.0", null],
+    ["latest, absent", "latest", false, false, "", "install"],
+    ["none, present, newer exists", null, true, true, "1.0", "upgrade"],
+    ["exact, below", "2.0", true, false, "1.0", "upgrade"],
+    ["exact, equal", "2.0", true, false, "2.0", null],
+    ["exact, above", "2.0", true, false, "3.0", "downgrade"],
+  ];
+  for (const [what, pin, present, outdated, installedVersion, expected] of rows) {
+    assert.equal(
+      actionFor("present", { present, outdated, canUninstall: true, pin, installedVersion }),
+      expected,
+      what,
+    );
+  }
+});
+
+test("actionFor: a keyword is never compared as a version", () => {
+  // The same measurement the Rust twin records: `compareVersions("2.50.1", "pending")` is 1,
+  // so a naive implementation returns "downgrade" — the destructive path.
+  assert.equal(compareVersions("2.50.1", "pending"), 1, "a word reads as 0.0.0");
+  assert.equal(
+    actionFor("present", {
+      present: true, outdated: false, canUninstall: true,
+      pin: "pending", installedVersion: "2.50.1",
+    }),
+    null,
+    "never a downgrade",
   );
 });

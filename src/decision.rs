@@ -88,11 +88,30 @@ pub fn action_for(desired: Desired, f: &MachineFacts) -> Option<Action> {
     }
     if desired == Desired::Present && f.present {
         if let Some(pin) = f.pin.filter(|p| !p.is_empty()) {
-            return match compare_versions(f.installed_version, pin) {
-                c if c < 0 => Some(Action::Upgrade),
-                c if c > 0 => Some(Action::Downgrade),
-                _ => None, // at the pin → satisfied
-            };
+            // ⭐ THE TWO KEYWORDS FIRST, because they are statements about POLICY, not versions
+            // to converge on — and `compare_versions` would happily read them as 0.0.0.
+            // MEASURED: `compare_versions("2.50.1", "pending") == 1`, i.e. "installed is above
+            // the pin" → Downgrade → the manual `uninstall && install pkg@pending` button. So
+            // the order of these checks is load-bearing, not stylistic.
+            //
+            // `pending` = nobody has arbitrated this version yet. Present ⇒ do nothing, and
+            // `outdated` is deliberately IGNORED: the gap is still emitted to the front
+            // (`emit_outdated_if` runs regardless) and the row shows it greyed, so this is a
+            // HOLD, not a blindfold. The per-row button still offers the update — a cost
+            // control, never a lock.
+            if pin.eq_ignore_ascii_case("pending") {
+                return None;
+            }
+            // `latest` = the author DECIDED to take the newest. Same effect as declaring
+            // nothing, and not redundant with it: a catalogue meant to be copied from must be
+            // able to say "yes, newest here" rather than merely omit the field.
+            if !pin.eq_ignore_ascii_case("latest") {
+                return match compare_versions(f.installed_version, pin) {
+                    c if c < 0 => Some(Action::Upgrade),
+                    c if c > 0 => Some(Action::Downgrade),
+                    _ => None, // at the pin → satisfied
+                };
+            }
         }
         if f.outdated {
             return Some(Action::Upgrade);
@@ -192,5 +211,157 @@ mod tests {
             installed_version: "",
         };
         assert_eq!(action_for(Desired::Absent, &not), None);
+    }
+
+    #[test]
+    fn the_two_keywords_resolve_as_a_table() {
+        // ⭐ ONE fixture, both sides. The same table lives in test/decision.test.mjs, because
+        // `action_for` exists TWICE (here and in public/decision.js) — one rule, two callers. The
+        // twins have drifted before; feeding them the same rows is the cheapest guard there is.
+        //
+        // Columns: what, pin, present, outdated, installed → expected action.
+        type Row = (
+            &'static str,
+            Option<&'static str>,
+            bool,
+            bool,
+            &'static str,
+            Option<Action>,
+        );
+        let cases: &[Row] = &[
+            // `pending` + present → NOTHING, and `outdated` is ignored. That is the whole point:
+            // the gap stays VISIBLE (the row shows it greyed) but the batch does not act.
+            (
+                "pending, present, newer exists",
+                Some("pending"),
+                true,
+                true,
+                "1.0",
+                None,
+            ),
+            (
+                "pending, present, current",
+                Some("pending"),
+                true,
+                false,
+                "1.0",
+                None,
+            ),
+            // ⭐ `pending` + ABSENT → install. There is no "held version" of a thing that is not
+            // there, and a fresh machine must still be equippable.
+            (
+                "pending, absent",
+                Some("pending"),
+                false,
+                false,
+                "",
+                Some(Action::Install),
+            ),
+            // `latest` behaves exactly as today's silence — the difference is that it was DECIDED.
+            (
+                "latest, present, newer exists",
+                Some("latest"),
+                true,
+                true,
+                "1.0",
+                Some(Action::Upgrade),
+            ),
+            (
+                "latest, present, current",
+                Some("latest"),
+                true,
+                false,
+                "1.0",
+                None,
+            ),
+            (
+                "latest, absent",
+                Some("latest"),
+                false,
+                false,
+                "",
+                Some(Action::Install),
+            ),
+            // Nothing declared: unchanged.
+            (
+                "none, present, newer exists",
+                None,
+                true,
+                true,
+                "1.0",
+                Some(Action::Upgrade),
+            ),
+            // An exact pin: unchanged, and pinned here so the keywords cannot break it.
+            (
+                "exact, below",
+                Some("2.0"),
+                true,
+                false,
+                "1.0",
+                Some(Action::Upgrade),
+            ),
+            ("exact, equal", Some("2.0"), true, false, "2.0", None),
+            (
+                "exact, above",
+                Some("2.0"),
+                true,
+                false,
+                "3.0",
+                Some(Action::Downgrade),
+            ),
+        ];
+        for (what, pin, present, outdated, installed, expected) in cases {
+            let f = MachineFacts {
+                present: *present,
+                outdated: *outdated,
+                can_uninstall: true,
+                pin: *pin,
+                installed_version: installed,
+            };
+            assert_eq!(action_for(Desired::Present, &f), *expected, "{what}");
+        }
+    }
+
+    #[test]
+    fn a_keyword_is_never_compared_as_a_version() {
+        // ⚠️ The defect this closes, pinned as a FACT rather than as prose. `compare_versions`
+        // takes the leading digits of each segment, so a word has none and reads as 0.0.0 —
+        // "installed is ABOVE the pin" → Downgrade → the manual `uninstall && install pkg@word`
+        // button, the only destructive path in the app.
+        //
+        // Recording the measurement here is what stops someone "simplifying" the keyword branch
+        // back into the comparison.
+        assert_eq!(
+            compare_versions("2.50.1", "current"),
+            1,
+            "a word reads as 0.0.0"
+        );
+        assert_eq!(
+            compare_versions("2.50.1", "pending"),
+            1,
+            "…and so would `pending`"
+        );
+        let f = MachineFacts {
+            present: true,
+            outdated: false,
+            can_uninstall: true,
+            pin: Some("pending"),
+            installed_version: "2.50.1",
+        };
+        assert_eq!(action_for(Desired::Present, &f), None, "never a downgrade");
+    }
+
+    #[test]
+    fn a_pending_row_wanted_absent_is_still_uninstalled() {
+        // A hold on the VERSION says nothing about whether the package should be there. The user's
+        // ✕ is a different axis, and it must keep working.
+        let f = MachineFacts {
+            present: true,
+            outdated: true,
+            can_uninstall: true,
+            pin: Some("pending"),
+            installed_version: "1.0",
+        };
+        assert_eq!(action_for(Desired::Absent, &f), Some(Action::Uninstall));
     }
 }

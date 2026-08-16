@@ -142,10 +142,26 @@ export function actionFor(
   if (desired === "present" && !present) return "install";
   if (desired === "present" && present) {
     if (pin) {
-      const cmp = compareVersions(installedVersion || "", pin);
-      if (cmp < 0) return "upgrade";
-      if (cmp > 0) return "downgrade";
-      return null; // at the pin → satisfied
+      // ⭐ THE TWO KEYWORDS FIRST — they state POLICY, not a version to converge on, and
+      // compareVersions would read them as 0.0.0. MEASURED:
+      // compareVersions("2.50.1", "pending") === 1, i.e. "installed is above the pin" →
+      // "downgrade" → the manual uninstall+install button. The order is load-bearing.
+      //
+      // ⚠️ AND THIS MUST MATCH src/decision.rs EXACTLY. The server executes the rule, this
+      // previews it; a divergence here does not merely mislabel — it would draw a downgrade
+      // button for a row the server holds.
+      const p = String(pin).toLowerCase();
+      // `pending`: nobody has arbitrated this version. Do nothing, and ignore `outdated` —
+      // the gap is still SHOWN (greyed, see versionSummary), so this is a hold, not a blindfold.
+      if (p === "pending") return null;
+      // `latest`: the author decided to take the newest. Falls through to the `outdated` check
+      // below, so exactly one place decides "newest ⇒ upgrade".
+      if (p !== "latest") {
+        const cmp = compareVersions(installedVersion || "", pin);
+        if (cmp < 0) return "upgrade";
+        if (cmp > 0) return "downgrade";
+        return null; // at the pin → satisfied
+      }
     }
     if (outdated) return "upgrade";
   }
