@@ -604,6 +604,20 @@ pub fn load_from_catalog(
         let is_config =
             p.check.is_some() && (cmd.route.is_none() || cmd.route.as_deref() == Some("run"));
         let is_extension = is_extension_route(cmd.route.as_deref());
+        // Classify what the author declared, ONCE per package. Two uses below: the log line
+        // that refuses an unknown word, and the value carried on the Step.
+        let declared = classify_pin(p.version.as_deref());
+        if let Some(PinKind::Invalid(word)) = &declared {
+            // ⚠️ REFUSED, never interpreted — and the package still loads. A catalogue with one
+            // bad field must not lose a row from the screen; it simply behaves as if nothing
+            // was declared. Naming the package AND the word is what makes this actionable: a
+            // log line saying "invalid version" without either is a riddle.
+            log(&format!(
+                "catalog: {} declares version \"{word}\" — not a version, not `latest`, not \
+                 `pending`; ignored. A word reads as 0.0.0 and would offer a DOWNGRADE.",
+                cp.id
+            ));
+        }
         steps.push(Step {
             id: cp.id.clone(),
             bundle: String::new(), // bundles don't own packages anymore
@@ -625,26 +639,26 @@ pub fn load_from_catalog(
             is_config,
             is_extension,
             version_regex: p.version_regex.clone(),
-            // ⚠️ A PIN IS ONLY CARRIED IF THE ROUTE CAN HONOUR IT. `action_for` consults the
-            // pin BEFORE `outdated` (decision.rs:90), so a pin on a route with no `upgrade:`
-            // command yields Action::Upgrade → `do_step` resolves it to None → a SILENT SKIP:
-            // no step message, no terminal line, no reason. That is the one outcome this repo
-            // refuses ("every gesture leaves a trace"), and the front would draw an update
-            // button that does nothing.
+            // What the RULE consults (`action_for`), as opposed to what a command
+            // interpolates (`commands_for`'s `ver`, which never sees a keyword — §2.1b).
             //
-            // A `vscode-extension` cannot be pinned at all: MEASURED, `code
-            // --install-extension id@<version>` exits 1 once the gallery stops serving that
-            // version. So dropping the pin here is not a limitation being hidden — it is the
-            // catalogue declaring something the route has no way to mean.
+            // ⚠️ An extension carries NO pin of any kind, keyword included: no extension route
+            // builds an `upgrade:` command, so a pin would make `action_for` return Upgrade
+            // with nothing to run — `do_step` returns a default outcome and the row is skipped
+            // IN SILENCE, the one outcome this repo refuses.
             //
-            // ⭐ This closes the SAME latent hole in `claude-plugin` and `skill`, which are
-            // extension routes and which likewise never consult `ver` when building their
-            // commands. Reusing the already-derived `is_extension` is deliberate: one
-            // derivation site, and it reads as "an extension carries no pin".
+            // ⚠️ An INVALID word carries nothing either: it was refused above, and letting it
+            // through would re-open the 0.0.0 → Downgrade path the refusal exists to close.
             pin: if is_extension {
                 None
             } else {
-                p.version.clone()
+                match &declared {
+                    Some(PinKind::Exact(v)) => Some(v.clone()),
+                    // Normalised to lowercase, so the rule compares against one spelling.
+                    Some(PinKind::Latest) => Some("latest".to_string()),
+                    Some(PinKind::Pending) => Some("pending".to_string()),
+                    Some(PinKind::Invalid(_)) | None => None,
+                }
             },
             requires: p.requires.clone(),
             posture: Posture::OptIn, // catalog default: free + out-by-default
@@ -1041,6 +1055,58 @@ mod tests {
             name: name.into(),
             ..Default::default()
         }
+    }
+
+    /// Build Steps from synthetic packages, exercising the same derivation
+    /// `load_from_catalog` uses. ⚠️ Test-only, and it must call the SAME code: a helper that
+    /// re-implemented the derivation would bless a copy instead of testing the original.
+    fn steps_from_pkgs(pkgs: &[(&str, RawPkg)], os: Os) -> Vec<Step> {
+        let dir = std::env::temp_dir().join(format!("talos-pin-cat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a temp catalogue dir");
+        for (stem, p) in pkgs {
+            let mut y = format!("name: {}\n", p.name);
+            if let Some(b) = &p.brew {
+                y.push_str(&format!("brew: {b}\n"));
+            }
+            if let Some(w) = &p.winget {
+                y.push_str(&format!("winget: {w}\n"));
+            }
+            if let Some(c) = &p.claude_plugin {
+                y.push_str(&format!("claude-plugin: {c}\n"));
+            }
+            if let Some(v) = &p.version {
+                y.push_str(&format!("version: \"{v}\"\n"));
+            }
+            std::fs::write(dir.join(format!("{stem}.yaml")), y).expect("write fixture");
+        }
+        let plan = load_from_catalog(dir.to_str().unwrap(), "", os, &|_| {});
+        let _ = std::fs::remove_dir_all(&dir);
+        plan.steps
+    }
+
+    /// Same, but capturing the log so a refusal can be asserted.
+    fn load_from_catalog_with_pkgs(pkgs: &[(&str, RawPkg)], os: Os) -> (Vec<Step>, Vec<String>) {
+        use std::cell::RefCell;
+        let dir = std::env::temp_dir().join(format!("talos-pin-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a temp catalogue dir");
+        for (stem, p) in pkgs {
+            let mut y = format!("name: {}\n", p.name);
+            if let Some(b) = &p.brew {
+                y.push_str(&format!("brew: {b}\n"));
+            }
+            if let Some(v) = &p.version {
+                y.push_str(&format!("version: \"{v}\"\n"));
+            }
+            std::fs::write(dir.join(format!("{stem}.yaml")), y).expect("write fixture");
+        }
+        let logged = RefCell::new(Vec::new());
+        let plan = load_from_catalog(dir.to_str().unwrap(), "", os, &|s: &str| {
+            logged.borrow_mut().push(s.to_string());
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        (plan.steps, logged.into_inner())
     }
 
     #[test]
@@ -1855,5 +1921,79 @@ slow: true
             c.downgrade.is_some(),
             "an exact pin keeps its manual downgrade path"
         );
+    }
+
+    #[test]
+    fn an_invalid_version_is_refused_and_the_package_carries_no_pin() {
+        // ⚠️ Refused, never interpreted. A typo must not become 0.0.0 → Downgrade → the only
+        // destructive path in the app. The package still LOADS (a catalogue with one bad field
+        // must not vanish from the screen); it simply behaves as if nothing was declared.
+        let (_, logged) = load_from_catalog_with_pkgs(
+            &[("weird", {
+                let mut p = pkg("Weird");
+                p.brew = Some("weird".into());
+                p.version = Some("current".into());
+                p
+            })],
+            Os::Darwin,
+        );
+        assert!(
+            logged
+                .iter()
+                .any(|l| l.contains("weird") && l.contains("current")),
+            "the refusal must NAME the package and the word: {logged:?}"
+        );
+    }
+
+    #[test]
+    fn the_two_keywords_travel_on_the_step_so_the_rule_can_see_them() {
+        // `action_for` decides from `Step.pin`; the keyword is exactly what it must consult.
+        // Carried as a STRING, so the wire (`step_json`) and `MachineFacts` are unchanged.
+        let mut p = pkg("Git");
+        p.brew = Some("git".into());
+        p.version = Some("pending".into());
+        let steps = steps_from_pkgs(&[("git", p)], Os::Darwin);
+        assert_eq!(steps[0].pin.as_deref(), Some("pending"));
+
+        let mut q = pkg("Node.js");
+        q.brew = Some("node".into());
+        q.version = Some("LATEST".into());
+        let steps = steps_from_pkgs(&[("node", q)], Os::Darwin);
+        assert_eq!(
+            steps[0].pin.as_deref(),
+            Some("latest"),
+            "normalised to lowercase"
+        );
+    }
+
+    #[test]
+    fn an_extension_still_carries_no_pin_even_when_it_declares_a_keyword() {
+        // The rule from the vscode-extension work stands: an extension route has no `upgrade:`
+        // command, so a pin of ANY kind would make action_for return Upgrade with nothing to run
+        // — `do_step` then returns a default outcome and the row is skipped IN SILENCE.
+        let mut p = pkg("Chiron");
+        p.claude_plugin = Some("chiron@tekton".into());
+        p.version = Some("pending".into());
+        let steps = steps_from_pkgs(&[("chiron", p)], Os::Darwin);
+        assert_eq!(
+            steps[0].pin, None,
+            "an extension carries no pin, keyword or not"
+        );
+    }
+
+    #[test]
+    fn every_shipped_version_is_one_of_the_three_legal_forms() {
+        // The guard that makes a typo in a catalogue edit fail a TEST rather than reach a machine.
+        // ⭐ This is a lint of the shipped example, deliberately kept on `catalog/`.
+        let cat = crate::catalog::load_catalog(concat!(env!("CARGO_MANIFEST_DIR"), "/catalog"));
+        for cp in cat.values() {
+            match classify_pin(cp.pkg.version.as_deref()) {
+                None | Some(PinKind::Exact(_)) | Some(PinKind::Latest) | Some(PinKind::Pending) => {
+                }
+                Some(PinKind::Invalid(w)) => {
+                    panic!("{}: version \"{w}\" is not a legal form", cp.pkg.name)
+                }
+            }
+        }
     }
 }
