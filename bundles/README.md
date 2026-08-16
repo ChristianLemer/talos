@@ -209,6 +209,41 @@ converges a file instead of installing software. The pattern (see `terminal/`):
 - **`marketplace:`** — for `claude-plugin`, the source registered (`claude plugin
   marketplace add`) before install. Omit when the plugin comes from an already-known
   marketplace. A local path with spaces is fine — it's quoted at the call site.
+- **`category:`** — one or more tags, e.g. `category: [editors]`. The **first** one groups
+  the package under a header in the Catalog view; the rest are shown as tags. Omitted →
+  `misc`. ⚠️ It is a *display* axis only: a category never decides an install, an order, or
+  a rung.
+
+## Behaviour seeds — `uac:` · `403:` · `slow:`
+
+Three optional booleans describing what installing this package **does to the operator**.
+They are read by the Apply panel to warn before it acts, and they are **seeds**: a fresh
+machine has collected nothing, so a hand-written value is what calibrates its first Apply
+before the fleet's own observations accumulate.
+
+| field | says | example |
+|---|---|---|
+| `uac: true` | this install **demands elevation** | `visual-studio-code` via winget (observed) |
+| `"403": true` | a corporate firewall answers 403 on this download | `rclone`, `uv` (observed on a real estate) |
+| `slow: true` | this one takes a long time | — |
+
+⭐ **A boolean, never a duration.** The author says "this one is slow"; the *measured*
+seconds come from the machine's own timing file. Declaring a number by hand would invite it
+to drift from what the machine actually observes.
+
+⭐ **They are also OVERRIDES, and that is the only way a fact goes back to false.** The
+fleet's shared record can only ratchet a fact **on** — an observation proves a wall exists,
+never that it is gone. Writing `"403": false` in the catalogue is the one gesture that turns
+it off, and it leaves a diff saying who decided.
+
+⚠️ **`403` is quoted for the reader, not out of necessity.** Measured: a bare `403:` parses
+identically. The quotes are there because the Rust field behind it is `forbidden` — an
+identifier cannot start with a digit — and a reader deserves to see that this is a key, not
+a number.
+
+⚠️ Scope these to what you actually saw. `uac: true` on VS Code came from a Windows
+observation; the same package via brew on macOS does not elevate. A seed asserted too
+broadly makes Apply promise "nothing will interrupt you" and then interrupt.
 
 ## profiles.yaml — named, additive selections
 

@@ -2008,4 +2008,89 @@ slow: true
             }
         }
     }
+
+    /// Every YAML key a catalogue author may write is documented in `bundles/README.md`.
+    ///
+    /// ⭐ WHY THIS EXISTS, measured rather than feared. `RawPkg` is the source of truth for
+    /// what the parser accepts, and it is not readable by a human; `bundles/README.md` is the
+    /// readable one, and nothing constrained it. That scissor is exactly how the README came
+    /// to state "if you want latest, omit `version:`" — true when written, false the day
+    /// `latest` became a word you can write. Nobody broke anything; the prose simply aged.
+    ///
+    /// So this makes drift IMPOSSIBLE rather than improbable: add a field to `RawPkg` and this
+    /// test fails until the README mentions it. On its first run it found FOUR undocumented
+    /// keys — `category`, `uac`, `403`, `slow` — three of which are the behaviour seeds that
+    /// calibrate a fresh machine's first Apply. They were reachable and unwritten.
+    ///
+    /// ⚠️ It does NOT check that the prose is CORRECT — no test can. It checks that the key
+    /// is mentioned at all, which is the difference between "undocumented" and "possibly
+    /// stale". Correctness stays a reviewer's job.
+    #[test]
+    fn every_raw_pkg_field_is_documented_in_the_bundles_readme() {
+        // ⚠️ `\r` stripped first: `include_str!` embeds the file as it sits on disk, and with
+        // no `.gitattributes` this tree is checked out CRLF on Windows. A sibling
+        // source-reading test was already bitten by exactly that, found by the windows-latest
+        // CI job on its first run.
+        let src = include_str!("bundles.rs").replace('\r', "");
+        let readme = include_str!("../bundles/README.md").replace('\r', "");
+
+        // The YAML key names, extracted from the struct rather than hand-listed — a hand-list
+        // is a second thing to forget, which is the defect this test exists to prevent.
+        let decl = src
+            .split_once("pub struct RawPkg {")
+            .expect("RawPkg's declaration moved — re-point this test")
+            .1
+            .split_once("\n}\n")
+            .expect("the end of RawPkg's body")
+            .0;
+        let mut keys: Vec<String> = Vec::new();
+        // A `rename` on the PRECEDING line wins: the Rust identifier is not the YAML key.
+        // Three shapes exist and all three must resolve — camelCase (`npmFlags`), hyphenated
+        // (`claude-plugin`, `vscode-extension`, `version-regex`) which an identifier cannot
+        // hold, and NUMERIC (`403`, behind the field `forbidden`) which cannot even start one.
+        let mut pending_rename: Option<String> = None;
+        for line in decl.lines() {
+            let t = line.trim();
+            if let Some(at) = t.find("rename = \"") {
+                let rest = &t[at + 10..];
+                if let Some(end) = rest.find('"') {
+                    pending_rename = Some(rest[..end].to_string());
+                }
+                continue;
+            }
+            if let Some(rest) = t.strip_prefix("pub ") {
+                if let Some(name) = rest.split(':').next() {
+                    keys.push(pending_rename.take().unwrap_or_else(|| name.to_string()));
+                }
+            }
+        }
+        assert!(
+            keys.len() >= 24,
+            "expected the whole struct, extracted only {}: {keys:?}",
+            keys.len()
+        );
+        assert!(
+            keys.iter().any(|k| k == "claude-plugin") && keys.iter().any(|k| k == "403"),
+            "the rename shapes must resolve to their YAML spelling: {keys:?}"
+        );
+
+        // ⚠️ The anchor is `<key>:` — the key AS WRITTEN IN YAML — not the bare word. A bare
+        // `grep` for "403" would match any prose about firewalls, and a test that passes on a
+        // coincidence is worse than no test: it retires the question without answering it.
+        // Both spellings count, because the README legitimately shows keys inside YAML blocks
+        // (`description: …`) as well as in code spans (`` `winget:` ``).
+        let undocumented: Vec<&String> = keys
+            .iter()
+            .filter(|k| {
+                let plain = format!("{k}:");
+                let quoted = format!("\"{k}\":"); // `403` is quoted in the catalogue
+                !readme.contains(&plain) && !readme.contains(&quoted)
+            })
+            .collect();
+        assert!(
+            undocumented.is_empty(),
+            "these keys are accepted by the parser and appear nowhere in bundles/README.md: \
+             {undocumented:?} — document them, or a catalogue author cannot know they exist"
+        );
+    }
 }
