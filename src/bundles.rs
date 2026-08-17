@@ -698,11 +698,16 @@ pub fn load_from_catalog(
             route: cmd.route,
             system_id,
             // For a content route the `detect:` field means "the NAME to look for", not a
-            // command. A VS Code extension's name IS its id, so the id is the default and an
-            // explicitly declared `detect:` still wins. Filling it here rather than adding a
-            // field to `Step` is deliberate: Step is filled at four literal sites (here plus
-            // three test builders), so every new field costs four edits.
-            detect: p.detect.clone().or_else(|| p.vscode_extension.clone()),
+            // command. A VS Code extension's name IS its id, and a nu-plugin's name IS the
+            // plugin name. Both default from their own field, and an explicitly declared
+            // `detect:` still wins. Filling it here rather than adding a field to `Step` is
+            // deliberate: Step is filled at four literal sites (here plus three test builders),
+            // so every new field costs four edits.
+            detect: p
+                .detect
+                .clone()
+                .or_else(|| p.vscode_extension.clone())
+                .or_else(|| p.nu_plugin.clone()),
             check: sub(p.check.clone()),
             is_config,
             is_extension,

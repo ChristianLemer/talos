@@ -175,6 +175,20 @@ fn detect_agent_content(step: &Step) -> Presence {
     }
 }
 
+/// The command that answers "is this plugin registered AND working?".
+///
+/// ⭐ A STATUS, not a file. `plugin.msgpackz` is a MessagePack-compressed registry, and
+/// parsing it would mean reimplementing nushell's own compatibility check — which is
+/// precisely the fact we want. So this route shells out where the vscode-extension route
+/// reads a manifest natively: the difference is that there, the fact wanted was a record on
+/// disk; here it is a verdict the tool computes.
+///
+/// ⚠️ `status == loaded`, not merely present: `added` means registered but not in the engine.
+/// And ⚠️ single quotes throughout — PowerShell interpolates inside double quotes.
+pub fn nu_plugin_presence_command(name: &str) -> String {
+    format!("nu -c 'plugin list | where name == {name} and status == loaded | length'")
+}
+
 /// Presence of a VS Code extension, from the scan's snapshot.
 ///
 /// ⭐ Three of the four verdicts are NOT `Some(false)`, and that is deliberate. `Some(false)`
@@ -396,7 +410,13 @@ pub fn detect_present_detailed_with_vscode(
     // DISPATCH — a missing route there means "not handled", which reads as unknown. A missing
     // route HERE means "handled WRONG". So this is the site that must consult
     // `bundles::is_extension_route`, the single place the class is decided.
-    if step.detect.is_some() && !crate::bundles::is_extension_route(step.route.as_deref()) {
+    if step.detect.is_some()
+        && !crate::bundles::is_extension_route(step.route.as_deref())
+        // ⚠️ `nu-plugin` is NOT in `is_extension_route` (a bundled one is not an extension —
+        // see the rung split), so it must be excluded HERE explicitly. This guard is an
+        // allowlist-by-negation: every content route is wrong by default until named.
+        && step.route.as_deref() != Some("nu-plugin")
+    {
         let bin = presence_probe(step.detect.as_deref(), os).map(|p| run_probe_detailed(&p));
         let bin_ok = bin.as_ref().map(|d| d.ok).unwrap_or(false);
         // The MANAGER half. A machine-wide listing answers it without a process; no
@@ -475,6 +495,35 @@ pub fn detect_present_detailed_with_vscode(
     //     No shell-out here at all: the host was probed once, for every row.
     if step.route.as_deref() == Some("vscode-extension") {
         return detect_vscode_extension(step, vscode);
+    }
+    // 3c. nu-plugin → ask nushell for the plugin's STATUS.
+    if step.route.as_deref() == Some("nu-plugin") {
+        let name = step.detect.as_deref().unwrap_or("").trim();
+        if name.is_empty() {
+            return Presence {
+                present: None,
+                reason: Some("no plugin name to look for".into()),
+                ..Default::default()
+            };
+        }
+        let probe = shell_probe(os, &nu_plugin_presence_command(name));
+        let d = run_probe_detailed(&probe);
+        // The command prints a COUNT: `1` when loaded, `0` when not. An exit code alone would
+        // not distinguish "not loaded" from "nu is missing".
+        let loaded = d.output.trim().starts_with('1');
+        return Presence {
+            // ⚠️ `nu` itself may be absent (the plugin requires Nushell). Then the probe
+            // fails and nothing is known — indeterminate, not absent, because "absent" would
+            // make Apply try to register a plugin into a shell that is not there.
+            present: if d.ok { Some(loaded) } else { None },
+            reason: if d.ok {
+                None
+            } else {
+                Some("nushell did not answer".into())
+            },
+            diag: Some(d),
+            ..Default::default()
+        };
     }
     // 4. exit-code (system manager without a binary detect). This stage is a pure
     //    manager probe, so the listing replaces it whole — there is no binary half
@@ -908,5 +957,44 @@ mod tests {
         let p = detect_present_detailed(&s, Os::Darwin);
         assert_eq!(p.present, Some(false));
         assert!(p.diag.expect("diag").cmdline.contains("false"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn a_nu_plugin_presence_is_a_LOADED_status_not_a_file() {
+        // ⚠️ THE LOAD-BEARING RULE. A binary compiled against the wrong nushell is registered,
+        // its file EXISTS, and it does not work. So a file check would report healthy for a
+        // broken plugin — the same false-green class as this repo's first starship check, which
+        // asked only "does the file exist and is it non-empty?" and answered *converged* for a
+        // file containing a comment.
+        //
+        // And `loaded` specifically, not merely present in the registry: `added` means
+        // registered but not in the engine.
+        let cmd = nu_plugin_presence_command("polars");
+        assert!(cmd.contains("plugin list"), "{cmd}");
+        assert!(cmd.contains("status == loaded"), "{cmd}");
+        assert!(cmd.contains("name == polars"), "{cmd}");
+        // ⚠️ Single-quoted, for the PowerShell interpolation reason.
+        assert!(!cmd.contains('"'), "no double quotes: {cmd}");
+    }
+
+    #[test]
+    fn a_nu_plugin_never_falls_into_the_binary_probe_branch() {
+        // ⚠️ THE TRAP, and it is the same one the vscode-extension route hit. `detect.rs`'s
+        // stage 2 fires on `detect.is_some() && !is_extension_route(route)` — an
+        // allowlist-by-NEGATION, so every new content route is wrong by default. A nu-plugin
+        // package would have its plugin NAME shelled out as a command, read "command not found",
+        // and report a registered plugin as absent.
+        let mut s = step();
+        s.route = Some("nu-plugin".into());
+        s.detect = Some("polars".into());
+        // Presence must not be decided by running `polars` as an executable.
+        let p = detect_present_detailed(&s, Os::Darwin);
+        let diag = p.diag.expect("evidence");
+        assert!(
+            diag.cmdline.contains("plugin list"),
+            "the plugin name must not be run as a command: {}",
+            diag.cmdline
+        );
     }
 }
