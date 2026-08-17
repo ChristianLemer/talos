@@ -71,6 +71,18 @@ pub struct RawPkg {
     /// cannot hold the hyphen, hence the rename — same as `claude-plugin` above.
     #[serde(default, rename = "vscode-extension")]
     pub vscode_extension: Option<String>,
+    /// A nushell plugin NAME, e.g. `polars` or `xlsx`. The binary is `nu_plugin_<name>`
+    /// (plus `.exe` on Windows) — DERIVED here, never written in YAML, because an author
+    /// writing the prefix would be stating the same fact twice.
+    #[serde(default, rename = "nu-plugin")]
+    pub nu_plugin: Option<String>,
+    /// Where the binary comes from, as `owner/repo@tag`. ABSENT means the plugin ships with
+    /// nushell itself and is already beside the `nu` binary.
+    ///
+    /// ⭐ This absence is the SOURCE AXIS, and it decides the rung: bundled ⇒ ⚡ (no network
+    /// at all), released ⇒ 🧩 (downloads, never elevates, writes in the user's profile).
+    #[serde(default, rename = "plugin-release")]
+    pub plugin_release: Option<String>,
     #[serde(default)]
     pub detect: Option<String>,
     #[serde(default)]
@@ -563,6 +575,59 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
             upgrade: None,
             downgrade: None,
         };
+    }
+    if let Some(name) = &pkg.nu_plugin {
+        // The binary name, derived. ⚠️ nushell VALIDATES this in hard code: `plugin add`
+        // refuses a file whose name does not start with `nu_plugin_` (PluginIdentity::new),
+        // so the prefix is not a convention here — it is a requirement.
+        let exe = if os == Os::Windows { ".exe" } else { "" };
+        let binary = format!("nu_plugin_{name}{exe}");
+        // `plugin rm` takes the PLUGIN name; `plugin add` takes a FILE. They differ by the
+        // prefix, and conflating them is the obvious first bug.
+        let uninstall = format!("nu -c 'plugin rm {name}'");
+        match &pkg.plugin_release {
+            None => {
+                // BUNDLED: the binary is already beside `nu`, so a BARE NAME resolves.
+                //
+                // ⭐ MEASURED: `plugin add nu_plugin_polars` (no path) registers the Cellar
+                // binary, because NU_PLUGIN_DIRS contains the directory holding `nu` by default.
+                // No network, no path resolution, no sidecar — which is exactly what earns this
+                // the ⚡ rung, whose promise is "no network at all".
+                return Commands {
+                    route: Some("nu-plugin".into()),
+                    install: Some(format!("nu -c 'plugin add {binary}'")),
+                    uninstall: Some(uninstall),
+                    // A bundled plugin is replaced when nushell itself is upgraded — there is
+                    // nothing for Talos to upgrade on its own.
+                    upgrade: None,
+                    downgrade: None,
+                };
+            }
+            Some(rel) => {
+                // RELEASED: the binary must be fetched first, so the work goes to the sidecar.
+                //
+                // ⚠️ The bare-name form CANNOT be used here: the binary is not in
+                // NU_PLUGIN_DIRS until it has been placed, so `plugin add` would fail to find
+                // it. The sidecar registers by ABSOLUTE path.
+                //
+                // ⚠️ SINGLE quotes around `{dir}`: PowerShell interpolates inside double quotes,
+                // so a `$word` anywhere in the catalogue path silently vanishes and the script
+                // is never found. Measured; and a guard test enforces it.
+                return Commands {
+                    route: Some("nu-plugin".into()),
+                    install: Some(format!(
+                        "nu '{{dir}}/nu-plugin-fetch.nu' install {name} {rel}"
+                    )),
+                    uninstall: Some(uninstall),
+                    // ⬜ No upgrade, deliberately: nothing marks a plugin outdated (scan_outdated
+                    // asks winget/brew only), so a wired `upgrade:` would be unreachable — the
+                    // mistake the claude-plugin route made. Re-running install fetches the
+                    // declared tag, which is the honest gesture.
+                    upgrade: None,
+                    downgrade: None,
+                };
+            }
+        }
     }
     none
 }
@@ -2053,6 +2118,101 @@ slow: true
             steps[0].pin, None,
             "an extension carries no pin, keyword or not"
         );
+    }
+
+    #[test]
+    fn a_bundled_nu_plugin_registers_by_bare_name() {
+        // ⭐ MEASURED: `plugin add nu_plugin_polars` (no path) registers the bundled binary,
+        // because NU_PLUGIN_DIRS already contains the directory holding `nu`. So the bundled
+        // source needs no path resolution at all — and therefore no network, which is what
+        // earns it the ⚡ rung.
+        let mut p = pkg("Polars for Nushell");
+        p.nu_plugin = Some("polars".into());
+        let c = commands_for(&p, Os::Darwin);
+        assert_eq!(c.route.as_deref(), Some("nu-plugin"));
+        let install = c.install.expect("an install command");
+        // ⭐ The BINARY name is derived: `nu_plugin_` + the declared name. An author who wrote
+        // the prefix in YAML would be stating the same fact twice.
+        assert!(
+            install.contains("plugin add nu_plugin_polars"),
+            "install: {install}"
+        );
+        // `plugin rm` takes the PLUGIN name, not the binary name — they differ by the prefix.
+        let uninstall = c.uninstall.expect("an uninstall command");
+        assert!(
+            uninstall.contains("plugin rm polars"),
+            "uninstall: {uninstall}"
+        );
+        // ⬜ No upgrade: a bundled plugin is replaced when nushell itself is upgraded, so there
+        // is nothing for Talos to upgrade independently.
+        assert_eq!(c.upgrade, None);
+        assert_eq!(c.downgrade, None);
+    }
+
+    #[test]
+    fn a_windows_bundled_nu_plugin_carries_the_exe_suffix() {
+        // The binary is `nu_plugin_x.exe` on Windows. Derived, like the prefix.
+        let mut p = pkg("Polars for Nushell");
+        p.nu_plugin = Some("polars".into());
+        let install = commands_for(&p, Os::Windows)
+            .install
+            .expect("an install command");
+        assert!(
+            install.contains("nu_plugin_polars.exe"),
+            "install: {install}"
+        );
+    }
+
+    #[test]
+    fn a_released_nu_plugin_goes_through_the_fetch_sidecar() {
+        // A released plugin cannot use the bare-name form: the binary is not in NU_PLUGIN_DIRS
+        // until it has been fetched. So the install delegates to the sidecar, which fetches,
+        // renames, sets the executable bit and registers by ABSOLUTE path.
+        let mut p = pkg("Excel for Nushell");
+        p.nu_plugin = Some("xlsx".into());
+        p.plugin_release = Some("ChristianLemer/nu_plugin_xlsx@v0.2.0".into());
+        let c = commands_for(&p, Os::Darwin);
+        let install = c.install.expect("an install command");
+        assert!(install.contains("nu-plugin-fetch.nu"), "install: {install}");
+        assert!(
+            install.contains("xlsx"),
+            "the plugin name reaches the sidecar: {install}"
+        );
+        assert!(
+            install.contains("ChristianLemer/nu_plugin_xlsx@v0.2.0"),
+            "the release ref reaches the sidecar: {install}"
+        );
+        // ⚠️ SINGLE-quoted: PowerShell interpolates inside double quotes, so a `$word` in the
+        // catalogue path would vanish. A guard test enforces this on every `{dir}` command.
+        assert!(
+            !install.contains("\"{dir}"),
+            "single quotes only: {install}"
+        );
+        // Uninstall is the same either way — nushell forgets the registration.
+        assert!(c.uninstall.expect("uninstall").contains("plugin rm xlsx"));
+    }
+
+    #[test]
+    fn a_nu_plugin_route_is_not_a_config_atom() {
+        // ⚠️ `is_config` is `check.is_some() && (route.is_none() || route == "run")`. A nu-plugin
+        // package declares a route, so it can never be misread as a config-atom even though it
+        // may sit on the same rung. The two classes must stay disjoint: a config-atom promises
+        // NO NETWORK, and a released plugin downloads.
+        let mut p = pkg("Excel for Nushell");
+        p.nu_plugin = Some("xlsx".into());
+        p.plugin_release = Some("owner/repo@v1".into());
+        let route = commands_for(&p, Os::Darwin).route;
+        assert_eq!(route.as_deref(), Some("nu-plugin"));
+    }
+
+    #[test]
+    fn a_system_route_still_wins_over_a_nu_plugin_declaration() {
+        // Route arbitration is ORDERED and the system manager is family 1. A package declaring
+        // both must not become a plugin — the rung would then promise the wrong thing.
+        let mut p = pkg("Confused");
+        p.brew = Some("nushell".into());
+        p.nu_plugin = Some("polars".into());
+        assert_eq!(commands_for(&p, Os::Darwin).route.as_deref(), Some("brew"));
     }
 
     #[test]
