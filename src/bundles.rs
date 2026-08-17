@@ -668,7 +668,10 @@ pub fn load_from_catalog(
         });
         let is_config =
             p.check.is_some() && (cmd.route.is_none() || cmd.route.as_deref() == Some("run"));
-        let is_extension = is_extension_route(cmd.route.as_deref());
+        // ⭐ Asked of the PACKAGE, not the route: `nu-plugin` maps to two rungs depending on
+        // whether the binary must be fetched. Every other route is unaffected — the helper
+        // falls through to `is_extension_route` for them.
+        let is_extension = is_extension_route_for(p, os);
         // Classify what the author declared, ONCE per package. Two uses below: the log line
         // that refuses an unknown word, and the value carried on the Step.
         let declared = classify_pin(p.version.as_deref());
@@ -764,6 +767,26 @@ pub fn is_extension_route(route: Option<&str>) -> bool {
         route,
         Some("claude-plugin") | Some("skill") | Some("vscode-extension")
     )
+}
+
+/// Does this PACKAGE install into a host rather than onto the machine — asked of the package,
+/// not merely its route.
+///
+/// ⭐ WHY BOTH FUNCTIONS EXIST. `is_extension_route` answers from the route string alone, and
+/// that is enough for every route where one name implies one cost. `nu-plugin` breaks that:
+/// a bundled plugin engages NO network (its binary ships with nushell — measured), while a
+/// released one fetches ~9 MB. One route, two rungs, decided by the source.
+///
+/// ⚠️ Do NOT "simplify" this by adding `nu-plugin` to `is_extension_route`. Every bundled
+/// plugin would move to 🧩, and ⚡ would then silently skip a gesture that engages nothing —
+/// a rung that promises less than it can deliver is as much a lie as one that promises more.
+pub fn is_extension_route_for(pkg: &RawPkg, os: Os) -> bool {
+    let route = commands_for(pkg, os).route;
+    if route.as_deref() == Some("nu-plugin") {
+        // The SOURCE decides: a fetch is a download, a bundled binary is not.
+        return pkg.plugin_release.is_some();
+    }
+    is_extension_route(route.as_deref())
 }
 
 /// What a catalogue author DECLARED in `version:`.
@@ -929,6 +952,42 @@ mod tests {
         assert!(!is_extension_route(
             commands_for(&c, Os::Darwin).route.as_deref()
         ));
+    }
+
+    #[test]
+    fn a_bundled_plugin_is_rung_zero_and_a_released_one_is_rung_one() {
+        // ⭐ THE POINT OF THE ROUTE. A rung is a promise about what the gesture ENGAGES:
+        //   ⚡ Config only  — no network AT ALL
+        //   🧩 Extensions   — downloads, never elevates, writes in your profile
+        // A bundled plugin engages no network (the binary is beside `nu`, measured). A released
+        // one fetches ~9 MB. Same route, two costs — so the rung follows the SOURCE, and this is
+        // the first route where it does.
+        let mut bundled = pkg("Polars for Nushell");
+        bundled.nu_plugin = Some("polars".into());
+        let mut released = pkg("Excel for Nushell");
+        released.nu_plugin = Some("xlsx".into());
+        released.plugin_release = Some("owner/repo@v1".into());
+
+        assert!(
+            !is_extension_route_for(&bundled, Os::Darwin),
+            "a bundled plugin downloads nothing, so it belongs on ⚡"
+        );
+        assert!(
+            is_extension_route_for(&released, Os::Darwin),
+            "a released plugin downloads, so it belongs on 🧩"
+        );
+    }
+
+    #[test]
+    fn the_route_alone_cannot_decide_a_nu_plugins_rung() {
+        // ⚠️ The guard against the obvious refactor. `is_extension_route(route)` takes ONLY the
+        // route string, so it CANNOT answer for `nu-plugin` — both sources share one route name.
+        // Adding "nu-plugin" to that list would put every bundled plugin on 🧩 and make ⚡ lie by
+        // omission (it would silently skip a gesture that engages nothing).
+        assert!(
+            !is_extension_route(Some("nu-plugin")),
+            "the route name alone must NOT classify — the source does"
+        );
     }
 
     #[test]

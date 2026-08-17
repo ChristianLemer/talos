@@ -383,6 +383,29 @@ mod tests {
                 true,
                 [false, true, true],
             ),
+            // A RELEASED nushell plugin: it downloads, so 🧩 — same class as a VS Code
+            // extension, and proven here rather than asserted in prose.
+            (
+                "released nu-plugin install",
+                Action::Install,
+                false,
+                true,
+                [false, true, true],
+            ),
+            // A BUNDLED one engages no network (the binary ships with nushell — measured), but
+            // it is not a config-atom, so it lands on 📦. ⚠️ This is a genuine design tension:
+            // a gesture that engages nothing ideally rides ⚡, but `is_config` is derived from
+            // `check:` in one place with one test, and widening it to mean two different things
+            // (has `check:`, OR is a bundled plugin) would blur the class. So ⚡ or 🧩 skips a
+            // free gesture, and that trade preserves the semantic boundary — whether ⚡ should
+            // grow a second door is C's call, not a silent overload.
+            (
+                "bundled nu-plugin install",
+                Action::Install,
+                false,
+                false,
+                [false, false, true],
+            ),
             // 📦 rung 2 — the machine. NOTHING is excluded here, and that is the whole point of
             // the reshape: `uac`, `403` and `slow` are written on the ROW instead of filtering
             // on the user's behalf.
