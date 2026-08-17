@@ -11,8 +11,14 @@
 # earlier Talos revision may still be missing the PATH entry.
 name: Bun PATH
 description: Puts ~/.bun/bin on the shell PATH so bun-installed CLIs are found
-run: nu "{dir}/bun-path.nu" apply
-check: nu "{dir}/bun-path.nu" check
+# ⚠️ SINGLE quotes, and it is not a style choice. On Windows `run:`/`check:` go through
+# PowerShell (`platform::shell_probe`), which INTERPOLATES inside double quotes: a `$word`
+# anywhere in `{dir}` expands to nothing and the path silently breaks. Measured under pwsh:
+# `"x/$Documents/y"` → `x//y`, while `'x/$Documents/y'` survives intact. A corporate share
+# path is exactly where a `$` shows up, so the double-quoted form was a row that reads
+# absent for a reason no operator could see.
+run: nu '{dir}/bun-path.nu' apply
+check: nu '{dir}/bun-path.nu' check
 # No uninstall: leaving the PATH entry is inert, and the sentinel block is ours to
 # remove later if we add a remove verb (same no-clobber stance as starship-config).
 category: [foundation]

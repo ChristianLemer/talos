@@ -1620,6 +1620,68 @@ mod tests {
         );
     }
 
+    /// A `{dir}` path is SINGLE-quoted, never double-quoted.
+    ///
+    /// ⚠️ THE DEFECT THIS CLOSES, and it was invisible from macOS. On Windows `run:` and
+    /// `check:` go through PowerShell (`platform::shell_probe`), which INTERPOLATES inside
+    /// double quotes. Measured under pwsh on this machine:
+    ///
+    /// ```text
+    ///   "x/$Documents/y"  →  x//y        a `$` + a LETTER is a variable: it vanishes
+    ///   "x/$ Documents/y" →  x/$ Docu…   a `$` + a SPACE is literal: harmless
+    ///   'x/$Documents/y'  →  x/$Docu…    single quotes survive either way
+    /// ```
+    ///
+    /// So a catalogue served from a share whose path contains `$Something` produced a broken
+    /// path, nu never found the script, and the row read *absent* — on Windows only, for a
+    /// reason no operator could see. A corporate share path is exactly where a `$` turns up.
+    ///
+    /// ⭐ This is the SECOND time a quoting rule in this file was learned the hard way: the
+    /// first was an unquoted parenthesis in a diagnostic LABEL, which PowerShell read as code
+    /// and RAN. Both are guarded here rather than trusted to memory, because both were silent
+    /// on Mac and total on Windows.
+    #[test]
+    fn a_shipped_dir_path_is_single_quoted_never_double() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("catalog");
+        let mut checked = 0usize;
+        for e in std::fs::read_dir(&dir).expect("the shipped catalogue must be readable") {
+            let path = e.expect("readable entry").path();
+            if path.extension().and_then(|x| x.to_str()) != Some("yaml") {
+                continue;
+            }
+            let id = path.file_stem().unwrap().to_string_lossy().to_string();
+            let raw = std::fs::read_to_string(&path).expect("readable");
+            let Some(cp) = crate::catalog::parse_catalog_entry(&raw, &id) else {
+                continue;
+            };
+            // Every hand-written command an author can put `{dir}` into.
+            for (what, cmd) in [
+                ("run", cp.pkg.run.as_deref()),
+                ("runUninstall", cp.pkg.run_uninstall.as_deref()),
+                ("check", cp.pkg.check.as_deref()),
+            ] {
+                let Some(cmd) = cmd else { continue };
+                if !cmd.contains("{dir}") {
+                    continue;
+                }
+                checked += 1;
+                assert!(
+                    !cmd.contains("\"{dir}"),
+                    "{id} {what}: `{{dir}}` is DOUBLE-quoted — PowerShell interpolates \
+                     inside double quotes, so a `$word` in the path vanishes on Windows. \
+                     Use single quotes: {cmd}"
+                );
+            }
+        }
+        // ⚠️ The anti-no-op guard, same reason as the sibling test above: today exactly two
+        // config-atoms use `{dir}`, and a test that silently checked zero of them would keep
+        // reporting success while guarding nothing.
+        assert!(
+            checked >= 2,
+            "only {checked} `{{dir}}` commands checked — the catalogue was not really read"
+        );
+    }
+
     #[test]
     fn overrides_parse_from_yaml_with_the_403_key() {
         let raw = "\
