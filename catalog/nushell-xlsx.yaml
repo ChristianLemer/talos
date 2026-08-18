@@ -1,0 +1,17 @@
+# Excel for Nushell — reads and writes .xlsx. ⭐ The ONE plugin here that nushell does not
+# ship, so its binary is fetched from the project's own release assets (~9 MB, aarch64-darwin
+# or x86_64-windows) — no Rust toolchain needed on a colleague's machine, which matters for a
+# data manager on Windows.
+#
+# ⚠️ THE VERSION COUPLING IS TIGHT AND RUNS BOTH WAYS. This binary is compiled against a
+# specific nu-plugin protocol version, and `catalog/nushell.yaml` pins Nushell. They agree
+# today BY HAND. Bump either side and `plugin add` fails — loudly, with a load error in the
+# row's terminal, which is the honest failure. There is no field expressing "requires Nushell
+# 0.113.x": `requires:` says PRESENT, not a version.
+name: Excel for Nushell
+description: Read and write .xlsx files from nushell
+nu-plugin: xlsx
+plugin-release: ChristianLemer/nu_plugin_xlsx@v0.2.0
+category: [terminal]
+requires:
+  - Nushell

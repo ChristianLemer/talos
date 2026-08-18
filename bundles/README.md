@@ -72,6 +72,7 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
 | claude-plugin | `claude-plugin: plugin@marketplace` + optional `marketplace:` | Claude Code plugin |
 | skill | `skill: source` + optional `skillName:` | cross-agent SKILL.md via `npx skills` |
 | vscode-extension | `vscode-extension: publisher.name` | a VS Code extension |
+| nu-plugin | `nu-plugin: name` + optional `plugin-release: owner/repo@tag` | a nushell plugin |
 
 **`detect:`** — how Talos knows a package is already present.
 - A binary route: the command whose exit 0 = present, e.g. `detect: code --version`.
@@ -104,6 +105,47 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
 - **No upgrade, deliberately.** VS Code auto-updates its own extensions
   (`extensions.autoUpdate` defaults to true), so Talos installs and removes; keeping
   them current is the editor's job.
+
+### `nu-plugin` — the rung follows the source
+
+```yaml
+  - name: Polars for Nushell
+    description: DataFrames in nushell — the plugin a data manager wants nu for
+    nu-plugin: polars
+    requires: [Nushell]
+```
+
+```yaml
+  - name: Excel for Nushell
+    description: Read and write .xlsx files from nushell
+    nu-plugin: xlsx
+    plugin-release: ChristianLemer/nu_plugin_xlsx@v0.2.0
+    requires: [Nushell]
+```
+
+- **Write the plugin NAME, never the binary filename.** `nu-plugin: polars` declares the
+  plugin named `polars`, and the engine derives `nu_plugin_polars` or `nu_plugin_polars.exe`
+  — that `nu_plugin_` prefix is a **nushell requirement** (validated in hard code), not a
+  convention. The source name is what you write.
+- **The source axis determines the rung.** This is the first route in the catalogue whose
+  install rung **depends on the package, not the route name**:
+  - **No `plugin-release:` = bundled with nushell** — the binary ships beside `nu`, so
+    `plugin add nu_plugin_polars` resolves via `NU_PLUGIN_DIRS` (which contains the
+    directory holding `nu`) and engages **no network at all**. ⚡ rung, measured.
+  - **`plugin-release:` present = fetched from the project's release** — downloads the
+    binary from `owner/repo`'s release assets (~9 MB for `xlsx`, aarch64-darwin or
+    x86_64-windows), renames, marks executable, and registers it. 🧩 rung, because it
+    fetches. The sidecar that does this is `catalog/nu-plugin-fetch.nu`.
+- **Presence is a STATUS, not a file.** A plugin binary compiled against a different
+  nushell version is registered, its file exists on disk, and it does not work. Talos
+  checks `plugin list | where name == <n> and status == loaded` — `added` is not enough.
+  The status says whether the plugin protocol agreed.
+- ⚠️ **The version coupling is TIGHT and runs BOTH WAYS, and there is no field for it.**
+  `catalog/nushell.yaml` pins Nushell at `0.113.1`; a plugin binary is compiled against a
+  specific nu-plugin protocol version. They agree **by hand**. Bump either side and
+  `plugin add` fails — loudly, with a load error in the row's terminal, which is the honest
+  failure. There is no field expressing "requires Nushell 0.113.x": `requires:` says
+  PRESENT, not a version constraint.
 
 **`requires:`** — names a package (or a bare command) that must be present first.
 Resolved against the whole plan: a plugin that `requires: [Claude Code]` stays
