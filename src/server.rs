@@ -1195,6 +1195,41 @@ fn rung_from_wire(v: &serde_json::Value) -> crate::ladder::Rung {
     }
 }
 
+/// Is this row IMPOSSIBLE here because a `requires:` can never hold — the row-button
+/// half of the requirement gate, reusing `deps::requires_blocked` rather than
+/// re-deriving the rule (one rule, three callers: model.js, apply_diff, here).
+///
+/// The desires are NOT knowable on this path — `row_action` never receives the wire's
+/// `on`/`off` lists, and recomputing the front's transitive pull server-side would be a
+/// second implementation of `wantedNames` in Rust. So `will_be_present` is read
+/// OPTIMISTICALLY (true for every node): the formula then reduces to
+/// `present_now || reachable`, which is exactly "could this requirement ever be here?".
+/// The narrowing is deliberate — see the call site.
+async fn requirement_blocks_row(state: &AppState, step: &crate::bundles::Step) -> Option<String> {
+    use crate::deps::{make_index, requires_blocked, DepNode};
+    if step.requires.is_empty() {
+        return None; // the overwhelming majority — no lock, no clone, no walk
+    }
+    let steps = state.plan.read().await.steps.clone();
+    let seen = state.last_seen.lock().await;
+    let nodes: Vec<DepNode> = steps
+        .iter()
+        .enumerate()
+        .map(|(j, s)| DepNode {
+            name: s.name.clone(),
+            requires: s.requires.clone(),
+            will_be_present: true, // unknown desire, read optimistically (see the doc)
+            // ⚠️ `Some(true)`, never "not Some(false)": an UN-PROBED row reads None, and
+            // treating that as present would let the gate pass on a row nobody looked at.
+            present_now: seen.get(j).cloned().flatten().and_then(|p| p.present) == Some(true),
+            reachable: s.uninstall.is_some(),
+        })
+        .collect();
+    let idx = make_index(&nodes);
+    let me = nodes.iter().position(|n| n.name == step.name)?;
+    requires_blocked(&nodes[me], &nodes, &idx)
+}
+
 /// ROW action: a single button on a row (install/uninstall/upgrade/
 /// downgrade). Runs do_step on that index then emits `done` to unfreeze the UI.
 /// downgrade is allowed (explicit manual click, the only destructive path outside the batch).
@@ -1212,6 +1247,24 @@ async fn row_action(socket: &mut WebSocket, state: &AppState, i: usize, action: 
     let sel = read_selection(&state.data_dir);
     if scope_refuses(&sel, &step.name) {
         println!("[scope] refused {} on {} (out of scope)", action, step.name);
+        let _ = socket
+            .send(Message::Text(json!({ "type": "done" }).to_string()))
+            .await;
+        return;
+    }
+    // THE SECOND SET OF TEETH: an IMPOSSIBLE requirement. This path never sees the wire's
+    // `on`/`off`, so it asks a deliberately NARROWER question than the batch does — not
+    // "will the requirement be there after this Apply?" but "could it ever be here?".
+    // A single button is an explicit gesture about one thing, and refusing it because a
+    // requirement is merely not-yet-installed would break the legitimate click that
+    // installs a plugin knowing the host is on its way.
+    if let Some(why) = requirement_blocks_row(state, step).await {
+        println!("[scope] refused {} on {} ({})", action, step.name, why);
+        let _ = socket
+            .send(Message::Text(
+                json!({ "type": "state", "i": i, "reason": why }).to_string(),
+            ))
+            .await;
         let _ = socket
             .send(Message::Text(json!({ "type": "done" }).to_string()))
             .await;
@@ -1397,7 +1450,9 @@ async fn apply_diff(
     rung: crate::ladder::Rung,
 ) {
     use crate::decision::{action_for, Action, Desired, MachineFacts};
-    use crate::deps::{index_of_names, make_index, requires_reason, topo_sort, DepNode};
+    use crate::deps::{
+        index_of_names, make_index, requires_blocked, requires_reason, topo_sort, DepNode,
+    };
     use std::collections::HashSet;
 
     let os = state.os;
@@ -1591,6 +1646,13 @@ async fn apply_diff(
             requires: s.requires.clone(),
             will_be_present: !want_off.contains(&i)
                 && (presences[i].present == Some(true) || want_on.contains(&i)),
+            // The two facts `will_be_present` folds away, kept apart because
+            // `requires_blocked` needs them apart. `present_now` is the observation with
+            // no desire mixed in; `reachable` is "Talos would act on this row at all",
+            // which is `uninstall.is_some()` — the very bit the front sends as
+            // `canUninstall`, so both halves of the rule read the same predicate.
+            present_now: presences[i].present == Some(true),
+            reachable: s.uninstall.is_some(),
         })
         .collect();
     let idx = make_index(&nodes);
@@ -1635,7 +1697,16 @@ async fn apply_diff(
         // Without the second, a client that simply omitted the list would still get
         // its uninstall: the batch path would trust the wire where the row path does
         // not. Same predicate, same disk, one asymmetry closed.
-        if out_of_scope.contains(&i) || scope_refuses(&sel, &step.name) {
+        //   · and the REQUIREMENTS, which only the server can answer: it holds the whole
+        //     graph and it has just re-probed it, so it does not depend on the wire being
+        //     honest here at all. This is the half that was computed and never enforced —
+        //     `requires_reason` fed the row's TEXT (below, at the repaint) and nothing
+        //     else, so a Microsoft redistributable on a Mac kept an install button and
+        //     counted against its bundle.
+        if out_of_scope.contains(&i)
+            || scope_refuses(&sel, &step.name)
+            || requires_blocked(&nodes[i], &nodes, &idx).is_some()
+        {
             continue;
         }
         let desired = if want_on.contains(&i) {
@@ -3679,5 +3750,110 @@ mod tests {
             "and nothing was written to the share"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- requirements as TEETH, not merely as a label -----------------------------
+    //
+    // Text-level, like `handled_client_msgs` above and for the same reason: both gates
+    // live in functions that need a live WebSocket, so no unit test can reach them. What
+    // needs pinning is nonetheless a literal — whether the skip consults the verdict at
+    // all — and the verdict's own logic is covered properly in deps.rs.
+    //
+    // ⚠️ These guard against the exact failure mode the whole change addresses: a
+    // requirement that is COMPUTED and then only shown. `requires_reason` was already
+    // computed at server.rs:1604 before this work and fed nothing but the row's text,
+    // which is why a Microsoft redistributable kept an install button on a Mac.
+
+    /// The body of a named async fn in this source file, up to the next top-level item,
+    /// with every line comment STRIPPED.
+    ///
+    /// ⚠️ The stripping is not tidiness, it is the whole validity of the technique. The
+    /// first draft of these guards passed the moment a COMMENT elsewhere in `apply_diff`
+    /// mentioned `requires_blocked` — a green light for code that did not exist. A
+    /// text-level guard that reads comments proves nothing about behaviour, and this repo
+    /// has been burned by exactly that before (an exposure audit that counted comments as
+    /// assertions). Read code, never prose.
+    fn fn_body(name: &str) -> String {
+        let src = include_str!("server.rs");
+        let start = src
+            .find(&format!("async fn {name}("))
+            .unwrap_or_else(|| panic!("`{name}` moved or was renamed — re-point this test"));
+        let end = src[start..]
+            .find("\n}\n")
+            .expect("a top-level fn body ends at a column-0 brace");
+        src[start..start + end]
+            .lines()
+            .map(|l| match l.find("//") {
+                Some(at) => &l[..at],
+                None => l,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_source_guards_read_code_and_not_comments() {
+        // The guard ON the guards. `fn_body` is only meaningful if a mention in prose
+        // cannot satisfy it, and that property is invisible until it fails — it failed
+        // here first, silently, which is why it is now pinned.
+        let body = fn_body("apply_diff");
+        assert!(
+            !body.contains("the two facts `will_be_present` folds away"),
+            "fn_body still returns comment text → every guard built on it can be \
+             satisfied by prose"
+        );
+        assert!(
+            body.contains("let os = state.os;"),
+            "fn_body stripped too much — it must still return the actual statements"
+        );
+    }
+
+    #[test]
+    fn the_batch_apply_refuses_a_requirement_blocked_row() {
+        // A row Apply can never satisfy must not be in the plan. Without this the front
+        // is the only guard, and a front-only guard is cosmetic: the SERVER builds the
+        // plan (the Git-hazard lesson, talos-scope-second-axis).
+        let body = fn_body("apply_diff");
+        assert!(
+            body.contains("requires_blocked"),
+            "apply_diff computes the dependency graph and never asks whether a row is \
+             possible → a row whose requirement cannot hold is still offered for install"
+        );
+    }
+
+    #[test]
+    fn the_row_button_refuses_a_requirement_blocked_row_too() {
+        // The per-row button never sees the wire lists, so it needs its own teeth —
+        // exactly the asymmetry `scope_refuses` was added to close, now closed on the
+        // second derivation as well.
+        let body = fn_body("row_action");
+        assert!(
+            body.contains("requirement_blocks_row"),
+            "row_action has teeth for the user's explicit scope override but not for an \
+             impossible requirement → the button stays live on a row the panel greyed out"
+        );
+        // And the helper must DELEGATE, not re-derive: a second copy of the rule is how
+        // the row path and the batch path came to disagree in the first place.
+        assert!(
+            fn_body("requirement_blocks_row").contains("requires_blocked"),
+            "the row gate re-implements the requirement rule instead of calling it → two \
+             behaviours for one question, which is the defect `scope_refuses` exists for"
+        );
+    }
+
+    #[test]
+    fn the_batch_gate_sits_where_the_other_two_scope_gates_sit() {
+        // ONE skip, three sources, one place. A second `continue` further down would be
+        // the drift that made `row_action` and the batch path disagree once already.
+        let body = fn_body("apply_diff");
+        let gate = body
+            .find("if out_of_scope.contains(&i)")
+            .expect("the scope gate moved — re-point this test");
+        let end = body[gate..].find("{\n").expect("the gate opens a block");
+        assert!(
+            body[gate..gate + end].contains("requires_blocked"),
+            "the requirement gate must join the existing scope condition, not add a \
+             second skip elsewhere in the loop"
+        );
     }
 }

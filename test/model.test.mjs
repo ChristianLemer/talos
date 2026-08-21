@@ -32,9 +32,11 @@ import {
   profileStateOf,
   removeFromPersonal,
   removeProfile,
+  requiresReason,
   rungPlan,
   rungSeconds,
   scopeOf,
+  scopeReason,
   setDecision,
   setExternal,
   setInstalledVersion,
@@ -143,9 +145,12 @@ function seedWithProfiles() {
   loadPlan(
     m,
     [
-      { i: 0, name: "Node", bundle: "Base", posture: "mandatory" },
-      { i: 1, name: "rg", bundle: "Extras", posture: "opt-in" },
-      { i: 2, name: "bat", bundle: "Extras", posture: "opt-in" },
+      // ⚠️ `canUninstall: true` is not decoration: without it these rows are derived
+      // OUT of scope (no way back → `no-route`), and profileProgress now honours the
+      // second axis. Three normal, fully manageable rows is what these tests mean.
+      { i: 0, name: "Node", bundle: "Base", posture: "mandatory", canUninstall: true },
+      { i: 1, name: "rg", bundle: "Extras", posture: "opt-in", canUninstall: true },
+      { i: 2, name: "bat", bundle: "Extras", posture: "opt-in", canUninstall: true },
     ],
     [
       { name: "Search", emoji: "🔎", packages: ["rg"] },
@@ -1086,4 +1091,180 @@ test("isPending: an absent pending row is not awaiting arbitration — it is awa
   // Adding outdated + available still does NOT make it pending — presence guards first.
   setOutdated(model, 0, true, "2.51.0");
   assert.equal(isPending(model, 0), false, "absent with a gap is still not pending");
+});
+
+// --- requirements as a SCOPE fact (not merely a label) ----------------------
+// The measured symptom (2026-08-21, on a Mac): `VC++ runtime` read `?` with an
+// `install` button, marked `tracked` + `auto`, and counted against Base (10/12) —
+// for a Microsoft redistributable that can never apply there. The `?` was honest
+// (winget does not exist on macOS, so presence is genuinely undeterminable); what
+// was false is that the row stayed actionable and counted.
+
+// A host package and a dependent, so the requirement can be made to hold or not.
+// ⚠️ `Windows` carries NO route — `canUninstall: false` — because that is what a
+// platform package IS: `detect: cmd /c ver` and nothing else, observed and never
+// installed. A fixture giving it a route would make the interesting case unreachable.
+function seedWithRequirement() {
+  const m = createModel();
+  loadPlan(
+    m,
+    [
+      { i: 0, name: "Windows", bundle: "", posture: "opt-in", canUninstall: false },
+      {
+        i: 1,
+        name: "VC++ runtime",
+        bundle: "Base",
+        posture: "opt-in",
+        canUninstall: true,
+        requires: ["Windows"],
+      },
+    ],
+    [{ name: "Base", emoji: "📦", packages: ["VC++ runtime"] }],
+  );
+  return m;
+}
+
+test("requiresReason: absent and unwanted requirement → the engine's wording", () => {
+  const m = seedWithRequirement();
+  setPresence(m, 0, false); // Windows is not here
+  assert.equal(requiresReason(m, 1), "requires Windows");
+});
+
+test("requiresReason: a PRESENT requirement satisfies it", () => {
+  const m = seedWithRequirement();
+  setPresence(m, 0, true);
+  assert.equal(requiresReason(m, 1), null);
+});
+
+test("requiresReason: a requirement Talos is about to install does hold", () => {
+  // A requirement being installed in the SAME Apply must not block its dependent —
+  // otherwise a bundle could never lay down a package and its plumbing in one gesture.
+  // What makes it hold is not the WISH but the reachability: wanted AND actionable.
+  const m = createModel();
+  loadPlan(
+    m,
+    [
+      { i: 0, name: "Nushell", bundle: "", posture: "opt-in", canUninstall: true },
+      { i: 1, name: "Polars", bundle: "", posture: "opt-in", canUninstall: true, requires: ["Nushell"] },
+    ],
+    [],
+  );
+  setPresence(m, 0, false);
+  setDecision(m, 1, "in"); // wanting Polars pulls Nushell in, transitively
+  assert.equal(desiredOf(m, 0), "present");
+  assert.equal(requiresReason(m, 1), null, "absent but on its way in");
+});
+
+test("requiresReason: wanting a row does not let it satisfy its OWN requirement", () => {
+  // ⭐ The trap that made the first version of this rule vacuous. `wantedNames` closes
+  // over `requires:`, so wanting `VC++ runtime` pulls `Windows` in — and a rule reading
+  // "is the requirement desired-present?" would answer YES for every wanted row,
+  // which is every row a bundle pulls. The measured symptom would have survived the fix.
+  //
+  // So the clause is reachability, not desire: a requirement with no practicable route
+  // will never be laid down, whatever anyone wants. `canUninstall` is the codebase's
+  // existing proxy for "Talos will actually act on this row" (scope.js's `no-route`),
+  // and it is the right one here for that reason rather than for its name.
+  const m = seedWithRequirement();
+  setPresence(m, 0, false);
+  applyProfile(m, "Base"); // Base pulls VC++ runtime → which pulls Windows "in"
+  assert.equal(desiredOf(m, 0), "present", "the pull really did reach Windows");
+  assert.equal(requiresReason(m, 1), "requires Windows");
+});
+
+test("requiresReason: ON Windows the very same row is fine", () => {
+  // ⭐ The half that proves the rule is not just "platform packages are always
+  // blocked": presence comes FIRST and unconditionally, so the day `cmd /c ver`
+  // succeeds the row behaves like any other — same YAML, same catalogue, different
+  // machine, different answer. Without this the fix would break Windows to fix macOS.
+  const m = seedWithRequirement();
+  applyProfile(m, "Base");
+  setPresence(m, 0, true); // `cmd /c ver` answered
+  assert.equal(requiresReason(m, 1), null);
+  assert.equal(scopeOf(m, 1), "in");
+});
+
+test("requiresReason: 'nobody wants it' is NOT 'it is about to vanish'", () => {
+  // ⭐ THE subtle decision, pinned here because getting it wrong is silent and loud
+  // at once. `deps::requires_reason` reasons over `will_be_present`, which VETOES on
+  // wanted-off — correct for the Apply, where `off` IS the uninstall instruction.
+  // Transposed to a derivation AT REST it would be a disaster: every package is
+  // either wanted or not, so a plugin row nobody asked for would read
+  // `requires Nushell` while nushell sits installed on the machine. That is noise on
+  // the majority state — the lesson caught twice after the padlock.
+  //
+  // So scope asks a NARROWER question: is the requirement there, or on its way? A
+  // present-but-unwanted requirement satisfies it. `deps::requires_blocked` is the
+  // engine's half of the same reading, and the pair is deliberately two functions
+  // rather than one with a flag.
+  const m = seedWithRequirement();
+  setPresence(m, 0, true); // installed, and no bundle pulls it
+  assert.equal(desiredOf(m, 0), "absent", "the fixture really is unwanted");
+  assert.equal(requiresReason(m, 1), null, "installed is installed");
+});
+
+test("requiresReason: a dangling requirement name says so, and does not crash", () => {
+  // The catalogue is a directory of files: a `requires:` can name a package nobody
+  // shipped. catalog.rs:164 chose not to fail loudly, so the row must say WHICH
+  // name is missing rather than silently behave as if satisfied.
+  const m = createModel();
+  loadPlan(m, [{ i: 0, name: "rg", bundle: "", posture: "opt-in", requires: ["Ghost"] }], []);
+  assert.equal(requiresReason(m, 0), "requires Ghost (unknown)");
+});
+
+test("requiresReason: no requirements → nothing to say", () => {
+  const m = seedWithRequirement();
+  assert.equal(requiresReason(m, 0), null);
+  assert.equal(requiresReason(m, 99), null, "an unknown index is not a crash");
+});
+
+test("an unmet requirement takes the row OUT of scope", () => {
+  const m = seedWithRequirement();
+  setPresence(m, 0, false);
+  assert.equal(scopeOf(m, 1), "out");
+  assert.equal(scopeReason(m, 1), "requires Windows");
+  // And back in the moment the requirement holds — the derivation is live, never stored.
+  setPresence(m, 0, true);
+  assert.equal(scopeOf(m, 1), "in");
+  assert.equal(scopeReason(m, 1), null);
+});
+
+test("an unmet requirement offers NO action — the install button dies", () => {
+  // ⭐ THE point of routing this through scope rather than through the label:
+  // `actionOf` gates on scope in ONE line, so isActionable, the row button, the
+  // will-change class and the plan count all go quiet without another edit.
+  const m = seedWithRequirement();
+  setPresence(m, 0, false);
+  setPresence(m, 1, false);
+  applyProfile(m, "Base"); // Base wants it; the machine cannot have it
+  assert.equal(desiredOf(m, 1), "present", "the desire is untouched — only the action dies");
+  assert.equal(actionOf(m, 1), null);
+  assert.equal(isActionable(m, 1), false);
+});
+
+test("an unmet requirement reaches the SERVER in the unmanaged list", () => {
+  // A front-only guard is cosmetic (talos-scope-second-axis): the server builds the
+  // plan, so it must be TOLD. `unmanagedIndices` is that wire.
+  const m = seedWithRequirement();
+  setPresence(m, 0, false);
+  // 0 = `Windows` itself (no route → the OLD derivation already put it out); 1 = the
+  // dependent, which only this change reaches. Both must cross, in catalogue order.
+  assert.deepEqual(unmanagedIndices(m), [0, 1]);
+});
+
+test("profileProgress: an out-of-scope member is not counted as missing", () => {
+  // The second half of the measured symptom — and NOT specific to requirements:
+  // the counter never consulted scope at all, so an `external` or no-route member
+  // already inflated the denominator. Base read 10/12 for two rows Apply would
+  // never touch.
+  const m = seedWithRequirement();
+  applyProfile(m, "Base"); // pulls VC++ runtime in → it is desired-present
+  setPresence(m, 0, true);
+  assert.deepEqual(profileProgress(m, "Base"), { present: 0, total: 1 });
+  setPresence(m, 0, false); // Windows gone → the member leaves the perimeter
+  assert.deepEqual(
+    profileProgress(m, "Base"),
+    { present: 0, total: 0 },
+    "a row that cannot be installed is not a goal",
+  );
 });

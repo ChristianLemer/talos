@@ -472,7 +472,12 @@ function paintPkg(i) {
   if (reason && reason !== "external") {
     // `external` is NOT written here: setStatus already appends " · external"
     // beside the real presence, and presence is the more useful fact.
-    r.statusLabel.textContent = SCOPE_LABEL[reason];
+    // `?? reason` because ONE member of this set is open-ended: a requirement reason
+    // carries a package name (`requires Windows`), so it can never be a key here. The
+    // fallback is what lets the engine's own wording reach the screen verbatim —
+    // without it the label reads "undefined" and the row is inert with no stated
+    // reason, the exact silence this axis exists to abolish.
+    r.statusLabel.textContent = SCOPE_LABEL[reason] ?? reason;
     r.statusLabel.className = "statusLabel self";
     if (reason === "yours" || reason === "available") {
       r.badge.textContent = "·";

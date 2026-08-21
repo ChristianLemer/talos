@@ -9,6 +9,15 @@ pub struct DepNode {
     pub name: String,
     pub requires: Vec<String>,
     pub will_be_present: bool, // present now OR desired-present after the Apply
+    /// Observed present RIGHT NOW, before any desire is applied. `will_be_present`
+    /// cannot answer for this: it folds the desire in, and the two part company on a
+    /// package that is installed and unwanted. See `requires_blocked`.
+    pub present_now: bool,
+    /// Would Talos ever act on this row? False for a package with no practicable route
+    /// on this machine — a platform probe, a winget-only entry on a Mac. Same bit the
+    /// front carries as `canUninstall` and scope.js reads as `no-route`, so the two
+    /// sides of the rule are the same predicate rather than two approximations.
+    pub reachable: bool,
 }
 
 fn index_by_name(nodes: &[DepNode]) -> HashMap<String, usize> {
@@ -34,6 +43,53 @@ pub fn requires_reason(
                 if !nodes[at].will_be_present {
                     return Some(format!("requires {req}"));
                 }
+            }
+        }
+    }
+    None
+}
+
+/// WHY this node's `requires:` make it IMPOSSIBLE here, or None — the SCOPE reading,
+/// as against `requires_reason`'s Apply reading. Same wording, deliberately: the row
+/// says the same thing whether the verdict came from the scan or from the Apply.
+///
+/// A requirement holds iff it exists in the catalogue AND (it is present now, OR it is
+/// on its way in and Talos can actually put it there). Two clauses, each earned:
+///
+/// · PRESENT NOW comes first and unconditionally. `Windows` has no route on Windows
+///   either — nothing installs an operating system — so a rule that weighed
+///   reachability first would block the row on the one machine where it belongs.
+///
+/// · WANTED IS NOT ENOUGH. The transitive pull (model.js `wantedNames`) means wanting a
+///   row pulls its requirements in, so `will_be_present` is true for almost every
+///   requirement of almost every wanted row. Reading it alone answers "satisfied" for
+///   the very symptom this exists to fix — a measured no-op, caught by a test.
+///
+/// WHY NOT one function with a flag: the two readings differ on exactly one situation —
+/// a requirement present but unwanted — and there they must differ. For the Apply,
+/// `off` IS the uninstall instruction, so `requires_reason` is right to call it unmet.
+/// For a derivation at rest, every package is either wanted or not, so reading
+/// "unwanted" as "vanishing" would make every unrequested plugin row shout
+/// `requires Nushell` beside an installed nushell — noise on the majority state. Two
+/// names keep that distinction visible; a boolean parameter would bury it.
+///
+/// DIRECT requirements only, like `requires_reason`: a chain whose middle link is
+/// itself blocked reports nothing. The gap is real and is shared with the front — one
+/// rule, one hole, never two behaviours.
+pub fn requires_blocked(
+    node: &DepNode,
+    nodes: &[DepNode],
+    idx: &HashMap<String, usize>,
+) -> Option<String> {
+    for req in &node.requires {
+        match idx.get(req) {
+            None => return Some(format!("requires {req} (unknown)")),
+            Some(&at) => {
+                let r = &nodes[at];
+                if r.present_now || (r.will_be_present && r.reachable) {
+                    continue;
+                }
+                return Some(format!("requires {req}"));
             }
         }
     }
@@ -151,7 +207,135 @@ mod tests {
             name: name.into(),
             requires: requires.iter().map(|s| s.to_string()).collect(),
             will_be_present: present,
+            present_now: present,
+            reachable: true,
         }
+    }
+
+    /// A node spelled out on all three axes, for the blocked-reading tests.
+    fn dep(
+        name: &str,
+        requires: &[&str],
+        will_be_present: bool,
+        present_now: bool,
+        reachable: bool,
+    ) -> DepNode {
+        DepNode {
+            name: name.into(),
+            requires: requires.iter().map(|s| s.to_string()).collect(),
+            will_be_present,
+            present_now,
+            reachable,
+        }
+    }
+
+    #[test]
+    fn blocked_when_the_requirement_is_absent_and_unreachable() {
+        // The measured case (2026-08-21): `VC++ runtime` requires `Windows`, on a Mac.
+        // `Windows` is a probe-only package — `detect: cmd /c ver`, no route — so it is
+        // absent AND can never be laid down. The dependent must leave the perimeter.
+        let nodes = vec![
+            dep("VC++ runtime", &["Windows"], true, false, true),
+            dep("Windows", &[], false, false, false),
+        ];
+        let idx = make_index(&nodes);
+        assert_eq!(
+            requires_blocked(&nodes[0], &nodes, &idx),
+            Some("requires Windows".into())
+        );
+    }
+
+    #[test]
+    fn a_present_requirement_holds_even_when_it_is_unreachable() {
+        // ⭐ The half that keeps Windows working. `Windows` has no route THERE either —
+        // `reachable` is false on every platform, because nothing installs an OS — so a
+        // rule reading reachability alone would block the row on the one machine where
+        // it belongs. Presence is checked FIRST and unconditionally.
+        let nodes = vec![
+            dep("VC++ runtime", &["Windows"], true, false, true),
+            dep("Windows", &[], true, true, false),
+        ];
+        let idx = make_index(&nodes);
+        assert_eq!(requires_blocked(&nodes[0], &nodes, &idx), None);
+    }
+
+    #[test]
+    fn an_absent_requirement_on_its_way_in_holds() {
+        // A requirement installed in the SAME Apply must not block its dependent, or a
+        // bundle could never lay down a package and its plumbing in one gesture.
+        let nodes = vec![
+            dep("Polars", &["Nushell"], true, false, true),
+            dep("Nushell", &[], true, false, true),
+        ];
+        let idx = make_index(&nodes);
+        assert_eq!(requires_blocked(&nodes[0], &nodes, &idx), None);
+    }
+
+    #[test]
+    fn wanting_a_requirement_is_not_enough_when_it_cannot_be_installed() {
+        // ⭐ THE trap that made the first version of this rule vacuous, front and back.
+        // The transitive pull means wanting a row pulls its requirements in, so
+        // `will_be_present` is true for essentially every requirement of every wanted
+        // row. Reading it ALONE would have answered "satisfied" for the measured
+        // symptom and shipped a no-op. Reachability is the discriminating half.
+        let nodes = vec![
+            dep("VC++ runtime", &["Windows"], true, false, true),
+            dep("Windows", &[], true, false, false), // pulled in, but nothing installs an OS
+        ];
+        let idx = make_index(&nodes);
+        assert_eq!(
+            requires_blocked(&nodes[0], &nodes, &idx),
+            Some("requires Windows".into())
+        );
+    }
+
+    #[test]
+    fn blocked_names_a_dangling_requirement() {
+        let nodes = vec![dep("a", &["ghost"], true, false, true)];
+        let idx = make_index(&nodes);
+        assert_eq!(
+            requires_blocked(&nodes[0], &nodes, &idx),
+            Some("requires ghost (unknown)".into())
+        );
+    }
+
+    #[test]
+    fn blocked_and_reason_read_the_same_situation_differently() {
+        // The two functions exist side by side ON PURPOSE, and this pins the ONE case
+        // where they part company: a requirement PRESENT but wanted-off.
+        //   · requires_reason  → unmet. Correct for the Apply, where `off` IS the
+        //                        uninstall instruction: it really is about to go.
+        //   · requires_blocked → holds. Correct for a derivation AT REST: every package
+        //                        is either wanted or not, so reading "unwanted" as
+        //                        "vanishing" would make every unrequested plugin row
+        //                        shout `requires Nushell` beside an installed nushell.
+        // Collapsing them into one function with a flag would hide exactly this.
+        let nodes = vec![
+            dep("Polars", &["Nushell"], true, false, true),
+            dep("Nushell", &[], false, true, true), // installed, and nothing wants it
+        ];
+        let idx = make_index(&nodes);
+        assert_eq!(
+            requires_reason(&nodes[0], &nodes, &idx),
+            Some("requires Nushell".into())
+        );
+        assert_eq!(requires_blocked(&nodes[0], &nodes, &idx), None);
+    }
+
+    #[test]
+    fn blocked_reports_the_first_failing_requirement() {
+        // Same convention as requires_reason — one message, the first that fails, so the
+        // row's single label is deterministic rather than whichever the map yielded.
+        let nodes = vec![
+            dep("a", &["b", "c"], true, false, true),
+            dep("b", &[], false, false, false),
+            dep("c", &[], false, false, false),
+        ];
+        let idx = make_index(&nodes);
+        assert_eq!(
+            requires_blocked(&nodes[0], &nodes, &idx),
+            Some("requires b".into())
+        );
     }
 
     #[test]

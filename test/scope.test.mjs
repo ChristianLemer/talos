@@ -70,6 +70,55 @@ test("scopeReason: a user-pushed-out row says so, and outranks nothing", () => {
   );
 });
 
+test("scopeOf: an unmet requirement derives the row OUT", () => {
+  // The measured symptom: a Microsoft redistributable on a Mac read `tracked` with an
+  // `install` button, because scope knew nothing about requirements. A row whose
+  // requirement will not hold cannot be installed NOR removed — the requirement is
+  // usually the very tool that would perform the gesture — so it leaves the perimeter
+  // in BOTH directions, exactly like the two derivations beside it.
+  const blocked = { ...managed, requiresReason: "requires Windows" };
+  assert.equal(scopeOf(blocked), "out");
+  // Satisfied (or absent) → the fact says nothing and the row stays in scope.
+  assert.equal(scopeOf({ ...managed, requiresReason: null }), "in");
+  assert.equal(scopeOf(managed), "in", "the fact is optional — an absent one is not a veto");
+});
+
+test("scopeOf: the user can still pull a requirement-blocked row back in", () => {
+  // Same shape as the other two derivations: derived out, manual "in" wins. The
+  // gesture is futile here (the Apply will fail loudly), but scope is the user's
+  // question to answer and a derivation that could not be overridden would be a lock.
+  const blocked = { ...managed, requiresReason: "requires Windows" };
+  assert.equal(scopeOf({ ...blocked, manual: "in" }), "in");
+});
+
+test("scopeReason: an unmet requirement gives the engine's own wording", () => {
+  // ⭐ NOT a token from SCOPE_LABEL: the string carries the requirement's NAME, and it
+  // is byte-for-byte what `deps::requires_reason` produces server-side. One wording,
+  // two callers — so the row reads the same whether the verdict came from the scan
+  // (here) or from the Apply (server.rs). A token would have forced a second
+  // vocabulary for the same fact.
+  assert.equal(
+    scopeReason({ ...managed, requiresReason: "requires Windows" }),
+    "requires Windows",
+  );
+  assert.equal(
+    scopeReason({ ...managed, requiresReason: "requires Windows (unknown)" }),
+    "requires Windows (unknown)",
+  );
+});
+
+test("scopeReason: the requirement outranks every other derived reason", () => {
+  // It names the actual blocker. `no-route` and `not-managed` describe the row's
+  // shape; `requires Windows` says what is missing and therefore what would fix it.
+  assert.equal(
+    scopeReason({
+      canUninstall: false, external: true, isConfig: true, pulled: true,
+      manual: "out", requiresReason: "requires Windows",
+    }),
+    "requires Windows",
+  );
+});
+
 test("scopeOf is platform-dependent by construction", () => {
   // Notepad++ declares only `winget:`. On macOS commands_for returns no commands
   // → canUninstall false → derived out. On Windows it has a route → in scope.

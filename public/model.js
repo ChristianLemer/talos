@@ -167,6 +167,47 @@ export function manualScope(model, i) {
   const s = model.scope.get(i);
   return s === "in" || s === "out" ? s : null;
 }
+// WHY a row's `requires:` does not hold, or null — the front's half of
+// `deps::requires_blocked`, word for word so the row reads the same whether the
+// verdict came from the scan (here) or from the Apply (server.rs).
+//
+// A requirement holds iff the package EXISTS in the catalogue and is either present
+// now or on its way in. Note what is deliberately NOT a veto: a requirement nobody
+// wants. `will_be_present` (deps.rs) does veto on wanted-off, which is right for the
+// Apply — there `off` is the uninstall instruction — but transposed to a derivation
+// at rest it would make every unrequested plugin row shout `requires Nushell` beside
+// an installed nushell. See the test that pins this.
+//
+// First failing requirement wins the message, like the engine. DIRECT requirements
+// only, also like the engine: a chain whose middle link is itself blocked reports
+// nothing here. That gap is real and shared by both sides — one rule, one hole,
+// never two behaviours.
+export function requiresReason(model, i) {
+  const p = model.pkgs.get(i);
+  if (!p) return null;
+  const idByName = new Map();
+  for (const [j, q] of model.pkgs) idByName.set(q.name, j);
+  for (const req of p.requires ?? []) {
+    const j = idByName.get(req);
+    // A dangling name is NAMED, never silently satisfied: the catalogue is a
+    // directory of files and a `requires:` can outlive the package it points at
+    // (catalog.rs:164 chose not to fail loudly, so the row has to say it).
+    if (j == null) return `requires ${req} (unknown)`;
+    const q = model.pkgs.get(j);
+    // Presence FIRST and unconditionally — the day `cmd /c ver` answers, the row
+    // behaves like any other. Without this ordering the fix would break Windows.
+    if (q?.present === true) continue;
+    // Otherwise: is it on its way in? Wanting it is NOT enough. `wantedNames` closes
+    // over `requires:`, so wanting a row pulls its own requirements in — a desire-only
+    // clause would make every pulled row satisfy itself and this whole rule vacuous.
+    // What counts is REACHABILITY: a package with no practicable route is never laid
+    // down, whatever anyone wants. `canUninstall` is the existing proxy for "Talos
+    // acts on this row" (scope.js's `no-route`), used here for that meaning.
+    if (desiredOf(model, j) === "present" && q?.canUninstall) continue;
+    return `requires ${req}`;
+  }
+  return null;
+}
 // The facts scope.js needs, gathered in one place so the rule stays pure.
 function scopeFacts(model, i) {
   const p = model.pkgs.get(i);
@@ -177,6 +218,9 @@ function scopeFacts(model, i) {
     isExtension: !!p?.isExtension,
     pulled: isPulled(model, i),
     manual: manualScope(model, i),
+    // The GLOBAL fact, pre-computed: scope.js is a pure function of one row, and this
+    // verdict reads another package's state. The walk belongs to whoever holds the model.
+    requiresReason: requiresReason(model, i),
   };
 }
 // "in" | "out" — the effective scope of row i.
@@ -715,6 +759,12 @@ export function profileProgress(model, name) {
     const i = idByName.get(pkgName);
     if (i == null) continue;
     if (desiredOf(model, i) !== "present") continue; // not wanted → not in the goal
+    // ⚠️ AND in scope. This counter never consulted the second axis, so it counted rows
+    // Apply provably will not touch: `Base` read 10/12 on a Mac for two winget-only
+    // rows. Not a requirements bug — an `external` or no-route member already inflated
+    // the denominator before requirements entered the picture. The goal is what Apply
+    // WILL put down, and out of scope means it will not (see actionOf, same gate).
+    if (scopeOf(model, i) === "out") continue;
     total++;
     if (model.pkgs.get(i)?.present === true) present++;
   }
