@@ -2175,14 +2175,17 @@ ws.onmessage = (ev) => {
       overall.textContent = "ready";
       hideSplash();
       break;
-    case "ready":
-      // Engine (pty) up — needed to RUN a command. No longer hides the splash:
-      // detection (state-done) is the meaningful gate now. Kept as status only.
-      if (overall.textContent === "starting…") overall.textContent = "ready";
-      break;
-    case "starting":
-      overall.textContent = "starting…";
-      break; // clicked before engine ready
+    // ⬜ `ready` + `starting` REMOVED 2026-08-23 — one mechanism, so both or neither. They
+    // wrote the global status word: `starting` set "starting…", `ready` cleared it back to
+    // "ready". Dead TWICE OVER. Nothing in `src/` emits either verb; and `ready`'s effect was
+    // gated on the label already reading "starting…", which only `starting` could write — so
+    // even a future emitter of `ready` alone would do nothing. A mechanism locked on itself.
+    //
+    // ⭐ Deleted rather than rewired because the situation they guarded no longer exists.
+    // Their reason was "clicked before engine ready", and the Apply buttons are now disabled
+    // for the whole scan (`refreshLiveness`: busy = applyRunning || scanning), so clicking
+    // too early is unreachable. `ws.onopen` → "checking…" and `state-done` → "ready" cover
+    // the boot on their own.
     // ⚠️ The upgrade scan could not be READ — which is not the same as "nothing
     // is outdated", and used to be indistinguishable from it. Every row below is
     // still correct about PRESENCE (a separate probe); what is missing is any
@@ -2242,11 +2245,13 @@ ws.onmessage = (ev) => {
       // masked field. The server asks ONCE per Apply (model C), then reuses it.
       showSudo();
       break;
-    case "detail": // version delta for an upgrade, e.g. "2.54→2.55"
-      if (rows[msg.i] && rows[msg.i].delta) {
-        rows[msg.i].delta.textContent = (msg.detail || "").replace("→", " → ");
-      }
-      break;
+    // ⬜ `detail` REMOVED 2026-08-23. It carried {i, detail:"2.54→2.55"} and wrote it into
+    // the row's version zone — which `paintVersion` now owns, with two numbers at most, a
+    // colour per role and the pin marked exactly once. Nothing in `src/` has ever emitted
+    // the verb (measured by comparing every `case` here against every `"type":` there), so
+    // this branch could not run. Deleted rather than kept because it wrote with
+    // `textContent`: had anything ever sent it, it would have FLATTENED the coloured
+    // display, not merely done nothing. A dead branch over a live element is a loaded gun.
     case "out": {
       const text = dec.decode(b64dec(msg.data));
       ensureTerm(msg.i).write(text);
@@ -2268,11 +2273,16 @@ ws.onmessage = (ev) => {
       exitFocusMode(); // everything reappears — failures already open, stand out
       refreshLiveness(); // unlock; re-light what's still useful
       break;
-    case "overlay":
-      document.getElementById("overlay-title").textContent = msg.title || "";
-      document.getElementById("overlay-body").textContent = msg.body || "";
-      document.getElementById("overlay").classList.add("show");
-      break;
+    // ⬜ `overlay` REMOVED 2026-08-23, with its markup and its two exclusive CSS rules. It was
+    // a generic full-screen panel (spinner + title + body) that NOTHING ever opened — unlike
+    // the other three verbs retired today, it was never superseded, it was never used at all.
+    //
+    // ⭐ Kept out on purpose rather than held for the panel merge (#splash / the rescan veil /
+    // focus mode into one object, a standing note in the plans). Holding an unused thing "for
+    // later" is exactly the reasoning that produced the four dead branches this pass removed,
+    // and an empty panel is a title and a paragraph — cheaper to write again than to explain.
+    // ⚠️ The `.overlay-card` chassis SURVIVES: six modals (consent, sudo, reset, forbidden)
+    // are built on it. Only `#overlay`, `#overlay.show` and `.overlay-card .spin` went.
     // An installer opened a window behind the panel while a step ran. Say so —
     // the panel isn't frozen, it's waiting. wait-window: we found the window and
     // flashed its taskbar button (always) + TRIED to raise it (msg.pushed says if

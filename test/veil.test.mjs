@@ -16,6 +16,16 @@ import { readFileSync } from "node:fs";
 const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 const appjs = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
 
+// The same source with every CSS and HTML comment blanked out.
+//
+// ⚠️ Not tidiness — validity. A selector-scoped assertion like "#splash declares no
+// z-index" walks forward from the name looking for a `{…}`. Prose mentioning `#splash`
+// therefore lets it walk into whatever rule comes NEXT, and the guard reports a property
+// that belongs to a different selector. Caught the day it was written: the new guard failed
+// on a comment that named both instances just above the shared `.veil` rule. This repo has
+// been burned by the same class of mistake in Rust — read code, never prose.
+const css = html.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/<!--[\s\S]*?-->/g, " ");
+
 // The slice of markup from <div id="steps"> to its closing tag. #steps holds only
 // dynamically-rendered rows, so its literal block in the source is short.
 function stepsBlock() {
@@ -33,9 +43,21 @@ test("veil: #steps-refresh is NOT inside #steps (it must not be trapped there)",
   );
 });
 
+// ⭐ Since the 2026-08-23 merge these properties live on the SHARED `.veil` class, not on
+// the id: the boot splash and the rescan veil are one object with two instances. So the
+// chain has two links to guard — the class must carry the geometry, and the instance must
+// carry the class. Asserting only the first would pass on a panel that never opted in.
+test("veil: the rescan instance opts into the shared .veil class", () => {
+  assert.match(
+    html,
+    /id="steps-refresh"[^>]*class="[^"]*\bveil\b/,
+    "#steps-refresh must carry class=\"veil\" or it inherits none of the shared geometry",
+  );
+});
+
 test("veil: it is positioned fixed, so `inset:0` means the viewport", () => {
-  const rule = html.match(/#steps-refresh\s*\{[^}]*\}/);
-  assert.ok(rule, "#steps-refresh needs a rule");
+  const rule = html.match(/\.veil\s*\{[^}]*\}/);
+  assert.ok(rule, ".veil needs a rule");
   assert.match(rule[0], /position:\s*fixed/, "absolute would re-trap it in a parent");
   assert.match(rule[0], /inset:\s*0/);
 });
@@ -46,11 +68,42 @@ test("veil: it layers above the sticky Apply bar and below the dialogs", () => {
     assert.ok(m, `${sel} needs a z-index`);
     return Number(m[1]);
   };
-  const veil = z("#steps-refresh");
+  // `.veil`, not `#steps-refresh`: one height for BOTH instances since the merge. The boot
+  // splash used to sit at 80 — above the six modals at 60 — with no stated reason, which
+  // left the first-boot sharing dialog invisible and unclickable behind it for the whole
+  // scan. One class, one height, and the defect cannot come back per-instance.
+  const veil = z("\\.veil");
   assert.ok(veil > z("\\.hero-apply"), "the sticky Apply bar must be covered");
   // A sudo prompt or a 403 modal raised DURING a scan has to stay answerable.
-  assert.ok(veil < z("#overlay"), "dialogs must stay above the veil");
-  assert.ok(veil < z("#splash"), "the boot splash must stay above the veil");
+  //
+  // ⭐ Named DIRECTLY since 2026-08-23. This used to assert against `#overlay`, a generic
+  // panel that stood in for "the dialog layer" — and when `#overlay` was deleted (nothing
+  // ever opened it) the test failed for a reason that had nothing to do with layering. A
+  // proxy reference breaks on the proxy's fate instead of on the property it guards. These
+  // two ARE the dialogs the comment above promises to keep answerable.
+  assert.ok(veil < z("#sudo"), "the sudo prompt must stay above the veil");
+  assert.ok(veil < z("#forbidden"), "the 403 modal must stay above the veil");
+});
+
+test("veil: NO instance declares a z-index of its own", () => {
+  // ⬜ This replaces `veil < z("#splash")`, which the 2026-08-23 merge made
+  // self-contradictory: it demanded the boot splash sit ABOVE the veil, and the merge's
+  // whole point is that they are one object at one height.
+  //
+  // ⭐ The replacement guards the DEFECT rather than the old arrangement. The splash used
+  // to carry `z-index:80` — above the six modals at 60 — with no stated reason, so on a
+  // first boot the sharing dialog (opened the moment the plan arrives) sat invisible AND
+  // unclickable behind it for the whole scan, and for the 120 s of the safety net if the
+  // scan never finished. A per-instance z-index is exactly how that comes back.
+  for (const id of ["#splash", "#steps-refresh"]) {
+    const rules = css.match(new RegExp(`${id}[^{]*\\{[^}]*\\}`, "g")) || [];
+    for (const r of rules) {
+      assert.ok(
+        !/z-index/.test(r),
+        `${id} declares its own z-index — height belongs to .veil, for both instances`,
+      );
+    }
+  }
 });
 
 test("veil: every clear path goes through hideRescanVeil()", () => {

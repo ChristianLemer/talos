@@ -234,16 +234,12 @@
          403 modal raised during a scan must still be readable and answerable.
          Sober on purpose: dim + blur + centred narration, NOT the boot splash, which
          would read as a restart. Only the extent changed. */
-      #steps-refresh { display:none; position:fixed; inset:0; z-index:40;
-        align-items:center; justify-content:center;
-        background:rgba(26,27,38,.82); backdrop-filter:blur(2px); }
+      /* The RESCAN instance of the veil. Everything about its shape now lives in the
+         shared `.veil-*` family (down near the splash); what is left here is the only
+         thing genuinely its own — a translucent blur, because a rescan interrupts a
+         screen the user was already reading and should not erase it. */
+      #steps-refresh { background:rgba(26,27,38,.82); backdrop-filter:blur(2px); }
       .steps-refreshing #steps-refresh { display:flex; }
-      .steps-refresh-inner { text-align:center; padding:24px; }
-      /* Same accent-gradient title as the hero/splash — keeps the family. */
-      .steps-refresh-title { font-size:34px; font-weight:800; letter-spacing:-1px; line-height:1;
-        background:linear-gradient(90deg,#7aa2f7,#bb9af7); -webkit-background-clip:text;
-        background-clip:text; color:transparent; }
-      .steps-refresh-msg { margin-top:12px; color:var(--dim); font-size:14px; letter-spacing:.3px; }
       /* Waiting-window banner: an installer opened a window behind the panel and
          may be waiting for the user. Soft amber (attention, not error), pulses so
          it's noticed. Sits between the action bar and the list. */
@@ -273,12 +269,12 @@
       #appmgmt-pill { width:auto; font-size:12px; }
       #appmgmt-pill.ok   { color:#9ece6a; }
       #appmgmt-pill.fail { color:#f7768e; }
-      /* Reuse the splash's sliding bar (same slide keyframe) so the overlay reads
-         as "working", not frozen — the point of the whole overlay on slow Windows. */
-      .steps-refresh-inner .splash-bar { margin-top:18px; width:200px; margin-left:auto; margin-right:auto; }
-      /* Same count line as the splash (tabular figures so "3 of 12" doesn't jitter). */
-      .steps-refresh-count { font-size:13px; color:var(--dim); margin-top:6px;
-        font-variant-numeric:tabular-nums; }
+      /* ⬜ The bar override and the duplicate count rule that used to sit here are GONE
+         (2026-08-23). The override was the worst of the seven differences between the two
+         veils: this instance BORROWED `.veil-bar` and then contradicted its width and
+         margin with a more specific selector, so the bar was shared and not shared at
+         once — and a change to a `splash-*` rule could break this panel silently. One
+         `.veil-bar` now, one `.veil-count`, both in the shared family. */
       /* Bundle accordion: header = selection card, body = package rows. */
       .bundle { border:1px solid var(--line); border-radius:10px; margin:8px 0; overflow:hidden; background:#1e2030; }
       .bundle-head { padding:11px 14px; cursor:pointer; display:flex; gap:11px; align-items:center;
@@ -677,11 +673,13 @@
       .xterm-viewport::-webkit-scrollbar-thumb:hover { background:var(--dim); }
       /* Full-screen overlay shown when the panel must close on purpose
          (e.g. uninstalling node, which the panel runs on). */
-      #overlay { position:fixed; inset:0; z-index:50; display:none; align-items:center; justify-content:center;
-                 background:rgba(16,17,24,.92); backdrop-filter:blur(3px); padding:40px; }
-      #overlay.show { display:flex; }
+      /* `.overlay-card` is the shared MODAL CHASSIS — consent, sudo, reset-confirm and
+         forbidden are all built on it, so it stays even though `#overlay` itself is gone
+         (removed 2026-08-23: a panel nothing ever opened). Its `.spin` rule went with it,
+         being the one child no other card used. The name is now a slight misnomer: it names
+         a chassis, not the panel it was born in. Renaming it would touch six call sites for
+         no behaviour, so the misnomer is documented rather than paid for. */
       .overlay-card { max-width:46ch; text-align:center; }
-      .overlay-card .spin { font-size:28px; color:#e0af68; margin-bottom:14px; }
       .overlay-card h2 { font-size:19px; margin:0 0 10px; }
       .overlay-card p { color:#a9b1d6; font-size:14px; line-height:1.5; margin:0; }
 
@@ -931,49 +929,137 @@
                        padding:7px 14px; border-radius:7px; font-size:13px; cursor:pointer; }
       .dlgbtn-danger:hover { color:#16161e; background:#ce697a; border-color:#ce697a; }
       /* Startup splash */
-      #splash { position:fixed; inset:0; z-index:80; display:flex; align-items:center; justify-content:center;
+      /* ═══ THE VEIL — ONE object, TWO instances ═══════════════════════════════════════
+         `#splash` (boot) and `#steps-refresh` (rescan) were two copies of the same panel:
+         a full-screen block that stops interaction and NARRATES the main process — title,
+         the package being looked at right now, "i of n", a bar. Merged 2026-08-23.
+
+         They had SEVEN differences. Only ONE was ever decided; the rest was drift from a
+         copied block retouched by eye, plus one outright contradiction (the rescan
+         borrowed `.veil-bar` then overrode it, so the class was shared and not shared at
+         the same time — an undeclared coupling where editing one panel broke the other).
+
+         ⭐ FOCUS MODE IS NOT A THIRD INSTANCE and was deliberately left alone. It owns no
+         DOM: it is `body.applying` + `.focus-show`, hiding every row outside the plan and
+         reordering the kept rows into real execution order. At rest the list is the MAP and
+         the map must not move; during an Apply the screen is a STORY following time. That
+         is a different job from blocking-and-narrating.
+
+         ⚠️ z-index 40, for BOTH — this is a behaviour CHANGE and it fixes a defect. The
+         rescan veil already sat at 40, deliberately and with a test saying why: a sudo
+         prompt or a 403 modal raised during a scan must stay answerable, and the six modals
+         live at 60. The splash sat at 80 with no stated reason — above those modals. The
+         consequence, on a FIRST BOOT: `app.js` opens the sharing modal the moment the plan
+         arrives (at connect), the splash covered it for the whole scan (~6 s warm Mac,
+         ~25 s slow Windows), and it was invisible AND unclickable, since `#splash` only
+         drops `pointer-events` once `.hide` lands. Worse, the splash lifts on `state-done`
+         — so a scan that never finishes left a dialog stranded behind an opaque screen for
+         the 120 s of the safety net. One height, one reason, both panels below the dialogs.
+         ⚠️ Not observed on a real first boot: that needs clearing `consent.json`, which is
+         the operator's live configuration. Reasoned from the two code sites and the two
+         z-indexes. */
+      .veil { position:fixed; inset:0; z-index:40; display:none;
+              align-items:center; justify-content:center; }
+      /* THE MARK AS A WATERMARK, bleeding into the panel instead of sitting on it.
+         ⚠️ A separate LAYER (`::before`), not `background-image` on `.veil` — each instance
+         already sets its own `background` SHORTHAND (the boot radial, the rescan
+         translucency), and a shorthand resets `background-image`, so putting the mark there
+         would be silently erased by whichever rule wins. A pseudo-element cannot collide.
+         ⭐ Source: `/talos-icon.png`, the 1024px original — `talos-mark.png` is only 128px
+         and would be mush at this size. `talos.svg` scales infinitely but is a DIFFERENT
+         mark (a geometric Sagittarius arrow) and carries its own opaque background rect.
+         `pointer-events:none` so the layer never eats a click meant for the panel. */
+      /* ⚠️ THE MASK is what makes this a watermark rather than a tile. The source icon
+         carries its OWN rounded-card background, so at any opacity its square edge shows as
+         a lighter rectangle behind the text — measured on screen, and it read as a box, not
+         as a mark. A radial mask dissolves the card into the panel: opaque out to 52% of the
+         image, then faded to nothing by its edge. The asset is untouched — cropping the face
+         out would mean editing the operator's icon, which is his to decide, not a side
+         effect of a CSS choice. */
+      .veil::before { content:""; position:absolute; inset:0; pointer-events:none;
+              background:url(/talos-icon.png) no-repeat center 42%;
+              background-size:min(520px, 66vw); opacity:.16;
+              -webkit-mask-image:radial-gradient(circle min(250px,32vw) at 50% 42%, #000 42%, transparent 100%);
+              mask-image:radial-gradient(circle min(250px,32vw) at 50% 42%, #000 42%, transparent 100%); }
+      /* ⚠️ An EXPLICIT radius, not `closest-side`. The keyword sizes the gradient against the
+         ::before BOX — which is `inset:0`, i.e. the whole panel, ~1000px wide — so it never
+         reached the 520px image and the card's edge still showed. Measured on screen: the
+         first attempt looked masked and was not. The radius must track the IMAGE (520px
+         wide → ~250px half), so the card's corners, at ~368px from centre, fall fully
+         outside it and the mark fades out well before its own boundary. */
+      /* Above the watermark. Without this the text would share a stacking context with the
+         layer and the mark could wash over it. */
+      .veil-inner { position:relative; z-index:1; }
+      /* 30ch was sized for the title + count alone. A child cannot outgrow its parent, so
+         the explanation below was squeezed into ~300px in a 1700px window — three cramped
+         lines. The box grows; the SHORT elements keep their own narrow measure. */
+      .veil-inner { text-align:center; max-width:min(62ch, 86vw); padding:24px; }
+      /* The MARK, above the title. Same file the header uses (`/talos-mark.png`) and the
+         same treatment — square source, rounded to echo the app icon's own card, never
+         stretched. One mark everywhere: header at 40px, first launch at 64px.
+         ⭐ 64, not 72, for a MEASURED reason rather than taste: the source is 128×128, so
+         64 CSS px is exactly its native size on a 2× display (64 × 2 = 128) and the mark
+         stays crisp. 72 would ask for 144 device pixels from a 128px file — upscaled, very
+         slightly soft, on the one screen a user looks at longest while waiting.
+         ⭐ This resurrects an intent, it does not invent one. A `.splash-logo` rule sat in
+         this file unused, next to the comment "Title placeholder until we have a good
+         centaur logo" — written when there was no logo, left orphaned when the logo landed
+         as the app icon in beta.14. It was declared with `font-size:46px` because it was
+         meant for a text GLYPH; an image wants width and height instead.
+         ⚠️ Boot instance only, like the subtitle: a first launch introduces the app, a
+         three-second rescan has nothing to introduce. */
+      .veil-logo { width:64px; height:64px; border-radius:14px; display:block;
+                   margin:0 auto 18px; }
+      /* Accent gradient like the hero h1 — the family the two panels always shared. */
+      .veil-title { font-size:44px; font-weight:800; letter-spacing:-1px; line-height:1;
+        background:linear-gradient(90deg,#7aa2f7,#bb9af7); -webkit-background-clip:text;
+        background-clip:text; color:transparent; }
+      .veil-sub { font-size:15px; color:var(--dim); margin:8px 0 20px; letter-spacing:.3px; }
+      /* The narration line: what is being looked at RIGHT NOW. Fixed height so a long name
+         never shifts the bar below it; ellipsis so it never wraps. ⚠️ The rescan instance
+         GAINS both — it used to be 14px, dim, and free to wrap. */
+      .veil-now { font-size:16px; color:#c0caf5; min-height:1.4em; line-height:1.4;
+                  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      /* Tabular figures so "3 of 12" → "4 of 12" does not jitter. This rule existed TWICE,
+         with the same four properties in both copies. */
+      .veil-count { font-size:13px; color:var(--dim); margin-top:6px; font-variant-numeric:tabular-nums; }
+
+      /* ── the BOOT instance ──────────────────────────────────────────────────────────
+         ⭐ ONE difference left, and it is the only one anybody ever had a reason for: the
+         deep radial backdrop. A first launch may cover the empty app completely; a rescan
+         interrupts a screen the user was already reading and must not erase it, so that one
+         stays translucent. Everything else — icon, title size, subtitle, explanation — is
+         now shared, on C's call: if it is one object it should look like one, and a
+         difference has to earn itself rather than survive from a copied block.
+         Plus the lifecycle, which is behaviour, not looks: this instance is visible from
+         the first paint (no JS shows it) and FADES then removes itself. */
+      #splash { display:flex;
                 background:radial-gradient(130% 130% at 50% 30%, #24283b 0%, #16161e 70%);
                 transition:opacity .4s ease; }
       #splash.hide { opacity:0; pointer-events:none; }
-      /* 30ch was sized for the title + count alone. A child cannot outgrow its parent,
-         so the explanation below was squeezed into ~300px in a 1700px window — three
-         cramped lines. The box grows; the SHORT elements keep their own narrow measure. */
-      .splash-inner { text-align:center; max-width:min(62ch, 86vw); padding:24px; }
-      .splash-logo { font-size:46px; margin-bottom:18px; animation:bob 1.6s ease-in-out infinite; }
-      @keyframes bob { 0%,100%{ transform:translateY(0) } 50%{ transform:translateY(-8px) } }
-      /* Title placeholder (no centaur logo yet). Accent gradient like the hero h1. */
-      .splash-title { font-size:44px; font-weight:800; letter-spacing:-1px; line-height:1;
-        background:linear-gradient(90deg,#7aa2f7,#bb9af7); -webkit-background-clip:text;
-        background-clip:text; color:transparent; }
-      .splash-subtitle { font-size:15px; color:var(--dim); margin:8px 0 20px; letter-spacing:.3px; }
-      /* The narration line: the package being probed RIGHT NOW. Fixed height so a
-         long name never shifts the bar below it. */
-      .splash-now { font-size:16px; color:#c0caf5; min-height:1.4em; line-height:1.4;
-                    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .splash-count { font-size:13px; color:var(--dim); margin-top:6px; font-variant-numeric:tabular-nums; }
       /* The REASON for the wait, under the bar. Quiet: it is read once, on a first
          launch, and must not compete with the narration line above it (which is the live
-         fact). `.splash-inner` caps everything at 30ch — right for a title, too narrow
+         fact). `.veil-inner` caps everything at 30ch — right for a title, too narrow
          for a sentence — so this one widens itself back out and re-centres, the only
          element here that is prose rather than a label.
          `max-width` (not `width`): a fixed width forced narrow wrapping even in a wide
          window, which stranded "Thanks for your patience." across two ragged lines.
          `text-wrap:balance` evens the lines out rather than leaving a lone short one. */
-      .splash-why { margin:20px auto 0; max-width:min(62ch, 86vw);
-                    font-size:12.5px; line-height:1.55; color:var(--dim);
-                    text-wrap:balance; }
-      /* Own measure, centred: the bar used to inherit `.splash-inner`'s 30ch, and when
+      .veil-why { margin:20px auto 0; max-width:min(62ch, 86vw);
+                  font-size:12.5px; line-height:1.55; color:var(--dim);
+                  text-wrap:balance; }
+      /* Own measure, centred: the bar used to inherit `.veil-inner`'s 30ch, and when
          that box grew to fit the explanation the bar stretched with it — a 3px hairline
          nearly 500px wide reads as a divider, not as progress. */
-      .splash-bar { margin:22px auto 0; width:min(30ch, 100%); height:3px;
+      .veil-bar { margin:22px auto 0; width:min(30ch, 100%); height:3px;
                     background:var(--line); border-radius:3px; overflow:hidden; }
       /* INDETERMINATE (pre-scan): the sliding shuttle. Dropped the moment we know
-         the count — see .splash-bar.determinate. */
-      .splash-bar span { display:block; height:100%; width:40%; border-radius:3px;
+         the count — see .veil-bar.determinate. */
+      .veil-bar span { display:block; height:100%; width:40%; border-radius:3px;
                          background:linear-gradient(90deg,#7aa2f7,#bb9af7); animation:slide 1.1s ease-in-out infinite; }
       /* DETERMINATE: width = real progress, no animation. A bar that shuttles
          forever says "unknown"; a bar that fills says "i of n". */
-      .splash-bar.determinate span { animation:none; width:0; transition:width .25s ease-out; }
+      .veil-bar.determinate span { animation:none; width:0; transition:width .25s ease-out; }
       @keyframes slide { 0%{ transform:translateX(-100%) } 100%{ transform:translateX(280%) } }
     </style>
   </head>
@@ -981,14 +1067,12 @@
     <!-- Startup splash: NARRATES the scan (the package being checked now + i/n).
          It does NOT entertain — the scan is serial and the server emits one event
          per package, so the truth is available and gets shown. -->
-    <div id="splash"><div class="splash-inner">
-      <!-- Title placeholder until we have a good centaur logo. "Talos preparing
-           the Centaur": the bronze guardian readies the mount (carbon+silicon). -->
-      <div class="splash-title">Talos</div>
-      <div class="splash-subtitle">checking what's already on your machine</div>
-      <div class="splash-now" id="splash-now">starting up…</div>
-      <div class="splash-count" id="splash-count"></div>
-      <div class="splash-bar" id="splash-bar"><span></span></div>
+    <div id="splash" class="veil"><div class="veil-inner">
+      <div class="veil-title">Talos</div>
+      <div class="veil-sub">checking the state of your machine</div>
+      <div class="veil-now" id="splash-now">starting up…</div>
+      <div class="veil-count" id="splash-count"></div>
+      <div class="veil-bar" id="splash-bar"><span></span></div>
       <!-- WHY the wait, not how long. The lines above already say WHAT is happening
            ("checking Nushell… 7 of 31" + a determinate bar) — true at every instant,
            on every machine. What was missing is the REASON, so a first-time user reads
@@ -1001,9 +1085,15 @@
       <!-- The closing courtesy is one unbreakable unit (nbsp between its words): left to
            itself it split as "Thanks for / your patience.", a four-word sentence
            straddling two lines, which reads as a layout accident, not a sentence. -->
-      <div class="splash-why">
-        Talos looks at what is already installed before proposing anything, so it never
-        reinstalls what you have. Thanks&nbsp;for&nbsp;your&nbsp;patience.
+      <!-- ⭐ ONE text for BOTH moments, C's call 2026-08-23 — and it dissolves the problem
+           instead of managing it. The old wording ("already installed… never reinstalls
+           what you have") was true of the FIRST look only; during the re-check before an
+           Apply nothing is being proposed, the machine is simply being re-read. Two texts
+           would have meant writing and maintaining two. This one is true at both: Talos
+           looks at the real state, then does only what is missing. -->
+      <div class="veil-why">
+        Talos checks the state of your machine before it proposes or changes anything, so it
+        only does what is actually needed. Thanks&nbsp;for&nbsp;your&nbsp;patience.
       </div>
     </div></div>
 
@@ -1014,24 +1104,30 @@
          tab strip and the header all stayed crisp AND CLICKABLE while the server
          worked. The region that will change is unknown until the plan arrives, and
          a crisp button INVITES a click that cannot be honoured. -->
-    <div id="steps-refresh">
-      <div class="steps-refresh-inner">
-        <div class="steps-refresh-title">Talos</div>
-        <!-- Narrated like the splash: the server emits one `rescan-progress` per
-             re-probed row, so this names the package instead of reciting a mood.
-             "Plotting the gallop…" is only the FIRST frame, before the first
-             verdict lands — never the whole wait. -->
-        <div class="steps-refresh-msg" id="refresh-now">Plotting the gallop…</div>
-        <div class="steps-refresh-count" id="refresh-count"></div>
-        <div class="splash-bar" id="refresh-bar"><span></span></div>
+    <!-- The RESCAN instance. ⭐ Word for word and mark for mark the same as the boot one —
+         C's call: it is one object, so it should look like one. The differences it used to
+         carry (no icon, no subtitle, no explanation, a smaller title) were never decided;
+         they came from a copied block with pieces removed, and I preserved them during the
+         merge while inventing a reason for them, which is its own mistake. The ONLY thing
+         still its own is the translucent backdrop, because this panel interrupts a screen
+         the user was reading and must not erase it. -->
+    <div id="steps-refresh" class="veil">
+      <div class="veil-inner">
+          <div class="veil-title">Talos</div>
+        <div class="veil-sub">checking the state of your machine</div>
+        <!-- The server emits one `rescan-progress` per re-probed row, so this names the
+             package instead of reciting a mood. "Plotting the gallop…" is only the FIRST
+             frame, before the first verdict lands — never the whole wait. -->
+        <div class="veil-now" id="refresh-now">Plotting the gallop…</div>
+        <div class="veil-count" id="refresh-count"></div>
+        <div class="veil-bar" id="refresh-bar"><span></span></div>
+        <div class="veil-why">
+          Talos checks the state of your machine before it proposes or changes anything, so it
+          only does what is actually needed. Thanks&nbsp;for&nbsp;your&nbsp;patience.
+        </div>
       </div>
     </div>
 
-    <div id="overlay"><div class="overlay-card">
-      <div class="spin">⏳</div>
-      <h2 id="overlay-title"></h2>
-      <p id="overlay-body"></p>
-    </div></div>
     <!-- Reset confirmation — reset clears the user's choices (not the machine) -->
     <div id="reset-confirm"><div class="overlay-card consent-card">
       <h2>Reset every choice?</h2>
