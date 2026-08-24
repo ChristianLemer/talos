@@ -16,4 +16,9 @@ _*
 .DS_Store
 
 # Field notes — describe corporate estates, never committed.
-docs/
+#
+# ⚠️ NO trailing slash, deliberately. The notes live outside the checkout and `docs` is a
+# local symlink to them. `docs/` matches a DIRECTORY only, and a symlink is a file to git —
+# so the old pattern stopped ignoring it and the link (an absolute path) was staged for
+# commit. `docs` matches either shape. Do not put the slash back.
+docs

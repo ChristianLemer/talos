@@ -49,9 +49,26 @@ work happens*; the tags are *released builds*. A future 1.0 will still live on a
 `beta` — the name will be wrong then, and that was a knowing trade-off.
 
 `docs/` is **gitignored** — the field notes (handoffs, plans, specs, session states) describe
-specific corporate estates, so they live on disk beside the repo, not in it. They are still
-there; git just stops carrying them. Do not try to `git add` them back, and do not cite a
-`docs/…` path in a committed comment: a public reader could not open it.
+specific corporate estates, so they are not in the repo. Do not try to `git add` them back,
+and do not cite a `docs/…` path in a committed comment: a public reader could not open it.
+
+Since 2026-08-30 they live in a synced vault OUTSIDE the checkout, and **where is deliberately
+not written here.** This file is committed: recording the location would publish it the day the
+repo does, which is the very thing gitignoring the notes avoids. The same goes for the former
+`_*` drafts, which moved there too and dropped the underscore.
+
+⚠️ **`docs` in a working checkout is a local SYMLINK to that vault, never versioned** — it holds
+an absolute path that differs per machine and names a personal account. It is what keeps every
+`docs/…` path resolving, superpowers included. **The setup recipe lives with the notes**, in a
+`SETUP.md` beside them — which is also how a second machine learns what to do, without the repo
+having to say it.
+
+⚠️ **`.gitignore` says `docs`, with NO trailing slash, deliberately.** `docs/` matches a
+directory only; a symlink is a file to git, so the old pattern stopped ignoring it and the link
+was staged for commit on the first try. Do not put the slash back.
+
+Still local and deliberately not documents: `_bundles-test/` (a test fixture), `_chiron-logo/`
+(graphics) and `_spike-font.ps1`.
 
 History was purged of every employer identification on 2026-08-09. When writing a comment about
 a firewall or a corporate constraint, say **"a corporate network" / "a corporate firewall"** —
