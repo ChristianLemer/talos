@@ -383,16 +383,26 @@ fn user_shell() -> String {
         .unwrap_or_else(|| "/bin/sh".into())
 }
 
-/// Builds the POSIX Probe for a given shell (PURE — the shell path is injected).
-/// zsh/bash → `-ilc` (interactive + login): sources /etc/profile (system PATH via
-/// path_helper: /opt/homebrew) AND the user rc (.zshrc/.bashrc: ~/.local/bin,
-/// where claude, uv, pip --user… live). ⚠️ `-lc` ALONE captures only the system PATH —
-/// that is what produced a false "absent" on a tool installed in ~/.local/bin. The
-/// interactive flag is what sources the user rc; do not drop it to "simplify".
+/// Builds the POSIX Probe for a given shell (PURE — OS and shell path are injected).
+/// zsh/bash on macOS → `-ilc` (interactive + login): a GUI-launched app there inherits
+/// NO user PATH, so only an interactive login shell sources /etc/profile (system PATH via
+/// path_helper: /opt/homebrew) AND the user rc (.zshrc/.bashrc: ~/.local/bin, where claude,
+/// uv, pip --user… live). ⚠️ `-lc` ALONE captures only the system PATH on macOS — that is
+/// what produced a false "absent" on a tool installed in ~/.local/bin. Do not drop `-i` on
+/// macOS to "simplify".
+/// On Linux → `-lc` even for zsh/bash: the session already exports the user PATH
+/// (uwsm/systemd import it), AND `bash -i` OUTSIDE a controlling terminal fails with
+/// "bash: cannot set terminal process group … Inappropriate ioctl for device" and breaks
+/// the probe (the upgrade scan exited 127). The interactive flag there buys nothing and costs
+/// the probe.
 /// A bare /bin/sh (neither zsh nor bash) → `-lc` alone (sh does not read the zsh/bash rc).
-fn posix_probe(shell: &str, command: &str) -> Probe {
+fn posix_probe(os: Os, shell: &str, command: &str) -> Probe {
     let is_rc_shell = shell.ends_with("zsh") || shell.ends_with("bash");
-    let flags = if is_rc_shell { "-ilc" } else { "-lc" };
+    let flags = if is_rc_shell && matches!(os, Os::Darwin) {
+        "-ilc"
+    } else {
+        "-lc"
+    };
     Probe {
         cmd: shell.to_string(),
         args: vec![flags.into(), command.into()],
@@ -429,7 +439,7 @@ pub fn shell_probe(os: Os, command: &str) -> Probe {
                 args: vec!["-NoProfile".into(), "-Command".into(), ps],
             }
         }
-        _ => posix_probe(&user_shell(), command),
+        _ => posix_probe(os, &user_shell(), command),
     }
 }
 
@@ -455,7 +465,7 @@ pub fn pty_shell(os: Os, command: &str) -> Probe {
                 ],
             }
         }
-        _ => posix_probe(&user_shell(), command),
+        _ => posix_probe(os, &user_shell(), command),
     }
 }
 
@@ -559,18 +569,29 @@ mod tests {
 
     #[test]
     fn posix_probe_zsh_interactive_login() {
-        // zsh/bash → -ilc: sources the user rc (.zshrc) → sees ~/.local/bin (claude, uv).
-        let p = posix_probe("/bin/zsh", "claude --version");
+        // macOS zsh/bash → -ilc: sources the user rc (.zshrc) → sees ~/.local/bin (claude, uv).
+        let p = posix_probe(Os::Darwin, "/bin/zsh", "claude --version");
         assert_eq!(p.cmd, "/bin/zsh");
         assert_eq!(p.args, vec!["-ilc", "claude --version"]);
-        let b = posix_probe("/opt/homebrew/bin/bash", "node --version");
+        let b = posix_probe(Os::Darwin, "/opt/homebrew/bin/bash", "node --version");
         assert_eq!(b.args[0], "-ilc");
+    }
+
+    #[test]
+    fn posix_probe_linux_no_interactive() {
+        // Linux zsh/bash → -lc, NOT -ilc: the session already exports PATH, and an
+        // interactive shell outside a controlling terminal fails with "cannot set
+        // terminal process group" (the upgrade scan exited 127). Regression guard.
+        let z = posix_probe(Os::Linux, "/bin/zsh", "node --version");
+        assert_eq!(z.args, vec!["-lc", "node --version"]);
+        let b = posix_probe(Os::Linux, "/bin/bash", "node --version");
+        assert_eq!(b.args[0], "-lc");
     }
 
     #[test]
     fn posix_probe_sh_login_only() {
         // bare /bin/sh does not read the zsh/bash rc → -lc alone (not -ilc, useless).
-        let p = posix_probe("/bin/sh", "node --version");
+        let p = posix_probe(Os::Darwin, "/bin/sh", "node --version");
         assert_eq!(p.cmd, "/bin/sh");
         assert_eq!(p.args, vec!["-lc", "node --version"]);
     }
