@@ -180,6 +180,10 @@ struct AppState {
     /// reused for the following steps of the same Apply, CLEARED at the end.
     /// RAM ONLY, never disk/log/journal. tokio Mutex (async access).
     sudo_pw: tokio::sync::Mutex<Option<String>>,
+    // The Doctor holds NO state here on purpose. Its terminal lives on its own
+    // socket (`/doctor`, see `handle_doctor_socket`), so its child, its stdin channel and
+    // its pending bytes are locals of that handler. Nothing about the rescue can be
+    // reached — or starved — by the step machinery that owns `/`.
     /// LAST OBSERVED presence per package, written by every scan (connect, Refresh,
     /// Apply re-scan), parallel to `plan.steps`. `None` = never observed.
     ///
@@ -498,6 +502,20 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
                 async move { root_or_ws(ws, state).await }
             }),
         )
+        // The Doctor's OWN socket. See `handle_doctor_socket` for why it is a
+        // second route and not a verb on `/`.
+        .route(
+            "/doctor",
+            get({
+                // The rescue config dir lives in the per-machine LOCAL data dir, never
+                // beside a shared exe — the same rule selection and consent follow.
+                let rescue = state.data_dir.join("rescue-claude");
+                move |ws: WebSocketUpgrade| {
+                    let rescue = rescue.clone();
+                    async move { ws.on_upgrade(move |s| handle_doctor_socket(s, rescue)) }
+                }
+            }),
+        )
         .fallback(get(move |uri: Uri| {
             let state = state_for_asset.clone();
             async move { serve_asset(uri.path(), &state) }
@@ -567,6 +585,273 @@ async fn root_or_ws(ws: Option<WebSocketUpgrade>, state: Arc<AppState>) -> Respo
         // read_to_string on a path relative to the cwd (shortcut #3 fixed).
         None => serve_asset("/", &state),
     }
+}
+
+/// Finds an executable on PATH and returns its ABSOLUTE path — without a shell.
+///
+/// ⭐ `which` / `where` would need one, and only `platform::shell_probe` / `pty_shell` may
+/// build a shell line. Splitting PATH ourselves keeps that rule intact, and the absolute
+/// path it yields is exactly what lets the Doctor start a binary while the operator's rc
+/// file is broken.
+fn on_path(name: &str) -> Option<std::path::PathBuf> {
+    let exe = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .map(|dir| dir.join(&exe))
+        .find(|p| p.is_file())
+}
+
+/// The Doctor terminal — an interactive rescue session, on a socket of its OWN.
+///
+/// ⭐ WHY IT EXISTS. Field incident: a broken Claude configuration locked the operator out
+/// for a week. Everything needed to recover was on the machine; what was missing was a way
+/// to reach it that did not go through the thing that was broken. So this terminal starts
+/// the binary by ABSOLUTE PATH with no shell (a broken rc file cannot stop it) and, on
+/// request, with a CLEAN config directory (no plugins, no hooks, no inherited settings).
+///
+/// ⭐ WHY A SECOND ROUTE AND NOT A VERB ON `/`. The step machinery holds `/`'s socket
+/// exclusively while a row runs — that is how `obtain_sudo_pw` reads its reply off the
+/// same socket. Sharing it would make Apply and the rescue mutually exclusive, and
+/// exactly in the case that matters most: an Apply WEDGED on a prompt is when you most
+/// want to open the Doctor, and is precisely when it would be unavailable.
+///
+/// So the isolation is not a workaround, it is the scope statement made structural: the
+/// Doctor is NOT a step (that is why display-only does not govern it), and the socket is
+/// part of the steps' machinery. A non-step does not share it. The rescue therefore
+/// cannot be starved by an Apply, and — the half that matters more — cannot disturb one.
+///
+/// No `plan`, no scan, no sudo here. `rescue_dir` is the only thing it is handed: the
+/// per-machine directory a CLEAN session uses as its whole notion of "my config".
+async fn handle_doctor_socket(mut socket: WebSocket, rescue_dir: std::path::PathBuf) {
+    // The child's stdout → this task. A tokio channel so the `select!` below can await it
+    // WHILE staying responsive to keystrokes; the pty's reader thread is the sender.
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    // The child's stdin. `std::sync` because `pty::run` drains it from a blocking thread.
+    let mut child_in: Option<std::sync::mpsc::Sender<Vec<u8>>> = None;
+    // The child's pty geometry, same reason. Kept beside stdin because it has the same
+    // lifetime: both are the live child, and both go stale the moment it exits.
+    let mut child_resize: Option<std::sync::mpsc::Sender<(u16, u16)>> = None;
+    // ⭐ The killer, kept rather than dropped. `pty::run` blocks, so it can only hand this
+    // out DURING the call — exactly as a row's step does. Without it, closing the Doctor
+    // tab left `claude` running forever with nothing reading it, and a second Launch
+    // stacked another one on top. A rescue you cannot stop is a trap of its own.
+    //
+    // A plain `Mutex`, not tokio's: the lock is held for one `kill()` syscall and never
+    // across an await, so an async mutex would buy nothing.
+    type Killer = Box<dyn portable_pty::ChildKiller + Send + Sync>;
+    let killer: std::sync::Arc<std::sync::Mutex<Option<Killer>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    // ⚠️ A pty read can split a multi-byte sequence. Emit only the valid UTF-8 prefix and
+    // carry the tail to the next chunk, or an accented glyph arrives mangled — the wart
+    // the polling version could not avoid.
+    let mut pending: Vec<u8> = Vec::new();
+    loop {
+        tokio::select! {
+            Some(bytes) = out_rx.recv() => {
+                pending.extend_from_slice(&bytes);
+                let good = match std::str::from_utf8(&pending) {
+                    Ok(_) => pending.len(),
+                    Err(e) => e.valid_up_to(),
+                };
+                if good > 0 {
+                    let text = String::from_utf8_lossy(&pending[..good]).to_string();
+                    pending.drain(..good);
+                    let _ = socket
+                        .send(Message::Text(
+                            json!({ "type": "doctor-out", "d": text }).to_string(),
+                        ))
+                        .await;
+                }
+            }
+            msg = socket.recv() => {
+                let Some(Ok(Message::Text(txt))) = msg else { break };
+                let parsed: serde_json::Value = serde_json::from_str(&txt).unwrap_or_default();
+                match parsed.get("type").and_then(|t| t.as_str()) {
+                    // ⭐ The BINARY IS RESOLVED HERE, never taken from the wire — the front
+                    // asks for "the rescue Claude" and the engine decides what that is. That
+                    // closes the arbitrary-exec hole the first spike had, and it is also the
+                    // honest split: the panel is a view, not a launcher.
+                    //
+                    // ⬜ RESIDUE, deliberate: `on_path("claude")` is a CODED choice, and the
+                    // hermeticity rule says the rescue command must be DECLARED — Claude is a
+                    // catalogue package, not an engine dependency. Reading it from the
+                    // catalogue is the next step; hardcoding the NAME (not a path) is the
+                    // smallest stand-in that still bypasses the shell.
+                    Some("doctor-start") => {
+                        // Geometry measured by the front. The pty must open at the size the
+                        // operator is LOOKING at, or the child wraps at a width nobody sees.
+                        let cols = parsed
+                            .get("cols")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(100)
+                            .clamp(20, 500) as u16;
+                        let rows = parsed
+                            .get("rows")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(24)
+                            .clamp(5, 200) as u16;
+                        let Some(bin) = on_path("claude") else {
+                            let _ = socket
+                                .send(Message::Text(
+                                    json!({
+                                        "type": "doctor-out",
+                                        "d": "\r\n[doctor] `claude` is not on PATH — nothing to rescue with.\r\n",
+                                    })
+                                    .to_string(),
+                                ))
+                                .await;
+                            continue;
+                        };
+                        // ⭐ WHY AN ENV VAR AND NOT `--bare`. MEASURED: `--bare` skips
+                        // "plugin SYNC", not plugin loading — installed plugins still load,
+                        // and skills still resolve via /skill-name. It also reduces auth to
+                        // "strictly ANTHROPIC_API_KEY or apiKeyHelper", never reading the
+                        // keychain. So it removes the authentication and keeps the plugins:
+                        // the exact opposite of a rescue.
+                        //
+                        // A clean `CLAUDE_CONFIG_DIR` does what the flag only sounded like.
+                        // Plugins live in that directory, and so do hooks (settings.json),
+                        // memory and per-project trust — so pointing it at a fresh path
+                        // yields a session carrying NONE of them. And auth survives:
+                        // measured on macOS, `CLAUDE_CONFIG_DIR=<fresh> claude -p` answers,
+                        // because credentials come from the keychain, not that directory.
+                        //
+                        // A boolean on the wire, never a path: the front names an intent and
+                        // the engine decides where "clean" is.
+                        let clean = parsed
+                            .get("clean")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let mut env: Vec<(String, String)> = Vec::new();
+                        if clean {
+                            // Created here, not lazily by the child: a directory the child
+                            // has to invent is a directory whose failure the operator would
+                            // read as "Claude is broken too".
+                            if let Err(e) = std::fs::create_dir_all(&rescue_dir) {
+                                println!("[doctor] rescue dir unusable: {e}");
+                            }
+                            env.push((
+                                "CLAUDE_CONFIG_DIR".to_string(),
+                                rescue_dir.to_string_lossy().to_string(),
+                            ));
+                        }
+                        let program = bin.to_string_lossy().to_string();
+                        let (in_tx, in_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+                        // A second Launch replaces the first: kill before spawning, or two
+                        // children share one terminal and the keystrokes go to whichever
+                        // drained the channel first.
+                        if let Ok(mut slot) = killer.lock() {
+                            if let Some(mut k) = slot.take() {
+                                let _ = k.kill();
+                            }
+                        }
+                        child_in = Some(in_tx);
+                        // The resize channel: the front measures its box, we forward the
+                        // geometry to the master. Without it the child keeps wrapping at
+                        // whatever width it started with, however wide the window becomes.
+                        let (rz_tx, rz_rx) = std::sync::mpsc::channel::<(u16, u16)>();
+                        child_resize = Some(rz_tx);
+                        let sink = out_tx.clone();
+                        println!(
+                            "[doctor] child spawned: {program} at {cols}x{rows} clean={clean}"
+                        );
+                        // The banner is the trace: the operator must be able to SEE which
+                        // binary answered, or a rescue that silently ran the wrong one is
+                        // worse than no rescue.
+                        let _ = socket
+                            .send(Message::Text(
+                                json!({
+                                    "type": "doctor-out",
+                                    "d": format!(
+                                        "[doctor] {program}  ({cols}x{rows}, no shell)\r\n{}",
+                                        if clean {
+                                            format!(
+                                                "[doctor] clean config: {}  (no plugins, no hooks, no inherited settings)\r\n",
+                                                rescue_dir.display()
+                                            )
+                                        } else {
+                                            String::new()
+                                        }
+                                    ),
+                                })
+                                .to_string(),
+                            ))
+                            .await;
+                        // Cloned OUT of the loop's binding: the loop keeps its handle to
+                        // kill on close and on the next Launch, the thread gets its own to
+                        // register with.
+                        let killer_slot = killer.clone();
+                        std::thread::spawn(move || {
+                            let code = crate::pty::run(
+                                &program,
+                                &[],
+                                Some(in_rx),
+                                Some(crate::pty::Geometry {
+                                    cols,
+                                    rows,
+                                    updates: Some(rz_rx),
+                                }),
+                                &env,
+                                move |k| {
+                                    if let Ok(mut guard) = killer_slot.lock() {
+                                        *guard = Some(k);
+                                    }
+                                },
+                                |bytes| {
+                                    let _ = sink.send(bytes.to_vec());
+                                },
+                            )
+                            .unwrap_or(-1);
+                            let _ = sink.send(format!("\r\n[doctor: exit {code}]\r\n").into_bytes());
+                        });
+                    }
+                    // A keystroke from xterm's `onData`, straight into the child's stdin.
+                    // ⭐ `pty::run` builds `CommandBuilder::new(program)` and NEVER a shell
+                    // line — only `platform::shell_probe` / `pty_shell` do, upstream. An
+                    // absolute path here escapes a broken rc file without becoming a third
+                    // place that wraps a shell, so single-shell-wrapping is untouched.
+                    Some("doctor-input") => {
+                        if let (Some(d), Some(tx)) = (
+                            parsed.get("d").and_then(|v| v.as_str()),
+                            child_in.as_ref(),
+                        ) {
+                            let _ = tx.send(d.as_bytes().to_vec());
+                        }
+                    }
+                    // The window changed size. Forwarding this is what makes the geometry
+                    // FOLLOW rather than freeze: a front that refits its own view while the
+                    // pty keeps the old width just moves the mismatch out of sight.
+                    Some("doctor-resize") => {
+                        if let (Some(c), Some(r), Some(tx)) = (
+                            parsed.get("cols").and_then(|v| v.as_u64()),
+                            parsed.get("rows").and_then(|v| v.as_u64()),
+                            child_resize.as_ref(),
+                        ) {
+                            let _ = tx.send((
+                                c.clamp(20, 500) as u16,
+                                r.clamp(5, 200) as u16,
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    // The tab was closed, or the window went away. Take the child with us: nothing is
+    // reading it any more, and an orphaned `claude` holding a pty is invisible to the
+    // operator — it would only surface as a process they never started.
+    if let Ok(mut slot) = killer.lock() {
+        if let Some(mut k) = slot.take() {
+            let _ = k.kill();
+            println!("[doctor] child killed with the socket");
+        }
+    }
+    println!("[doctor] socket closed");
 }
 
 /// ONE row of the `plan` message, as the front reads it.
@@ -1931,6 +2216,8 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
             &program,
             &arg_refs,
             Some(in_rx),
+            None, // a row's terminal is a fixed-width display box — keep 100x24
+            &[],  // steps inherit the engine env unchanged
             |k| {
                 if let Ok(mut slot) = killer_slot.lock() {
                     *slot = Some(k);

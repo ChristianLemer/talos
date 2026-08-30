@@ -707,6 +707,23 @@
         .tagline { display:none; }
         header { padding:10px 16px 8px; }
       }
+      /* Doctor tab. The frame's HEIGHT is set by app.js, not here: the only
+         honest value is measured from where the frame actually sits, and a `calc(100vh -
+         190px)` drifts the moment the button bar wraps to a second line. */
+      .doctor-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+        margin-bottom:12px; }
+      .doctor-btn { background:#1a1b26; color:var(--fg); border:1px solid var(--line);
+        border-radius:7px; padding:8px 15px; cursor:pointer; font-size:13px;
+        display:inline-flex; align-items:baseline; gap:7px; }
+      .doctor-btn:hover { border-color:#3d59a1; }
+      .doctor-hint { color:var(--dim); font-size:11px; }
+      .doctor-note { color:var(--dim); font-size:12px; margin-left:auto; }
+      /* The border the terminal never had. Padding inside it, so glyphs never touch the
+         line, and the radius clips xterm's own square canvas. */
+      #doctor-frame { border:1px solid var(--line); border-radius:10px;
+        background:#1a1b26; padding:10px; overflow:hidden; }
+      #doctor-host { height:100%; }
+
       /* Tabs + views */
       nav { display:flex; gap:4px; padding:0 12px; border-bottom:1px solid var(--line); }
       .tab { background:none; border:0; color:var(--dim); padding:9px 14px; cursor:pointer; font-size:13px;
@@ -1287,6 +1304,7 @@
            scope controls learned — C caught it twice. -->
       <button class="tab tab-adv-only" data-view="arbitration">Arbitration</button>
       <button class="tab" data-view="log">Log &amp; settings</button>
+      <button class="tab" data-view="doctor">Doctor</button>
     </nav>
 
     <div id="view-bundles" class="view active">
@@ -1436,6 +1454,21 @@
         <button id="arb-copy" class="btn">Copy</button>
       </div>
       <div id="steps"></div>
+    </div>
+
+    <!-- The Doctor tab: a rescue terminal. Self-contained — this block, the CSS above,
+         and the `doctor*` block in app.js are all of it. -->
+    <div id="view-doctor" class="view">
+      <div class="doctor-bar">
+        <button id="doctor-launch" class="doctor-btn">Launch Claude</button>
+        <button id="doctor-launch-clean" class="doctor-btn">
+          Launch clean <span class="doctor-hint">own config — no plugins, no hooks</span>
+        </button>
+        <span class="doctor-note">Absolute path, no shell — a broken profile cannot stop it.</span>
+      </div>
+      <!-- The frame is the terminal's own border: app.js measures THIS box and both the
+           view and the pty are opened at exactly that geometry. -->
+      <div id="doctor-frame"><div id="doctor-host"></div></div>
     </div>
 
     <div id="view-log" class="view">

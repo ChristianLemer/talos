@@ -78,6 +78,18 @@ pub fn claude_would_refuse(candidate: &str, cwd: &str) -> bool {
     }
 }
 
+/// Where a pty starts, and — when the surface can be resized — where it goes next.
+///
+/// One struct rather than two parameters so `run`'s signature does not creep: an initial
+/// size with no channel is the fixed display box, an initial size WITH one is a terminal
+/// the operator can drag.
+pub struct Geometry {
+    pub cols: u16,
+    pub rows: u16,
+    /// Later `(cols, rows)` from the front. `None` = the surface never changes size.
+    pub updates: Option<Receiver<(u16, u16)>>,
+}
+
 /// Runs `program args...` in a pty and calls `on_bytes` for each chunk read.
 /// Returns the process exit code.
 ///
@@ -94,18 +106,33 @@ pub fn claude_would_refuse(candidate: &str, cwd: &str) -> bool {
 /// Killing the child needs nothing else from us: the child-wait thread below already
 /// drops the master on exit, which closes the pseudo-console and forces EOF on the
 /// reader — so a kill takes the SAME exit path as a normal finish.
+///
+/// `size`: OPTIONAL geometry. `None` keeps the historical 100×24 — right for a row's
+/// terminal, which is a fixed-width display box. A caller that lets the operator SEE a
+/// full-window terminal must pass its real geometry, or the child wraps at a width nobody
+/// is looking at; and if that window can be resized, it must pass `updates` too.
+/// `env`: extra variables for the child, applied AFTER the engine's own. This is how a
+/// caller redirects a tool's whole notion of "my config" — `CLAUDE_CONFIG_DIR` at a clean
+/// directory is what makes a rescue session carry no plugins, no hooks and no inherited
+/// settings, which no command-line flag achieves.
 pub fn run<F: FnMut(&[u8])>(
     program: &str,
     args: &[&str],
     input: Option<Receiver<Vec<u8>>>,
+    size: Option<Geometry>,
+    env: &[(String, String)],
     on_spawn: impl FnOnce(Box<dyn ChildKiller + Send + Sync>),
     mut on_bytes: F,
 ) -> std::io::Result<i32> {
+    let (cols, rows, resize) = match size {
+        Some(g) => (g.cols, g.rows, g.updates),
+        None => (100, 24, None),
+    };
     let pty = native_pty_system();
     let pair = pty
         .openpty(PtySize {
-            rows: 24,
-            cols: 100,
+            rows,
+            cols,
             pixel_width: 0,
             pixel_height: 0,
         })
@@ -134,6 +161,10 @@ pub fn run<F: FnMut(&[u8])>(
     // The cost is that it does not appear in the row's terminal — accepted, because
     // `admin doctor` can report it and a shell-quoting bug here would break every step.
     cmd.env("CLAUDE_CODE_PLUGIN_PREFER_HTTPS", "1");
+    // Caller-supplied, LAST so it can override the line above if it ever needs to.
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
     let mut child = pair
         .slave
         .spawn_command(cmd)
@@ -173,10 +204,35 @@ pub fn run<F: FnMut(&[u8])>(
     // on its exit we DROP the master, which closes the pseudo-console and unblocks the reader.
     // On macOS/Linux EOF already arrives on its own → this drop is harmless (same result).
     let (code_tx, code_rx) = std::sync::mpsc::channel::<i32>();
-    let master = pair.master;
+    // ⭐ SHARED so a resize can reach the master WHILE the child runs — but shared in a way
+    // that leaves the EOF chain above intact: the child-wait thread still TAKES the master
+    // and drops it, which is the whole ConPTY fix. The lock is held for one ioctl and never
+    // across the read loop, so a resize cannot stall output.
+    let master = std::sync::Arc::new(std::sync::Mutex::new(Some(pair.master)));
+    if let Some(rx) = resize {
+        let m = master.clone();
+        std::thread::spawn(move || {
+            while let Ok((cols, rows)) = rx.recv() {
+                let Ok(guard) = m.lock() else { break };
+                // `None` = the child has exited and the master is already dropped. Stop,
+                // rather than spin: the sender is a UI that may still be alive.
+                let Some(master) = guard.as_ref() else { break };
+                let _ = master.resize(PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                });
+            }
+        });
+    }
+    let master_for_exit = master.clone();
     std::thread::spawn(move || {
         let code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(-1);
-        drop(master); // closes the pseudo-console → forces EOF on the reader side
+        // Dropping the master closes the pseudo-console → forces EOF on the reader side.
+        if let Ok(mut guard) = master_for_exit.lock() {
+            guard.take();
+        }
         let _ = code_tx.send(code);
     });
 
@@ -200,6 +256,45 @@ pub fn run<F: FnMut(&[u8])>(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    /// A resize must reach the CHILD, not merely the master — otherwise the front refits
+    /// its own view, the shell keeps wrapping at the old width, and the mismatch has only
+    /// been moved out of sight. `stty size` asks the tty itself, so it answers for the
+    /// child's own view of the world, which is the thing under test.
+    #[test]
+    fn a_resize_reaches_the_child() {
+        let (tx, rx) = std::sync::mpsc::channel::<(u16, u16)>();
+        let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let sink = out.clone();
+        // The child sleeps so the resize lands BEFORE it asks — the alternative is racing
+        // the ioctl against process startup, which would make this test flaky by design.
+        let handle = std::thread::spawn(move || {
+            run(
+                "/bin/sh",
+                &["-c", "sleep 1; stty size"],
+                None,
+                Some(Geometry {
+                    cols: 80,
+                    rows: 24,
+                    updates: Some(rx),
+                }),
+                &[], // no extra env
+                |_k| {},
+                |bytes| {
+                    sink.lock().unwrap().extend_from_slice(bytes);
+                },
+            )
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        tx.send((133, 47)).expect("resize channel closed early");
+        let _ = handle.join().expect("pty thread panicked");
+        let text = String::from_utf8_lossy(&out.lock().unwrap()).to_string();
+        // `stty size` prints "rows cols".
+        assert!(
+            text.contains("47 133"),
+            "the child saw {text:?}, not the resized 47x133 — the ioctl did not reach it"
+        );
+    }
 
     // The real candidates and directories from the field measurement: git installed
     // under the user profile, with NO candidate outside it.
@@ -344,6 +439,8 @@ mod tests {
             "/bin/sh",
             &["-c", "sleep 30"],
             None,
+            None, // default geometry
+            &[],  // no extra env
             |k| {
                 *killer_slot.lock().unwrap() = Some(k);
             },
@@ -368,6 +465,8 @@ mod tests {
             "/bin/sh",
             &["-c", "true"],
             None,
+            None, // default geometry
+            &[],  // no extra env
             |_k| {
                 c.store(true, std::sync::atomic::Ordering::SeqCst);
             },

@@ -1920,13 +1920,135 @@ function setTab(v) {
     t.classList.toggle("active", t.dataset.view === v)
   );
   const isLog = v === "log";
-  document.getElementById("view-bundles").classList.toggle("active", !isLog);
+  const isDoctor = v === "doctor";
+  document
+    .getElementById("view-bundles")
+    .classList.toggle("active", !isLog && !isDoctor);
   document.getElementById("view-log").classList.toggle("active", isLog);
+  document.getElementById("view-doctor").classList.toggle("active", isDoctor);
   document.body.classList.toggle("tab-bundles", v === "bundles");
   document.body.classList.toggle("tab-catalog", v === "catalog");
   document.body.classList.toggle("tab-arbitration", v === "arbitration");
   if (isLog) ws.send(JSON.stringify({ type: "get-log" }));
+  if (isDoctor) doctorOpen();
 }
+
+// The Doctor terminal — an interactive rescue session.
+//
+// Self-contained ON PURPOSE: its own socket, its own listener, nothing added to the
+// main dispatch. Deleting this block plus the `view-doctor` markup deletes the whole
+// experiment with nothing left dangling.
+//
+// ⭐ ITS OWN SOCKET, not a verb on the shared one. `run_in_pty` holds the main socket
+// exclusively while a row runs (that is how the sudo prompt reads its reply), so a
+// Doctor sharing it would be mutually exclusive with Apply — and unavailable exactly
+// when an Apply is wedged, which is when you most want it. Server side: /doctor.
+//
+// ⭐ `onData` is the one genuinely missing piece the spec named. xterm has always
+// handed us every keystroke here; the pty has always accepted arbitrary bytes on its
+// input channel (the sudo password is merely its first caller). This wires the two.
+let doctorTerm = null;
+let doctorWs = null;
+
+// Size the frame to whatever is left of the window, then report how many cols/rows fit
+// inside it — measured with the SAME font xterm renders in. No fit addon is vendored, and
+// guessing would either wrap the child at a width the operator cannot see, or overflow.
+function doctorFit() {
+  const frame = document.getElementById("doctor-frame");
+  const host = document.getElementById("doctor-host");
+  // Measured from where the frame actually sits: no magic offset to drift.
+  const top = frame.getBoundingClientRect().top;
+  frame.style.height = Math.max(160, window.innerHeight - top - 18) + "px";
+  const probe = document.createElement("span");
+  probe.style.cssText =
+    "position:absolute;visibility:hidden;white-space:pre;font-family:" +
+    "courier-new,courier,monospace;font-size:" +
+    (window.innerHeight < 700 ? 11 : 12) +
+    "px";
+  probe.textContent = "0".repeat(100);
+  document.body.append(probe);
+  const r = probe.getBoundingClientRect();
+  const cw = r.width / 100;
+  const lh = r.height * 1.2; // xterm's default lineHeight multiplier
+  probe.remove();
+  const cols = Math.max(20, Math.floor(host.clientWidth / cw) - 1);
+  const rows = Math.max(5, Math.floor(host.clientHeight / lh) - 1);
+  return { cols, rows };
+}
+
+// Refit BOTH ends on a window change. Refitting only the view would move the mismatch
+// out of sight rather than remove it: the child keeps wrapping at its old width.
+let doctorRzTimer = null;
+function doctorRefit() {
+  if (!doctorTerm) return;
+  const { cols, rows } = doctorFit();
+  if (cols === doctorTerm.cols && rows === doctorTerm.rows) return;
+  doctorTerm.resize(cols, rows);
+  if (doctorWs && doctorWs.readyState === 1) {
+    doctorWs.send(JSON.stringify({ type: "doctor-resize", cols, rows }));
+  }
+}
+window.addEventListener("resize", () => {
+  // Debounced: a drag fires this continuously, and each resize is an ioctl on the pty plus
+  // a full xterm reflow. 80 ms is below the threshold where a drag feels laggy.
+  clearTimeout(doctorRzTimer);
+  doctorRzTimer = setTimeout(doctorRefit, 80);
+});
+
+function doctorOpen() {
+  if (!doctorTerm) {
+    doctorTerm = newTerm();
+    doctorTerm.open(document.getElementById("doctor-host"));
+    // Registered ONCE, with the terminal — not per socket, or a reconnect would stack
+    // handlers and send every keystroke N times. It reads `doctorWs` at press time.
+    doctorTerm.onData((d) => {
+      if (doctorWs && doctorWs.readyState === 1) {
+        doctorWs.send(JSON.stringify({ type: "doctor-input", d }));
+      }
+    });
+    // Fit on first open too, not only on Launch: the box is already visible here
+    // (setTab flips `active` before calling us), so an unfitted 100x12 would flash.
+    const f = doctorFit();
+    doctorTerm.resize(f.cols, f.rows);
+  }
+  if (doctorWs && doctorWs.readyState <= 1) return; // connecting or open
+  doctorWs = new WebSocket(
+    (location.protocol === "https:" ? "wss://" : "ws://") +
+      location.host +
+      "/doctor"
+  );
+  // Streamed, not polled: the dedicated socket has no step machinery to yield to.
+  doctorWs.onmessage = (e) => {
+    let m;
+    try {
+      m = JSON.parse(e.data);
+    } catch {
+      return;
+    }
+    if (m.type === "doctor-out") doctorTerm.write(m.d);
+  };
+  doctorWs.onclose = () => doctorTerm.write("\r\n[doctor: socket closed]\r\n");
+}
+// ⭐ Neither a path nor an argv travels on the wire: the front asks for "the rescue
+// Claude", optionally "clean", and the engine decides what those mean (server: `on_path`,
+// and the rescue config dir). An intent the front can NAME is not the same hole as a
+// command line it can compose.
+//
+// `clean` is a CONFIG DIR, not `--bare`. Measured: `--bare` skips plugin *sync* while
+// still loading installed plugins, and stops reading the keychain — it removes the auth
+// and keeps the plugins. A fresh CLAUDE_CONFIG_DIR is what actually carries none of them.
+function doctorLaunch(clean) {
+  doctorOpen();
+  const { cols, rows } = doctorFit();
+  doctorTerm.resize(cols, rows);
+  const send = () =>
+    doctorWs.send(JSON.stringify({ type: "doctor-start", cols, rows, clean }));
+  // The socket may still be connecting on the very first click.
+  if (doctorWs.readyState === 1) send();
+  else doctorWs.addEventListener("open", send, { once: true });
+}
+document.getElementById("doctor-launch").onclick = () => doctorLaunch(false);
+document.getElementById("doctor-launch-clean").onclick = () => doctorLaunch(true);
 document.querySelectorAll(".tab").forEach((tab) => {
   tab.onclick = () => setTab(tab.dataset.view);
 });

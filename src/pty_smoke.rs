@@ -24,6 +24,8 @@ fn main() {
         program,
         &args,
         None,
+        None, // default geometry
+        &[],  // no extra env
         |_killer| {},
         |bytes| {
             print!("{}", String::from_utf8_lossy(bytes));
