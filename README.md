@@ -9,7 +9,8 @@ Tekton (Chiron included, as a removable example).
 
 **Status: the installer runs.** It is a native app (Tauri + Rust) with an
 embedded web UI: a single `Talos` / `Talos.exe` that scans a machine and
-installs / upgrades / removes packages live — proven on macOS and Windows. See
+installs / upgrades / removes packages live — proven on macOS and Windows, and
+building and running on Linux. See
 **Build the kit** below.
 
 The core is generic — it knows no client. Everything specific (theme, packages,
@@ -78,6 +79,7 @@ MSVC on Windows, WebKit on macOS):
 ```
 cargo tauri build          # macOS → target/release/bundle/macos/Talos.app
                            # Windows → target/release/Talos.exe
+cargo build --release      # Linux → target/release/Talos (bare binary, no bundle)
 ```
 
 `public/` (the web UI) is **sealed into the binary** at compile time — the exe is
@@ -91,7 +93,8 @@ side on the target — no installer required. The binaries are **unsigned** for 
 (signing/notarisation is a separate step).
 
 ⚠️ **Where that content comes from is not this repository.** A GitHub Release here
-publishes the **binaries only** — `Talos.exe` and the zipped `.app`, never a
+publishes the **binaries only** — `Talos.exe`, the zipped `.app` and the Linux
+`Talos-linux-x86_64`, never a
 `catalog/` or `bundles/`. The `catalog/` and `bundles/` you see in this tree are
 **examples**, and they double as fixtures for the engine's own tests. A maintainer
 keeps their real content in their own place and pairs it with a released binary; the

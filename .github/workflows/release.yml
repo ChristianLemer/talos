@@ -1,8 +1,16 @@
-# Release — on a tag `v*`, each OS runner NATIVELY builds its target with
-# `cargo tauri build` and attaches the bundle(s) to a GitHub Release. Native per
-# OS because Tauri does NOT cross-compile (WebView2 + MSVC on Windows, WebKit on
-# macOS). Pre-release is automatic when the tag contains a `-` (v0.1.0-beta.1 →
-# pre-release; v0.1.0 → latest).
+# Release — on a tag `v*`, each OS runner NATIVELY builds its target and
+# attaches the deliverable(s) to a GitHub Release. Native per OS because Tauri
+# does NOT cross-compile (WebView2 + MSVC on Windows, WebKit on macOS, WebKitGTK
+# on Linux). Pre-release is automatic when the tag contains a `-`
+# (v0.1.0-beta.1 → pre-release; v0.1.0 → latest).
+#
+# Linux ships the BARE binary, like Windows: the kit is `Talos` + `catalog/` +
+# `bundles/` side by side, no package. It is built with plain `cargo build
+# --release` rather than `cargo tauri build`: the front is static (`frontendDist:
+# public`, no beforeBuildCommand) and `tauri::generate_context!` embeds it during
+# the cargo build itself, so the CLI would only add a bundling step we do not
+# want — and `cargo build --release` is exactly what a developer runs locally,
+# which is the path that was verified.
 #
 # NO runtime smoke-test: the binary is now a NATIVE GUI app (Tauri window), not a
 # headless server — it won't boot reliably on a display-less runner. The real
@@ -38,6 +46,10 @@ jobs:
             # bare exe only — the deliverable is exe + bundles/ rsync'd, no installer
             artifacts: |
               target/release/Talos.exe
+          - os: ubuntu-22.04 # x64 runner → x86_64-unknown-linux-gnu
+            # bare binary, renamed so the asset says which OS/arch it is for
+            artifacts: |
+              Talos-linux-x86_64
 
     runs-on: ${{ matrix.os }}
 
@@ -46,6 +58,18 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      # Same list as ci.yml, for the same reason: tauri's build script links
+      # WebKitGTK at compile time, so without the dev libs even `cargo build` aborts.
+      - name: System deps for tauri-build (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev
 
       # NO rust-cache here: release runs only on tags, and Actions caches are
       # scoped by ref — a tag build can only read caches saved on the SAME tag
@@ -60,16 +84,27 @@ jobs:
       # (which IS native) and let it fetch tauri-cli's official prebuilt binary
       # from the tauri-apps GitHub Releases (per-platform assets exist).
       - name: Install cargo-binstall
+        if: runner.os != 'Linux'
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-binstall
 
       - name: Install Tauri CLI (prebuilt)
+        if: runner.os != 'Linux'
         run: cargo binstall --no-confirm tauri-cli
 
       # Native GUI build → produces the OS bundle(s). No cross-compile.
       - name: Build (cargo tauri build)
+        if: runner.os != 'Linux'
         run: cargo tauri build
+
+      # See the header: the bare binary is the deliverable, and this is the
+      # verified local path. Renamed so the Release asset names its OS/arch.
+      - name: Build (cargo build --release, Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --release --bin Talos
+          cp target/release/Talos Talos-linux-x86_64
 
       # A .app is a directory; a Release asset must be a single file. ditto keeps
       # the bundle's symlinks/permissions intact (plain zip would mangle them).
