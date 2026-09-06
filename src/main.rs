@@ -10,6 +10,7 @@ mod behaviour_io;
 mod build_info;
 mod bundles;
 mod catalog;
+mod check;
 mod consent;
 mod decision;
 mod deps;
@@ -28,6 +29,22 @@ mod vscode;
 mod watch;
 
 fn main() {
+    // `Talos --check [catalog_dir bundles_dir]`: read the content and exit, no window.
+    // What an integrator runs before dropping a kit on the share, and what a content
+    // repo's pipeline runs on every push. Exit code 0 = clean, 1 = findings. ⚠️ On Windows
+    // the release exe is a GUI-subsystem program: its stdout reaches a REDIRECTED handle
+    // (`Talos.exe --check > check.txt`) but not the bare console, so the exit code is the
+    // contract there and the text is a bonus.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--check") {
+        let (catalog_dir, bundles_dir) = match (args.get(1), args.get(2)) {
+            (Some(c), Some(b)) => (std::path::PathBuf::from(c), std::path::PathBuf::from(b)),
+            _ => platform::content_dirs(),
+        };
+        let report = check::run(&catalog_dir, &bundles_dir);
+        print!("{}", report.render());
+        std::process::exit(if report.ok() { 0 } else { 1 });
+    }
     // The HTTP+WS server runs in its own tokio runtime, in the background.
     // The Tauri window (webview) loads http://127.0.0.1:1420 → app.js connects to it
     // via WS as it does today (location.host = 127.0.0.1:1420), unchanged.

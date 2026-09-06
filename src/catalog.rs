@@ -36,6 +36,14 @@ pub fn parse_catalog_entry(raw: &str, stem: &str) -> Option<CatalogPackage> {
     Some(CatalogPackage { id, pkg })
 }
 
+/// The strict twin of `parse_catalog_entry`, for `--check`: the same reading, but a YAML
+/// error comes back with serde's message instead of being swallowed. The runtime keeps
+/// skipping a bad file (one broken row must not take the screen down); the check NAMES it.
+pub fn parse_catalog_entry_strict(raw: &str, stem: &str) -> Result<CatalogPackage, String> {
+    serde_yaml::from_str::<RawPkg>(raw).map_err(|e| e.to_string())?;
+    parse_catalog_entry(raw, stem).ok_or_else(|| "unreadable".to_string())
+}
+
 /// Load every `*.yaml` under `dir` into an id→CatalogPackage map. Absent dir or
 /// bad files → skipped. The map keeps deterministic order (BTreeMap) for stable
 /// emission.

@@ -91,9 +91,15 @@ pub fn parse_profiles(raw: &str) -> Profiles {
 /// each). A bundle file is `{bundle:, emoji:, usage:, highlights:, description:,
 /// packages: [names]}`. Returns None if it has no name (not a bundle card).
 pub fn parse_one_bundle(raw: &str) -> Option<Profile> {
-    let p: RawProfile = serde_yaml::from_str(raw).ok()?;
-    let name = p.profile?;
-    Some(Profile {
+    parse_one_bundle_strict(raw).ok().flatten()
+}
+
+/// The strict twin, for `--check`: a YAML error comes back with serde's message; a file
+/// with no `bundle:` name comes back as `Ok(None)` — that is what makes a yaml under
+/// bundles/ "not a card", and the check reports it by file name instead of dropping it.
+pub fn parse_one_bundle_strict(raw: &str) -> Result<Option<Profile>, String> {
+    let p: RawProfile = serde_yaml::from_str(raw).map_err(|e| e.to_string())?;
+    Ok(p.profile.map(|name| Profile {
         name,
         emoji: p.emoji.unwrap_or_else(|| "🎯".into()),
         usage: p.usage.unwrap_or_default(),
@@ -101,7 +107,7 @@ pub fn parse_one_bundle(raw: &str) -> Option<Profile> {
         description: p.description.unwrap_or_default(),
         packages: p.packages,
         needs: p.needs,
-    })
+    }))
 }
 
 /// Load the bundle cards: every `*.yaml` under `dir` that names a bundle becomes

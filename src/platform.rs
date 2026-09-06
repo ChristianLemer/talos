@@ -342,6 +342,39 @@ pub fn exe_sibling_dir(exe: &std::path::Path) -> PathBuf {
     parent.to_path_buf()
 }
 
+/// The folder next to the running exe — outside the `.app` on macOS. See `exe_sibling_dir`.
+pub fn exe_sibling() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .map(|p| exe_sibling_dir(&p))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Where `catalog/` and `bundles/` are read from — ONE rule, two callers: the server at
+/// boot, and `--check` from the command line. Each folder is looked for in `sibling` (next
+/// to the exe, outside the `.app` on macOS — the packaged case); if absent there, it falls
+/// back to the current directory — the DEV case (`cargo run` from the repo root, where the
+/// exe is `target/debug/Talos` but the content is `./catalog` + `./bundles`). Resolved from
+/// the REAL exe first, never the cwd alone: a `.app` launched by Finder has cwd=/ and a
+/// relative "bundles" opened empty. Absent in both places → the relative name, which loads
+/// empty. PURE over `sibling` → testable without launching a process.
+pub fn content_dirs_in(sibling: &std::path::Path) -> (PathBuf, PathBuf) {
+    let pick = |name: &str| -> PathBuf {
+        let beside = sibling.join(name);
+        if beside.is_dir() {
+            beside
+        } else {
+            PathBuf::from(name)
+        }
+    };
+    (pick("catalog"), pick("bundles"))
+}
+
+/// `content_dirs_in` for the running exe.
+pub fn content_dirs() -> (PathBuf, PathBuf) {
+    content_dirs_in(&exe_sibling())
+}
+
 // Windows PATH refresh: an install writes the registry but does NOT propagate the PATH
 // to already-running processes → a freshly installed tool would read "absent" without this.
 //
@@ -594,6 +627,19 @@ mod tests {
         let p = posix_probe(Os::Darwin, "/bin/sh", "node --version");
         assert_eq!(p.cmd, "/bin/sh");
         assert_eq!(p.args, vec!["-lc", "node --version"]);
+    }
+
+    /// Beside the exe when the folder is there; the bare relative name otherwise — each of
+    /// the two independently, so a kit with only `bundles/` beside still reads it.
+    #[test]
+    fn content_dirs_fall_back_per_folder() {
+        let d = std::env::temp_dir().join(format!("talos-content-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("bundles")).unwrap();
+        let (catalog, bundles) = content_dirs_in(&d);
+        assert_eq!(catalog, PathBuf::from("catalog"));
+        assert_eq!(bundles, d.join("bundles"));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

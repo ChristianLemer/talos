@@ -370,32 +370,11 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         "--- appmgmt: {}",
         crate::platform::app_management_status(os).as_str()
     );
-    // The "next to the exe" folder (outside the .app if packaged): that's WHERE
-    // bundles/ AND the consented shared copy live (hermetic boundary — mirror of
-    // the TS compiled BUNDLES_DIR). Resolved from the REAL exe, NOT the cwd: a .app
-    // launched by Finder has cwd=/ → a relative "bundles" path opened empty.
-    let sibling_dir = std::env::current_exe()
-        .ok()
-        .map(|p| crate::platform::exe_sibling_dir(&p))
-        .unwrap_or_else(|| PathBuf::from("."));
-    // Scan the bundles ONCE at boot (pure: disk read + YAML). We look
-    // NEXT TO the exe (packaged .app/.exe case); if absent, we fall back to "bundles"
-    // relative to the cwd (DEV case: `cargo run`/`tauri dev` runs from the repo root,
-    // where the exe is target/debug/talos but the bundles are ./bundles). Absent → empty plan.
-    let sibling_bundles = sibling_dir.join("bundles");
-    let bundles_dir: PathBuf = if sibling_bundles.is_dir() {
-        sibling_bundles
-    } else {
-        PathBuf::from("bundles")
-    };
+    // Where the content is read from: next to the exe, else the cwd (DEV). One rule for
+    // the server and for `--check` — see platform::content_dirs.
+    let sibling_dir = crate::platform::exe_sibling();
+    let (catalog_dir, bundles_dir) = crate::platform::content_dirs_in(&sibling_dir);
     println!("[bundles] dir: {}", bundles_dir.display());
-    // The flat catalog sits beside bundles/ (same dev/packaged resolution).
-    let sibling_catalog = sibling_dir.join("catalog");
-    let catalog_dir: PathBuf = if sibling_catalog.is_dir() {
-        sibling_catalog
-    } else {
-        PathBuf::from("catalog")
-    };
     println!("[catalog] dir: {}", catalog_dir.display());
     let plan = load_from_catalog(
         catalog_dir.to_str().unwrap_or("catalog"),
