@@ -20,61 +20,76 @@ plugins) enters by **extension** (a bundle folder), never into the core.
 
 ## Package it for your team
 
-**This repo is the workshop, not the product.** You clone it, put *your* content
-in, and produce a **kit** to hand to your colleagues or users. The engine is
-generic — it knows no client; what makes a kit *yours* is the `bundles/` you
-ship beside it.
+**This repo is the workshop, not the product.** What your team gets is a **kit**: a
+released Talos binary next to *your* content. The engine is generic — it knows no
+client; what makes a kit yours is the `catalog/` and `bundles/` beside it. You never
+build the engine, and your content never lives in this repo.
 
-### 1 — Declare your content
+### 1 — Your content: `catalog/` + `bundles/`
 
-A bundle is a **folder** with a `bundle.yaml`. It lists packages as *needs*
-satisfied by a named route (`winget`, `brew`, `cargo`, `bun`, a raw `run`, a
-Claude Code `claude-plugin`, or a cross-agent `skill`). Copy an existing one and
-edit — the full field reference (routes, postures, version pinning, config-atoms,
-profiles) lives in [`bundles/README.md`](bundles/README.md):
+Two flat folders, read from disk beside the exe at runtime — no build step:
+
+- **`catalog/`** — one YAML per **package**: what it is called, which route installs
+  it (`winget`, `brew`, `cargo`, `npm`, `bun`, `run`, a Claude Code `claude-plugin`, a
+  `skill`, a `vscode-extension`, a `nu-plugin`), how to detect it, which version to
+  hold. The file stem is the package id; `name:` is what everything else refers to.
+- **`bundles/`** — one YAML per **selection**: a named card that pulls packages in by
+  their `name`, and `needs:` other bundles (Base ← Documents ← Data ← Development is
+  the shipped chain).
 
 ```yaml
-bundle: Editors
-emoji: ✏️
-description: Where you see and edit what the AI produces.
-priority: 10           # order on screen (and now the order Apply acts in)
-selectable: true       # can the whole card be toggled?
-posture: opt-out       # default for its packages (see below)
+# catalog/jq.yaml
+name: jq
+description: JSON CLI — required by some agent plugin hooks
+winget: jqlang.jq
+brew: jq
+detect: jq --version
+version: latest
 
-packages:
-  - name: Visual Studio Code
-    description: Where you see and edit what the AI produces
-    winget: Microsoft.VisualStudioCode   # the route (id winget knows)
-    detect: code --version               # how to tell it's already present
-
-  # A Claude Code plugin (hooks/agents/commands/MCP):
-  - name: Chiron
-    claude-plugin: chiron@tekton              # <plugin>@<marketplace>
-    marketplace: github:ChristianLemer/tekton # registered before install
-    detect: chiron                            # name `claude plugin list` reports
-    requires: claude                          # not offered if `claude` is absent
-
-  # A cross-agent skill (SKILL.md, via bunx skills):
-  - name: uv/ruff/ty skills
-    skill: astral-sh/claude-code-plugins      # source for `bunx skills add`
-    detect: astral                            # name `bunx skills list` reports
-    requires: Bun
+# bundles/base.yaml
+bundle: Base
+emoji: 🧱
+usage: The essentials — an AI agent, the plumbing it runs on, the method.
+packages: [Git, Node.js, jq, Nushell, Claude Code]
 ```
 
-For `claude-plugin` and `skill`, `detect:` is the name the tool lists the item
-under (not a PATH binary), and `requires:` names a command that must be on PATH —
-if it's missing, the row shows *"requires … (absent)"* instead of acting.
+The full field reference — routes, `version:` pinning, config-atoms, behaviour seeds —
+is [`bundles/README.md`](bundles/README.md). The `catalog/` and `bundles/` in this tree
+are **examples**, and double as fixtures for the engine's own tests: copy them, then
+make them yours.
 
-**Posture** — the author's policy per bundle: `mandatory` (always on, locked),
-`opt-out` (on by default, user may decline), `opt-in` (off by default, user may
-add), `forbidden` (always off, locked). Drop folders into `bundles/`, remove the
-ones you don't want — `base/` is the neutral substrate, the rest are examples.
+**Keep the content in a repo of your own.** Two folders and one more file:
 
-### 2 — Build the kit
+```
+your-talos-content/
+├── catalog/
+├── bundles/
+└── .talos-version      ← one line: the release your kit runs, e.g. v0.0.1-beta.37
+```
 
-With [Rust](https://rustup.rs) + the Tauri CLI (`cargo install tauri-cli`).
-Build natively on each target OS — Tauri does **not** cross-compile (WebView2 +
-MSVC on Windows, WebKit on macOS):
+Changing what Talos proposes is a commit. Moving to a newer Talos is a commit that
+changes one line. And before either lands:
+
+```bash
+Talos --check catalog bundles     # exit 1 on a broken file, an unknown name, a bad version
+```
+
+`--check` reads your content the way the running app would and **refuses what the
+runtime silently skips** — a YAML that does not parse, a bundle naming a package that
+does not exist, a `requires:` nobody satisfies, a `version:` word that is neither a
+version nor `latest` nor `pending`. Put it in your pipeline, or run it by hand. On
+Windows, redirect the output (`Talos.exe --check catalog bundles > check.txt`): the
+release exe is a GUI program and prints to a file, not to the bare console. The exit
+code is the contract.
+
+### 2 — The engine: a release, not a build
+
+Every tag `v*` publishes the launchers on the [Releases](../../releases) page: the
+zipped `Talos.app` (Apple Silicon), `Talos.exe` (x64) and the bare Linux binary. They
+are the same engine for everyone; you download, you do not compile.
+
+If you do want to build (to change the engine, not the content): [Rust](https://rustup.rs)
+and the Tauri CLI, natively on each OS — Tauri does **not** cross-compile:
 
 ```
 cargo tauri build          # macOS → target/release/bundle/macos/Talos.app
@@ -82,33 +97,28 @@ cargo tauri build          # macOS → target/release/bundle/macos/Talos.app
 cargo build --release      # Linux → target/release/Talos (bare binary, no bundle)
 ```
 
-`public/` (the web UI) is **sealed into the binary** at compile time — the exe is
-self-contained for its front end. Your `bundles/` are **not** sealed: they live in
-a folder **beside** the exe, read from disk at runtime (the hermetic boundary — the
-engine changes rarely, content changes often).
+`public/` (the web UI) is **sealed into the binary**; your content is **not** — it is
+read from the folder beside the exe at runtime. That is the hermetic boundary: the
+engine changes rarely, the content often, and the two meet on the target machine,
+never in this repo.
 
-**The deliverable** is the executable **plus** `bundles/` next to it. The retained
-distribution model is **rsync** (or any copy): drop `Talos.exe` + `bundles/` side by
-side on the target — no installer required. The binaries are **unsigned** for now
-(signing/notarisation is a separate step).
+### 3 — Compose and distribute the kit
 
-⚠️ **Where that content comes from is not this repository.** A GitHub Release here
-publishes the **binaries only** — `Talos.exe`, the zipped `.app` and the Linux
-`Talos-linux-x86_64`, never a
-`catalog/` or `bundles/`. The `catalog/` and `bundles/` you see in this tree are
-**examples**, and they double as fixtures for the engine's own tests. A maintainer
-keeps their real content in their own place and pairs it with a released binary; the
-two halves meet on the target machine, not in this repo.
+**The deliverable** is the launchers **plus** `catalog/` + `bundles/` beside them. Ship
+one without the other and Talos opens inert (nothing to propose); it won't crash, it
+just has nothing to say. The binaries are **unsigned** for now (signing/notarisation is
+a separate step).
 
-That is the hermetic boundary stated as a distribution rule: the engine knows no
-client, so it cannot also be the home of anyone's catalogue.
+One script composes the kit, from a Mac, into the folder your team launches from:
 
-### 3 — Distribute it
+```bash
+sh admin/get-talos.sh "<kit folder>" --content path/to/your-talos-content
+```
 
-Hand `dist/` to your team. The two parts travel **together** — the exe is the
-generic engine, `bundles/` is your content, read from disk beside it at runtime.
-Ship one without the other and Talos opens inert (nothing to propose); it won't
-crash, it just has nothing to say.
+It reads `.talos-version`, fetches those launchers, and copies your content beside
+them. Without `--content` it refreshes the launchers only and leaves the content in
+the kit untouched — for a team that edits its YAML in place on the share. It needs
+`gh` (the repo is private today; `gh auth login` once).
 
 Built to live on a **shared OneDrive**, launched by many machines from the same
 copy — the exe is never copied per machine:
@@ -118,10 +128,12 @@ copy — the exe is never copied per machine:
   run, idempotently.
 - It **self-heals**: each launch kills any stale instance holding its port, so
   everyone runs the latest code on the share without manual cleanup.
+- Windows locks a running `Talos.exe`, so a refreshed exe reaches a machine at the
+  next sync after Talos is closed there. On a Mac, mark the kit folder *Always keep
+  on this device*: the `.app` is a folder of files, and a half-synced app must never
+  be launched.
 
-Drop the kit on the share once; every machine runs it in place. To refresh the
-launchers from the newest release, `admin/get-talos.sh <kit folder>` (macOS,
-needs `gh`) replaces `Talos.app` and `Talos.exe` and leaves your content alone.
+Drop the kit on the share once; every machine runs it in place.
 
 ### What your users will see
 

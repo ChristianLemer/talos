@@ -1,60 +1,74 @@
-# Authoring bundles
+# Authoring content — `catalog/` and `bundles/`
 
-This folder **is** the content Talos proposes. The engine (the exe) is generic and
-knows nothing about your team; what makes a kit *yours* lives here. Drop folders in,
-remove the ones you don't want, edit the YAML — no build step for the content, the
-exe reads `bundles/` from disk beside it at runtime.
+These two folders **are** the content Talos proposes. The engine (the exe) is generic
+and knows nothing about your team; what makes a kit *yours* lives here. Edit the YAML —
+no build step for the content, the exe reads both folders from disk beside it at
+runtime. `Talos --check catalog bundles` tells you before the kit ships whether every
+file parses and every name resolves.
 
-> New here? Copy an existing bundle folder, rename it, edit its `bundle.yaml`. The
-> rest of this file is the reference for when you want to know exactly what a field does.
+> New here? Copy a file from `catalog/`, rename it, edit it. Then list its `name:` in
+> a bundle. The rest of this file is the reference for when you want to know exactly
+> what a field does.
 
 ## The shape
 
 ```
+catalog/
+├── git.yaml            ← one package = one file; the stem is its id
+├── jq.yaml
+├── starship.yaml
+├── starship.nu         ← a config-atom may ship a file beside it (see Config-atoms)
+└── …
 bundles/
-├── README.md          ← you are here
-├── profiles.yaml      ← optional: named, additive selections (see bottom)
-├── base/
-│   └── bundle.yaml     ← one bundle = one folder with a bundle.yaml
-├── terminal/
-│   ├── bundle.yaml
-│   └── starship.nu     ← a config-atom may ship files beside its manifest
+├── README.md           ← you are here
+├── base.yaml           ← one bundle = one file: a named card that pulls packages IN
+├── documents.yaml      ← `needs: [Base]` — activating it activates Base too
 └── …
 ```
 
-A subfolder is a bundle **only** if it contains a `bundle.yaml`. Anything else is
-ignored (that's why `profiles.yaml` can sit at the root without being mistaken for a
-bundle). A broken YAML is skipped with a log line, not a crash — the panel opens with
-whatever parsed.
+Packages live in the **flat catalog**, once each. Bundles do not own packages: they
+**reference** them by `name:`. Several bundles may pull the same package; a package in
+no bundle still shows in the Catalog view, just not pulled by any card.
 
-## A bundle.yaml
+At runtime a broken file is skipped with a log line, not a crash — the panel opens with
+whatever parsed. That leniency is for the person in front of the screen; at authoring
+time run `--check`, which refuses the same file by name.
+
+## A catalog file — one package
 
 ```yaml
-bundle: Editors            # display name (falls back to the folder name)
-emoji: ✏️
-description: Where you see and edit what the AI produces.
-priority: 10               # screen order — and the order Apply acts in (low = first)
-selectable: true           # can the whole card be toggled at once?
-posture: opt-out           # DEFAULT posture inherited by every package below
-
-packages:
-  - name: Visual Studio Code
-    description: Where you see and edit what the AI produces
-    winget: Microsoft.VisualStudioCode   # the route + the id that route knows
-    brew: visual-studio-code             # the id for the OTHER OS (see Routes)
-    detect: code --version               # how to tell it's already present
+name: Visual Studio Code               # what bundles and `requires:` refer to
+description: Where you see and edit what the AI produces
+winget: Microsoft.VisualStudioCode     # the route + the id that route knows
+brew: visual-studio-code               # the id for the OTHER OS (see Routes)
+detect: code --version                 # how to tell it's already present
+version: latest                        # see Pinning a version
+requires: [Git]                        # other packages, by name (see below)
+category: [editors]                    # display grouping only
 ```
 
-**Posture is a bundle-level policy**, inherited uniformly by every package. A bundle
-that mixes opt-in and opt-out packages makes its own card lie — if you need both,
-make two bundles.
+`requires:` names packages this one is only offered with; an unmet requirement takes
+the row out of the perimeter, with the reason shown. Names, not ids: `--check` refuses
+a name the catalog does not declare.
 
-| Posture | Default | User can change? |
-|---|---|---|
-| `mandatory` | on | no (locked on) |
-| `opt-out` | on | yes — decline it |
-| `opt-in` | off | yes — add it |
-| `forbidden` | off | no (locked off) |
+## A bundle file — one card
+
+```yaml
+bundle: Documents
+emoji: 📄
+usage: Read, write and convert documents.
+highlights: [Pandoc, Typst]            # 2-3 names to advertise the card
+description: What you need to work on text — on top of Base.
+needs: [Base]                          # bundles this one stands on (real cascade)
+packages:
+  - Pandoc
+  - Typst
+```
+
+A bundle is a **button**: activating it pulls its packages "in" as a group. Purely
+additive — it never forces anything out, and a manual "out" always wins. Several can
+be active at once; their pulls union. `needs:` chains bundles: the shipped chain is
+Base ← Documents ← Data ← Development, plus standalone cards.
 
 ## Routes — a package is a *need*, satisfied by one named route
 
@@ -287,27 +301,9 @@ a number.
 observation; the same package via brew on macOS does not elevate. A seed asserted too
 broadly makes Apply promise "nothing will interrupt you" and then interrupt.
 
-## profiles.yaml — named, additive selections
+## `profiles.yaml` — the legacy multi-card file
 
-Optional, single file at the root of `bundles/`. A profile is a **button**: applying it
-pulls its packages "in" as a group. Purely additive — it never forces anything out, and
-a manual "out" always wins (that's what turns a profile "hollow"). Several can be active
-at once; their pulls union. Profiles reference packages by their `name`.
-
-```yaml
-columns: 2                 # grid width of the profile bar
-
-profiles:
-  - profile: Essential AI
-    emoji: 🌱
-    usage: Talk to an AI agent and read its work in a proper editor.
-    highlights: [Claude Code, VS Code]   # 2-3 names to advertise the profile
-    description: The minimum — an AI agent you can talk to, and a place to read it.
-    packages:
-      # Bun is not listed — Claude Code pulls it in via `requires: Bun`.
-      - Claude Code
-      - Visual Studio Code
-```
-
-An unknown package name in a profile simply pulls nothing — harmless, so profiles stay
-decoupled from the exact bundle set.
+Before one-file-per-bundle, all cards lived in one `bundles/profiles.yaml` with a
+`profiles:` list. The runtime still reads it for back-compat; `--check` refuses it and
+asks for one file per bundle, which is what a kit should ship. Convert by moving each
+`- profile:` item into its own `bundles/<name>.yaml` with `bundle:` as the key.

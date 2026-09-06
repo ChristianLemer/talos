@@ -8,36 +8,32 @@ choose what should be there, and converges. Rust + Tauri backend, plain-JS front
 **English everywhere in the artefact** — UI text, comments, commit messages, docs. Zero French
 in committed files. The conversation with the operator is usually French; the code never is.
 
-## Version control: jj, not git
+## Version control: git, direct on `beta`, until the 0.1.0 freeze
 
-This repo is driven with **jj** (colocated over git). Do not say or run `git reset`, `git
-rebase`, `git commit`. Equivalents: rewrite a message = `jj describe`; realign after a rewritten
-history = `jj git fetch` then work from the new head. The only legitimate `jj git …` commands are
-`fetch` / `push` / `clone`.
+Since 2026-09-05 the operator no longer commits by hand. Agents commit, with **git**,
+straight on `beta`, in a plain git clone — the jj era is over for this repo (the
+operator drove it with jj, colocated, until then; an old note saying `jj describe`
+or `jj new` describes that era). After the 0.1.0 freeze the flow becomes a branch per
+intention and a PR to `beta`, squash-merged by the operator.
 
-Reading history through `git log` / `git show` / `git ls-tree` is fine — jj exposes no
-content-grep across commits, so those stay useful. **Never** use a git command that *writes*.
+Rules that stay:
 
-⚠️ **`jj new` immediately after a push.** jj's working copy is a real commit; if `@` is the
-commit the bookmark points at and you edit a file, you amend the **pushed** commit and a `jj
-describe` overwrites its message. This repo has been bitten 3×. Check with
-`jj log -r 'beta@origin | @'` before touching anything.
+- **Never rewrite pushed history.** The repo has been rewritten twice (2026-08-09, and
+  once more after); each time left dead build stamps behind. A third time is not on.
+- **Tag = release.** Pushing `v*` builds and publishes; only tag a commit that passed the
+  four verifications, and say in the tag message what the release is for.
+- **`_*` is gitignored** (local scratch). Editing only a `_*` file and committing
+  produces an EMPTY commit.
+- **A change made with an AI assistant says so in a trailer.**
 
-⚠️ **`git log --all` lies here.** jj adds thousands of internal `refs/jj/keep` refs, so `--all`
-reports ~15 000 commits instead of the real count. Always scope to the branch:
-`git log refs/heads/beta`.
-
-⚠️ **`_*` is gitignored** (local scratch). `_PLAN*.md`, `_STACK.md` live on disk, never
-versioned. Editing only a `_*` file and committing produces an EMPTY commit.
-
-## Repo shape (as of 2026-08-09)
+## Repo shape (as of 2026-09-06)
 
 | ref | what |
 |---|---|
-| `beta` | **the living branch**, 327 commits, linear (0 merges) |
+| `beta` | **the living branch**, ~385 commits, linear (0 merges) |
 | `main` | the primordial empty commit — deliberately, work is on `beta` |
-| tags | 20 (`v0.0.1-beta.1` … `beta.20`), all on the rewritten history |
-| visibility | **private** |
+| tags | 18 (`v0.0.1-beta.20` … `beta.37`), all on `beta`; beta.1–19 were retired on 2026-09-06 with their releases |
+| visibility | **private**, going public soon — the history was audited for that on 2026-09-06 |
 
 ⚠️ **The living branch was called `tauri` until 2026-08-09.** It was renamed because the name
 described the *framework* — and the framework had already been replaced once (Deno →
@@ -80,11 +76,14 @@ publish.
 Run all four before claiming anything works. These are exactly what CI enforces:
 
 ```bash
-cargo test --all-targets                      # 212 + 2 = 214 tests
+cargo test --all-targets                      # 319 + 8 tests (2026-09-06)
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings     # any lint fails the build
-node --test "test/*.test.mjs"                 # 122 tests
+node --test "test/*.test.mjs"                 # 169 tests
 ```
+
+A fifth, for content rather than code: `cargo run -- --check catalog bundles` reads
+the shipped examples the strict way (`src/check.rs`) and must say `0 errors`.
 
 ⚠️ **Not `cargo test --bins`** — it runs only 2 tests and looks green while proving nothing.
 ⚠️ **Quote the node glob.** `node --test test/` treats the path as a directory and misses files;
@@ -101,26 +100,28 @@ cargo tauri build     # the deliverable; needs `cargo binstall tauri-cli` once
 
 The Mac deliverable is `target/release/bundle/macos/Talos.app`, never the bare binary. A release
 is triggered by pushing a `v*` tag: `.github/workflows/release.yml` builds natively per OS
-(Tauri does not cross-compile) and attaches `Talos-macos-aarch64.app.zip` + `Talos.exe`.
+(Tauri does not cross-compile) and attaches `Talos-macos-aarch64.app.zip`, `Talos.exe` and
+`Talos-linux-x86_64`.
 
 ⚠️ **A release is TWO halves**: the binary *and* `catalog/` + `bundles/`, which the exe reads
 from disk beside itself. Shipping the exe alone tests a mixture and fails misleadingly. Any
-handoff says "copy three things".
+handoff says "copy three things". `admin/get-talos.sh` composes that kit from a release
+and a content folder; `Talos --check` validates the content first.
 
 Every binary bakes a build stamp (jj change · sha · timestamp) so you can tell which build is
-running. ⚠️ The 18 betas before `beta.19` have stamps pointing at SHAs that no longer exist
-(history rewrite) — their binaries work, but an old stamp will not resolve.
+running. ⚠️ Stamps from before the 2026-08-09 rewrite point at SHAs that no longer exist; the
+releases that carried them (beta.1–19) were retired on 2026-09-06.
 
 ## Architecture
 
-- **`src/`** — 24 Rust modules. `server.rs` (axum + WS), `catalog.rs` / `bundles.rs` (read YAML
+- **`src/`** — 25 Rust modules. `server.rs` (axum + WS), `catalog.rs` / `bundles.rs` (read YAML
   from disk), `detect.rs` / `outdated.rs` (real machine state), `pty.rs` (portable-pty),
   `decision.rs`, `ladder.rs`, `behaviour.rs`, `platform.rs`.
 - **`public/`** — the front, plain ES modules, no framework, no bundler, no CDN. `decision.js`
   is **shared** with the server's logic: one rule, two callers. `model.js` is DOM-free and
   tested.
-- **`catalog/`** — one YAML per package (**33 packages / 35 files**: two `.nu` sidecars,
-  `bun-path.nu` and `starship.nu`). Never write 35 packages.
+- **`catalog/`** — one YAML per package (**39 packages / 42 files**: the rest are `.nu`
+  sidecars such as `bun-path.nu` and `starship.nu`). Never count the sidecars as packages.
 - **`bundles/`** — selections, a chain: Base ← Documents ← Data ← Development, plus standalone
   Terminal tools and Legacy.
 
