@@ -119,7 +119,9 @@ copy — the exe is never copied per machine:
 - It **self-heals**: each launch kills any stale instance holding its port, so
   everyone runs the latest code on the share without manual cleanup.
 
-Drop the kit on the share once; every machine runs it in place.
+Drop the kit on the share once; every machine runs it in place. To refresh the
+launchers from the newest release, `admin/get-talos.sh <kit folder>` (macOS,
+needs `gh`) replaces `Talos.app` and `Talos.exe` and leaves your content alone.
 
 ### What your users will see
 
