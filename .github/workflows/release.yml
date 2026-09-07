@@ -39,9 +39,12 @@ jobs:
       matrix:
         include:
           - os: macos-14 # Apple Silicon runner → aarch64-apple-darwin
-            # the .app (a directory) zipped — a Release asset must be a single file
+            # the .app (a directory) zipped — a Release asset must be a single file.
+            # The kit script rides along: an integrator fetches it by TAG
+            # (releases/download/<tag>/get-talos.sh), a pin that does not move.
             artifacts: |
               Talos-macos-aarch64.app.zip
+              admin/get-talos.sh
           - os: windows-latest # x64 runner → x86_64-pc-windows-msvc
             # bare exe only — the deliverable is exe + bundles/ rsync'd, no installer
             artifacts: |

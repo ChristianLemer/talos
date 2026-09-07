@@ -151,9 +151,15 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
     git ref and runs it with `--dir` and `--register`. The installer picks the archive
     built for the Nushell **minor** that runs it (a plugin loads into exactly one), on
     this OS and arch, verifies the published `.sha256`, places and registers the binary.
-    🧩 rung, because it fetches. `ref` pins the installer, not the binary: `HEAD` follows
-    the project, a tag freezes the installer's behaviour. A plugin qualifies by shipping
-    that `install.nu` at its root; `nu_plugin_xlsx` is the reference.
+    🧩 rung, because it fetches. `ref` pins the installer, not the binary: `HEAD` (the
+    default when `@ref` is omitted) follows the project, a tag or a sha freezes the
+    installer's behaviour. A plugin qualifies by shipping that `install.nu` at its root;
+    `nu_plugin_xlsx` is the reference.
+  - **Delegation puts `api.github.com` on the TARGET machine's path** — the installer
+    lists releases to pick the build. Unauthenticated: 60 calls/hour per address, and a
+    fleet behind one corporate NAT shares the address. For a firewall that blocks it,
+    the installer's `--archive <path>` installs from a staged local archive, and an atom
+    can pass it — no engine change.
 - **Presence is a STATUS, not a file.** A plugin binary compiled against a different
   nushell version is registered, its file exists on disk, and it does not work. Talos
   checks `plugin list | where name == <n> and status == loaded` — `added` is not enough.

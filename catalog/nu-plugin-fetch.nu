@@ -28,7 +28,19 @@
 #
 # `ref` pins the INSTALLER, not the binary. The binary follows the running Nushell, which
 # is the one coupling no version field can express (a plugin loads into exactly one minor).
-# `HEAD` follows the project's default branch; a tag freezes the installer's behaviour.
+# `HEAD` follows the project's default branch and is the default when `@ref` is omitted; a
+# tag or a commit sha freezes the installer's behaviour.
+#
+# ⚠️ WHAT DELEGATION COSTS, and the catalogue author should know:
+#   · api.github.com enters the critical path of the TARGET machine, not the integrator's:
+#     the installer lists the project's releases to find the build for its Nushell minor.
+#     Unauthenticated, that API allows 60 calls per hour PER ADDRESS — and a fleet behind a
+#     corporate NAT shares one address. The installer honours GITHUB_TOKEN if the row's
+#     environment carries one.
+#   · The escape hatch is the installer's `--archive <path>`: install from a local archive,
+#     no network. An integrator can stage the archives in the kit at composition time and
+#     have an atom pass `--archive`; that needs no engine change, `payload/` being a
+#     convention the atoms read, and it is the answer for a firewall that blocks the API.
 
 def plugin-dir []: nothing -> path {
     # ⭐ nushell's OWN data dir, and NOT a manager's bin directory. A previous attempt wrote
@@ -42,12 +54,14 @@ def plugin-dir []: nothing -> path {
 }
 
 export def install [name: string, release: string]: nothing -> nothing {
+    # `owner/repo` alone means `owner/repo@HEAD`: the comment above promised it, so the code
+    # keeps it. Two `@` is a typo, not a ref.
     let parts = ($release | split row '@')
-    if ($parts | length) != 2 {
-        error make { msg: $"plugin-release must be owner/repo@ref, got: ($release)" }
+    if ($parts | length) > 2 or ($parts.0 | split row '/' | length) != 2 {
+        error make { msg: $"plugin-release must be owner/repo[@ref], got: ($release)" }
     }
     let repo = $parts.0
-    let ref = $parts.1
+    let ref = if ($parts | length) == 2 { $parts.1 } else { 'HEAD' }
     let url = $"https://raw.githubusercontent.com/($repo)/($ref)/install.nu"
 
     let dir = (plugin-dir)
