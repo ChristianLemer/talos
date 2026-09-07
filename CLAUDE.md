@@ -32,8 +32,8 @@ Rules that stay:
 |---|---|
 | `beta` | **the living branch**, ~385 commits, linear (0 merges) |
 | `main` | the primordial empty commit — deliberately, work is on `beta` |
-| tags | 18 (`v0.0.1-beta.20` … `beta.37`), all on `beta`; beta.1–19 were retired on 2026-09-06 with their releases |
-| visibility | **private**, going public soon — the history was audited for that on 2026-09-06 |
+| tags | 19 (`v0.0.1-beta.20` … `beta.38`), all on `beta`; beta.1–19 were retired on 2026-09-06 with their releases |
+| visibility | **public** since 2026-09-06, after a history audit the same day |
 
 ⚠️ **The living branch was called `tauri` until 2026-08-09.** It was renamed because the name
 described the *framework* — and the framework had already been replaced once (Deno →

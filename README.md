@@ -118,7 +118,7 @@ sh admin/get-talos.sh "<kit folder>" --content path/to/your-talos-content
 It reads `.talos-version`, fetches those launchers, and copies your content beside
 them. Without `--content` it refreshes the launchers only and leaves the content in
 the kit untouched — for a team that edits its YAML in place on the share. It needs
-`gh` (the repo is private today; `gh auth login` once).
+nothing but `curl`.
 
 Built to live on a **shared OneDrive**, launched by many machines from the same
 copy — the exe is never copied per machine:

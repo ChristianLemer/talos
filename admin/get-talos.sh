@@ -29,13 +29,12 @@
 # refreshes it everywhere.
 #
 # Plain `sh`, not nushell, on purpose: this is the tool that installs the tool that
-# installs nushell. A bootstrap may lean only on what the OS ships — `sh`, `ditto`,
-# `xattr` — plus `gh`, the one thing you install by hand: the repo is private, so a
-# download needs an authenticated client (`brew install gh; gh auth login`, once).
+# installs nushell. A bootstrap may lean only on what the OS ships — `sh`, `curl`,
+# `ditto`, `xattr` — and nothing you install by hand. The repo is public, so a plain
+# `curl` reaches every asset.
 #
-# ⚠️ `gh release download` without a tag means "latest", and GitHub's "latest" skips
-# pre-releases. Every Talos release is a pre-release so far, so the newest tag is looked
-# up explicitly. Once a stable v0.1.0 exists this lookup still works.
+# ⚠️ The newest tag is read from the releases list, not from GitHub's "latest": that
+# link skips pre-releases, and every Talos release is a pre-release until v0.1.0.
 #
 # ⚠️ OneDrive and a running exe: Windows locks `Talos.exe` while it runs, so OneDrive
 # cannot replace it on a machine where Talos is open — it retries, and the new exe lands
@@ -69,7 +68,7 @@ if [ -n "$CONTENT" ]; then
         || { echo "$CONTENT has no catalog/ + bundles/" >&2; exit 2; }
 fi
 
-command -v gh >/dev/null || { echo "gh is required (brew install gh; gh auth login)" >&2; exit 1; }
+command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
 
 # The version: the flag, else the pin file beside the content (or in the cwd), else newest.
 if [ -z "$TAG" ]; then
@@ -77,7 +76,9 @@ if [ -z "$TAG" ]; then
     [ -f "$PIN" ] && TAG="$(tr -d '[:space:]' < "$PIN")"
 fi
 if [ -z "$TAG" ]; then
-    TAG="$(gh release list -R "$REPO" --limit 1 --json tagName -q '.[0].tagName')"
+    # The first `tag_name` in the API's list is the newest release, pre-release or not.
+    TAG="$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=1" \
+        | grep -m1 '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
     [ -n "$TAG" ] || { echo "no release found on $REPO" >&2; exit 1; }
 fi
 
@@ -87,8 +88,9 @@ if [ "$(cat "$DEST/VERSION" 2>/dev/null || true)" = "$TAG" ]; then
 else
     TMP="$(mktemp -d)"
     trap 'rm -rf "$TMP"' EXIT
-    gh release download "$TAG" -R "$REPO" --dir "$TMP" \
-        --pattern "$MAC_ASSET" --pattern "$WIN_ASSET"
+    for asset in "$MAC_ASSET" "$WIN_ASSET"; do
+        curl -fsSL -o "$TMP/$asset" "https://github.com/$REPO/releases/download/$TAG/$asset"
+    done
     # ditto keeps the .app's symlinks and permissions (plain unzip mangles them); the app
     # is unsigned, so drop the quarantine flag or Gatekeeper refuses it.
     ditto -x -k "$TMP/$MAC_ASSET" "$TMP"
