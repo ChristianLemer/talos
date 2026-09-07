@@ -2881,7 +2881,10 @@ mod tests {
         let out = doctor_candidates(&[blind, declared, plain]);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].name, "Agent");
-        assert_eq!(out[0].word, "agent", "the first word of detect is the binary");
+        assert_eq!(
+            out[0].word, "agent",
+            "the first word of detect is the binary"
+        );
         assert!(out[0].clean.is_none());
     }
 
