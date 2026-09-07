@@ -133,7 +133,7 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
   - name: Excel for Nushell
     description: Read and write .xlsx files from nushell
     nu-plugin: xlsx
-    plugin-release: ChristianLemer/nu_plugin_xlsx@v0.2.0
+    plugin-release: ChristianLemer/nu_plugin_xlsx@HEAD
     requires: [Nushell]
 ```
 
@@ -146,10 +146,14 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
   - **No `plugin-release:` = bundled with nushell** — the binary ships beside `nu`, so
     `plugin add nu_plugin_polars` resolves via `NU_PLUGIN_DIRS` (which contains the
     directory holding `nu`) and engages **no network at all**. ⚡ rung, measured.
-  - **`plugin-release:` present = fetched from the project's release** — downloads the
-    binary from `owner/repo`'s release assets (~9 MB for `xlsx`, aarch64-darwin or
-    x86_64-windows), renames, marks executable, and registers it. 🧩 rung, because it
-    fetches. The sidecar that does this is `catalog/nu-plugin-fetch.nu`.
+  - **`plugin-release: owner/repo@ref` = fetched from the project's release** — the
+    sidecar `catalog/nu-plugin-fetch.nu` fetches the project's own `install.nu` at that
+    git ref and runs it with `--dir` and `--register`. The installer picks the archive
+    built for the Nushell **minor** that runs it (a plugin loads into exactly one), on
+    this OS and arch, verifies the published `.sha256`, places and registers the binary.
+    🧩 rung, because it fetches. `ref` pins the installer, not the binary: `HEAD` follows
+    the project, a tag freezes the installer's behaviour. A plugin qualifies by shipping
+    that `install.nu` at its root; `nu_plugin_xlsx` is the reference.
 - **Presence is a STATUS, not a file.** A plugin binary compiled against a different
   nushell version is registered, its file exists on disk, and it does not work. Talos
   checks `plugin list | where name == <n> and status == loaded` — `added` is not enough.

@@ -1,17 +1,21 @@
 # Excel for Nushell — reads and writes .xlsx. ⭐ The ONE plugin here that nushell does not
-# ship, so its binary is fetched from the project's own release assets (~9 MB, aarch64-darwin
-# or x86_64-windows) — no Rust toolchain needed on a colleague's machine, which matters for a
-# data manager on Windows.
+# ship, so its binary comes from the project's own releases (~9 MB) — no Rust toolchain on a
+# colleague's machine, which matters for a data manager on Windows.
 #
-# ⚠️ THE VERSION COUPLING IS TIGHT AND RUNS BOTH WAYS. This binary is compiled against a
-# specific nu-plugin protocol version, and `catalog/nushell.yaml` pins Nushell. They agree
-# today BY HAND. Bump either side and `plugin add` fails — loudly, with a load error in the
-# row's terminal, which is the honest failure. There is no field expressing "requires Nushell
-# 0.113.x": `requires:` says PRESENT, not a version.
+# ⭐ THE VERSION COUPLING IS SOLVED WHERE IT LIVES. A plugin binary loads into exactly one
+# Nushell minor, and the project publishes one release per minor (`v0.2.1+nu-0.115.1`,
+# four platforms, a `.sha256` per asset). Its own `install.nu` picks the archive matching
+# the Nushell that runs it and verifies the checksum; `nu-plugin-fetch.nu` only fetches and
+# runs that installer. So the pin in `catalog/nushell.yaml` decides which plugin build lands,
+# with nothing to keep in step by hand — and a Nushell minor the project has not published
+# for fails LOUDLY in the row's terminal, which is the honest failure.
+#
+# `@HEAD` pins the INSTALLER (the project's default branch), not the binary. A tag here
+# would freeze the installer's behaviour, never the build it selects.
 name: Excel for Nushell
 description: Read and write .xlsx files from nushell
 nu-plugin: xlsx
-plugin-release: ChristianLemer/nu_plugin_xlsx@v0.2.0
+plugin-release: ChristianLemer/nu_plugin_xlsx@HEAD
 category: [terminal]
 requires:
   - Nushell
