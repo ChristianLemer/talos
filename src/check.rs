@@ -125,6 +125,44 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
                  — the runtime ignores it, which is not what you meant"
             ));
         }
+        // `doctor:` is a capability the engine acts on, so its two inputs are checked
+        // here rather than discovered at launch: a binary to resolve (the first word of
+        // `detect:`) and, if a clean env var is declared, a name that IS a variable name.
+        // And it is never a category — display must not carry behaviour.
+        if let Some(d) = cp.pkg.doctor.as_ref() {
+            let word = cp
+                .pkg
+                .detect
+                .as_deref()
+                .and_then(|s| s.split_whitespace().next());
+            if word.is_none() {
+                r.errors.push(format!(
+                    "{label}: `doctor:` without a `detect:` — the Doctor launches the first \
+                     word of detect, so there is nothing to launch"
+                ));
+            }
+            if let Some(var) = d.clean.as_ref().and_then(|c| c.env.as_deref()) {
+                let ok = !var.is_empty()
+                    && !var.starts_with(|c: char| c.is_ascii_digit())
+                    && var.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+                if !ok {
+                    r.errors.push(format!(
+                        "{label}: doctor clean.env \"{var}\" is not an environment variable name"
+                    ));
+                }
+            }
+        }
+        if cp
+            .pkg
+            .category
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case("doctor"))
+        {
+            r.errors.push(format!(
+                "{label}: `doctor` is a capability (the `doctor:` block), not a category — a \
+                 category never decides a behaviour"
+            ));
+        }
         requires.push((label, cp.pkg.requires.clone()));
     }
     for (label, reqs) in requires {
@@ -289,6 +327,46 @@ mod tests {
             "{text}"
         );
         assert!(!r.ok());
+    }
+
+    #[test]
+    fn a_doctor_declaration_needs_a_binary_and_a_real_variable() {
+        let d = tmp("doctor");
+        write(
+            &d,
+            "catalog/ok.yaml",
+            "name: Ok\nbrew: ok\ndetect: ok --version\ndoctor:\n  clean: { env: OK_HOME }\n",
+        );
+        write(
+            &d,
+            "catalog/blind.yaml",
+            "name: Blind\nbrew: blind\ndoctor: {}\n",
+        );
+        write(
+            &d,
+            "catalog/badvar.yaml",
+            "name: BadVar\nbrew: b\ndetect: b\ndoctor:\n  clean: { env: \"1 bad\" }\n",
+        );
+        write(
+            &d,
+            "catalog/cat.yaml",
+            "name: Cat\nbrew: c\ndetect: c\ncategory: [Doctor]\n",
+        );
+        let r = run(&d.join("catalog"), &d.join("bundles"));
+        let text = r.render();
+        assert!(
+            text.contains("catalog/blind.yaml: `doctor:` without a `detect:`"),
+            "{text}"
+        );
+        assert!(
+            text.contains("catalog/badvar.yaml: doctor clean.env \"1 bad\""),
+            "{text}"
+        );
+        assert!(
+            text.contains("catalog/cat.yaml: `doctor` is a capability"),
+            "{text}"
+        );
+        assert!(!text.contains("catalog/ok.yaml"), "{text}");
     }
 
     #[test]

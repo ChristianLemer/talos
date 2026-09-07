@@ -275,6 +275,14 @@ converges a file instead of installing software. The pattern (see `terminal/`):
 - **`marketplace:`** — for `claude-plugin`, the source registered (`claude plugin
   marketplace add`) before install. Omit when the plugin comes from an already-known
   marketplace. A local path with spaces is fine — it's quoted at the call site.
+- **`doctor:`** — this package may be launched from the **Doctor** tab as a rescue
+  session, by absolute path and no shell. A **capability**, never a category: the tab's
+  dropdown lists every present package declaring it, in catalogue order, then the OS
+  shell (the floor, always there). Optional `clean:` says how it starts WITHOUT its own
+  configuration — `{ env: CLAUDE_CONFIG_DIR }` (a fresh per-machine directory through that
+  variable) or `{ args: ["-n"] }` — and is what puts a *Launch clean* button beside
+  *Launch*. Declare it only on programs you have MEASURED to start that way. The binary is
+  the first word of `detect:`; `--check` refuses a `doctor:` without one.
 - **`category:`** — one or more tags, e.g. `category: [editors]`. The **first** one groups
   the package under a header in the Catalog view; the rest are shown as tags. Omitted →
   `misc`. ⚠️ It is a *display* axis only: a category never decides an install, an order, or

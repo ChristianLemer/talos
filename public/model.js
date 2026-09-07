@@ -832,3 +832,25 @@ export function applySavedActiveBundles(model, list) {
   if (!Array.isArray(list)) return;
   for (const name of list) if (model.profiles.has(name)) applyProfile(model, name);
 }
+
+// --- the Doctor's dropdown, as data ---------------------------------------------------
+// `agents` come from the engine: every catalogue package declaring `doctor:`, with its
+// presence NOW and whether a clean launch is declared. Present ones are offered in
+// catalogue order; the OS shell — the floor — is offered last and always, so the list is
+// never empty even on a machine where no agent ever got installed. `remembered` is the
+// last choice (ui prefs) and wins if that candidate is still present. Absent candidates
+// are listed apart: the Doctor names them and points at the Catalog, it never installs.
+export function doctorChoices(agents, shell, remembered) {
+  const list = Array.isArray(agents) ? agents : [];
+  const options = list
+    .filter((a) => a && a.present)
+    .map((a) => ({ value: a.name, label: a.name, clean: !!a.clean }));
+  if (shell) {
+    options.push({ value: "shell", label: `${shell} — OS shell, no profile`, clean: false });
+  }
+  const absent = list.filter((a) => a && !a.present).map((a) => a.name);
+  const selected = options.some((o) => o.value === remembered)
+    ? remembered
+    : (options[0]?.value ?? "");
+  return { options, absent, selected };
+}

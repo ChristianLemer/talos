@@ -342,6 +342,40 @@ pub fn exe_sibling_dir(exe: &std::path::Path) -> PathBuf {
     parent.to_path_buf()
 }
 
+/// The Doctor's FLOOR: the shell the OS ships, started without a profile, by absolute path.
+///
+/// It exists for the case where no declared rescue candidate is present — the agent never
+/// installed, its route broken, the network gone. A rescue that depends on an installation
+/// having succeeded is not a rescue; this one depends only on what the OS ships. No
+/// profile, so a broken rc file cannot stop it. None only if even that binary is missing.
+/// Windows: `-NoProfile`. macOS: `zsh -f`. Linux: `bash --noprofile --norc` (measured), then
+/// `/bin/sh`.
+pub fn rescue_shell(os: Os) -> Option<(PathBuf, Vec<String>)> {
+    let candidates: Vec<(PathBuf, &[&str])> = match os {
+        Os::Windows => {
+            let root = std::env::var_os("SystemRoot")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+            vec![(
+                root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe"),
+                &["-NoProfile"][..],
+            )]
+        }
+        Os::Darwin => vec![
+            (PathBuf::from("/bin/zsh"), &["-f"][..]),
+            (PathBuf::from("/bin/sh"), &[][..]),
+        ],
+        Os::Linux => vec![
+            (PathBuf::from("/bin/bash"), &["--noprofile", "--norc"][..]),
+            (PathBuf::from("/bin/sh"), &[][..]),
+        ],
+    };
+    candidates
+        .into_iter()
+        .find(|(p, _)| p.is_file())
+        .map(|(p, a)| (p, a.iter().map(|x| x.to_string()).collect()))
+}
+
 /// The folder next to the running exe — outside the `.app` on macOS. See `exe_sibling_dir`.
 pub fn exe_sibling() -> PathBuf {
     std::env::current_exe()
@@ -627,6 +661,18 @@ mod tests {
         let p = posix_probe(Os::Darwin, "/bin/sh", "node --version");
         assert_eq!(p.cmd, "/bin/sh");
         assert_eq!(p.args, vec!["-lc", "node --version"]);
+    }
+
+    /// The floor exists on the machine running the tests, and it is profile-free.
+    #[test]
+    fn the_rescue_shell_exists_and_skips_the_profile() {
+        let (bin, args) = rescue_shell(current_os()).expect("an OS shell");
+        assert!(bin.is_absolute(), "{}", bin.display());
+        assert!(bin.is_file(), "{}", bin.display());
+        // Every shell we know takes a "no profile" flag, and /bin/sh has none to skip.
+        let profile_free =
+            args.iter().any(|a| a.contains("no") || a == "-f") || bin.ends_with("sh");
+        assert!(profile_free, "{args:?}");
     }
 
     /// Beside the exe when the folder is there; the bare relative name otherwise — each of

@@ -22,3 +22,11 @@ requires:
 # and the per-row button still offers it. Replace this with `latest` or an exact version once
 # the decision is made; `grep -c 'version: "pending"' catalog/*.yaml` is then the work left.
 version: "pending"
+
+# The Doctor tab may launch this as the rescue session. `clean.env`: a fresh per-machine
+# directory handed through CLAUDE_CONFIG_DIR yields a session with no plugins, no hooks,
+# no memory, no inherited settings — and auth survives, because credentials come from the
+# keychain (MEASURED on macOS). Not `--bare`: measured, that skips plugin SYNC, keeps the
+# plugins loaded and drops the keychain — the opposite of a rescue.
+doctor:
+  clean: { env: CLAUDE_CONFIG_DIR }

@@ -200,6 +200,7 @@ function persistSelection() {
         advanced: document.body.classList.contains("advanced"),
         showAll: document.body.classList.contains("show-all"),
         theme: document.documentElement.dataset.theme || "",
+        doctor: doctorRemembered, // the Doctor's last choice (a package name, or "shell")
       },
     },
   }));
@@ -213,6 +214,8 @@ function applySavedSelection(sel) {
   applyAdvanced(!!sel?.ui?.advanced);
   applyShowAll(!!sel?.ui?.showAll);
   applyTheme(sel?.ui?.theme || "");
+  doctorRemembered = sel?.ui?.doctor || "";
+  doctorRenderAgents();
   repaintAll();
 }
 // Repaint EVERYTHING — used after a change that can move many rows at once (a
@@ -1949,6 +1952,48 @@ function setTab(v) {
 // input channel (the sudo password is merely its first caller). This wires the two.
 let doctorTerm = null;
 let doctorWs = null;
+// What the engine said the catalogue declares (`doctor-agents`), and the last choice.
+let doctorAgents = { agents: [], shell: "" };
+let doctorRemembered = "";
+
+// The dropdown, rendered from data the engine sent — never from a name in this file.
+// Absent candidates go to the note line with a pointer at the Catalog: the Doctor does
+// not install, the Catalog row does, with every guarantee Apply gives.
+function doctorRenderAgents() {
+  const sel = document.getElementById("doctor-agent");
+  if (!sel) return;
+  const { options, absent, selected } = M.doctorChoices(
+    doctorAgents.agents,
+    doctorAgents.shell,
+    doctorRemembered
+  );
+  sel.replaceChildren(
+    ...options.map((o) => {
+      const el = document.createElement("option");
+      el.value = o.value;
+      el.textContent = o.label;
+      el.dataset.clean = o.clean ? "1" : "";
+      return el;
+    })
+  );
+  sel.value = selected;
+  doctorRefreshButtons();
+  const note = document.getElementById("doctor-note");
+  note.textContent = absent.length
+    ? `Not on this machine: ${absent.join(", ")} — install from the Catalog.`
+    : "Absolute path, no shell — a broken profile cannot stop it.";
+}
+// "Launch clean" exists only for a candidate that declared HOW it launches clean.
+function doctorRefreshButtons() {
+  const sel = document.getElementById("doctor-agent");
+  const opt = sel.selectedOptions[0];
+  document.getElementById("doctor-launch-clean").hidden = !(opt && opt.dataset.clean);
+}
+document.getElementById("doctor-agent").onchange = () => {
+  doctorRemembered = document.getElementById("doctor-agent").value;
+  doctorRefreshButtons();
+  persistSelection();
+};
 
 // Size the frame to whatever is left of the window, then report how many cols/rows fit
 // inside it — measured with the SAME font xterm renders in. No fit addon is vendored, and
@@ -2026,23 +2071,25 @@ function doctorOpen() {
       return;
     }
     if (m.type === "doctor-out") doctorTerm.write(m.d);
+    if (m.type === "doctor-agents") {
+      doctorAgents = { agents: m.agents || [], shell: m.shell || "" };
+      doctorRenderAgents();
+    }
   };
   doctorWs.onclose = () => doctorTerm.write("\r\n[doctor: socket closed]\r\n");
 }
-// ⭐ Neither a path nor an argv travels on the wire: the front asks for "the rescue
-// Claude", optionally "clean", and the engine decides what those mean (server: `on_path`,
-// and the rescue config dir). An intent the front can NAME is not the same hole as a
-// command line it can compose.
-//
-// `clean` is a CONFIG DIR, not `--bare`. Measured: `--bare` skips plugin *sync* while
-// still loading installed plugins, and stops reading the keychain — it removes the auth
-// and keeps the plugins. A fresh CLAUDE_CONFIG_DIR is what actually carries none of them.
+// ⭐ Neither a path nor an argv travels on the wire: the front names a PACKAGE from the
+// dropdown (or "shell" for the floor), optionally "clean", and the engine resolves both
+// against the catalogue's `doctor:` blocks. An intent the front can NAME is not the same
+// hole as a command line it can compose. What "clean" means for an agent (a fresh config
+// dir through an env var, or arguments) is declared in its catalogue entry, not here.
 function doctorLaunch(clean) {
   doctorOpen();
   const { cols, rows } = doctorFit();
   doctorTerm.resize(cols, rows);
+  const agent = document.getElementById("doctor-agent").value || "shell";
   const send = () =>
-    doctorWs.send(JSON.stringify({ type: "doctor-start", cols, rows, clean }));
+    doctorWs.send(JSON.stringify({ type: "doctor-start", cols, rows, clean, agent }));
   // The socket may still be connecting on the very first click.
   if (doctorWs.readyState === 1) send();
   else doctorWs.addEventListener("open", send, { once: true });

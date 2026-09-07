@@ -573,6 +573,7 @@ mod tests {
 
     fn step() -> Step {
         Step {
+            doctor: None,
             id: "n".into(),
             bundle: "t".into(),
             name: "n".into(),

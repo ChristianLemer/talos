@@ -8,3 +8,7 @@ version: "0.113.1"
 category: [foundation]
 # Asks for an authorisation on Windows via winget. Promoted from behaviour/ (fleet, 2026-08-06).
 uac: true
+# A shell is a legitimate rescue too: when the agent is what is broken, this is what is
+# left. `nu -n` loads no config files (MEASURED: it is how every sidecar check here runs).
+doctor:
+  clean: { args: ["-n"] }

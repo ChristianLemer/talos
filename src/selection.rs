@@ -26,6 +26,10 @@ pub struct UiPrefs {
     /// the front-end owns the set of valid names (see index.html [data-theme]).
     #[serde(default)]
     pub theme: String,
+    /// The Doctor's last choice — a package name, or "shell". Restored into the dropdown
+    /// if that candidate is still present; otherwise the first present one wins.
+    #[serde(default)]
+    pub doctor: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -486,12 +486,13 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         .route(
             "/doctor",
             get({
-                // The rescue config dir lives in the per-machine LOCAL data dir, never
-                // beside a shared exe — the same rule selection and consent follow.
-                let rescue = state.data_dir.join("rescue-claude");
+                // The handler reads the plan (which packages declare `doctor:`) and the
+                // data dir (where a clean config dir is created — per machine, never
+                // beside a shared exe, the same rule selection and consent follow).
+                let state = state.clone();
                 move |ws: WebSocketUpgrade| {
-                    let rescue = rescue.clone();
-                    async move { ws.on_upgrade(move |s| handle_doctor_socket(s, rescue)) }
+                    let state = state.clone();
+                    async move { ws.on_upgrade(move |s| handle_doctor_socket(s, state)) }
                 }
             }),
         )
@@ -584,6 +585,44 @@ fn on_path(name: &str) -> Option<std::path::PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// One line to the Doctor's terminal — the refusals and the "nothing to launch" cases.
+async fn doctor_line(socket: &mut WebSocket, text: &str) {
+    let _ = socket
+        .send(Message::Text(
+            json!({ "type": "doctor-out", "d": format!("\r\n{text}\r\n") }).to_string(),
+        ))
+        .await;
+}
+
+/// A rescue candidate as the Doctor sees it: a catalogue package with a `doctor:` block.
+/// `word` is the binary to resolve on PATH — the first word of `detect:` — resolved at
+/// launch, not stored, so presence is what the machine answers now.
+struct DoctorCandidate {
+    name: String,
+    id: String,
+    word: String,
+    clean: Option<crate::bundles::CleanLaunch>,
+}
+
+/// The packages that declare `doctor:` AND say how to detect themselves, in catalogue
+/// order. A `doctor:` without a `detect:` has no binary to launch and is not a candidate
+/// (`--check` refuses it before it gets here). PURE over the steps → tested without PATH.
+fn doctor_candidates(steps: &[crate::bundles::Step]) -> Vec<DoctorCandidate> {
+    steps
+        .iter()
+        .filter_map(|s| {
+            let decl = s.doctor.as_ref()?;
+            let word = s.detect.as_deref()?.split_whitespace().next()?;
+            Some(DoctorCandidate {
+                name: s.name.clone(),
+                id: s.id.clone(),
+                word: word.to_string(),
+                clean: decl.clean.clone(),
+            })
+        })
+        .collect()
+}
+
 /// The Doctor terminal — an interactive rescue session, on a socket of its OWN.
 ///
 /// ⭐ WHY IT EXISTS. Field incident: a broken Claude configuration locked the operator out
@@ -603,9 +642,17 @@ fn on_path(name: &str) -> Option<std::path::PathBuf> {
 /// part of the steps' machinery. A non-step does not share it. The rescue therefore
 /// cannot be starved by an Apply, and — the half that matters more — cannot disturb one.
 ///
-/// No `plan`, no scan, no sudo here. `rescue_dir` is the only thing it is handed: the
-/// per-machine directory a CLEAN session uses as its whole notion of "my config".
-async fn handle_doctor_socket(mut socket: WebSocket, rescue_dir: std::path::PathBuf) {
+/// No scan, no sudo here. It reads the plan for ONE thing — which packages declare
+/// `doctor:` — and the data dir for one thing: where a CLEAN session's config lives.
+///
+/// ⭐ THE CANDIDATES COME FROM THE CATALOGUE, NOT FROM THE CODE. `on_path("claude")` used
+/// to be a coded choice, marked as a residue: Claude is a catalogue package, not an engine
+/// dependency, and the hermeticity rule says the rescue command must be DECLARED. Now a
+/// package with a `doctor:` block is a candidate, its binary is the first word of its
+/// `detect:`, and presence is re-resolved on PATH at every launch — detect, don't remember.
+/// Below every candidate sits the FLOOR: the OS shell without a profile
+/// (`platform::rescue_shell`), for the machine where the agent never got installed.
+async fn handle_doctor_socket(mut socket: WebSocket, state: Arc<AppState>) {
     // The child's stdout → this task. A tokio channel so the `select!` below can await it
     // WHILE staying responsive to keystrokes; the pty's reader thread is the sender.
     let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
@@ -628,6 +675,30 @@ async fn handle_doctor_socket(mut socket: WebSocket, rescue_dir: std::path::Path
     // carry the tail to the next chunk, or an accented glyph arrives mangled — the wart
     // the polling version could not avoid.
     let mut pending: Vec<u8> = Vec::new();
+    // What the dropdown offers: every declared candidate with its presence NOW, and the
+    // floor. Sent once per socket; presence is resolved again at launch, so a package
+    // installed while the tab was open still launches.
+    let candidates = {
+        let plan = state.plan.read().await;
+        doctor_candidates(&plan.steps)
+    };
+    let shell_name = crate::platform::rescue_shell(state.os)
+        .and_then(|(p, _)| p.file_name().map(|n| n.to_string_lossy().to_string()));
+    let agents: Vec<serde_json::Value> = candidates
+        .iter()
+        .map(|c| {
+            json!({
+                "name": c.name,
+                "present": on_path(&c.word).is_some(),
+                "clean": c.clean.is_some(),
+            })
+        })
+        .collect();
+    let _ = socket
+        .send(Message::Text(
+            json!({ "type": "doctor-agents", "agents": agents, "shell": shell_name }).to_string(),
+        ))
+        .await;
     loop {
         tokio::select! {
             Some(bytes) = out_rx.recv() => {
@@ -655,11 +726,9 @@ async fn handle_doctor_socket(mut socket: WebSocket, rescue_dir: std::path::Path
                     // closes the arbitrary-exec hole the first spike had, and it is also the
                     // honest split: the panel is a view, not a launcher.
                     //
-                    // ⬜ RESIDUE, deliberate: `on_path("claude")` is a CODED choice, and the
-                    // hermeticity rule says the rescue command must be DECLARED — Claude is a
-                    // catalogue package, not an engine dependency. Reading it from the
-                    // catalogue is the next step; hardcoding the NAME (not a path) is the
-                    // smallest stand-in that still bypasses the shell.
+                    // The front names a PACKAGE (or "shell" for the floor), never a path or an
+                    // argv; the engine resolves it against the catalogue's `doctor:` blocks
+                    // and refuses any other name. Same closed hole, no coded `claude`.
                     Some("doctor-start") => {
                         // Geometry measured by the front. The pty must open at the size the
                         // operator is LOOKING at, or the child wraps at a width nobody sees.
@@ -673,52 +742,64 @@ async fn handle_doctor_socket(mut socket: WebSocket, rescue_dir: std::path::Path
                             .and_then(|v| v.as_u64())
                             .unwrap_or(24)
                             .clamp(5, 200) as u16;
-                        let Some(bin) = on_path("claude") else {
-                            let _ = socket
-                                .send(Message::Text(
-                                    json!({
-                                        "type": "doctor-out",
-                                        "d": "\r\n[doctor] `claude` is not on PATH — nothing to rescue with.\r\n",
-                                    })
-                                    .to_string(),
-                                ))
-                                .await;
-                            continue;
-                        };
-                        // ⭐ WHY AN ENV VAR AND NOT `--bare`. MEASURED: `--bare` skips
-                        // "plugin SYNC", not plugin loading — installed plugins still load,
-                        // and skills still resolve via /skill-name. It also reduces auth to
-                        // "strictly ANTHROPIC_API_KEY or apiKeyHelper", never reading the
-                        // keychain. So it removes the authentication and keeps the plugins:
-                        // the exact opposite of a rescue.
-                        //
-                        // A clean `CLAUDE_CONFIG_DIR` does what the flag only sounded like.
-                        // Plugins live in that directory, and so do hooks (settings.json),
-                        // memory and per-project trust — so pointing it at a fresh path
-                        // yields a session carrying NONE of them. And auth survives:
-                        // measured on macOS, `CLAUDE_CONFIG_DIR=<fresh> claude -p` answers,
-                        // because credentials come from the keychain, not that directory.
-                        //
-                        // A boolean on the wire, never a path: the front names an intent and
-                        // the engine decides where "clean" is.
+                        let wanted = parsed
+                            .get("agent")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("shell");
                         let clean = parsed
                             .get("clean")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
                         let mut env: Vec<(String, String)> = Vec::new();
-                        if clean {
-                            // Created here, not lazily by the child: a directory the child
-                            // has to invent is a directory whose failure the operator would
-                            // read as "Claude is broken too".
-                            if let Err(e) = std::fs::create_dir_all(&rescue_dir) {
-                                println!("[doctor] rescue dir unusable: {e}");
+                        let mut args: Vec<String> = Vec::new();
+                        let mut banner = String::new();
+                        let program: String = if wanted == "shell" {
+                            let Some((bin, a)) = crate::platform::rescue_shell(state.os) else {
+                                doctor_line(&mut socket, "[doctor] no OS shell found — nothing to rescue with.").await;
+                                continue;
+                            };
+                            args = a;
+                            bin.to_string_lossy().to_string()
+                        } else {
+                            let Some(c) = candidates.iter().find(|c| c.name == wanted) else {
+                                doctor_line(&mut socket, &format!("[doctor] `{wanted}` is not declared as a rescue (`doctor:`) in the catalogue.")).await;
+                                continue;
+                            };
+                            let Some(bin) = on_path(&c.word) else {
+                                doctor_line(&mut socket, &format!("[doctor] `{wanted}` is not on PATH — install it from the Catalog first.")).await;
+                                continue;
+                            };
+                            if clean {
+                                let Some(cl) = c.clean.as_ref() else {
+                                    doctor_line(&mut socket, &format!("[doctor] `{wanted}` declares no clean launch.")).await;
+                                    continue;
+                                };
+                                // ⭐ WHY A FRESH CONFIG DIR AND NOT A FLAG, for the agents that
+                                // have one. MEASURED on Claude: `--bare` skips plugin SYNC, not
+                                // plugin loading, and stops reading the keychain — it removes
+                                // the authentication and keeps the plugins, the exact opposite
+                                // of a rescue. A clean `CLAUDE_CONFIG_DIR` carries no plugins,
+                                // hooks, memory or trust, and auth survives because it comes
+                                // from the keychain. That knowledge now lives in the catalogue
+                                // entry's `clean.env`; the engine only creates the directory —
+                                // here, not lazily by the child: a directory the child has to
+                                // invent is a directory whose failure the operator would read
+                                // as "the agent is broken too".
+                                if let Some(var) = cl.env.as_deref() {
+                                    let rescue_dir = state.data_dir.join(format!("rescue-{}", c.id));
+                                    if let Err(e) = std::fs::create_dir_all(&rescue_dir) {
+                                        println!("[doctor] rescue dir unusable: {e}");
+                                    }
+                                    banner.push_str(&format!(
+                                        "[doctor] clean config: {var}={}  (no plugins, no hooks, no inherited settings)\r\n",
+                                        rescue_dir.display()
+                                    ));
+                                    env.push((var.to_string(), rescue_dir.to_string_lossy().to_string()));
+                                }
+                                args.extend(cl.args.iter().cloned());
                             }
-                            env.push((
-                                "CLAUDE_CONFIG_DIR".to_string(),
-                                rescue_dir.to_string_lossy().to_string(),
-                            ));
-                        }
-                        let program = bin.to_string_lossy().to_string();
+                            bin.to_string_lossy().to_string()
+                        };
                         let (in_tx, in_rx) = std::sync::mpsc::channel::<Vec<u8>>();
                         // A second Launch replaces the first: kill before spawning, or two
                         // children share one terminal and the keystrokes go to whichever
@@ -746,15 +827,8 @@ async fn handle_doctor_socket(mut socket: WebSocket, rescue_dir: std::path::Path
                                 json!({
                                     "type": "doctor-out",
                                     "d": format!(
-                                        "[doctor] {program}  ({cols}x{rows}, no shell)\r\n{}",
-                                        if clean {
-                                            format!(
-                                                "[doctor] clean config: {}  (no plugins, no hooks, no inherited settings)\r\n",
-                                                rescue_dir.display()
-                                            )
-                                        } else {
-                                            String::new()
-                                        }
+                                        "[doctor] {program} {}  ({cols}x{rows}, no shell)\r\n{banner}",
+                                        args.join(" ")
                                     ),
                                 })
                                 .to_string(),
@@ -765,9 +839,10 @@ async fn handle_doctor_socket(mut socket: WebSocket, rescue_dir: std::path::Path
                         // register with.
                         let killer_slot = killer.clone();
                         std::thread::spawn(move || {
+                            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
                             let code = crate::pty::run(
                                 &program,
-                                &[],
+                                &arg_refs,
                                 Some(in_rx),
                                 Some(crate::pty::Geometry {
                                     cols,
@@ -2790,8 +2865,29 @@ mod tests {
 
     /// A minimal Step for the forced-cask tests: only `system_id`/`pin`/`upgrade`
     /// matter here, the rest are inert defaults.
+    /// A candidate needs BOTH a `doctor:` block and a `detect:` to take a binary from;
+    /// one without the other is not launchable and is left out, in catalogue order.
+    #[test]
+    fn doctor_candidates_need_a_doctor_block_and_a_detect() {
+        let mut declared = brew_step("a", None);
+        declared.name = "Agent".into();
+        declared.detect = Some("agent --version".into());
+        declared.doctor = Some(Default::default());
+        let mut blind = brew_step("b", None);
+        blind.doctor = Some(Default::default());
+        blind.detect = None;
+        let mut plain = brew_step("c", None);
+        plain.detect = Some("cc".into());
+        let out = doctor_candidates(&[blind, declared, plain]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "Agent");
+        assert_eq!(out[0].word, "agent", "the first word of detect is the binary");
+        assert!(out[0].clean.is_none());
+    }
+
     fn brew_step(system_id: &str, pin: Option<&str>) -> Step {
         Step {
+            doctor: None,
             id: system_id.into(),
             bundle: String::new(),
             name: system_id.into(),

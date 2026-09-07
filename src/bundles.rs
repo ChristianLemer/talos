@@ -38,6 +38,33 @@ impl Posture {
     }
 }
 
+/// `doctor:` — this package can be launched as the rescue session of the Doctor tab.
+///
+/// ⭐ A CAPABILITY, not a category. `category:` is a display axis and never decides a
+/// behaviour; this block is read by the engine and never shown as a group. A package is
+/// an agent by category and a rescue by this block, independently — a shell qualifies
+/// too, an agent nobody measured does not. Present = candidate. `clean` = how to start it
+/// WITHOUT its own configuration, when that is known; absent, only the plain launch is
+/// offered. The binary is the first word of `detect:`, so a `doctor:` without a `detect:`
+/// is refused by `--check`.
+#[derive(Debug, Deserialize, serde::Serialize, Default, Clone, PartialEq)]
+pub struct DoctorDecl {
+    #[serde(default)]
+    pub clean: Option<CleanLaunch>,
+}
+
+/// How a program starts without its configuration. Two forms, because that is how many
+/// there are: a fresh directory handed through an environment variable (Claude Code's
+/// `CLAUDE_CONFIG_DIR`, measured), or arguments that skip the config (`nu -n`, measured;
+/// `zsh -f`, `powershell -NoProfile`). Both may be given; the engine applies both.
+#[derive(Debug, Deserialize, serde::Serialize, Default, Clone, PartialEq)]
+pub struct CleanLaunch {
+    #[serde(default)]
+    pub env: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct RawPkg {
     pub name: String,
@@ -114,6 +141,9 @@ pub struct RawPkg {
     /// would invite it to drift from what the machine actually observes.
     #[serde(default)]
     pub slow: Option<bool>,
+    /// See `DoctorDecl`.
+    #[serde(default)]
+    pub doctor: Option<DoctorDecl>,
 }
 
 impl RawPkg {
@@ -220,6 +250,8 @@ pub fn resolve_facts(
 
 #[derive(Debug, Clone)]
 pub struct Step {
+    /// Rescue capability, carried verbatim from the catalogue (see `DoctorDecl`).
+    pub doctor: Option<DoctorDecl>,
     /// The catalogue id (the yaml file's stem, unless the file declares an explicit
     /// `id:`) — what names this package's behaviour file, so `behaviour/<id>.yaml` sits
     /// beside `catalog/<id>.yaml`. Distinct from `name`, which is the human label shown
@@ -688,6 +720,7 @@ pub fn load_from_catalog(
         }
         steps.push(Step {
             id: cp.id.clone(),
+            doctor: p.doctor.clone(),
             bundle: String::new(), // bundles don't own packages anymore
             name: p.name.clone(),
             description: p.description.clone().unwrap_or_default(),

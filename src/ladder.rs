@@ -281,6 +281,7 @@ mod tests {
     /// matter here, the rest are inert defaults.
     fn step(id: &str, route: Option<&str>, ov: Overrides) -> Step {
         Step {
+            doctor: None,
             id: id.into(),
             bundle: String::new(),
             name: id.into(),
