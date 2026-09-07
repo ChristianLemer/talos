@@ -669,9 +669,14 @@ mod tests {
         let (bin, args) = rescue_shell(current_os()).expect("an OS shell");
         assert!(bin.is_absolute(), "{}", bin.display());
         assert!(bin.is_file(), "{}", bin.display());
-        // Every shell we know takes a "no profile" flag, and /bin/sh has none to skip.
-        let profile_free =
-            args.iter().any(|a| a.contains("no") || a == "-f") || bin.ends_with("sh");
+        // Every shell we know takes a "no profile" flag — `-NoProfile`, `--noprofile`,
+        // `-f` — and /bin/sh has none to skip. Case-insensitive: the Windows CI job is the
+        // one place this meets PowerShell's capitalised flag, and it caught a
+        // lowercase-only check on 2026-09-08.
+        let profile_free = args
+            .iter()
+            .any(|a| a.to_ascii_lowercase().contains("no") || a == "-f")
+            || bin.ends_with("sh");
         assert!(profile_free, "{args:?}");
     }
 
