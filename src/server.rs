@@ -541,6 +541,8 @@ fn mime_for(path: &str) -> &'static str {
         Some("css") => "text/css; charset=utf-8",
         Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
+        Some("woff2") => "font/woff2",
+        Some("txt") => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
     }
 }
@@ -653,28 +655,40 @@ fn doctor_candidates(steps: &[crate::bundles::Step]) -> Vec<DoctorCandidate> {
 /// Below every candidate sits the FLOOR: the OS shell without a profile
 /// (`platform::rescue_shell`), for the machine where the agent never got installed.
 async fn handle_doctor_socket(mut socket: WebSocket, state: Arc<AppState>) {
-    // The child's stdout → this task. A tokio channel so the `select!` below can await it
-    // WHILE staying responsive to keystrokes; the pty's reader thread is the sender.
-    let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-    // The child's stdin. `std::sync` because `pty::run` drains it from a blocking thread.
-    let mut child_in: Option<std::sync::mpsc::Sender<Vec<u8>>> = None;
-    // The child's pty geometry, same reason. Kept beside stdin because it has the same
-    // lifetime: both are the live child, and both go stale the moment it exits.
-    let mut child_resize: Option<std::sync::mpsc::Sender<(u16, u16)>> = None;
-    // ⭐ The killer, kept rather than dropped. `pty::run` blocks, so it can only hand this
-    // out DURING the call — exactly as a row's step does. Without it, closing the Doctor
-    // tab left `claude` running forever with nothing reading it, and a second Launch
-    // stacked another one on top. A rescue you cannot stop is a trap of its own.
-    //
-    // A plain `Mutex`, not tokio's: the lock is held for one `kill()` syscall and never
-    // across an await, so an async mutex would buy nothing.
     type Killer = Box<dyn portable_pty::ChildKiller + Send + Sync>;
-    let killer: std::sync::Arc<std::sync::Mutex<Option<Killer>>> =
-        std::sync::Arc::new(std::sync::Mutex::new(None));
-    // ⚠️ A pty read can split a multi-byte sequence. Emit only the valid UTF-8 prefix and
-    // carry the tail to the next chunk, or an accented glyph arrives mangled — the wart
-    // the polling version could not avoid.
-    let mut pending: Vec<u8> = Vec::new();
+    /// One live child. Everything here has the child's lifetime: stdin, the pty geometry,
+    /// the killer, and the UTF-8 tail a pty read may split (emit only the valid prefix and
+    /// carry the rest to the next chunk, or an accented glyph arrives mangled).
+    struct Session {
+        input: std::sync::mpsc::Sender<Vec<u8>>,
+        resize: std::sync::mpsc::Sender<(u16, u16)>,
+        // ⭐ The killer, kept rather than dropped. `pty::run` blocks, so it can only hand
+        // this out DURING the call. Without it, closing a tab left the child running with
+        // nothing reading it. A rescue you cannot stop is a trap of its own. A plain
+        // `Mutex`: held for one `kill()` syscall, never across an await.
+        killer: std::sync::Arc<std::sync::Mutex<Option<Killer>>>,
+        pending: Vec<u8>,
+    }
+    /// What a child's reader thread reports back, tagged with its session.
+    enum Event {
+        Out(Vec<u8>),
+        Exit(i32),
+    }
+    // ⭐ SESSIONS, plural, on ONE socket. The front opens a tab per Launch — two agents side
+    // by side, a clean one next to a normal one, a shell beside the agent that works — and
+    // each is a session with its own child, addressed by the `id` the front minted. One
+    // socket because the isolation that matters is from Apply's socket, not between
+    // rescues; one channel for every child's output because `select!` wants one thing
+    // to await, and the tag says which tab.
+    let mut sessions: std::collections::HashMap<u64, Session> = std::collections::HashMap::new();
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, Event)>();
+    let kill = |sess: &Session| {
+        if let Ok(mut slot) = sess.killer.lock() {
+            if let Some(mut k) = slot.take() {
+                let _ = k.kill();
+            }
+        }
+    };
     // What the dropdown offers: every declared candidate with its presence NOW, and the
     // floor. Sent once per socket; presence is resolved again at launch, so a package
     // installed while the tab was open still launches.
@@ -701,37 +715,48 @@ async fn handle_doctor_socket(mut socket: WebSocket, state: Arc<AppState>) {
         .await;
     loop {
         tokio::select! {
-            Some(bytes) = out_rx.recv() => {
-                pending.extend_from_slice(&bytes);
-                let good = match std::str::from_utf8(&pending) {
-                    Ok(_) => pending.len(),
-                    Err(e) => e.valid_up_to(),
-                };
-                if good > 0 {
-                    let text = String::from_utf8_lossy(&pending[..good]).to_string();
-                    pending.drain(..good);
-                    let _ = socket
-                        .send(Message::Text(
-                            json!({ "type": "doctor-out", "d": text }).to_string(),
-                        ))
-                        .await;
+            Some((id, ev)) = out_rx.recv() => {
+                match ev {
+                    Event::Out(bytes) => {
+                        let Some(sess) = sessions.get_mut(&id) else { continue };
+                        sess.pending.extend_from_slice(&bytes);
+                        let good = match std::str::from_utf8(&sess.pending) {
+                            Ok(_) => sess.pending.len(),
+                            Err(e) => e.valid_up_to(),
+                        };
+                        if good > 0 {
+                            let text = String::from_utf8_lossy(&sess.pending[..good]).to_string();
+                            sess.pending.drain(..good);
+                            let _ = socket
+                                .send(Message::Text(
+                                    json!({ "type": "doctor-out", "id": id, "d": text }).to_string(),
+                                ))
+                                .await;
+                        }
+                    }
+                    Event::Exit(code) => {
+                        // The child is gone: the tab stays readable, the session does not.
+                        sessions.remove(&id);
+                        let _ = socket
+                            .send(Message::Text(
+                                json!({ "type": "doctor-exit", "id": id, "code": code }).to_string(),
+                            ))
+                            .await;
+                    }
                 }
             }
             msg = socket.recv() => {
                 let Some(Ok(Message::Text(txt))) = msg else { break };
                 let parsed: serde_json::Value = serde_json::from_str(&txt).unwrap_or_default();
+                let id = parsed.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
                 match parsed.get("type").and_then(|t| t.as_str()) {
-                    // ⭐ The BINARY IS RESOLVED HERE, never taken from the wire — the front
-                    // asks for "the rescue Claude" and the engine decides what that is. That
-                    // closes the arbitrary-exec hole the first spike had, and it is also the
-                    // honest split: the panel is a view, not a launcher.
-                    //
-                    // The front names a PACKAGE (or "shell" for the floor), never a path or an
-                    // argv; the engine resolves it against the catalogue's `doctor:` blocks
-                    // and refuses any other name. Same closed hole, no coded `claude`.
+                    // ⭐ The BINARY IS RESOLVED HERE, never taken from the wire. The front
+                    // names a PACKAGE (or "shell" for the floor), never a path or an argv;
+                    // the engine resolves it against the catalogue's `doctor:` blocks and
+                    // refuses any other name. That closes the arbitrary-exec hole the first
+                    // spike had, and it is the honest split: the panel is a view, not a
+                    // launcher.
                     Some("doctor-start") => {
-                        // Geometry measured by the front. The pty must open at the size the
-                        // operator is LOOKING at, or the child wraps at a width nobody sees.
                         let cols = parsed
                             .get("cols")
                             .and_then(|v| v.as_u64())
@@ -800,24 +825,27 @@ async fn handle_doctor_socket(mut socket: WebSocket, state: Arc<AppState>) {
                             }
                             bin.to_string_lossy().to_string()
                         };
-                        let (in_tx, in_rx) = std::sync::mpsc::channel::<Vec<u8>>();
-                        // A second Launch replaces the first: kill before spawning, or two
-                        // children share one terminal and the keystrokes go to whichever
-                        // drained the channel first.
-                        if let Ok(mut slot) = killer.lock() {
-                            if let Some(mut k) = slot.take() {
-                                let _ = k.kill();
-                            }
+                        // A Launch on an id that is still alive replaces it: kill first, or
+                        // two children share one terminal.
+                        if let Some(old) = sessions.remove(&id) {
+                            kill(&old);
                         }
-                        child_in = Some(in_tx);
+                        let (in_tx, in_rx) = std::sync::mpsc::channel::<Vec<u8>>();
                         // The resize channel: the front measures its box, we forward the
                         // geometry to the master. Without it the child keeps wrapping at
                         // whatever width it started with, however wide the window becomes.
                         let (rz_tx, rz_rx) = std::sync::mpsc::channel::<(u16, u16)>();
-                        child_resize = Some(rz_tx);
+                        let killer: std::sync::Arc<std::sync::Mutex<Option<Killer>>> =
+                            std::sync::Arc::new(std::sync::Mutex::new(None));
+                        sessions.insert(id, Session {
+                            input: in_tx,
+                            resize: rz_tx,
+                            killer: killer.clone(),
+                            pending: Vec::new(),
+                        });
                         let sink = out_tx.clone();
                         println!(
-                            "[doctor] child spawned: {program} at {cols}x{rows} clean={clean}"
+                            "[doctor] session {id}: {program} at {cols}x{rows} clean={clean}"
                         );
                         // The banner is the trace: the operator must be able to SEE which
                         // binary answered, or a rescue that silently ran the wrong one is
@@ -826,6 +854,7 @@ async fn handle_doctor_socket(mut socket: WebSocket, state: Arc<AppState>) {
                             .send(Message::Text(
                                 json!({
                                     "type": "doctor-out",
+                                    "id": id,
                                     "d": format!(
                                         "[doctor] {program} {}  ({cols}x{rows}, no shell)\r\n{banner}",
                                         args.join(" ")
@@ -834,10 +863,6 @@ async fn handle_doctor_socket(mut socket: WebSocket, state: Arc<AppState>) {
                                 .to_string(),
                             ))
                             .await;
-                        // Cloned OUT of the loop's binding: the loop keeps its handle to
-                        // kill on close and on the next Launch, the thread gets its own to
-                        // register with.
-                        let killer_slot = killer.clone();
                         std::thread::spawn(move || {
                             let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
                             let code = crate::pty::run(
@@ -851,44 +876,53 @@ async fn handle_doctor_socket(mut socket: WebSocket, state: Arc<AppState>) {
                                 }),
                                 &env,
                                 move |k| {
-                                    if let Ok(mut guard) = killer_slot.lock() {
+                                    if let Ok(mut guard) = killer.lock() {
                                         *guard = Some(k);
                                     }
                                 },
                                 |bytes| {
-                                    let _ = sink.send(bytes.to_vec());
+                                    let _ = sink.send((id, Event::Out(bytes.to_vec())));
                                 },
                             )
                             .unwrap_or(-1);
-                            let _ = sink.send(format!("\r\n[doctor: exit {code}]\r\n").into_bytes());
+                            let _ = sink.send((id, Event::Out(
+                                format!("\r\n[doctor: exit {code}]\r\n").into_bytes(),
+                            )));
+                            let _ = sink.send((id, Event::Exit(code)));
                         });
                     }
-                    // A keystroke from xterm's `onData`, straight into the child's stdin.
+                    // A keystroke from xterm's `onData`, straight into that child's stdin.
                     // ⭐ `pty::run` builds `CommandBuilder::new(program)` and NEVER a shell
                     // line — only `platform::shell_probe` / `pty_shell` do, upstream. An
                     // absolute path here escapes a broken rc file without becoming a third
                     // place that wraps a shell, so single-shell-wrapping is untouched.
                     Some("doctor-input") => {
-                        if let (Some(d), Some(tx)) = (
+                        if let (Some(d), Some(sess)) = (
                             parsed.get("d").and_then(|v| v.as_str()),
-                            child_in.as_ref(),
+                            sessions.get(&id),
                         ) {
-                            let _ = tx.send(d.as_bytes().to_vec());
+                            let _ = sess.input.send(d.as_bytes().to_vec());
                         }
                     }
-                    // The window changed size. Forwarding this is what makes the geometry
-                    // FOLLOW rather than freeze: a front that refits its own view while the
-                    // pty keeps the old width just moves the mismatch out of sight.
+                    // The window changed size, or another tab came to the front. Forwarding
+                    // this is what makes the geometry FOLLOW rather than freeze.
                     Some("doctor-resize") => {
-                        if let (Some(c), Some(r), Some(tx)) = (
+                        if let (Some(c), Some(r), Some(sess)) = (
                             parsed.get("cols").and_then(|v| v.as_u64()),
                             parsed.get("rows").and_then(|v| v.as_u64()),
-                            child_resize.as_ref(),
+                            sessions.get(&id),
                         ) {
-                            let _ = tx.send((
+                            let _ = sess.resize.send((
                                 c.clamp(20, 500) as u16,
                                 r.clamp(5, 200) as u16,
                             ));
+                        }
+                    }
+                    // A tab closed: its child goes with it, now, not at socket close.
+                    Some("doctor-kill") => {
+                        if let Some(sess) = sessions.remove(&id) {
+                            kill(&sess);
+                            println!("[doctor] session {id} killed by the front");
                         }
                     }
                     _ => {}
@@ -896,14 +930,12 @@ async fn handle_doctor_socket(mut socket: WebSocket, state: Arc<AppState>) {
             }
         }
     }
-    // The tab was closed, or the window went away. Take the child with us: nothing is
-    // reading it any more, and an orphaned `claude` holding a pty is invisible to the
+    // The tab was closed, or the window went away. Take every child with us: nothing is
+    // reading them any more, and an orphaned agent holding a pty is invisible to the
     // operator — it would only surface as a process they never started.
-    if let Ok(mut slot) = killer.lock() {
-        if let Some(mut k) = slot.take() {
-            let _ = k.kill();
-            println!("[doctor] child killed with the socket");
-        }
+    for (id, sess) in sessions.drain() {
+        kill(&sess);
+        println!("[doctor] session {id} killed with the socket");
     }
     println!("[doctor] socket closed");
 }

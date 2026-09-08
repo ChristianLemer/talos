@@ -42,3 +42,20 @@ test("garbage in, empty out — never a crash on the rescue path", () => {
   const r = doctorChoices(undefined, "", "x");
   assert.deepEqual(r, { options: [], absent: [], selected: "" });
 });
+
+import { doctorSessionLabel, doctorNextActive } from "../public/model.js";
+
+test("a session tab says what runs, and whether it runs clean", () => {
+  assert.equal(doctorSessionLabel("Claude Code", false, "zsh"), "Claude Code");
+  assert.equal(doctorSessionLabel("Claude Code", true, "zsh"), "Claude Code · clean");
+  assert.equal(doctorSessionLabel("shell", false, "powershell.exe"), "powershell.exe");
+  assert.equal(doctorSessionLabel("shell", true, ""), "shell · clean");
+});
+
+test("closing a tab: the active one stays unless it is the closed one", () => {
+  assert.equal(doctorNextActive([1, 2, 3], 1, 3), 1);
+  assert.equal(doctorNextActive([1, 2, 3], 2, 2), 3, "right-hand neighbour first");
+  assert.equal(doctorNextActive([1, 2, 3], 3, 3), 2, "then the left one");
+  assert.equal(doctorNextActive([1], 1, 1), null, "nothing left");
+  assert.equal(doctorNextActive([1, 2], 9, 2), 1, "a stale active falls back to what remains");
+});

@@ -97,11 +97,22 @@ setTimeout(hideSplash, SPLASH_SAFETY_MS); // safety net only — state-done norm
 // Shorter terminals (10 rows) — they scroll, and tall fixed boxes waste
 // vertical space on small screens. Smaller font on short viewports.
 const TERM_ROWS = window.innerHeight < 700 ? 8 : 12;
+// ONE font stack for every terminal AND for the probe that measures cell size (doctorFit):
+// the two must agree or the pty is opened at a geometry the glyphs do not fill. First the
+// EMBEDDED JetBrains Mono (index.html @font-face, sealed into the binary — identical on the
+// three OS), then a locally installed Nerd variant for the icon glyphs agents print, then
+// whatever is monospace. xterm's default was Courier, a bitmap face on Linux.
+const TERM_FONT =
+  '"JetBrains Mono", "JetBrainsMono Nerd Font", "Cascadia Mono", Menlo, Consolas, ' +
+  '"DejaVu Sans Mono", "Noto Sans Mono", monospace';
+// 13px reads; 12 was tuned for Courier's wider cell. Small windows keep one size down.
+const TERM_FONT_SIZE = () => (window.innerHeight < 700 ? 12 : 13);
 const newTerm = () =>
   new Terminal({
     cols: 100,
     rows: TERM_ROWS,
-    fontSize: window.innerHeight < 700 ? 11 : 12,
+    fontSize: TERM_FONT_SIZE(),
+    fontFamily: TERM_FONT,
     convertEol: false,
     theme: { background: "#1a1b26", foreground: "#c0caf5" },
   });
@@ -1936,7 +1947,7 @@ function setTab(v) {
   if (isDoctor) doctorOpen();
 }
 
-// The Doctor terminal — an interactive rescue session.
+// The Doctor terminal — rescue sessions, one tab each.
 //
 // Self-contained ON PURPOSE: its own socket, its own listener, nothing added to the
 // main dispatch. Deleting this block plus the `view-doctor` markup deletes the whole
@@ -1947,11 +1958,14 @@ function setTab(v) {
 // Doctor sharing it would be mutually exclusive with Apply — and unavailable exactly
 // when an Apply is wedged, which is when you most want it. Server side: /doctor.
 //
-// ⭐ `onData` is the one genuinely missing piece the spec named. xterm has always
-// handed us every keystroke here; the pty has always accepted arbitrary bytes on its
-// input channel (the sudo password is merely its first caller). This wires the two.
-let doctorTerm = null;
+// ⭐ SESSIONS, one tab each. Every Launch mints an id, opens a pane with its own xterm
+// and asks the engine for a child under that id; the engine tags every byte with it.
+// Two agents side by side, a clean one next to a normal one, a shell beside the agent
+// that works. Closing a tab kills its child now, not at socket close.
 let doctorWs = null;
+const doctorSessions = new Map(); // id → { term, pane, tab, label, alive }
+let doctorActive = null;
+let doctorNextId = 1;
 // What the engine said the catalogue declares (`doctor-agents`), and the last choice.
 let doctorAgents = { agents: [], shell: "" };
 let doctorRemembered = "";
@@ -2007,8 +2021,9 @@ function doctorFit() {
   const probe = document.createElement("span");
   probe.style.cssText =
     "position:absolute;visibility:hidden;white-space:pre;font-family:" +
-    "courier-new,courier,monospace;font-size:" +
-    (window.innerHeight < 700 ? 11 : 12) +
+    TERM_FONT +
+    ";font-size:" +
+    TERM_FONT_SIZE() +
     "px";
   probe.textContent = "0".repeat(100);
   document.body.append(probe);
@@ -2021,16 +2036,18 @@ function doctorFit() {
   return { cols, rows };
 }
 
-// Refit BOTH ends on a window change. Refitting only the view would move the mismatch
-// out of sight rather than remove it: the child keeps wrapping at its old width.
+// Refit BOTH ends of the ACTIVE session on a window change (a hidden pane has no size
+// to measure; it is refitted when it comes to the front). Refitting only the view would
+// move the mismatch out of sight rather than remove it.
 let doctorRzTimer = null;
 function doctorRefit() {
-  if (!doctorTerm) return;
+  const s = doctorSessions.get(doctorActive);
+  if (!s) return;
   const { cols, rows } = doctorFit();
-  if (cols === doctorTerm.cols && rows === doctorTerm.rows) return;
-  doctorTerm.resize(cols, rows);
+  if (cols === s.term.cols && rows === s.term.rows) return;
+  s.term.resize(cols, rows);
   if (doctorWs && doctorWs.readyState === 1) {
-    doctorWs.send(JSON.stringify({ type: "doctor-resize", cols, rows }));
+    doctorWs.send(JSON.stringify({ type: "doctor-resize", id: doctorActive, cols, rows }));
   }
 }
 window.addEventListener("resize", () => {
@@ -2040,22 +2057,37 @@ window.addEventListener("resize", () => {
   doctorRzTimer = setTimeout(doctorRefit, 80);
 });
 
-function doctorOpen() {
-  if (!doctorTerm) {
-    doctorTerm = newTerm();
-    doctorTerm.open(document.getElementById("doctor-host"));
-    // Registered ONCE, with the terminal — not per socket, or a reconnect would stack
-    // handlers and send every keystroke N times. It reads `doctorWs` at press time.
-    doctorTerm.onData((d) => {
-      if (doctorWs && doctorWs.readyState === 1) {
-        doctorWs.send(JSON.stringify({ type: "doctor-input", d }));
-      }
-    });
-    // Fit on first open too, not only on Launch: the box is already visible here
-    // (setTab flips `active` before calling us), so an unfitted 100x12 would flash.
-    const f = doctorFit();
-    doctorTerm.resize(f.cols, f.rows);
+function doctorActivate(id) {
+  doctorActive = id;
+  for (const [sid, s] of doctorSessions) {
+    s.pane.classList.toggle("active", sid === id);
+    s.tab.classList.toggle("active", sid === id);
   }
+  const s = doctorSessions.get(id);
+  if (s) {
+    doctorRefit();
+    s.term.focus();
+  }
+}
+
+function doctorClose(id) {
+  const s = doctorSessions.get(id);
+  if (!s) return;
+  if (s.alive && doctorWs && doctorWs.readyState === 1) {
+    doctorWs.send(JSON.stringify({ type: "doctor-kill", id }));
+  }
+  const ids = [...doctorSessions.keys()];
+  const next = M.doctorNextActive(ids, doctorActive, id);
+  s.term.dispose();
+  s.pane.remove();
+  s.tab.remove();
+  doctorSessions.delete(id);
+  doctorActive = null;
+  if (next !== null) doctorActivate(next);
+}
+
+// Connect the socket (once); the panes come with Launch.
+function doctorOpen() {
   if (doctorWs && doctorWs.readyState <= 1) return; // connecting or open
   doctorWs = new WebSocket(
     (location.protocol === "https:" ? "wss://" : "ws://") +
@@ -2070,13 +2102,26 @@ function doctorOpen() {
     } catch {
       return;
     }
-    if (m.type === "doctor-out") doctorTerm.write(m.d);
+    if (m.type === "doctor-out") doctorSessions.get(m.id)?.term.write(m.d);
+    if (m.type === "doctor-exit") {
+      const s = doctorSessions.get(m.id);
+      if (s) {
+        s.alive = false;
+        s.tab.classList.add("dead");
+      }
+    }
     if (m.type === "doctor-agents") {
       doctorAgents = { agents: m.agents || [], shell: m.shell || "" };
       doctorRenderAgents();
     }
   };
-  doctorWs.onclose = () => doctorTerm.write("\r\n[doctor: socket closed]\r\n");
+  doctorWs.onclose = () => {
+    for (const s of doctorSessions.values()) {
+      s.alive = false;
+      s.tab.classList.add("dead");
+      s.term.write("\r\n[doctor: socket closed]\r\n");
+    }
+  };
 }
 // ⭐ Neither a path nor an argv travels on the wire: the front names a PACKAGE from the
 // dropdown (or "shell" for the floor), optionally "clean", and the engine resolves both
@@ -2085,11 +2130,41 @@ function doctorOpen() {
 // dir through an env var, or arguments) is declared in its catalogue entry, not here.
 function doctorLaunch(clean) {
   doctorOpen();
-  const { cols, rows } = doctorFit();
-  doctorTerm.resize(cols, rows);
   const agent = document.getElementById("doctor-agent").value || "shell";
+  const id = doctorNextId++;
+  const label = M.doctorSessionLabel(agent, clean, doctorAgents.shell);
+  const pane = document.createElement("div");
+  pane.className = "doctor-pane";
+  document.getElementById("doctor-host").append(pane);
+  const tab = document.createElement("span");
+  tab.className = "doctor-tab";
+  const name = document.createElement("span");
+  name.textContent = label;
+  const x = document.createElement("span");
+  x.className = "x";
+  x.textContent = "×";
+  x.title = "Close — stops the process";
+  x.onclick = (ev) => {
+    ev.stopPropagation();
+    doctorClose(id);
+  };
+  tab.append(name, x);
+  tab.onclick = () => doctorActivate(id);
+  document.getElementById("doctor-tabs").append(tab);
+  const term = newTerm();
+  term.open(pane);
+  // Registered ONCE, with the terminal. It reads `doctorWs` at press time.
+  term.onData((d) => {
+    if (doctorWs && doctorWs.readyState === 1) {
+      doctorWs.send(JSON.stringify({ type: "doctor-input", id, d }));
+    }
+  });
+  doctorSessions.set(id, { term, pane, tab, label, alive: true });
+  doctorActivate(id);
+  const { cols, rows } = doctorFit();
+  term.resize(cols, rows);
   const send = () =>
-    doctorWs.send(JSON.stringify({ type: "doctor-start", cols, rows, clean, agent }));
+    doctorWs.send(JSON.stringify({ type: "doctor-start", id, cols, rows, clean, agent }));
   // The socket may still be connecting on the very first click.
   if (doctorWs.readyState === 1) send();
   else doctorWs.addEventListener("open", send, { once: true });

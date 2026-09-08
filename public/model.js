@@ -854,3 +854,20 @@ export function doctorChoices(agents, shell, remembered) {
     : (options[0]?.value ?? "");
   return { options, absent, selected };
 }
+
+// --- Doctor sessions, the pure part -------------------------------------------------
+// The label a session tab wears: what runs, and whether it runs clean.
+export function doctorSessionLabel(agent, clean, shellName) {
+  const base = agent === "shell" ? (shellName || "shell") : agent;
+  return clean ? `${base} · clean` : base;
+}
+// Which tab takes the front after `closed` goes: the one that was active if it is not the
+// closed one; else its right-hand neighbour, else its left, else nothing. Ids in tab
+// order.
+export function doctorNextActive(ids, activeId, closed) {
+  const rest = ids.filter((i) => i !== closed);
+  if (activeId !== closed && rest.includes(activeId)) return activeId;
+  const at = ids.indexOf(closed);
+  if (at < 0) return rest[0] ?? null;
+  return ids[at + 1] ?? rest[at - 1] ?? rest[0] ?? null;
+}
