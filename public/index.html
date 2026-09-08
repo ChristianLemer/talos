@@ -63,7 +63,7 @@
          launch, and it was buying a five-line sales paragraph. `align-items:center`
          (not flex-start) so the mark sits with the two text lines rather than above
          them. Keeps the gradient — the mood was never the problem, the height was. */
-      header { padding:12px 20px; border-bottom:1px solid var(--line);
+      header { padding:16px 22px; border-bottom:1px solid var(--line);
                background:radial-gradient(120% 140% at 0% 0%, var(--surface-hi) 0%, var(--bg) 60%);
                display:flex; align-items:center; gap:14px; }
       /* The mark: rounded to echo the app icon's own card, and NOT stretched — the
@@ -231,7 +231,9 @@
          ladder to calibrate either. Mirrors `body.tab-catalog .hero-apply`, which lives
          with the other tab-scoped rules further down. */
       body.tab-catalog #ladder { display:none; }
-      #steps { padding:8px 12px; position:relative; min-height:180px; }
+      /* ONE gutter for the whole window, 22px, the header's own: the list, the Doctor
+         and the settings all sit inside it, so nothing touches the window edge. */
+      #steps { padding:12px 22px 24px; position:relative; min-height:180px; }
       /* Re-scan veil: shown while the server re-scans presence BEFORE the plan
          arrives (the silent gap). Covers EVERYTHING — `position:fixed` on a
          top-level element, so it is not trapped in #steps' containing block the way
@@ -667,7 +669,7 @@
       .rerun.avail:hover { opacity:1; color:#7aa2f7; border-color:#3d59a1; }
       .rerun:disabled { opacity:.35; cursor:default; background:none; }
       .panel { position:relative; border-top:1px solid var(--line); }
-      .term-host { padding:6px 10px; }
+      .term-host { padding:12px 16px; }
       .copy { position:absolute; top:8px; right:12px; z-index:2; background:var(--line); color:var(--dim);
               border:0; padding:5px; border-radius:6px; cursor:pointer; display:flex; opacity:.6; }
       .copy:hover { color:var(--fg); opacity:1; }
@@ -721,7 +723,7 @@
          honest value is measured from where the frame actually sits, and a `calc(100vh -
          190px)` drifts the moment the button bar wraps to a second line. */
       .doctor-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
-        margin-bottom:12px; }
+        margin-bottom:14px; }
       .doctor-btn { background:var(--surface); color:var(--fg); border:1px solid var(--line);
         border-radius:7px; padding:8px 15px; cursor:pointer; font-size:13px;
         display:inline-flex; align-items:baseline; gap:7px; }
@@ -751,7 +753,7 @@
          the hairline that vanished into the dark surface. Padding inside it, so glyphs
          never touch the line, and the radius clips xterm's own square canvas. */
       #doctor-frame { border:1px solid #3d59a1; border-radius:0 10px 10px 10px;
-        background:#1a1b26; padding:10px; overflow:hidden; }
+        background:#1a1b26; padding:14px 16px; overflow:hidden; }
       #doctor-host { height:100%; position:relative; }
       .doctor-pane { height:100%; display:none; }
       .doctor-pane.active { display:block; }
@@ -763,6 +765,7 @@
       .tab:hover { color:var(--fg); }
       .tab.active { color:var(--fg); border-bottom-color:#3d59a1; }
       .view { display:none; } .view.active { display:block; }
+      #view-doctor, #view-log { padding:16px 22px 24px; }
       /* Apply focus mode: during an Apply the screen narrows to what's being
          worked on. Untouched + succeeded rows are hidden; the running one shows;
          failures stay visible+open. On done, everything reappears (failures
@@ -838,7 +841,7 @@
         justify-content:space-between; gap:8px; }
       #arb-head .arb-note { font-size:11px; color:var(--dim); }
       /* Settings rows + history */
-      #settings { padding:14px 14px 4px; }
+      #settings { padding:0 0 4px; }
       .set-row { display:flex; align-items:center; gap:14px; padding:12px 0; border-bottom:1px solid var(--line); }
       .set-row > div:first-child { flex:1; }
       .set-title { font-size:14px; font-weight:600; }

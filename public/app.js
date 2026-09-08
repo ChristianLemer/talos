@@ -2031,7 +2031,9 @@ function doctorFit() {
   const host = document.getElementById("doctor-host");
   // Measured from where the frame actually sits: no magic offset to drift.
   const top = frame.getBoundingClientRect().top;
-  frame.style.height = Math.max(160, window.innerHeight - top - 18) + "px";
+  // 24px = the view's bottom gutter, plus a hair so the frame's border never kisses
+  // the window edge.
+  frame.style.height = Math.max(160, window.innerHeight - top - 28) + "px";
   const probe = document.createElement("span");
   probe.style.cssText =
     "position:absolute;visibility:hidden;white-space:pre;font-family:" +
