@@ -98,6 +98,24 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
                 continue;
             }
         };
+        // A key the engine does not know is a FIELD THAT DOES NOTHING: serde ignores it,
+        // the runtime never sees it, and the author believes it took. `requries:`,
+        // `npm-flags:` for `npmFlags:`, a field from a future release on an older
+        // engine — all read as "fine" without this. The names come from the struct.
+        if let Ok(serde_yaml::Value::Mapping(m)) = serde_yaml::from_str::<serde_yaml::Value>(&raw) {
+            for k in m.keys() {
+                let key = match k {
+                    serde_yaml::Value::String(s) => s.clone(),
+                    serde_yaml::Value::Number(n) => n.to_string(),
+                    other => format!("{other:?}"),
+                };
+                if !crate::bundles::RawPkg::KNOWN_KEYS.contains(&key.as_str()) && key != "id" {
+                    r.errors.push(format!(
+                        "{label}: unknown field `{key}` — the engine ignores it, so it does nothing"
+                    ));
+                }
+            }
+        }
         let cp = match crate::catalog::parse_catalog_entry_strict(&raw, stem) {
             Ok(cp) => cp,
             Err(e) => {
@@ -327,6 +345,37 @@ mod tests {
             "{text}"
         );
         assert!(!r.ok());
+    }
+
+    #[test]
+    fn an_unknown_field_is_named_not_ignored() {
+        let d = tmp("unknown-key");
+        write(
+            &d,
+            "catalog/typo.yaml",
+            "name: Typo\nbrew: t\nrequries:\n  - Git\n",
+        );
+        write(
+            &d,
+            "catalog/camel.yaml",
+            "name: Camel\nnpm: c\nnpm-flags: -g\n",
+        );
+        write(
+            &d,
+            "catalog/fine.yaml",
+            "name: Fine\nbrew: f\nrunUninstall: rm\n\"403\": true\n",
+        );
+        let r = run(&d.join("catalog"), &d.join("bundles"));
+        let text = r.render();
+        assert!(
+            text.contains("catalog/typo.yaml: unknown field `requries`"),
+            "{text}"
+        );
+        assert!(
+            text.contains("catalog/camel.yaml: unknown field `npm-flags`"),
+            "{text}"
+        );
+        assert!(!text.contains("catalog/fine.yaml"), "{text}");
     }
 
     #[test]

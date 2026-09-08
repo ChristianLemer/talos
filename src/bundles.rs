@@ -65,6 +65,43 @@ pub struct CleanLaunch {
     pub args: Vec<String>,
 }
 
+impl RawPkg {
+    /// Every YAML key a catalog file may carry, as `--check` enforces it. ⚠️ Kept BY HAND
+    /// beside the struct: serde has no way to list a struct's accepted names, and
+    /// `deny_unknown_fields` is not wanted at runtime (a field from a newer release must
+    /// not take a row off the screen on an older engine). The test
+    /// `known_keys_match_the_struct` fails if a field is added here or there alone.
+    pub const KNOWN_KEYS: &'static [&'static str] = &[
+        "name",
+        "description",
+        "winget",
+        "brew",
+        "cargo",
+        "npm",
+        "npmFlags",
+        "bun",
+        "run",
+        "runUninstall",
+        "claude-plugin",
+        "marketplace",
+        "skill",
+        "skillName",
+        "vscode-extension",
+        "nu-plugin",
+        "plugin-release",
+        "detect",
+        "check",
+        "version-regex",
+        "version",
+        "requires",
+        "category",
+        "uac",
+        "403",
+        "slow",
+        "doctor",
+    ];
+}
+
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct RawPkg {
     pub name: String,
@@ -879,6 +916,33 @@ pub fn classify_pin(declared: Option<&str>) -> Option<PinKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The hand-kept key list and the struct must agree: a YAML carrying EVERY known key
+    /// parses, and the list has exactly as many entries as the struct has fields. A field
+    /// added to one side alone fails here rather than in an integrator's `--check`.
+    #[test]
+    fn known_keys_match_the_struct() {
+        let yaml: String = RawPkg::KNOWN_KEYS
+            .iter()
+            .map(|k| match *k {
+                "requires" | "category" => format!("{k}: []\n"),
+                "uac" | "403" | "slow" => format!("\"{k}\": true\n"),
+                "doctor" => "doctor: {}\n".to_string(),
+                _ => format!("{k}: x\n"),
+            })
+            .collect();
+        let parsed: Result<RawPkg, _> = serde_yaml::from_str(&yaml);
+        assert!(parsed.is_ok(), "{parsed:?}");
+        // Count the struct's fields through Debug: one `: ` per field in the default dump.
+        let dump = format!("{:?}", RawPkg::default());
+        let fields = dump.matches(": ").count();
+        assert_eq!(
+            fields,
+            RawPkg::KNOWN_KEYS.len(),
+            "RawPkg has {fields} fields, KNOWN_KEYS lists {} — update the list",
+            RawPkg::KNOWN_KEYS.len()
+        );
+    }
 
     /// Panics if `line` contains a parenthesis a shell would treat as CODE.
     ///
