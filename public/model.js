@@ -856,10 +856,13 @@ export function doctorChoices(agents, shell, remembered) {
 }
 
 // --- Doctor sessions, the pure part -------------------------------------------------
-// The label a session tab wears: what runs, and whether it runs clean.
-export function doctorSessionLabel(agent, clean, shellName) {
+// The label a session tab wears: its number, what runs, and whether it runs clean. The
+// number is the session id — monotonic for the life of the tab strip — so two sessions
+// of the same agent never wear the same name, and a closed "3" is never reused.
+export function doctorSessionLabel(agent, clean, shellName, n) {
   const base = agent === "shell" ? (shellName || "shell") : agent;
-  return clean ? `${base} · clean` : base;
+  const what = clean ? `${base} · clean` : base;
+  return n ? `${n} · ${what}` : what;
 }
 // Which tab takes the front after `closed` goes: the one that was active if it is not the
 // closed one; else its right-hand neighbour, else its left, else nothing. Ids in tab

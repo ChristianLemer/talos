@@ -2148,7 +2148,7 @@ function doctorLaunch(clean) {
   doctorOpen();
   const agent = doctorRemembered || "shell";
   const id = doctorNextId++;
-  const label = M.doctorSessionLabel(agent, clean, doctorAgents.shell);
+  const label = M.doctorSessionLabel(agent, clean, doctorAgents.shell, id);
   const pane = document.createElement("div");
   pane.className = "doctor-pane";
   document.getElementById("doctor-host").append(pane);

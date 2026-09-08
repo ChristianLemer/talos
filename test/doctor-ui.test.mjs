@@ -45,11 +45,12 @@ test("garbage in, empty out — never a crash on the rescue path", () => {
 
 import { doctorSessionLabel, doctorNextActive } from "../public/model.js";
 
-test("a session tab says what runs, and whether it runs clean", () => {
-  assert.equal(doctorSessionLabel("Claude Code", false, "zsh"), "Claude Code");
-  assert.equal(doctorSessionLabel("Claude Code", true, "zsh"), "Claude Code · clean");
-  assert.equal(doctorSessionLabel("shell", false, "powershell.exe"), "powershell.exe");
-  assert.equal(doctorSessionLabel("shell", true, ""), "shell · clean");
+test("a session tab says its number, what runs, and whether it runs clean", () => {
+  assert.equal(doctorSessionLabel("Claude Code", false, "zsh", 1), "1 · Claude Code");
+  assert.equal(doctorSessionLabel("Claude Code", true, "zsh", 2), "2 · Claude Code · clean");
+  assert.equal(doctorSessionLabel("shell", false, "powershell.exe", 3), "3 · powershell.exe");
+  assert.equal(doctorSessionLabel("shell", true, "", 4), "4 · shell · clean");
+  assert.equal(doctorSessionLabel("Codex", false, "zsh"), "Codex", "no number, no prefix");
 });
 
 test("closing a tab: the active one stays unless it is the closed one", () => {
