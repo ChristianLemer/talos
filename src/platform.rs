@@ -308,6 +308,19 @@ pub fn local_data_dir(os: Os) -> PathBuf {
     }
 }
 
+/// The user's home, where a terminal opened for a person starts. `USERPROFILE` on
+/// Windows, `HOME` elsewhere; None when the environment does not say.
+pub fn user_home(os: Os) -> Option<PathBuf> {
+    let var = if os == Os::Windows {
+        "USERPROFILE"
+    } else {
+        "HOME"
+    };
+    std::env::var_os(var)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
 fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)

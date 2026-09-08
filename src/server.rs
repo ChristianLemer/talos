@@ -844,6 +844,19 @@ async fn handle_doctor_socket(mut socket: WebSocket, state: Arc<AppState>) {
                             pending: Vec::new(),
                         });
                         let sink = out_tx.clone();
+                        // A rescue starts in the user's HOME — what a terminal opened for a
+                        // person does — never in Talos's own cwd, which is `/` from Finder,
+                        // System32 from Explorer, or the repo in dev. ⚠️ On Windows this is
+                        // a knowing trade: `claude` refuses a git that sits below its cwd
+                        // (`pty::safe_working_dir`), and a git under AppData IS below the
+                        // home. A rescue is not an install, and a human terminal in the home
+                        // is exactly the situation every Windows user of claude is in; if it
+                        // bites, the banner shows the cwd and the person `cd`s.
+                        let cwd = crate::platform::user_home(state.os);
+                        let cwd_line = cwd
+                            .as_ref()
+                            .map(|d| format!("[doctor] cwd: {}\r\n", d.display()))
+                            .unwrap_or_default();
                         println!(
                             "[doctor] session {id}: {program} at {cols}x{rows} clean={clean}"
                         );
@@ -856,7 +869,7 @@ async fn handle_doctor_socket(mut socket: WebSocket, state: Arc<AppState>) {
                                     "type": "doctor-out",
                                     "id": id,
                                     "d": format!(
-                                        "[doctor] {program} {}  ({cols}x{rows}, no shell)\r\n{banner}",
+                                        "[doctor] {program} {}  ({cols}x{rows}, no shell)\r\n{cwd_line}{banner}",
                                         args.join(" ")
                                     ),
                                 })
@@ -873,6 +886,7 @@ async fn handle_doctor_socket(mut socket: WebSocket, state: Arc<AppState>) {
                                     cols,
                                     rows,
                                     updates: Some(rz_rx),
+                                    cwd,
                                 }),
                                 &env,
                                 move |k| {

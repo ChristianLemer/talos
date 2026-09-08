@@ -727,12 +727,16 @@
         display:inline-flex; align-items:baseline; gap:7px; }
       .doctor-btn:hover { border-color:#3d59a1; }
       .doctor-hint { color:var(--dim); font-size:11px; }
-      /* Themed like every other control: the surface token, never a hard-coded colour —
-         a native <select> otherwise paints the OS look, white on a dark theme. */
-      .doctor-select { background:var(--surface); color:var(--fg); border:1px solid var(--line);
-        border-radius:7px; padding:8px 10px; font-size:13px; max-width:40%; cursor:pointer; }
-      .doctor-select:hover { border-color:#3d59a1; }
-      .doctor-select option { background:var(--surface); color:var(--fg); }
+      /* The picker: our own menu, so every theme paints it with its surface tokens. */
+      .doctor-pick { position:relative; }
+      .doctor-pick-btn { min-width:180px; justify-content:space-between; }
+      .doctor-pick-btn .caret { color:var(--dim); font-size:11px; }
+      .doctor-menu { position:absolute; top:calc(100% + 4px); left:0; min-width:100%;
+        background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:4px;
+        z-index:20; box-shadow:0 8px 24px rgba(0,0,0,.35); }
+      .doctor-menu div { padding:7px 12px; border-radius:6px; cursor:pointer; font-size:13px;
+        white-space:nowrap; color:var(--fg); }
+      .doctor-menu div:hover, .doctor-menu div.sel { background:var(--surface-hi); }
       .doctor-note { color:var(--dim); font-size:12px; margin-left:auto; }
       /* Session tabs: a strip above the frame, one per live or finished session. */
       .doctor-tabs { display:flex; gap:4px; flex-wrap:wrap; margin-bottom:6px; min-height:0; }
@@ -1491,7 +1495,14 @@
            that is present on this machine, then the OS shell — the floor, always there.
            Nothing here names an agent. -->
       <div class="doctor-bar">
-        <select id="doctor-agent" class="doctor-select" title="What to launch"></select>
+        <!-- A native <select> paints the OS look — GTK white on a dark theme — and takes
+             no CSS on its list, so the picker is ours: a button and a menu of divs. -->
+        <div class="doctor-pick" id="doctor-pick">
+          <button id="doctor-agent-btn" class="doctor-btn doctor-pick-btn" type="button">
+            <span id="doctor-agent-label">…</span><span class="caret">▾</span>
+          </button>
+          <div id="doctor-menu" class="doctor-menu" hidden></div>
+        </div>
         <button id="doctor-launch" class="doctor-btn">Launch</button>
         <button id="doctor-launch-clean" class="doctor-btn" hidden>
           Launch clean <span class="doctor-hint">own config — no plugins, no hooks</span>

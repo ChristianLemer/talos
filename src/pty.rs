@@ -88,6 +88,11 @@ pub struct Geometry {
     pub rows: u16,
     /// Later `(cols, rows)` from the front. `None` = the surface never changes size.
     pub updates: Option<Receiver<(u16, u16)>>,
+    /// Where the child starts. `None` = the default a STEP gets (`safe_working_dir` on
+    /// Windows, Talos's own cwd elsewhere). A rescue session sets it: a terminal opened for
+    /// a person starts in their home, not wherever the exe was double-clicked from
+    /// (Finder gives `/`, Explorer gives System32).
+    pub cwd: Option<std::path::PathBuf>,
 }
 
 /// Runs `program args...` in a pty and calls `on_bytes` for each chunk read.
@@ -124,9 +129,9 @@ pub fn run<F: FnMut(&[u8])>(
     on_spawn: impl FnOnce(Box<dyn ChildKiller + Send + Sync>),
     mut on_bytes: F,
 ) -> std::io::Result<i32> {
-    let (cols, rows, resize) = match size {
-        Some(g) => (g.cols, g.rows, g.updates),
-        None => (100, 24, None),
+    let (cols, rows, resize, cwd) = match size {
+        Some(g) => (g.cols, g.rows, g.updates, g.cwd),
+        None => (100, 24, None, None),
     };
     let pty = native_pty_system();
     let pair = pty
@@ -139,10 +144,11 @@ pub fn run<F: FnMut(&[u8])>(
         .map_err(|e| std::io::Error::other(e.to_string()))?;
     let mut cmd = CommandBuilder::new(program);
     cmd.args(args);
+    // A caller-chosen start directory wins (the Doctor: the user's home). Otherwise,
     // Windows: never let the child inherit Talos's own cwd — see `safe_working_dir`.
     // The child would otherwise run wherever the exe was launched from, and `claude`
     // refuses a git that lives under the cwd.
-    if let Some(dir) = safe_working_dir() {
+    if let Some(dir) = cwd.or_else(safe_working_dir) {
         cmd.cwd(dir);
     }
     // ⭐ Force plugin marketplace clones over HTTPS.
@@ -274,6 +280,7 @@ mod tests {
                 &["-c", "sleep 1; stty size"],
                 None,
                 Some(Geometry {
+                    cwd: None,
                     cols: 80,
                     rows: 24,
                     updates: Some(rx),

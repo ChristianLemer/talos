@@ -1966,48 +1966,62 @@ let doctorWs = null;
 const doctorSessions = new Map(); // id → { term, pane, tab, label, alive }
 let doctorActive = null;
 let doctorNextId = 1;
-// What the engine said the catalogue declares (`doctor-agents`), and the last choice.
+// What the engine said the catalogue declares (`doctor-agents`), the choices derived
+// from it, and the current one (also the last choice, persisted in the ui prefs).
 let doctorAgents = { agents: [], shell: "" };
+let doctorOptions = [];
 let doctorRemembered = "";
 
 // The dropdown, rendered from data the engine sent — never from a name in this file.
 // Absent candidates go to the note line with a pointer at the Catalog: the Doctor does
 // not install, the Catalog row does, with every guarantee Apply gives.
 function doctorRenderAgents() {
-  const sel = document.getElementById("doctor-agent");
-  if (!sel) return;
+  const menu = document.getElementById("doctor-menu");
+  if (!menu) return;
   const { options, absent, selected } = M.doctorChoices(
     doctorAgents.agents,
     doctorAgents.shell,
     doctorRemembered
   );
-  sel.replaceChildren(
+  doctorOptions = options;
+  doctorRemembered = selected;
+  menu.replaceChildren(
     ...options.map((o) => {
-      const el = document.createElement("option");
-      el.value = o.value;
+      const el = document.createElement("div");
       el.textContent = o.label;
-      el.dataset.clean = o.clean ? "1" : "";
+      el.classList.toggle("sel", o.value === selected);
+      el.onclick = () => {
+        doctorRemembered = o.value;
+        doctorMenuShow(false);
+        doctorRenderAgents();
+        persistSelection();
+      };
       return el;
     })
   );
-  sel.value = selected;
-  doctorRefreshButtons();
+  const current = options.find((o) => o.value === selected);
+  document.getElementById("doctor-agent-label").textContent = current
+    ? current.label
+    : "nothing to launch";
+  // "Launch clean" exists only for a candidate that declared HOW it launches clean.
+  document.getElementById("doctor-launch-clean").hidden = !(current && current.clean);
+  document.getElementById("doctor-launch").disabled = !current;
   const note = document.getElementById("doctor-note");
   note.textContent = absent.length
     ? `Not on this machine: ${absent.join(", ")} — install from the Catalog.`
     : "Absolute path, no shell — a broken profile cannot stop it.";
 }
-// "Launch clean" exists only for a candidate that declared HOW it launches clean.
-function doctorRefreshButtons() {
-  const sel = document.getElementById("doctor-agent");
-  const opt = sel.selectedOptions[0];
-  document.getElementById("doctor-launch-clean").hidden = !(opt && opt.dataset.clean);
+function doctorMenuShow(on) {
+  document.getElementById("doctor-menu").hidden = !on;
 }
-document.getElementById("doctor-agent").onchange = () => {
-  doctorRemembered = document.getElementById("doctor-agent").value;
-  doctorRefreshButtons();
-  persistSelection();
+document.getElementById("doctor-agent-btn").onclick = (ev) => {
+  ev.stopPropagation();
+  doctorMenuShow(document.getElementById("doctor-menu").hidden);
 };
+document.addEventListener("click", () => doctorMenuShow(false));
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") doctorMenuShow(false);
+});
 
 // Size the frame to whatever is left of the window, then report how many cols/rows fit
 // inside it — measured with the SAME font xterm renders in. No fit addon is vendored, and
@@ -2130,7 +2144,7 @@ function doctorOpen() {
 // dir through an env var, or arguments) is declared in its catalogue entry, not here.
 function doctorLaunch(clean) {
   doctorOpen();
-  const agent = document.getElementById("doctor-agent").value || "shell";
+  const agent = doctorRemembered || "shell";
   const id = doctorNextId++;
   const label = M.doctorSessionLabel(agent, clean, doctorAgents.shell);
   const pane = document.createElement("div");
