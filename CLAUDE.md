@@ -100,8 +100,9 @@ cargo tauri build     # the deliverable; needs `cargo binstall tauri-cli` once
 
 The Mac deliverable is `target/release/bundle/macos/Talos.app`, never the bare binary. A release
 is triggered by pushing a `v*` tag: `.github/workflows/release.yml` builds natively per OS
-(Tauri does not cross-compile) and attaches `Talos-macos-aarch64.app.zip`, `Talos.exe` and
-`Talos-linux-x86_64`.
+(Tauri does not cross-compile) and attaches `Talos-macos-aarch64.app.zip`, `Talos.exe`,
+`Talos-linux-x86_64`, `talos-content.zip` (the socle, checked by the Linux build before
+zipping) and `admin/get-talos.sh`.
 
 ⚠️ **A release is TWO halves**: the binary *and* `catalog/` + `bundles/`, which the exe reads
 from disk beside itself. Shipping the exe alone tests a mixture and fails misleadingly. Any

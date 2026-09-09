@@ -86,8 +86,9 @@ code is the contract.
 ### 2 — The engine: a release, not a build
 
 Every tag `v*` publishes the launchers on the [Releases](../../releases) page: the
-zipped `Talos.app` (Apple Silicon), `Talos.exe` (x64) and the bare Linux binary. They
-are the same engine for everyone; you download, you do not compile.
+zipped `Talos.app` (Apple Silicon), `Talos.exe` (x64), the bare Linux binary — and
+`talos-content.zip`, the socle of that same tag, plus the kit script. They are the same
+engine for everyone; you download, you do not compile.
 
 If you do want to build (to change the engine, not the content): [Rust](https://rustup.rs)
 and the Tauri CLI, natively on each OS — Tauri does **not** cross-compile:
@@ -110,16 +111,22 @@ one without the other and Talos opens inert (nothing to propose); it won't crash
 just has nothing to say. The binaries are **unsigned** for now (signing/notarisation is
 a separate step).
 
-One script composes the kit, from a Mac, into the folder your team launches from:
+One script composes the kit, from a Mac, and needs nothing but `curl`:
 
 ```bash
-sh admin/get-talos.sh "<kit folder>" --content path/to/your-talos-content
+# discovering Talos: a folder that works, ready to double-click
+curl -fsSL https://github.com/ChristianLemer/talos/releases/latest/download/get-talos.sh | sh -s -- ~/Talos
+
+# your team: the same, into the folder it launches from, with YOUR content
+sh get-talos.sh "<kit folder>" --content path/to/your-talos-content
 ```
 
-It reads `.talos-version`, fetches those launchers, and copies your content beside
-them. Without `--content` it refreshes the launchers only and leaves the content in
-the kit untouched — for a team that edits its YAML in place on the share. It needs
-nothing but `curl`.
+Without `--content` the kit gets the **socle** of the same release. With it, your
+`.talos-version` picks the release and your content replaces the socle. Either way
+every asset is verified against its published digest, the composed kit is read by
+`Talos --check` with the very binary it ships — a kit that does not pass is not left
+behind — and a `MANIFEST.sha256` lets any synced replica be re-verified offline with
+`get-talos.sh <kit> --verify`.
 
 Built to live on a **shared OneDrive**, launched by many machines from the same
 copy — the exe is never copied per machine:
