@@ -1,0 +1,8 @@
+# FORM: `version-regex:` overrides how the version is read from the probe's output.
+name: Odd Version
+description: A tool whose --version prints more than a version
+winget: Vendor.Odd
+brew: odd
+detect: odd --version
+version-regex: "v(\\d+\\.\\d+)"
+category: [foundation]

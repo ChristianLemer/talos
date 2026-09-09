@@ -1,0 +1,8 @@
+# FORM: the shell that hosts nushell plugins.
+name: Nushell
+description: A structured shell
+winget: Nushell.Nushell
+brew: nushell
+detect: nu --version
+version: latest
+category: [terminal]

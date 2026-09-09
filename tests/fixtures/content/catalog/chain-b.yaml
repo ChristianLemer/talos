@@ -1,0 +1,8 @@
+name: Chain B
+description: Needs Chain C
+winget: Vendor.ChainB
+brew: chain-b
+detect: chain-b --version
+category: [foundation]
+requires:
+  - Chain C

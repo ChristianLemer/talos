@@ -1,0 +1,11 @@
+# FORM: a bundle that `needs:` another — activating it activates Base too.
+bundle: Second
+emoji: 🔗
+usage: Stands on Base.
+highlights: [Claude Plugin]
+description: The second rung of the chain.
+needs: [Base]
+packages:
+  - Claude Plugin
+  - Some Skill
+  - Editor Extension

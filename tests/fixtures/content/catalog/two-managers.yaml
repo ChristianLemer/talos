@@ -1,0 +1,9 @@
+# FORM: one package, two managers, an exact pin, a Windows elevation seed.
+name: Two Managers
+description: A tool winget and brew both know, pinned to an exact version
+winget: Vendor.Two
+brew: two
+detect: two --version
+version: "1.2.3"
+category: [foundation]
+uac: true

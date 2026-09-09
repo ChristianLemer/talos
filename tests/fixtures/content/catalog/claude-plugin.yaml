@@ -1,0 +1,10 @@
+# FORM: a Claude Code plugin from a declared marketplace; detected by the name
+# `claude plugin list` reports; requires the agent that hosts it.
+name: Claude Plugin
+description: A plugin for the agent, from a marketplace it must register first
+claude-plugin: plug@market
+marketplace: vendor/market
+detect: plug
+category: [automation]
+requires:
+  - Npm Agent

@@ -1,0 +1,6 @@
+# FORM: the cargo route.
+name: Cargo Tool
+description: A Rust tool installed with cargo
+cargo: cargo-tool
+detect: cargo-tool --version
+category: [languages]

@@ -1,0 +1,8 @@
+# FORM: the package other routes lean on by NAME — npm and skill packages must require it.
+name: Node.js
+description: JavaScript runtime — npm and npx come with it
+winget: OpenJS.NodeJS
+brew: node
+detect: node --version
+version: latest
+category: [foundation]

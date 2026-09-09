@@ -1,0 +1,10 @@
+# FORM: a cross-agent skill installed through `npx skills` — hence Node — with the
+# list-name pinned because the display name has a space.
+name: Some Skill
+description: A SKILL.md installed for every agent on the machine
+skill: vendor/skills@some-skill
+skillName: some-skill
+detect: some-skill
+category: [automation]
+requires:
+  - Node.js

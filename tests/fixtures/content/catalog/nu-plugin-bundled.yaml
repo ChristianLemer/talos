@@ -1,0 +1,7 @@
+# FORM: a nushell plugin that ships BESIDE nu — no `plugin-release:`, so the ⚡ rung.
+name: Bundled Plugin
+description: A plugin nushell ships in its own directory
+nu-plugin: bundled
+category: [terminal]
+requires:
+  - Nushell

@@ -1,0 +1,11 @@
+# FORM: the three behaviour seeds — elevation, a corporate firewall's 403, slowness.
+name: Seeds
+description: A package that declares everything installing it does to the operator
+winget: Vendor.Seeds
+brew: seeds
+detect: seeds --version
+version: latest
+category: [foundation]
+uac: true
+"403": true
+slow: true

@@ -1,0 +1,8 @@
+# FORM: the bun route — and the rule that comes with it: require Bun by name.
+name: Bun Tool
+description: A JavaScript tool installed globally with bun
+bun: bun-tool
+detect: bun-tool --version
+category: [languages]
+requires:
+  - Bun

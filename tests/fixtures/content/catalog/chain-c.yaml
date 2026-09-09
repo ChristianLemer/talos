@@ -1,0 +1,6 @@
+name: Chain C
+description: The end of the chain
+winget: Vendor.ChainC
+brew: chain-c
+detect: chain-c --version
+category: [foundation]

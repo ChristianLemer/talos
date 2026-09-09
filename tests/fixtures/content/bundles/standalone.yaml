@@ -1,0 +1,13 @@
+# FORM: a standalone bundle, no `needs:`.
+bundle: Standalone
+emoji: 🧪
+usage: Everything else, on its own.
+highlights: [Nushell]
+description: The rest of the forms, in one card.
+packages:
+  - Nushell
+  - Bundled Plugin
+  - Released Plugin
+  - Config Atom
+  - Windows Only
+  - Seeds

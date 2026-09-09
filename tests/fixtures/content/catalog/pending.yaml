@@ -1,0 +1,8 @@
+# FORM: `version: "pending"` — nobody has decided which upgrade to take; held out of the batch.
+name: Pending
+description: A tool whose upgrade awaits a decision
+winget: Vendor.Pending
+brew: pending
+detect: pending --version
+version: "pending"
+category: [foundation]

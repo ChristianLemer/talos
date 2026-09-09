@@ -1,0 +1,8 @@
+# FORM: the runtime the bun route leans on by NAME — a bun package must require it.
+name: Bun
+description: A JavaScript runtime with its own global installer
+winget: Oven-sh.Bun
+brew: oven-sh/bun/bun
+detect: bun --version
+version: latest
+category: [languages]

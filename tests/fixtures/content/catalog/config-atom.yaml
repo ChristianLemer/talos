@@ -1,0 +1,8 @@
+# FORM: a config-atom — run / check / runUninstall through a nushell sidecar beside this
+# file, reached by `{dir}` in SINGLE quotes (PowerShell interpolates inside double ones).
+name: Config Atom
+description: A configuration applied by a script that ships beside this file
+run: nu '{dir}/atom.nu' apply '{dir}'
+check: nu '{dir}/atom.nu' check '{dir}'
+runUninstall: nu '{dir}/atom.nu' uninstall '{dir}'
+category: [config]

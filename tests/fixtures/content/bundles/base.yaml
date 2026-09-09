@@ -1,0 +1,11 @@
+# FORM: the root of the chain — pulls packages by NAME.
+bundle: Base
+emoji: 🧱
+usage: The fixture's foundation.
+highlights: [Two Managers, Npm Agent]
+description: What every other fixture bundle stands on.
+packages:
+  - Two Managers
+  - Node.js
+  - Npm Agent
+  - Editor

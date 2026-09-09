@@ -1,0 +1,8 @@
+# FORM: a winget-only package that requires the OS package.
+name: Windows Only
+description: A tool that exists on Windows alone
+winget: Vendor.WinOnly
+version: latest
+category: [foundation]
+requires:
+  - Windows

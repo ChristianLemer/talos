@@ -1,0 +1,8 @@
+# FORM: a VS Code extension — no `detect:` (the id is the name the host lists), no
+# `version:` (the gallery will not honour one), the host in `requires:`.
+name: Editor Extension
+description: An extension the editor installs and keeps current itself
+vscode-extension: vendor.ext
+category: [editors]
+requires:
+  - Editor

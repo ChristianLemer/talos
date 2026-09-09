@@ -1179,6 +1179,39 @@ mod tests {
         assert_eq!(commands_for(&n, Os::Darwin).route.as_deref(), Some("npm"));
     }
 
+    /// The two content trees the shipped-content guards walk: the SOCLE at the repo root
+    /// (what a release publishes) and the FIXTURE under tests/ (one file per form). A
+    /// property that must hold for shipped content holds for both; a test that names a
+    /// file names the fixture, whose ids never change for a product's reasons.
+    fn content_trees() -> Vec<(&'static str, &'static str, &'static str)> {
+        vec![
+            (
+                "socle",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/catalog"),
+                concat!(env!("CARGO_MANIFEST_DIR"), "/bundles"),
+            ),
+            (
+                "fixture",
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/content/catalog"
+                ),
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/content/bundles"
+                ),
+            ),
+        ]
+    }
+    const FIXTURE_CATALOG: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/content/catalog"
+    );
+    const FIXTURE_BUNDLES: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/content/bundles"
+    );
+
     #[test]
     fn an_extension_route_carries_no_pin_because_it_cannot_honour_one() {
         // ⚠️ `action_for` consults the pin BEFORE `outdated` (decision.rs:90), and no
@@ -1189,23 +1222,20 @@ mod tests {
         // Measured for the vscode route: `code --install-extension id@<version>` exits 1 once
         // the gallery drops that version, so the pin is not merely unsupported — it is
         // unmeanable.
-        let plan = load_from_catalog(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/catalog"),
-            concat!(env!("CARGO_MANIFEST_DIR"), "/bundles"),
-            Os::Darwin,
-            &|_| {},
-        );
-        for s in &plan.steps {
-            if s.is_extension {
-                assert!(
-                    s.pin.is_none(),
-                    "{}: an extension route carries a pin it cannot honour",
-                    s.name
-                );
+        for (tree, catalog, bundles) in content_trees() {
+            let plan = load_from_catalog(catalog, bundles, Os::Darwin, &|_| {});
+            for s in &plan.steps {
+                if s.is_extension {
+                    assert!(
+                        s.pin.is_none(),
+                        "{tree} {}: an extension route carries a pin it cannot honour",
+                        s.name
+                    );
+                }
             }
         }
-        // And a synthetic package, so the guard does not depend on what the catalogue happens
-        // to ship today.
+        // And a synthetic package, so the guard does not depend on what the trees happen
+        // to hold today.
         let mut p = pkg("Pinned extension");
         p.vscode_extension = Some("some.ext".into());
         p.version = Some("1.2.3".into());
@@ -1221,26 +1251,29 @@ mod tests {
     /// as `the_shipped_seed_reaches_overrides`. Adding a sixth extension does not fail it —
     /// nothing here asserts a total.
     #[test]
-    fn the_shipped_extensions_are_the_content_routes() {
-        let cat = crate::catalog::load_catalog(concat!(env!("CARGO_MANIFEST_DIR"), "/catalog"));
+    fn the_fixture_extensions_are_the_content_routes() {
+        let cat = crate::catalog::load_catalog(FIXTURE_CATALOG);
         for (id, expected) in [
-            ("chiron", true),
-            ("astral", true),
-            ("jj-skills", true),
-            ("nushell-dev", true),
-            ("rust-best-practices", true),
-            ("vscode-nushell-lang", true),
-            // The controls: a binary, and a config-atom — the rungs on either side.
-            ("git", false),
-            ("starship-config", false),
+            ("claude-plugin", true),
+            ("skill", true),
+            ("vscode-ext", true),
+            // Fetched from a release: the 🧩 rung, because it fetches.
+            ("nu-plugin-released", true),
+            // The controls: a binary, a config-atom, and a plugin shipped BESIDE nu — the
+            // rungs on either side.
+            ("two-managers", false),
+            ("config-atom", false),
+            ("nu-plugin-bundled", false),
         ] {
             let cp = cat
                 .values()
                 .find(|c| c.id == id)
-                .unwrap_or_else(|| panic!("{id} is shipped"));
+                .unwrap_or_else(|| panic!("{id} is in the fixture"));
+            // The PACKAGE decides for nu-plugin (bundled ⚡ vs fetched 🧩), the route for the
+            // rest — `is_extension_route_for` is the one the plan uses.
             let route = commands_for(&cp.pkg, Os::Darwin).route;
             assert_eq!(
-                is_extension_route(route.as_deref()),
+                is_extension_route_for(&cp.pkg, Os::Darwin),
                 expected,
                 "{id}: route {route:?}"
             );
@@ -1248,29 +1281,21 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_vscode_extension_detects_by_its_id_without_declaring_one() {
-        let plan = load_from_catalog(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/catalog"),
-            concat!(env!("CARGO_MANIFEST_DIR"), "/bundles"),
-            Os::Darwin,
-            &|_| {},
-        );
+    fn the_fixture_vscode_extension_detects_by_its_id_without_declaring_one() {
+        let plan = load_from_catalog(FIXTURE_CATALOG, FIXTURE_BUNDLES, Os::Darwin, &|_| {});
         let s = plan
             .steps
             .iter()
-            .find(|s| s.id == "vscode-nushell-lang")
-            .expect("the shipped example must be there");
+            .find(|s| s.id == "vscode-ext")
+            .expect("the fixture's extension must be there");
         assert_eq!(s.route.as_deref(), Some("vscode-extension"));
         assert!(s.is_extension, "🧩, so an Apply at ⚡ must not fetch it");
         assert!(!s.is_config);
         // The id reaches `detect` even though the YAML declares no `detect:` — that fallback is
         // what lets the catalogue author avoid writing the id twice.
-        assert_eq!(
-            s.detect.as_deref(),
-            Some("thenuprojectcontributors.vscode-nushell-lang")
-        );
+        assert_eq!(s.detect.as_deref(), Some("vendor.ext"));
         assert!(
-            s.requires.iter().any(|r| r == "Visual Studio Code"),
+            s.requires.iter().any(|r| r == "Editor"),
             "the host must be declared so topo_sort orders it first: {:?}",
             s.requires
         );
@@ -1549,16 +1574,18 @@ mod tests {
     /// with it and nothing dangles. Its Bun twin is in catalog.rs.
     #[test]
     fn shipped_npm_routed_packages_require_node() {
-        let cat = crate::catalog::load_catalog(concat!(env!("CARGO_MANIFEST_DIR"), "/catalog"));
-        for c in cat.values() {
-            let p = &c.pkg;
-            // `skill:` installs through `npx`, which ships with Node (see commands_for).
-            if p.npm.is_some() || p.skill.is_some() {
-                assert!(
-                    p.requires.iter().any(|r| r == "Node.js"),
-                    "{}: routes through npm/npx but does not require Node.js",
-                    p.name
-                );
+        for (tree, catalog, _) in content_trees() {
+            let cat = crate::catalog::load_catalog(catalog);
+            for c in cat.values() {
+                let p = &c.pkg;
+                // `skill:` installs through `npx`, which ships with Node (see commands_for).
+                if p.npm.is_some() || p.skill.is_some() {
+                    assert!(
+                        p.requires.iter().any(|r| r == "Node.js"),
+                        "{tree} {}: routes through npm/npx but does not require Node.js",
+                        p.name
+                    );
+                }
             }
         }
     }
@@ -1802,48 +1829,50 @@ mod tests {
     /// route already assert against the shipped catalogue, not fixtures).
     #[test]
     fn every_shipped_command_parses_on_every_os() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("catalog");
-        let mut checked = 0usize;
-        for e in std::fs::read_dir(&dir).expect("the shipped catalogue must be readable") {
-            let path = e.expect("readable entry").path();
-            // The two `.nu` sidecars are FILES, not command lines — the command that
-            // invokes them is what this checks, and it lives in the yaml.
-            if path.extension().and_then(|x| x.to_str()) != Some("yaml") {
-                continue;
-            }
-            let id = path.file_stem().unwrap().to_string_lossy().to_string();
-            let raw = std::fs::read_to_string(&path).expect("readable");
-            let Some(cp) = crate::catalog::parse_catalog_entry(&raw, &id) else {
-                continue;
-            };
-            for os in [Os::Windows, Os::Darwin, Os::Linux] {
-                let c = commands_for(&cp.pkg, os);
-                for (verb, cmd) in [
-                    ("install", &c.install),
-                    ("uninstall", &c.uninstall),
-                    ("upgrade", &c.upgrade),
-                    ("downgrade", &c.downgrade),
-                ] {
-                    if let Some(cmd) = cmd {
-                        checked += 1;
-                        assert_shell_safe(cmd, &format!("{id} {os:?} {verb}"));
+        for (tree, catalog, _) in content_trees() {
+            let dir = std::path::Path::new(catalog);
+            let mut checked = 0usize;
+            for e in std::fs::read_dir(dir).expect("the content tree must be readable") {
+                let path = e.expect("readable entry").path();
+                // The `.nu` sidecars are FILES, not command lines — the command that
+                // invokes them is what this checks, and it lives in the yaml.
+                if path.extension().and_then(|x| x.to_str()) != Some("yaml") {
+                    continue;
+                }
+                let id = path.file_stem().unwrap().to_string_lossy().to_string();
+                let raw = std::fs::read_to_string(&path).expect("readable");
+                let Some(cp) = crate::catalog::parse_catalog_entry(&raw, &id) else {
+                    continue;
+                };
+                for os in [Os::Windows, Os::Darwin, Os::Linux] {
+                    let c = commands_for(&cp.pkg, os);
+                    for (verb, cmd) in [
+                        ("install", &c.install),
+                        ("uninstall", &c.uninstall),
+                        ("upgrade", &c.upgrade),
+                        ("downgrade", &c.downgrade),
+                    ] {
+                        if let Some(cmd) = cmd {
+                            checked += 1;
+                            assert_shell_safe(cmd, &format!("{tree} {id} {os:?} {verb}"));
+                        }
                     }
                 }
+                // `check:` is wrapped by the same `shell_probe` and is the OTHER command an
+                // author writes by hand, so it falls under the same rule.
+                if let Some(chk) = cp.pkg.check.as_deref() {
+                    checked += 1;
+                    assert_shell_safe(chk, &format!("{tree} {id} check"));
+                }
             }
-            // `check:` is wrapped by the same `shell_probe` and is the OTHER command an
-            // author writes by hand, so it falls under the same rule.
-            if let Some(chk) = cp.pkg.check.as_deref() {
-                checked += 1;
-                assert_shell_safe(chk, &format!("{id} check"));
-            }
+            // ⚠️ Without this, a renamed folder or a parse that starts returning None turns
+            // the whole test into a green no-op — the classic way a shipped-content guard
+            // stops guarding while still reporting success.
+            assert!(
+                checked > 10,
+                "{tree}: only {checked} commands checked — the tree was not really read"
+            );
         }
-        // ⚠️ Without this, a renamed folder or a parse that starts returning None turns
-        // the whole test into a green no-op — the classic way a shipped-catalogue guard
-        // stops guarding while still reporting success.
-        assert!(
-            checked > 30,
-            "only {checked} shipped commands checked — the catalogue was not really read"
-        );
     }
 
     /// A `{dir}` path is SINGLE-quoted, never double-quoted.
@@ -1868,44 +1897,46 @@ mod tests {
     /// on Mac and total on Windows.
     #[test]
     fn a_shipped_dir_path_is_single_quoted_never_double() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("catalog");
-        let mut checked = 0usize;
-        for e in std::fs::read_dir(&dir).expect("the shipped catalogue must be readable") {
-            let path = e.expect("readable entry").path();
-            if path.extension().and_then(|x| x.to_str()) != Some("yaml") {
-                continue;
-            }
-            let id = path.file_stem().unwrap().to_string_lossy().to_string();
-            let raw = std::fs::read_to_string(&path).expect("readable");
-            let Some(cp) = crate::catalog::parse_catalog_entry(&raw, &id) else {
-                continue;
-            };
-            // Every hand-written command an author can put `{dir}` into.
-            for (what, cmd) in [
-                ("run", cp.pkg.run.as_deref()),
-                ("runUninstall", cp.pkg.run_uninstall.as_deref()),
-                ("check", cp.pkg.check.as_deref()),
-            ] {
-                let Some(cmd) = cmd else { continue };
-                if !cmd.contains("{dir}") {
+        for (tree, catalog, _) in content_trees() {
+            let dir = std::path::Path::new(catalog);
+            let mut checked = 0usize;
+            for e in std::fs::read_dir(dir).expect("the content tree must be readable") {
+                let path = e.expect("readable entry").path();
+                if path.extension().and_then(|x| x.to_str()) != Some("yaml") {
                     continue;
                 }
-                checked += 1;
-                assert!(
-                    !cmd.contains("\"{dir}"),
-                    "{id} {what}: `{{dir}}` is DOUBLE-quoted — PowerShell interpolates \
-                     inside double quotes, so a `$word` in the path vanishes on Windows. \
-                     Use single quotes: {cmd}"
-                );
+                let id = path.file_stem().unwrap().to_string_lossy().to_string();
+                let raw = std::fs::read_to_string(&path).expect("readable");
+                let Some(cp) = crate::catalog::parse_catalog_entry(&raw, &id) else {
+                    continue;
+                };
+                // Every hand-written command an author can put `{dir}` into.
+                for (what, cmd) in [
+                    ("run", cp.pkg.run.as_deref()),
+                    ("runUninstall", cp.pkg.run_uninstall.as_deref()),
+                    ("check", cp.pkg.check.as_deref()),
+                ] {
+                    let Some(cmd) = cmd else { continue };
+                    if !cmd.contains("{dir}") {
+                        continue;
+                    }
+                    checked += 1;
+                    assert!(
+                        !cmd.contains("\"{dir}"),
+                        "{tree} {id} {what}: `{{dir}}` is DOUBLE-quoted — PowerShell interpolates \
+                         inside double quotes, so a `$word` in the path vanishes on Windows. \
+                         Use single quotes: {cmd}"
+                    );
+                }
             }
+            // ⚠️ The anti-no-op guard, same reason as the sibling test above: a test that
+            // silently checked zero `{dir}` commands would keep reporting success while
+            // guarding nothing. Every tree carries at least one config-atom.
+            assert!(
+                checked >= 2,
+                "{tree}: only {checked} `{{dir}}` commands checked — the tree was not really read"
+            );
         }
-        // ⚠️ The anti-no-op guard, same reason as the sibling test above: today exactly two
-        // config-atoms use `{dir}`, and a test that silently checked zero of them would keep
-        // reporting success while guarding nothing.
-        assert!(
-            checked >= 2,
-            "only {checked} `{{dir}}` commands checked — the catalogue was not really read"
-        );
     }
 
     #[test]
@@ -1945,51 +1976,48 @@ slow: true
     /// protects is the loop's meaning — a glob that matched nothing would pass vacuously.
     #[test]
     fn every_shipped_catalogue_file_still_parses_after_the_new_fields() {
-        let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/catalog"));
-        let mut files = 0usize;
-        for entry in std::fs::read_dir(dir)
-            .expect("catalog/ is shipped")
-            .flatten()
-        {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
-                continue; // sidecars like starship.nu are not packages
+        for (tree, catalog, _) in content_trees() {
+            let dir = std::path::Path::new(catalog);
+            let mut files = 0usize;
+            for entry in std::fs::read_dir(dir)
+                .expect("the content tree is there")
+                .flatten()
+            {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+                    continue; // sidecars like atom.nu are not packages
+                }
+                files += 1;
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap();
+                let raw = std::fs::read_to_string(&path).unwrap();
+                assert!(
+                    crate::catalog::parse_catalog_entry(&raw, stem).is_some(),
+                    "{tree} {} no longer parses",
+                    path.display()
+                );
             }
-            files += 1;
-            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap();
-            let raw = std::fs::read_to_string(&path).unwrap();
             assert!(
-                crate::catalog::parse_catalog_entry(&raw, stem).is_some(),
-                "{} no longer parses",
-                path.display()
+                files > 10,
+                "{tree}: only {files} catalogue files walked — the glob found (almost) nothing"
+            );
+            assert_eq!(
+                crate::catalog::load_catalog(dir.to_str().unwrap()).len(),
+                files,
+                "{tree}: the loader must still yield one entry per catalogue file"
             );
         }
-        assert!(
-            files > 20,
-            "only {files} catalogue files walked — the glob found (almost) nothing"
-        );
-        assert_eq!(
-            crate::catalog::load_catalog(dir.to_str().unwrap()).len(),
-            files,
-            "the loader must still yield one entry per catalogue file"
-        );
     }
 
     #[test]
-    fn the_shipped_seed_reaches_overrides() {
+    fn the_fixture_seeds_reach_overrides() {
         // The walk above proves every file still PARSES, which already catches a bad VALUE:
         // `uac: ture` is not a bool, so `parse_catalog_entry` returns None and the walk
         // trips (measured, both ways). What it does NOT catch is a bad KEY — `uacc: true`
-        // parses fine, because serde ignores an unknown field in silence, leaving the
-        // declaration inert and a fresh machine's first Apply uncalibrated. That one hole is
-        // why this test exists: it pins the VALUES that ship, through the same lift the
-        // resolution uses.
-        //
-        // Names the five stems on purpose rather than walking for whatever declares `uac`.
-        // The fixed set is the stronger guard — DELETING a seed turns it red, which a
-        // "some file declares something" check would sail past — and adding a sixth
-        // observation still will not, since nothing here asserts a total.
-        let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/catalog"));
+        // parses fine, because serde ignores an unknown field in silence (`--check` refuses
+        // it now, the runtime never will). This pins the VALUES the fixture declares,
+        // through the same lift the resolution uses — including the `rename = "403"`
+        // bridge, which the fixture writes quoted, as the reader expects.
+        let dir = std::path::Path::new(FIXTURE_CATALOG);
         let declared = |stem: &str| {
             let raw = std::fs::read_to_string(dir.join(format!("{stem}.yaml"))).unwrap();
             crate::catalog::parse_catalog_entry(&raw, stem)
@@ -1997,58 +2025,22 @@ slow: true
                 .pkg
                 .overrides()
         };
-
-        // Observed elevating on Windows via winget. The first four are C's, the last two
-        // came from a colleague's real Windows machine on 2026-08-04 — the first field data the
-        // telemetry ever produced, and the reason this list is expected to grow.
-        for stem in [
-            // C's, from her own field use
-            "7-zip",
-            "aws-cli",
-            "node",
-            "visual-studio-code",
-            // reported by a colleague, 2026-08-04
-            "starship",
-            "notepad-plus-plus",
-            // promoted from behaviour/ — the fleet found these before anyone declared them
-            "git",
-            "greenshot",
-            "nushell",
-        ] {
-            let o = declared(stem);
-            assert_eq!(o.uac, Some(true), "{stem} must declare uac: true");
-            // ⚠️ A LATENT false red: if any of these four is ever observed hitting a 403 at
-            // a corporate network, declaring it here turns this line red. That is the tripwire working —
-            // update the line, do not delete the assertion.
-            assert_eq!(o.forbidden, None, "{stem} says nothing about the firewall");
-        }
-
-        // And rclone meeting a corporate firewall, which pins the `rename = "403"` bridge.
-        // (Measured: serde_yaml accepts a BARE `403:` here too — it matches the renamed
-        // field on the key's text, integer-looking or not. The shipped file quotes it for
-        // the reader, not out of necessity.)
-        // And the ones a corporate firewall answers 403 on. rclone is C's; jj and ripgrep came
-        // from the colleague's machine on 2026-08-04.
-        //
-        // ⚠️ `403` is a NETWORK fact, not a Windows one — `forbidden::is403` has no platform
-        // gate, so a Mac behind the same firewall collects it too. Do not "fix" these into a
-        // Windows-only list.
-        for stem in ["rclone", "jj", "ripgrep", "bat", "uv"] {
-            let o = declared(stem);
-            assert_eq!(o.forbidden, Some(true), "{stem} must declare 403: true");
-            assert_eq!(o.uac, None, "{stem} says nothing about elevation");
-        }
-
+        let all = declared("seeds");
+        assert_eq!(all.uac, Some(true), "seeds must declare uac: true");
+        assert_eq!(all.forbidden, Some(true), "seeds must declare 403: true");
+        assert_eq!(all.slow, Some(true), "seeds must declare slow: true");
+        // Elevation alone, and nothing about the firewall.
+        let one = declared("two-managers");
+        assert_eq!(one.uac, Some(true));
+        assert_eq!(
+            one.forbidden, None,
+            "two-managers says nothing about the firewall"
+        );
+        assert_eq!(one.slow, None);
         // A package with no declaration must stay silent — otherwise the seed is not a
         // seed but a default, and "no opinion" would have collapsed into "false".
-        // The control must declare NOTHING, and it keeps moving as facts get promoted: jq
-        // became a fixture's subject, then bat gained a 403 from the fleet. `marktext` is the
-        // current choice — a package no report and no machine has flagged. When it too gets
-        // promoted, move this rather than deleting it: without a control, "no opinion" could
-        // silently collapse into "false" and nothing would notice.
-        assert_eq!(declared("marktext").uac, None);
-        assert_eq!(declared("marktext").forbidden, None);
-        assert_eq!(declared("marktext").slow, None);
+        let none = declared("pending");
+        assert_eq!((none.uac, none.forbidden, none.slow), (None, None, None));
     }
 
     // B5: `requires:` from catalog YAML must reach the Step (the front does the
@@ -2378,15 +2370,22 @@ slow: true
 
     #[test]
     fn every_shipped_version_is_one_of_the_three_legal_forms() {
-        // The guard that makes a typo in a catalogue edit fail a TEST rather than reach a machine.
-        // ⭐ This is a lint of the shipped example, deliberately kept on `catalog/`.
-        let cat = crate::catalog::load_catalog(concat!(env!("CARGO_MANIFEST_DIR"), "/catalog"));
-        for cp in cat.values() {
-            match classify_pin(cp.pkg.version.as_deref()) {
-                None | Some(PinKind::Exact(_)) | Some(PinKind::Latest) | Some(PinKind::Pending) => {
-                }
-                Some(PinKind::Invalid(w)) => {
-                    panic!("{}: version \"{w}\" is not a legal form", cp.pkg.name)
+        // The guard that makes a typo in a content edit fail a TEST rather than reach a
+        // machine. A lint of what ships, on both trees.
+        for (tree, catalog, _) in content_trees() {
+            let cat = crate::catalog::load_catalog(catalog);
+            for cp in cat.values() {
+                match classify_pin(cp.pkg.version.as_deref()) {
+                    None
+                    | Some(PinKind::Exact(_))
+                    | Some(PinKind::Latest)
+                    | Some(PinKind::Pending) => {}
+                    Some(PinKind::Invalid(w)) => {
+                        panic!(
+                            "{tree} {}: version \"{w}\" is not a legal form",
+                            cp.pkg.name
+                        )
+                    }
                 }
             }
         }

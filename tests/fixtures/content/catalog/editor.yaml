@@ -1,0 +1,8 @@
+# FORM: a graphical app on both managers — the host an extension requires.
+name: Editor
+description: A graphical editor
+winget: Vendor.Editor
+brew: editor
+detect: editor --version
+version: latest
+category: [editors]

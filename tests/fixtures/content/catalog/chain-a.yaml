@@ -1,0 +1,9 @@
+# FORM: a requires chain, a → b → c, declared by NAME.
+name: Chain A
+description: Needs Chain B
+winget: Vendor.ChainA
+brew: chain-a
+detect: chain-a --version
+category: [foundation]
+requires:
+  - Chain B

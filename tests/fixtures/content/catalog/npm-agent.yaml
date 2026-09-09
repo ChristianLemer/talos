@@ -1,0 +1,13 @@
+# FORM: the npm route with flags, a Node requirement, and a Doctor declaration with a
+# clean launch through an environment variable.
+name: Npm Agent
+description: An agent installed globally through npm
+npm: "@vendor/agent"
+npmFlags: "--no-fund"
+detect: agent --version
+version: latest
+category: [agents]
+requires:
+  - Node.js
+doctor:
+  clean: { env: AGENT_CONFIG_DIR }

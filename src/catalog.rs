@@ -133,26 +133,41 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // ---- The SHIPPED catalogue, not a fixture ----
+    // ---- The SHIPPED content, on both trees ----
     //
-    // These read catalog/ and bundles/ from the repo. The Bun regression that broke
-    // plugin hooks on Windows (2026-07-26) was invisible to every unit test, because
-    // every unit test built its own fixture: a wrong PREMISE in a shipped YAML has
-    // no fixture to contradict it. So assert on the real files.
+    // These read real YAML from disk. The Bun regression that broke plugin hooks on
+    // Windows (2026-07-26) was invisible to every unit test, because every unit test built
+    // its own fixture: a wrong PREMISE in a shipped YAML has no fixture to contradict it.
+    // So assert on the real files — the socle at the repo root, what a release publishes,
+    // and the form-per-file fixture under tests/, which must obey the same rules.
 
-    fn shipped_catalog() -> BTreeMap<String, CatalogPackage> {
-        load_catalog(concat!(env!("CARGO_MANIFEST_DIR"), "/catalog"))
+    fn trees() -> Vec<(&'static str, &'static str)> {
+        vec![
+            (
+                concat!(env!("CARGO_MANIFEST_DIR"), "/catalog"),
+                concat!(env!("CARGO_MANIFEST_DIR"), "/bundles"),
+            ),
+            (
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/content/catalog"
+                ),
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/content/bundles"
+                ),
+            ),
+        ]
     }
 
-    fn shipped_base_packages() -> Vec<String> {
+    fn base_packages(bundles: &str) -> Vec<String> {
         #[derive(serde::Deserialize)]
         struct Bundle {
             #[serde(default)]
             packages: Vec<String>,
         }
-        let raw =
-            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/bundles/base.yaml"))
-                .expect("bundles/base.yaml is shipped");
+        let raw = std::fs::read_to_string(format!("{bundles}/base.yaml"))
+            .expect("bundles/base.yaml is there");
         serde_yaml::from_str::<Bundle>(&raw).unwrap().packages
     }
 
@@ -162,41 +177,47 @@ mod tests {
     /// second time. See catalog/node.yaml for the whole argument.
     #[test]
     fn the_base_bundle_ships_node() {
-        assert!(
-            shipped_base_packages().iter().any(|p| p == "Node.js"),
-            "Node.js must stay in bundles/base.yaml — third-party plugin hooks invoke `node`"
-        );
+        for (_, bundles) in trees() {
+            assert!(
+                base_packages(bundles).iter().any(|p| p == "Node.js"),
+                "{bundles}/base.yaml must keep Node.js — third-party plugin hooks invoke `node`"
+            );
+        }
     }
 
-    /// Every `requires:` in the shipped catalogue must name a shipped package.
-    /// A dangling name does not fail loudly: requires_reason prints "requires X
-    /// (unknown)" on a row and the user is left to guess.
+    /// Every `requires:` must name a package of the same tree. A dangling name does not
+    /// fail loudly: requires_reason prints "requires X (unknown)" on a row and the user
+    /// is left to guess.
     #[test]
     fn every_shipped_requirement_names_a_shipped_package() {
-        let cat = shipped_catalog();
-        let names: Vec<&str> = cat.values().map(|c| c.pkg.name.as_str()).collect();
-        for c in cat.values() {
-            for req in &c.pkg.requires {
-                assert!(
-                    names.contains(&req.as_str()),
-                    "{}: requires \"{}\" which no catalog file declares",
-                    c.pkg.name,
-                    req
-                );
+        for (catalog, _) in trees() {
+            let cat = load_catalog(catalog);
+            let names: Vec<&str> = cat.values().map(|c| c.pkg.name.as_str()).collect();
+            for c in cat.values() {
+                for req in &c.pkg.requires {
+                    assert!(
+                        names.contains(&req.as_str()),
+                        "{catalog}: {} requires \"{}\" which no file declares",
+                        c.pkg.name,
+                        req
+                    );
+                }
             }
         }
     }
 
-    /// Same for the socle: a bundle that pulls a name nothing declares pulls nothing.
+    /// Same for Base: a bundle that pulls a name nothing declares pulls nothing.
     #[test]
     fn every_base_package_is_in_the_catalog() {
-        let cat = shipped_catalog();
-        let names: Vec<&str> = cat.values().map(|c| c.pkg.name.as_str()).collect();
-        for p in shipped_base_packages() {
-            assert!(
-                names.contains(&p.as_str()),
-                "bundles/base.yaml pulls \"{p}\" which no catalog file declares"
-            );
+        for (catalog, bundles) in trees() {
+            let cat = load_catalog(catalog);
+            let names: Vec<&str> = cat.values().map(|c| c.pkg.name.as_str()).collect();
+            for p in base_packages(bundles) {
+                assert!(
+                    names.contains(&p.as_str()),
+                    "{bundles}/base.yaml pulls \"{p}\" which no catalog file declares"
+                );
+            }
         }
     }
 
@@ -208,14 +229,16 @@ mod tests {
     /// down with it.
     #[test]
     fn bun_routed_packages_require_bun() {
-        for c in shipped_catalog().values() {
-            let p = &c.pkg;
-            if p.bun.is_some() {
-                assert!(
-                    p.requires.iter().any(|r| r == "Bun"),
-                    "{}: routes through bun but does not require Bun",
-                    p.name
-                );
+        for (catalog, _) in trees() {
+            for c in load_catalog(catalog).values() {
+                let p = &c.pkg;
+                if p.bun.is_some() {
+                    assert!(
+                        p.requires.iter().any(|r| r == "Bun"),
+                        "{catalog}: {} routes through bun but does not require Bun",
+                        p.name
+                    );
+                }
             }
         }
     }

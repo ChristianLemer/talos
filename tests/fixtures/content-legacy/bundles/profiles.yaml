@@ -1,0 +1,9 @@
+# LEGACY FORM: the multi-card file the runtime still reads and `--check` refuses.
+columns: 2
+profiles:
+  - profile: Legacy One
+    emoji: 🕰️
+    usage: An old-style card.
+    packages: [Two Managers]
+  - profile: Legacy Two
+    packages: [Editor]

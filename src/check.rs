@@ -276,15 +276,67 @@ mod tests {
         std::fs::write(root.join(rel), body).unwrap();
     }
 
-    /// The shipped examples are the fixture every other test leans on: they must be clean,
-    /// or `--check` would refuse the very kit this repo demonstrates.
+    /// What ships must read clean: the socle at the repo root (what a release publishes)
+    /// and the form-per-file fixture under tests/ — or `--check` would refuse the very
+    /// content this repo demonstrates and tests with.
     #[test]
     fn the_shipped_content_is_clean() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let r = run(&root.join("catalog"), &root.join("bundles"));
-        assert!(r.ok(), "{}", r.render());
-        assert!(r.packages > 20, "{} packages", r.packages);
-        assert!(r.bundles > 3, "{} bundles", r.bundles);
+        for (catalog, bundles, min_packages) in [
+            (root.join("catalog"), root.join("bundles"), 4),
+            (
+                root.join("tests/fixtures/content/catalog"),
+                root.join("tests/fixtures/content/bundles"),
+                15,
+            ),
+        ] {
+            let r = run(&catalog, &bundles);
+            assert!(r.ok(), "{}: {}", catalog.display(), r.render());
+            assert!(
+                r.packages >= min_packages,
+                "{}: {} packages",
+                catalog.display(),
+                r.packages
+            );
+            assert!(
+                r.bundles >= 1,
+                "{}: {} bundles",
+                catalog.display(),
+                r.bundles
+            );
+        }
+    }
+
+    /// The fixture is complete by construction: every key the engine accepts appears in
+    /// at least one of its files. A field added to `RawPkg` without a form here fails
+    /// this, not an integrator's `--check` months later.
+    #[test]
+    fn the_fixture_covers_every_known_key() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/content/catalog");
+        let mut seen = std::collections::BTreeSet::new();
+        for path in yaml_files(&dir) {
+            let raw = std::fs::read_to_string(&path).unwrap();
+            if let Ok(serde_yaml::Value::Mapping(m)) =
+                serde_yaml::from_str::<serde_yaml::Value>(&raw)
+            {
+                for k in m.keys() {
+                    if let serde_yaml::Value::String(s) = k {
+                        seen.insert(s.clone());
+                    } else if let serde_yaml::Value::Number(n) = k {
+                        seen.insert(n.to_string());
+                    }
+                }
+            }
+        }
+        let missing: Vec<&str> = crate::bundles::RawPkg::KNOWN_KEYS
+            .iter()
+            .copied()
+            .filter(|k| !seen.contains(*k))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "keys with no form in the fixture: {missing:?}"
+        );
     }
 
     #[test]

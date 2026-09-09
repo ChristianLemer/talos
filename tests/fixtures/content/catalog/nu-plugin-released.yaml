@@ -1,0 +1,9 @@
+# FORM: a nushell plugin FETCHED from its project's release — `plugin-release:` makes
+# it the 🧩 rung and sends the work to the project's own installer.
+name: Released Plugin
+description: A plugin fetched from its project's GitHub release
+nu-plugin: released
+plugin-release: vendor/nu_plugin_released@HEAD
+category: [terminal]
+requires:
+  - Nushell

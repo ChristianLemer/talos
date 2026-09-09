@@ -1,0 +1,6 @@
+# FORM: the OS as a package — so Windows-only rows can `requires:` it and leave the
+# perimeter elsewhere. Detected by a command only Windows answers.
+name: Windows
+description: The operating system, declared so Windows-only rows can depend on it
+detect: cmd /c ver
+category: [foundation]
