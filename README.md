@@ -53,8 +53,10 @@ usage: An agent, an editor, and what they stand on.
 packages: [Git, Node.js, jq, Claude Code, Visual Studio Code, uv]
 ```
 
-The full field reference — routes, `version:` pinning, config-atoms, behaviour seeds —
-is [`bundles/README.md`](bundles/README.md). The `catalog/` and `bundles/` in this tree
+The full field reference — routes, `version:` pinning, config-atoms, behaviour seeds — is
+[`plugin/skills/talos-content/references/fields.md`](plugin/skills/talos-content/references/fields.md),
+and the agent that writes content with you is one command away (see **The plugin** below).
+The `catalog/` and `bundles/` in this tree
 are the **socle**: what a machine needs to work with an agent, every file written as a
 lesson, and every route but two shown by a real package. Copy them, then make them
 yours. (The engine's own tests read a separate, synthetic fixture under `tests/`.)
@@ -149,6 +151,31 @@ They double-click the exe (or a shortcut you place). It opens a **native window*
 (Tauri, 16:9, size/position remembered per machine), scans the machine, and shows
 what's present, missing, or outdated. They act; it acts, *showing* every step. No
 install, no runtime to provision — the web UI is baked into the exe.
+
+---
+
+## The plugin — an agent that writes the content with you
+
+Nobody receives "a configuration". An integrator receives the socle **and an agent that
+adapts it**. This repo is also a Claude Code marketplace serving one plugin, `talos`:
+
+```bash
+claude plugin marketplace add github:ChristianLemer/talos
+claude plugin install talos@talos
+```
+
+- skill **`talos-content`** — the doctrine, a snippet per route, the traps, the loop that
+  ends at `0 errors`, and the complete field reference
+  ([`references/fields.md`](plugin/skills/talos-content/references/fields.md)).
+- skill **`talos-kit`** — composing and distributing a kit, `--verify` on a shared drive,
+  and the Doctor tab.
+- command **`/talos:init`** — scaffolds a content repo: `catalog/`, `bundles/`, a
+  `.talos-version` pinned at the newest release, a workflow that runs `--check` in CI, the
+  reference copied in verbatim, and an `AGENTS.md` so *any* agent can maintain the repo.
+
+It ships from this branch and these tags, so the plugin and the engine always describe the
+same content format — and `cargo test` fails if the engine grows a field the reference
+does not mention. See [`plugin/README.md`](plugin/README.md).
 
 ---
 

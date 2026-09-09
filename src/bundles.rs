@@ -2391,30 +2391,44 @@ slow: true
         }
     }
 
-    /// Every YAML key a catalogue author may write is documented in `bundles/README.md`.
+    /// Every YAML key a catalogue author may write is documented in the authoring reference —
+    /// `plugin/skills/talos-content/`, the skill this repo's own plugin ships.
     ///
     /// ⭐ WHY THIS EXISTS, measured rather than feared. `RawPkg` is the source of truth for
-    /// what the parser accepts, and it is not readable by a human; `bundles/README.md` is the
-    /// readable one, and nothing constrained it. That scissor is exactly how the README came
-    /// to state "if you want latest, omit `version:`" — true when written, false the day
-    /// `latest` became a word you can write. Nobody broke anything; the prose simply aged.
+    /// what the parser accepts, and it is not readable by a human; the reference is the
+    /// readable one, and nothing constrained it. That scissor is exactly how it came to state
+    /// "if you want latest, omit `version:`" — true when written, false the day `latest`
+    /// became a word you can write. Nobody broke anything; the prose simply aged.
     ///
     /// So this makes drift IMPOSSIBLE rather than improbable: add a field to `RawPkg` and this
-    /// test fails until the README mentions it. On its first run it found FOUR undocumented
+    /// test fails until the reference mentions it. On its first run it found FOUR undocumented
     /// keys — `category`, `uac`, `403`, `slow` — three of which are the behaviour seeds that
     /// calibrate a fresh machine's first Apply. They were reachable and unwritten.
+    ///
+    /// ⚠️ The reference LEFT `bundles/README.md` when the plugin landed, and that file is now
+    /// a pointer to it. The guard followed; it did not stay behind on the pointer, which would
+    /// have kept passing while documenting nothing.
     ///
     /// ⚠️ It does NOT check that the prose is CORRECT — no test can. It checks that the key
     /// is mentioned at all, which is the difference between "undocumented" and "possibly
     /// stale". Correctness stays a reviewer's job.
     #[test]
-    fn every_raw_pkg_field_is_documented_in_the_bundles_readme() {
+    fn every_raw_pkg_field_is_documented_in_the_authoring_reference() {
         // ⚠️ `\r` stripped first: `include_str!` embeds the file as it sits on disk, and with
         // no `.gitattributes` this tree is checked out CRLF on Windows. A sibling
         // source-reading test was already bitten by exactly that, found by the windows-latest
         // CI job on its first run.
         let src = include_str!("bundles.rs").replace('\r', "");
-        let readme = include_str!("../bundles/README.md").replace('\r', "");
+        // The reference is the `talos-content` skill of this repo's own plugin — the doctrine
+        // in SKILL.md, the field-by-field semantics in references/fields.md. Both count: a key
+        // is documented wherever an author will meet it. `include_str!` resolves at COMPILE
+        // time, so moving either file breaks the build rather than quietly emptying the guard.
+        let reference = format!(
+            "{}\n{}",
+            include_str!("../plugin/skills/talos-content/SKILL.md"),
+            include_str!("../plugin/skills/talos-content/references/fields.md")
+        )
+        .replace('\r', "");
 
         // The YAML key names, extracted from the struct rather than hand-listed — a hand-list
         // is a second thing to forget, which is the defect this test exists to prevent.
@@ -2466,13 +2480,14 @@ slow: true
             .filter(|k| {
                 let plain = format!("{k}:");
                 let quoted = format!("\"{k}\":"); // `403` is quoted in the catalogue
-                !readme.contains(&plain) && !readme.contains(&quoted)
+                !reference.contains(&plain) && !reference.contains(&quoted)
             })
             .collect();
         assert!(
             undocumented.is_empty(),
-            "these keys are accepted by the parser and appear nowhere in bundles/README.md: \
-             {undocumented:?} — document them, or a catalogue author cannot know they exist"
+            "these keys are accepted by the parser and appear nowhere in the authoring \
+             reference (plugin/skills/talos-content/): {undocumented:?} — document them, or a \
+             catalogue author cannot know they exist"
         );
     }
 }

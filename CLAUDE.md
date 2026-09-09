@@ -128,6 +128,19 @@ releases that carried them (beta.1–19) were retired on 2026-09-06.
 - **`tests/fixtures/content/`** — the FIXTURE: one file per form the engine knows, synthetic
   ids, for the tests. The shipped-content guards walk both trees; a test that names a file
   names the fixture. Keep the two apart: the socle is real, the fixture is complete.
+- **`.claude-plugin/marketplace.json`** + **`plugin/`** — the repo is also a Claude Code
+  marketplace serving one plugin, `talos` (`claude plugin install talos@talos`; the GitHub
+  default branch is `beta`, so `github:ChristianLemer/talos` resolves to the living
+  branch). Two skills — `talos-content` (the doctrine and the **field reference**,
+  `plugin/skills/talos-content/references/fields.md`) and `talos-kit` (composing,
+  `--verify`, the Doctor) — plus `/talos:init`, which scaffolds an integrator's content
+  repo and copies the reference into it **verbatim**.
+
+⚠️ **The field reference has ONE source**, and it is the skill. `bundles/README.md` is a
+pointer to it (it used to *be* it), and `check::tests::the_authoring_reference_covers_every_known_key`
+fails when a key is added to `RawPkg::KNOWN_KEYS` and not mentioned under
+`plugin/skills/talos-content/`. Never paraphrase the reference into a second file — copy
+it, or link it.
 
 **The core knows no client.** Anything client- or flavour-specific enters by extension, never
 into the core. `catalog/chiron.yaml` still carries a site-specific marketplace path — a known

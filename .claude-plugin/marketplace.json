@@ -1,0 +1,22 @@
+{
+  "name": "talos",
+  "owner": {
+    "name": "Christian Lemer",
+    "url": "https://github.com/ChristianLemer"
+  },
+  "metadata": {
+    "description": "Talos — the graphical promoter and installer. This marketplace serves one plugin: the assistant for writing and maintaining Talos content, versioned with the engine it describes."
+  },
+  "plugins": [
+    {
+      "name": "talos",
+      "displayName": "Talos",
+      "description": "Write and maintain Talos content — the catalog/ and bundles/ YAML a kit is made of. Carries the field reference, the doctrine, and /talos:init to scaffold a content repo.",
+      "source": "./plugin",
+      "license": "MIT",
+      "homepage": "https://github.com/ChristianLemer/talos",
+      "repository": "https://github.com/ChristianLemer/talos",
+      "keywords": ["talos", "installer", "catalog", "bundles", "yaml", "authoring"]
+    }
+  ]
+}

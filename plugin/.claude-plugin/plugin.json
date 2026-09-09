@@ -1,0 +1,13 @@
+{
+  "name": "talos",
+  "version": "0.0.1",
+  "description": "The authoring assistant for Talos content — catalog/ and bundles/, the kit, and the loop that checks them.",
+  "author": {
+    "name": "Christian Lemer",
+    "url": "https://github.com/ChristianLemer"
+  },
+  "homepage": "https://github.com/ChristianLemer/talos",
+  "repository": "https://github.com/ChristianLemer/talos",
+  "license": "MIT",
+  "keywords": ["talos", "installer", "catalog", "bundles", "yaml", "authoring"]
+}

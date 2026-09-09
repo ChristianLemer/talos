@@ -114,7 +114,8 @@ jobs:
           cp target/release/Talos Talos-linux-x86_64
 
       # The socle, read the strict way by the binary just built, then zipped as it sits
-      # at the root — catalog/ and bundles/ side by side, the authoring reference inside.
+      # at the root — catalog/ and bundles/ side by side. The field reference itself lives in
+      # the `talos` plugin now; `bundles/README.md` ships as the pointer to it.
       - name: Check and zip the socle (Linux)
         if: runner.os == 'Linux'
         run: |
