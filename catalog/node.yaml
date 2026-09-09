@@ -1,39 +1,16 @@
-# Node.js — JavaScript runtime. Required, and NOT by Talos itself: by the Claude
-# PLUGIN ECOSYSTEM. Published plugins run their hooks with a hardcoded `node`
-# (chiron, atlas, caveman all do). A Node-less box therefore either dies with
-# `node: command not found` or — worse, ponytail-style behind a `command -v node`
-# guard — silently does not activate.
+# Node.js — the JavaScript runtime. Talos itself does not need it; the agent ecosystem
+# does: Claude Code installs through npm, `npx skills` installs skills, and published
+# plugins run their hooks with a literal `node`. A machine without it is not minimal, it
+# is exotic — removing it once made that dependency implicit and broke plugin hooks on
+# Windows (2026-07-26), which is why a test guards its place in Base.
 #
-# ⚠️ DO NOT remove this again on the grounds that "Claude Code moved to Bun". That
-# is true and beside the point: Bun replaced Node as the runtime *we* invoke, it
-# cannot satisfy the literal string `node` written into somebody else's plugin. A
-# previous revision of this file claimed Node was "superseded, kept only for
-# cleanup"; that generalised from Claude Code to the whole ecosystem, was never
-# tested on a box that actually lacked Node, and broke plugin hooks on Windows
-# (2026-07-26).
-#
-# Dropping the package did not drop the dependency — it made it implicit and
-# undetected, which is strictly worse than an assumed one. `node` on PATH IS the
-# gaussian of JS tooling: a machine without it is not minimal, it is exotic.
+# Current, not LTS: two Node installs confuse the PATH, and a team that shipped both
+# learned to keep exactly one.
 name: Node.js
-description: JavaScript runtime — Claude plugin hooks invoke `node` directly
+description: JavaScript runtime — npm, npx and every plugin hook lean on it
 winget: OpenJS.NodeJS
 brew: node
 detect: node --version
+version: latest
 category: [foundation]
-# Observed on Windows via winget (C, 2026-08-01): demands elevation, so an unattended
-# Apply must not schedule it. This is a SEED, not a substitute for the telemetry: a fresh
-# machine has collected nothing, and without this line its first Apply would promise
-# "nothing will interrupt you" and then hit a UAC prompt. The shared behaviour file
-# confirms and extends it from the fleet; the catalogue speaks first.
-#
-# It is also an OVERRIDE: an explicit value here beats what was collected, which is the
-# only way a monotone fact ever goes back to false. Scoped to (winget, windows) by the
-# observation, not by this file — the same package via brew on macOS does not elevate.
 uac: true
-
-# Held for arbitration: nobody has decided which upgrade of this application is worth taking,
-# so Apply does not push one. ⚠️ NOT a blindfold — the row still SHOWS a newer version, greyed,
-# and the per-row button still offers it. Replace this with `latest` or an exact version once
-# the decision is made; `grep -c 'version: "pending"' catalog/*.yaml` is then the work left.
-version: "pending"

@@ -393,7 +393,7 @@ mod tests {
         );
 
         // Rung 4 🏗️: slow DOMINATES, so this one is admitted nowhere below Everything.
-        let slow = &all["aws-cli"]["brew/darwin"];
+        let slow = &all["chain-a"]["brew/darwin"];
         assert!(
             crate::ladder::is_slow(slow),
             "the slow fixture must actually CLASSIFY as slow, not merely carry a big number"
@@ -402,12 +402,12 @@ mod tests {
         // all (the watcher is `#[cfg(target_os = "windows")]`); `403` merely saves a trip to
         // the office. Same rung, very different standing — see the fixtures' README.
         assert!(
-            all["fd"]["brew/darwin"].forbidden,
+            all["chain-b"]["brew/darwin"].forbidden,
             "the 403 fixture — and if this fails, suspect the KEY before the value"
         );
-        assert!(all["helix"]["brew/darwin"].uac, "the uac fixture");
+        assert!(all["chain-c"]["brew/darwin"].uac, "the uac fixture");
         // Rung 2 ☕: the control. Without it the set would only ever prove EXCLUSION.
-        let fast = &all["jq"]["brew/darwin"];
+        let fast = &all["editor"]["brew/darwin"];
         assert!(
             fast.slow_secs > 0 && !crate::ladder::is_slow(fast),
             "the fast fixture must be MEASURED and quick — a 0 would read as unknown"
@@ -427,7 +427,7 @@ mod tests {
         // can never appear in a plan, and looks perfectly fine while proving nothing.
         let catalog = crate::catalog::load_catalog(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("catalog")
+                .join("tests/fixtures/content/catalog")
                 .to_str()
                 .unwrap(),
         );
@@ -439,21 +439,21 @@ mod tests {
             );
         }
 
-        // The two facts that must NOT already be declared in catalog/, or the fixture is
-        // indistinguishable from the declaration and proves nothing about this FOLDER being
-        // read. Asserted rather than commented, because the catalogue is free to change:
-        // `catalog/rclone.yaml` already declares `"403": true`, which is exactly why the 403
-        // fixture subject declares nothing of its own.
+        // The facts that must NOT already be declared by the subject's catalogue file, or
+        // the fixture is indistinguishable from the declaration and proves nothing about
+        // this FOLDER being read. The subjects are the content fixture's `chain-*` and
+        // `editor` — files that declare no seed at all, by construction — so a fact seen
+        // here can only have come from here.
         assert_eq!(
-            catalog["fd"].pkg.forbidden, None,
+            catalog["chain-b"].pkg.forbidden, None,
             "the 403 fixture's package must declare no 403 of its own"
         );
         assert_eq!(
-            catalog["helix"].pkg.uac, None,
+            catalog["chain-c"].pkg.uac, None,
             "the uac fixture's package must declare no uac of its own"
         );
         assert_eq!(
-            catalog["aws-cli"].pkg.slow, None,
+            catalog["chain-a"].pkg.slow, None,
             "the slow fixture's package must declare no slow of its own"
         );
     }

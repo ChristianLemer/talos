@@ -1,0 +1,9 @@
+# The VC++ redistributable — Nushell will not start on Windows without it, and Windows does
+# not always have it. Windows-only, so it requires the OS package.
+name: VC++ runtime
+description: Microsoft VC++ 2015+ redistributable — Nushell will not start without it
+winget: Microsoft.VCRedist.2015+.x64
+version: latest
+category: [foundation]
+requires:
+  - Windows

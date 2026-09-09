@@ -1,19 +1,12 @@
-# Excel for Nushell — reads and writes .xlsx. ⭐ The ONE plugin here that nushell does not
-# ship, so its binary comes from the project's own releases (~9 MB) — no Rust toolchain on a
-# colleague's machine, which matters for a data manager on Windows.
-#
-# ⭐ THE VERSION COUPLING IS SOLVED WHERE IT LIVES. A plugin binary loads into exactly one
-# Nushell minor, and the project publishes one release per minor (`v0.2.1+nu-0.115.1`,
-# four platforms, a `.sha256` per asset). Its own `install.nu` picks the archive matching
-# the Nushell that runs it and verifies the checksum; `nu-plugin-fetch.nu` only fetches and
-# runs that installer. So the pin in `catalog/nushell.yaml` decides which plugin build lands,
-# with nothing to keep in step by hand — and a Nushell minor the project has not published
-# for fails LOUDLY in the row's terminal, which is the honest failure.
-#
-# `@HEAD` pins the INSTALLER (the project's default branch), not the binary. A tag here
-# would freeze the installer's behaviour, never the build it selects.
+# Excel for Nushell — reads and writes .xlsx. THE NU-PLUGIN ROUTE, RELEASED: nushell does
+# not ship it, so `plugin-release: owner/repo@ref` names the project and the git ref of its
+# `install.nu`; the sidecar `nu-plugin-fetch.nu` beside this file fetches that installer
+# and runs it. The installer picks the archive built for the Nushell MINOR running here
+# and verifies the checksum — the version coupling is solved where it lives, and a minor
+# the project has not published for fails LOUDLY in the row's terminal. The 🧩 rung,
+# because it fetches. `@HEAD` pins the installer, never the binary.
 name: Excel for Nushell
-description: Read and write .xlsx files from nushell
+description: Read and write .xlsx files from the shell
 nu-plugin: xlsx
 plugin-release: ChristianLemer/nu_plugin_xlsx@HEAD
 category: [terminal]

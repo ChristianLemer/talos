@@ -1,32 +1,20 @@
-# Claude Code — the default AI agent (opt-out via the Agents bundle).
-# Installed globally via npm (`npm install -g`). Bun installs the SAME native binary
-# and works fine, but the agent routes through npm because Node.js is what the socle
-# guarantees: published Claude plugins run their hooks with a hardcoded `node` (see
-# catalog/node.yaml), so a Node-less box was never actually viable. Routing the agent
-# through a second runtime bought an extra dependency and no independence.
-# Detection is installer-agnostic (`claude --version`), so a bun-installed `claude`
-# from an earlier Talos revision is still detected.
+# Claude Code — the agent. THE NPM ROUTE: `npm:` names the package, installed globally;
+# it therefore `requires:` Node.js BY NAME — the name in node.yaml, not the file name. A
+# requirement that is absent takes this row out of the perimeter with the reason shown.
 name: Claude Code
-description: Anthropic's official CLI agent — installed globally via npm
+description: Anthropic's coding agent, on the command line
 npm: "@anthropic-ai/claude-code"
 detect: claude --version
+version: latest
 category: [agents]
 requires:
-  - Node.js # a PACKAGE name (matches catalog/node.yaml `name: Node.js`), resolved
-  # against the plan — satisfied if Node is present OR wanted (transitively pulled
-  # in). npm ships with Node, so there is no separate npm package to require, and
-  # no PATH config-atom either: both installers put their global bin on PATH.
+  - Node.js
 
-# Held for arbitration: nobody has decided which upgrade of this application is worth taking,
-# so Apply does not push one. ⚠️ NOT a blindfold — the row still SHOWS a newer version, greyed,
-# and the per-row button still offers it. Replace this with `latest` or an exact version once
-# the decision is made; `grep -c 'version: "pending"' catalog/*.yaml` is then the work left.
-version: "pending"
-
-# The Doctor tab may launch this as the rescue session. `clean.env`: a fresh per-machine
-# directory handed through CLAUDE_CONFIG_DIR yields a session with no plugins, no hooks,
-# no memory, no inherited settings — and auth survives, because credentials come from the
-# keychain (MEASURED on macOS). Not `--bare`: measured, that skips plugin SYNC, keeps the
-# plugins loaded and drops the keychain — the opposite of a rescue.
+# THE DOCTOR: this package may be launched from the Doctor tab as a rescue session, by
+# absolute path and no shell. `clean.env`: a fresh per-machine directory handed through
+# CLAUDE_CONFIG_DIR yields a session with no plugins, no hooks, no memory, no inherited
+# settings — and auth survives, because credentials come from the keychain (MEASURED on
+# macOS). Not `--bare`: measured, that skips plugin SYNC, keeps the plugins loaded and
+# drops the keychain — the opposite of a rescue. A capability, never a category.
 doctor:
   clean: { env: CLAUDE_CONFIG_DIR }

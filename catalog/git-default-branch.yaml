@@ -1,0 +1,16 @@
+# Git's default branch — A CONFIG-ATOM WITHOUT A SCRIPT. `run:` applies a setting,
+# `check:` answers whether it is applied (exit 0 = present), `runUninstall:` undoes it.
+# No package manager, no sidecar: three git commands. The row shows up as configuration,
+# not as software, and Apply treats it like any other step — non-interactive, traced.
+#
+# `--get` exits 1 when the key is unset, which is what makes `check:` honest; it does not
+# verify the VALUE, so a machine set to `trunk` reads as configured. Say so rather than
+# pretend: a check that is true for the wrong reason is still a check the reader can see.
+name: Git default branch
+description: New repositories start on `main`
+run: git config --global init.defaultBranch main
+check: git config --global --get init.defaultBranch
+runUninstall: git config --global --unset init.defaultBranch
+category: [config]
+requires:
+  - Git

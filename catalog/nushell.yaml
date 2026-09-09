@@ -1,12 +1,13 @@
-# Nushell — structured shell, the language Talos config-atoms are written in.
+# Nushell — a shell where everything is data: tables in, tables out, no parsing of text.
+# The language Talos's own scripted config-atoms are written in, and the shell an agent
+# is happiest driving. `latest`: the plugins below follow the running minor by themselves.
 name: Nushell
-description: Structured shell — the language Talos config-atoms are written in
+description: A shell where everything is data — tables in, tables out
 winget: Nushell.Nushell
 brew: nushell
 detect: nu --version
-version: "0.113.1"
-category: [foundation]
-# Asks for an authorisation on Windows via winget. Promoted from behaviour/ (fleet, 2026-08-06).
+version: latest
+category: [terminal]
 uac: true
 # A shell is a legitimate rescue too: when the agent is what is broken, this is what is
 # left. `nu -n` loads no config files (MEASURED: it is how every sidecar check here runs).

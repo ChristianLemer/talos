@@ -1,0 +1,12 @@
+# Plus — the shapes a content author meets next: a config-atom without a script, the OS
+# as a package, and a row that only exists on Windows.
+bundle: Plus
+emoji: ➕
+usage: A few settings and Windows extras.
+highlights: [Git default branch, 7-Zip]
+description: A git setting applied as a step, and what Windows lacks.
+needs: [Base]
+packages:
+  - Git default branch
+  - Windows
+  - 7-Zip

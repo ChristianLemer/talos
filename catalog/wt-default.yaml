@@ -1,0 +1,14 @@
+# Windows Terminal, defaulting to Nushell — A CONFIG-ATOM WITH A SIDECAR. The three
+# commands hand the work to `wt-default.nu` beside this file, reached through `{dir}` in
+# SINGLE quotes: PowerShell interpolates inside double ones, and a `$` in the path would
+# vanish. `check '{dir}'` answers whether the profile is set (exit 0). Windows-only, and it
+# needs the shell it promotes.
+name: Windows Terminal default shell
+description: Makes Nushell the default profile in Windows Terminal
+run: nu '{dir}/wt-default.nu' apply '{dir}'
+check: nu '{dir}/wt-default.nu' check '{dir}'
+runUninstall: nu '{dir}/wt-default.nu' uninstall '{dir}'
+category: [config]
+requires:
+  - Nushell
+  - Windows

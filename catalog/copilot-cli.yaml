@@ -1,0 +1,10 @@
+# Copilot CLI — a second agent, GitHub's, on the command line. The fallback when the first
+# cannot reach a model, and the proof that Talos knows no favourite. ⚠️ On brew the CASK
+# is `copilot-cli`: `copilot` alone is AWS's container tool.
+name: Copilot CLI
+description: GitHub's terminal agent — a second opinion, or a fallback
+winget: GitHub.Copilot
+brew: copilot-cli
+detect: copilot --version
+version: latest
+category: [agents]

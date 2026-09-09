@@ -34,8 +34,8 @@ Two flat folders, read from disk beside the exe at runtime — no build step:
   `skill`, a `vscode-extension`, a `nu-plugin`), how to detect it, which version to
   hold. The file stem is the package id; `name:` is what everything else refers to.
 - **`bundles/`** — one YAML per **selection**: a named card that pulls packages in by
-  their `name`, and `needs:` other bundles (Base ← Documents ← Data ← Development is
-  the shipped chain).
+  their `name`, and `needs:` other bundles (Base ← Manuals, Plus, Terminal is the
+  shipped set).
 
 ```yaml
 # catalog/jq.yaml
@@ -49,14 +49,15 @@ version: latest
 # bundles/base.yaml
 bundle: Base
 emoji: 🧱
-usage: The essentials — an AI agent, the plumbing it runs on, the method.
-packages: [Git, Node.js, jq, Nushell, Claude Code]
+usage: An agent, an editor, and what they stand on.
+packages: [Git, Node.js, jq, Claude Code, Visual Studio Code, uv]
 ```
 
 The full field reference — routes, `version:` pinning, config-atoms, behaviour seeds —
 is [`bundles/README.md`](bundles/README.md). The `catalog/` and `bundles/` in this tree
-are **examples**, and double as fixtures for the engine's own tests: copy them, then
-make them yours.
+are the **socle**: what a machine needs to work with an agent, every file written as a
+lesson, and every route but two shown by a real package. Copy them, then make them
+yours. (The engine's own tests read a separate, synthetic fixture under `tests/`.)
 
 **Keep the content in a repo of your own.** Two folders and one more file:
 

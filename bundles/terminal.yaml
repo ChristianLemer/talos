@@ -1,13 +1,15 @@
-# Terminal tools — a comfortable prompt + fast CLI utilities. Standalone: depends
-# on nothing, activated independently of the chain (spec §24).
-bundle: Terminal tools
+# Terminal — Nushell and its plugins: a shell where everything is data, and the two ways
+# a plugin reaches it (shipped beside nu, or fetched from its project's release). On
+# Windows, the runtime it needs and Windows Terminal set to open on it.
+bundle: Terminal
 emoji: 🐚
-usage: A comfortable terminal — prompt and fast CLI tools.
-highlights: [Starship, ripgrep, bat]
-description: Cross-shell prompt and speedy command-line utilities.
+usage: A shell where everything is data, with DataFrames and Excel.
+highlights: [Nushell, Polars for Nushell]
+description: Nushell, its plugins, and Windows Terminal defaulting to it.
+needs: [Base]
 packages:
-  - Starship
-  - Starship config
-  - ripgrep
-  - fd
-  - bat
+  - Nushell
+  - VC++ runtime
+  - Polars for Nushell
+  - Excel for Nushell
+  - Windows Terminal default shell

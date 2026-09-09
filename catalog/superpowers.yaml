@@ -1,0 +1,12 @@
+# Superpowers — a manual for the agent: how to work, not what to build. THE CLAUDE-PLUGIN
+# ROUTE: `claude-plugin:` is `<plugin>@<marketplace>`, and `marketplace:` names the
+# source Talos registers before installing. `detect:` is the name `claude plugin list`
+# reports, not a binary on PATH. It requires the agent that hosts it.
+name: Superpowers
+description: Teaches the agent how to work — TDD, systematic debugging, planning, review
+claude-plugin: superpowers@claude-plugins-official
+marketplace: anthropics/claude-plugins-official
+detect: superpowers
+category: [automation]
+requires:
+  - Claude Code

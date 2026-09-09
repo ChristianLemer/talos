@@ -1,0 +1,7 @@
+# Windows — THE OPERATING SYSTEM AS A PACKAGE. Nothing installs it; it is declared so a
+# Windows-only row can `requires: [Windows]` and leave the perimeter on a Mac with the
+# reason shown, instead of failing there. Detected by a command only Windows answers.
+name: Windows
+description: The operating system — declared so Windows-only rows can depend on it
+detect: cmd /c ver
+category: [foundation]

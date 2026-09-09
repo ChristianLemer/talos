@@ -1,5 +1,10 @@
 # Behaviour fixtures — validating the Apply ladder without installing anything
 
+> Since 2026-09-09 the subjects are packages of the CONTENT fixture
+> (`tests/fixtures/content/catalog/`), not of the shipped socle: `chain-a`, `chain-b`,
+> `chain-c` and `editor` declare no seed, so a fact read from here is provably from here.
+> The product names in the table below are the history of why each rung has a fixture.
+
 The ladder is a five-detent slider (⚡ Config only · 📦 Add missing · ☕ Unattended · 👀 Stay
 nearby · 🏗️ Everything) that filters an Apply by how far you want to go. Which rung admits a
 row depends on three **behaviour facts** per (package, route, os): `uac`, `403`, `slow_secs`.
@@ -29,13 +34,13 @@ rewrites them.
 
 | file | the rung it exercises | why this package |
 |---|---|---|
-| `aws-cli.yaml` | 🏗️ Everything — `slow_secs: 900`, well above `ladder::SLOW_SECS` (60) | slow DOMINATES in `rung_allows`, so this row is admitted nowhere below the top. `catalog/aws-cli.yaml` declares no `slow` (nothing in `catalog/` does), so a slow AWS CLI can only have come from here |
-| `helix.yaml` | 👀 Stay nearby — `uac: true` | **deliberately NOT one of the four packages that declare `uac: true` in `catalog/`** (7-Zip, AWS CLI, Node.js, VS Code) — a seeded row looks identical whether this file was read or not. And **deliberately a row Talos manages**: Git reads `external` on the dev Mac (Xcode CLT) and both config-atoms derive out of scope, and an out-of-scope row yields no action at any rung |
-| `fd.yaml` | 👀 Stay nearby — `"403": true` | the subject must declare nothing of its own, and it MOVES as facts get promoted: rclone → uv → fd (uv was promoted 2026-08-08 when the fleet saw a real 403) |
-| `jq.yaml` | ☕ Unattended — measured and quick (`slow_secs: 3`) | the CONTROL. Without a row the filter lets THROUGH on its facts, the other three prove only that rows can be excluded |
+| `chain-a.yaml` | 🏗️ Everything — `slow_secs: 900`, well above `ladder::SLOW_SECS` (60) | slow DOMINATES in `rung_allows`, so this row is admitted nowhere below the top. `catalog/aws-cli.yaml` declares no `slow` (nothing in `catalog/` does), so a slow AWS CLI can only have come from here |
+| `chain-c.yaml` | 👀 Stay nearby — `uac: true` | **deliberately NOT one of the four packages that declare `uac: true` in `catalog/`** (7-Zip, AWS CLI, Node.js, VS Code) — a seeded row looks identical whether this file was read or not. And **deliberately a row Talos manages**: Git reads `external` on the dev Mac (Xcode CLT) and both config-atoms derive out of scope, and an out-of-scope row yields no action at any rung |
+| `chain-b.yaml` | 👀 Stay nearby — `"403": true` | the subject must declare nothing of its own, and it MOVES as facts get promoted: rclone → uv → fd (uv was promoted 2026-08-08 when the fleet saw a real 403) |
+| `editor.yaml` | ☕ Unattended — measured and quick (`slow_secs: 3`) | the CONTROL. Without a row the filter lets THROUGH on its facts, the other three prove only that rows can be excluded |
 
 **File stems are catalogue ids.** `behaviour_io::behaviour_path` joins `format!("{id}.yaml")`,
-so `aws-cli.yaml` here pairs with `catalog/aws-cli.yaml`, the same correspondence the real
+so `chain-a.yaml` here pairs with `tests/fixtures/content/catalog/chain-a.yaml`, the same correspondence the real
 share uses. A fixture named `fixture-slow.yaml` matches no package, can never appear on a
 row, and looks perfectly fine while proving nothing. `behaviour_io.rs`'s
 `the_shipped_fixtures_parse_and_reach_every_rung` asserts every stem against the real

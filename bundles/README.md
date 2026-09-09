@@ -16,8 +16,8 @@ file parses and every name resolves.
 catalog/
 ├── git.yaml            ← one package = one file; the stem is its id
 ├── jq.yaml
-├── starship.yaml
-├── starship.nu         ← a config-atom may ship a file beside it (see Config-atoms)
+├── wt-default.yaml
+├── wt-default.nu       ← a config-atom may ship a file beside it (see Config-atoms)
 └── …
 bundles/
 ├── README.md           ← you are here
@@ -54,21 +54,21 @@ a name the catalog does not declare.
 ## A bundle file — one card
 
 ```yaml
-bundle: Documents
-emoji: 📄
-usage: Read, write and convert documents.
-highlights: [Pandoc, Typst]            # 2-3 names to advertise the card
-description: What you need to work on text — on top of Base.
+bundle: Manuals
+emoji: 📚
+usage: Teach the agent how to work, and keep a second one at hand.
+highlights: [Superpowers, astral]      # 2-3 names to advertise the card
+description: Plugins and skills that shape how the agent works, plus Copilot CLI.
 needs: [Base]                          # bundles this one stands on (real cascade)
 packages:
-  - Pandoc
-  - Typst
+  - Superpowers
+  - astral
 ```
 
 A bundle is a **button**: activating it pulls its packages "in" as a group. Purely
 additive — it never forces anything out, and a manual "out" always wins. Several can
 be active at once; their pulls union. `needs:` chains bundles: the shipped chain is
-Base ← Documents ← Data ← Development, plus standalone cards.
+Base ← Manuals, Plus, Terminal — each of the three `needs: [Base]`.
 
 ## Routes — a package is a *need*, satisfied by one named route
 
@@ -250,8 +250,8 @@ converges a file instead of installing software. The pattern (see `terminal/`):
 ```yaml
   - name: Starship config
     description: A sensible Starship prompt config the family ships
-    run: nu "{dir}/starship.nu" apply    # apply = open | patch | save
-    check: nu "{dir}/starship.nu" check  # dry-run: exit 0 = converged, non-zero = drifted
+    run: nu '{dir}/wt-default.nu' apply '{dir}'    # apply = open | patch | save
+    check: nu '{dir}/wt-default.nu' check '{dir}'  # dry-run: exit 0 = converged, non-zero = drifted
     requires: [Starship]
 ```
 
@@ -298,7 +298,7 @@ before the fleet's own observations accumulate.
 | field | says | example |
 |---|---|---|
 | `uac: true` | this install **demands elevation** | `visual-studio-code` via winget (observed) |
-| `"403": true` | a corporate firewall answers 403 on this download | `rclone`, `uv` (observed on a real estate) |
+| `"403": true` | a corporate firewall answers 403 on this download | observed on a real estate; a SITE fact, so the socle declares none |
 | `slow: true` | this one takes a long time | — |
 
 ⭐ **A boolean, never a duration.** The author says "this one is slow"; the *measured*

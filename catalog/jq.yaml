@@ -1,13 +1,9 @@
-# jq — JSON CLI, required by some agent plugin hooks.
+# jq — the JSON command line. Some plugin hooks call it; an agent reaches for it
+# constantly. Small, and everywhere.
 name: jq
-description: JSON CLI — required by some agent plugin hooks
+description: JSON on the command line — plugin hooks and agents both reach for it
 winget: jqlang.jq
 brew: jq
 detect: jq --version
+version: latest
 category: [foundation]
-
-# Held for arbitration: nobody has decided which upgrade of this application is worth taking,
-# so Apply does not push one. ⚠️ NOT a blindfold — the row still SHOWS a newer version, greyed,
-# and the per-row button still offers it. Replace this with `latest` or an exact version once
-# the decision is made; `grep -c 'version: "pending"' catalog/*.yaml` is then the work left.
-version: "pending"

@@ -1,16 +1,18 @@
-# Git — version control, required by agent plugin marketplaces.
+# Git — version control. Agents work in repositories, and plugin marketplaces are git
+# clones, so this is the first thing a machine needs.
+#
+# THE SHAPE OF A PACKAGE: a `name:` (what bundles and `requires:` refer to), one id per
+# manager Talos may use on this machine (`winget:` on Windows, `brew:` on macOS), a
+# `detect:` command whose success means "present" and whose output carries the version,
+# and a `version:` policy. `latest` says: keep it current. `category:` only groups the
+# row in the Catalog view — it never decides anything.
 name: Git
-description: Version control — required by agent plugin marketplaces
+description: Version control — agents work in repositories, plugins are git clones
 winget: Git.Git
 brew: git
 detect: git --version
-category: [vcs]
-# Asks for an authorisation on Windows via winget, and takes ~9 min — the slowest
-# thing in the catalogue. Promoted from behaviour/ (fleet, 2026-08-06).
+version: latest
+category: [foundation]
+# A BEHAVIOUR SEED: installing this elevates on Windows (winget asks for authorisation).
+# Apply warns before it acts. Declare only what you have seen.
 uac: true
-
-# Held for arbitration: nobody has decided which upgrade of this application is worth taking,
-# so Apply does not push one. ⚠️ NOT a blindfold — the row still SHOWS a newer version, greyed,
-# and the per-row button still offers it. Replace this with `latest` or an exact version once
-# the decision is made; `grep -c 'version: "pending"' catalog/*.yaml` is then the work left.
-version: "pending"

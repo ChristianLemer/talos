@@ -1,20 +1,17 @@
-# Base — the socle: plumbing + the AI agent + methodology. Everything stands on
-# it. The chain (Documents ← Data ← Development) needs Base; activating any of
-# them activates Base too (real cascade, spec §23).
+# Base — what a machine needs to work with an agent, and nothing else. A BUNDLE is a
+# card: activating it pulls its packages "in" as a group, by NAME. Purely additive; a
+# manual "out" always wins. Every other bundle here `needs:` this one, so activating any
+# of them activates Base too.
 bundle: Base
 emoji: 🧱
-usage: The essentials — an AI agent, the plumbing it runs on, the method.
-highlights: [Claude Code, Chiron]
-description: The foundation every workspace stands on.
+usage: An agent, an editor, and what they stand on.
+highlights: [Claude Code, Visual Studio Code, uv]
+description: The foundation — Git, Node, jq, the agent, the editor, and uv.
 packages:
-  # Node.js is listed EXPLICITLY, not because Talos needs it but because published
-  # Claude plugins run their hooks with a hardcoded `node` — see catalog/node.yaml
-  # for why removing it was a mistake. It is part of the socle: a box that talks to
-  # an agent needs `node` on PATH.
   - Git
   - Node.js
   - jq
-  - Nushell
-  - AWS CLI
   - Claude Code
-  - Chiron
+  - Visual Studio Code
+  - Claude Code for VS Code
+  - uv

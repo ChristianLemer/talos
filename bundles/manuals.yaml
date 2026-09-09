@@ -1,0 +1,13 @@
+# Manuals — what teaches the agent, and a second agent. Plugins from public marketplaces,
+# a skill every agent reads, and Copilot's CLI. `needs: [Base]`: no agent, no manual.
+bundle: Manuals
+emoji: 📚
+usage: Teach the agent how to work, and keep a second one at hand.
+highlights: [Superpowers, astral]
+description: Plugins and skills that shape how the agent works, plus Copilot CLI.
+needs: [Base]
+packages:
+  - Superpowers
+  - astral
+  - Writing guidelines
+  - Copilot CLI

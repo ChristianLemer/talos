@@ -120,10 +120,13 @@ releases that carried them (beta.1–19) were retired on 2026-09-06.
 - **`public/`** — the front, plain ES modules, no framework, no bundler, no CDN. `decision.js`
   is **shared** with the server's logic: one rule, two callers. `model.js` is DOM-free and
   tested.
-- **`catalog/`** — one YAML per package (**39 packages / 42 files**: the rest are `.nu`
-  sidecars such as `bun-path.nu` and `starship.nu`). Never count the sidecars as packages.
-- **`bundles/`** — selections, a chain: Base ← Documents ← Data ← Development, plus standalone
-  Terminal tools and Legacy.
+- **`catalog/`** + **`bundles/`** — the SOCLE: what a release publishes as content and what
+  a stranger receives. One YAML per package (**19 packages / 21 files**: the rest are `.nu`
+  sidecars, `nu-plugin-fetch.nu` and `wt-default.nu`), four bundles — Base ← Manuals, Plus,
+  Terminal. Every file is written as a lesson. Never count the sidecars as packages.
+- **`tests/fixtures/content/`** — the FIXTURE: one file per form the engine knows, synthetic
+  ids, for the tests. The shipped-content guards walk both trees; a test that names a file
+  names the fixture. Keep the two apart: the socle is real, the fixture is complete.
 
 **The core knows no client.** Anything client- or flavour-specific enters by extension, never
 into the core. `catalog/chiron.yaml` still carries a site-specific marketplace path — a known

@@ -1,0 +1,14 @@
+# Writing guidelines — THE SKILL ROUTE: a SKILL.md every agent on the machine can read,
+# installed with `npx skills add <owner/repo@skill>`, hence Node. `skillName:` pins the
+# list-name the tool reports, because the display name has a space and uninstall/upgrade
+# resolve by that name. `detect:` is that same name. Listed in the public repo
+# vercel-labs/agent-skills (read on 2026-09-09).
+name: Writing guidelines
+description: A skill that teaches the agent to write clearly
+skill: vercel-labs/agent-skills@writing-guidelines
+skillName: writing-guidelines
+detect: writing-guidelines
+category: [automation]
+requires:
+  - Claude Code
+  - Node.js

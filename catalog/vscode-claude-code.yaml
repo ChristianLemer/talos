@@ -1,0 +1,11 @@
+# Claude Code for VS Code — THE VSCODE-EXTENSION ROUTE. The id is what the editor lists,
+# so no `detect:` is needed (the id is the name); no `version:` either, the gallery will
+# not honour one and the editor keeps its extensions current itself. The host is in
+# `requires:` so it is installed first, and so the row leaves the perimeter without it.
+name: Claude Code for VS Code
+description: The agent inside the editor — diffs to review, context to share
+vscode-extension: anthropic.claude-code
+category: [agents]
+requires:
+  - Visual Studio Code
+  - Claude Code
