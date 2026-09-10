@@ -1,22 +1,35 @@
 ---
 name: talos-kit
-description: Compose and distribute a Talos kit — the released launchers plus your `catalog/` and `bundles/`, in one flat folder a team launches from a shared drive. Covers `.talos-version` (the pin), `get-talos.sh` (compose, and what it verifies), `--verify` on a synced replica, the OneDrive realities (a locked exe, a half-synced .app, self-healing), and the Doctor tab — why a rescue candidate must declare `doctor:` and how `clean:` is measured. Use when shipping content to a team, bumping the Talos version, diagnosing a kit that opens inert or runs stale code, or deciding whether a package belongs in the Doctor.
+description: Compose and distribute a Talos kit — the released launchers plus your `catalog/` and `bundles/`, in one folder a team launches from a shared drive. Covers `.talos-version` (the pin), `get-talos.sh` and `get-talos.ps1` (compose from any OS, and what they verify), `--verify` on a synced replica, the OneDrive realities (a locked exe, a half-synced .app, self-healing), and the Doctor tab — why a rescue candidate must declare `doctor:` and how `clean:` is measured. Use when shipping content to a team, bumping the Talos version, diagnosing a kit that opens inert or runs stale code, or deciding whether a package belongs in the Doctor.
 ---
 
 # The Talos kit
 
-*A kit is a folder. Three things in it, flat, and every machine launches it in place.*
+*A kit is a folder. Every machine launches it in place, from the name of its own OS.*
 
 ```
 <the kit folder>
-├── Talos.app/          ← macOS launcher (a folder of files)
-├── Talos.exe           ← Windows launcher
+├── MacOS/Talos.app     ← macOS launcher (a folder of files)
+├── Windows/Talos.exe   ← Windows launcher
+├── Linux/Talos         ← Linux launcher
 ├── catalog/            ← YOUR content
 ├── bundles/            ← YOUR content
-├── VERSION             ← the tag this kit was composed from
-├── KIT.txt             ← provenance: tag, date, per-asset size and published digest
-└── MANIFEST.sha256     ← every file as it sits here, in `shasum -c` format
+└── .talos/
+    ├── VERSION         ← the tag this kit was composed from
+    ├── KIT.txt         ← provenance: tag, date, per-asset size and published digest
+    └── MANIFEST.sha256 ← every file as it sits here, in `shasum -c` format
 ```
+
+⭐ **One folder per OS is what lets every launcher keep its standard name.** A bare
+`Talos` next to `Talos.exe` in one folder shows as two identical rows in an Explorer
+that hides extensions, and one of them does nothing when double-clicked. Whoever
+receives the kit opens the name of their system. The three metadata files are read by
+the scripts and by nobody else, so they sit out of the way under `.talos/`.
+
+⭐ **The engine finds the content beside the launcher, then exactly ONE level up**, then
+the current directory (a dev fallback). One level, never a search upward. That is why a
+kit composed flat — every kit made before the OS folders — still resolves unchanged and
+needs no re-composing.
 
 ⚠️ **A release is TWO halves.** Ship a launcher without `catalog/` + `bundles/` and Talos
 opens **inert** — it does not crash, it simply has nothing to propose. Any handoff says
@@ -67,15 +80,26 @@ sh get-talos.sh "<kit folder>" --version v0.0.1-beta.42 --content .
 repo). Without `--content` the kit gets the **socle** of that same release —
 `talos-content.zip`, what a stranger receives. With it, your folder replaces the socle.
 
-⚠️ **It composes from a Mac.** It leans on `ditto` and `xattr` to unpack the `.app` with
-its symlinks and permissions intact, so today it runs on macOS. It nonetheless places
-*both* launchers — the Windows machines on the share get their `Talos.exe` from the same
-run. A Linux binary is published per release but is not put in the kit, deliberately: a
-bare `Talos` file beside `Talos.exe` would only confuse the folder.
+⭐ **It composes from any OS, and the kit does not record which one.** `get-talos.sh`
+runs on macOS and Linux; `get-talos.ps1` does the same job on Windows:
 
-⚠️ **Plain `sh`, not nushell, on purpose.** This is the tool that installs the tool that
-installs nushell. A bootstrap may lean only on what the OS ships — `sh`, `curl`,
-`shasum`, `ditto`, `xattr` — and on nothing you have to install first.
+```powershell
+irm https://github.com/ChristianLemer/talos/releases/latest/download/get-talos.ps1 | iex
+
+# iex cannot pass arguments, so build the scriptblock when you need them:
+& ([scriptblock]::Create((irm .../get-talos.ps1))) -Kit "C:\Kits\Talos" -Content .
+```
+
+All three launchers are placed whichever machine composes. What differs between hosts is
+only *how* the `.app` is unpacked — `ditto` + `xattr` on a Mac, plain `unzip` or
+`Expand-Archive` elsewhere, which is faithful because the bundle is four files with no
+symlink — and *which* launcher runs the check below.
+
+⚠️ **Plain `sh`, and Windows PowerShell 5.1 — not nushell, not pwsh 7.** This is the tool
+that installs the tool that installs everything else. A bootstrap may lean only on what
+the OS ships: `sh`, `curl`, `unzip`, `shasum`/`sha256sum` on one side; on the other, the
+5.1 that Windows already has. Requiring pwsh 7 would mean installing a shell in order to
+run the installer.
 
 ⚠️ **The newest tag is read from the releases list, not from GitHub's "latest".** That
 link skips pre-releases, and every Talos release is a pre-release until v0.1.0.
@@ -86,17 +110,30 @@ link skips pre-releases, and every Talos release is a pre-release until v0.1.0.
 GitHub publishes for it; a mismatch refuses the kit rather than composing it. After
 placing, `MANIFEST.sha256` records what actually landed on disk, file by file.
 
-**The kit is checked by the engine it ships.** After composing, the script runs
-`Talos.app/Contents/MacOS/Talos --check catalog bundles` on the folder itself: the
-content is validated by the exact binary that will read it, before the manifest is
-written. A kit that does not pass is not left behind — the script exits 1.
+**The kit is checked by the engine it ships, from where it will be read.** After
+composing, the script runs `--check` **with no arguments**, on the launcher it has just
+placed, **from an empty working directory**. No arguments, so the engine resolves
+`catalog/` and `bundles/` itself — that proves the LAYOUT and not just the content. From
+an empty directory, because the engine's last resort is the current one: run the check
+from a content repo and that fallback quietly answers with *that repo's* catalog, so a kit
+the engine cannot read reports "0 errors". A kit that does not pass is not left behind —
+the script exits 1.
+
+⚠️ **A tag older than the OS folders cannot read this layout.** Its engine only ever
+looked beside itself. The scripts detect exactly that — they re-ask with the paths spelled
+out — and say so instead of blaming your content. Compose with a newer `--version`.
+
+**The manifest is one artefact, three readers.** `shasum -a 256` on macOS, `sha256sum` on
+Linux, `Get-FileHash` on Windows: lowercase hex, two spaces, forward slashes, LF, no BOM.
+A kit composed on Windows re-verifies on a colleague's Mac.
 
 ---
 
 ## `--verify` — the gesture for a shared drive
 
 ```sh
-sh get-talos.sh "<kit folder>" --verify
+sh get-talos.sh "<kit folder>" --verify      # macOS, Linux
+.\get-talos.ps1 "<kit folder>" -Verify        # Windows
 ```
 
 Recomputes every file against `MANIFEST.sha256`, offline, and exits 1 on the first

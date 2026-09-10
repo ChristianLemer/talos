@@ -398,21 +398,40 @@ pub fn exe_sibling() -> PathBuf {
 }
 
 /// Where `catalog/` and `bundles/` are read from — ONE rule, two callers: the server at
-/// boot, and `--check` from the command line. Each folder is looked for in `sibling` (next
-/// to the exe, outside the `.app` on macOS — the packaged case); if absent there, it falls
-/// back to the current directory — the DEV case (`cargo run` from the repo root, where the
-/// exe is `target/debug/Talos` but the content is `./catalog` + `./bundles`). Resolved from
-/// the REAL exe first, never the cwd alone: a `.app` launched by Finder has cwd=/ and a
-/// relative "bundles" opened empty. Absent in both places → the relative name, which loads
-/// empty. PURE over `sibling` → testable without launching a process.
+/// boot, and `--check` from the command line. Three steps, in order, per folder:
+///
+///   1. **Beside the exe** (`sibling`, outside the `.app` on macOS) — the flat kit, and
+///      what every kit deployed before the OS folders looks like. Unchanged, and first,
+///      so a folder already sitting on a share resolves exactly as it always did.
+///   2. **One level up** — the deployed kit, where the launcher lives in its own OS
+///      folder and the content sits at the root beside it:
+///      `<kit>/Windows/Talos.exe` reads `<kit>/catalog` and `<kit>/bundles`.
+///      The engine does not read the folder's NAME. It cannot: macOS and Windows have
+///      case-insensitive filesystems and Linux does not, so recognising `MacOS` would
+///      have had to pick between `MacOS`, `macos` and `MACOS` and would have been wrong
+///      on one of the three. A level is a level on all three.
+///   3. **The current directory** — the DEV case (`cargo run` from the repo root, where
+///      the exe is `target/debug/Talos` but the content is `./catalog` + `./bundles`).
+///
+/// ⭐ ONE level, and one only — never a search upward. A climb that keeps going until it
+/// finds something would eventually adopt a stranger's `catalog/` three folders up and
+/// believe it was home. One level is exactly the depth of the layout, and it is bounded.
+///
+/// Resolved from the REAL exe first, never the cwd alone: a `.app` launched by Finder has
+/// cwd=/ and a relative "bundles" opened empty. Absent everywhere → the relative name,
+/// which loads empty. PURE over `sibling` → testable without launching a process.
 pub fn content_dirs_in(sibling: &std::path::Path) -> (PathBuf, PathBuf) {
     let pick = |name: &str| -> PathBuf {
         let beside = sibling.join(name);
         if beside.is_dir() {
-            beside
-        } else {
-            PathBuf::from(name)
+            return beside;
         }
+        if let Some(above) = sibling.parent().map(|p| p.join(name)) {
+            if above.is_dir() {
+                return above;
+            }
+        }
+        PathBuf::from(name)
     };
     (pick("catalog"), pick("bundles"))
 }
@@ -704,6 +723,74 @@ mod tests {
         assert_eq!(catalog, PathBuf::from("catalog"));
         assert_eq!(bundles, d.join("bundles"));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The kit's OS folder: the launcher sits in `<kit>/Windows/`, the content at `<kit>/`.
+    /// One level up finds it — that is the whole of the deployed layout.
+    #[test]
+    fn content_dirs_climb_one_level_out_of_the_os_folder() {
+        let kit = std::env::temp_dir().join(format!("talos-kit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&kit);
+        std::fs::create_dir_all(kit.join("catalog")).unwrap();
+        std::fs::create_dir_all(kit.join("bundles")).unwrap();
+        std::fs::create_dir_all(kit.join("Windows")).unwrap();
+        let (catalog, bundles) = content_dirs_in(&kit.join("Windows"));
+        assert_eq!(catalog, kit.join("catalog"));
+        assert_eq!(bundles, kit.join("bundles"));
+        let _ = std::fs::remove_dir_all(&kit);
+    }
+
+    /// ⭐ ONE level, never a search upward. A climb that keeps going would eventually
+    /// adopt a stranger's `catalog/` several folders up and believe it was home.
+    #[test]
+    fn content_dirs_never_climb_two_levels() {
+        let kit = std::env::temp_dir().join(format!("talos-deep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&kit);
+        std::fs::create_dir_all(kit.join("catalog")).unwrap();
+        std::fs::create_dir_all(kit.join("a/b")).unwrap();
+        let (catalog, _) = content_dirs_in(&kit.join("a/b"));
+        assert_eq!(
+            catalog,
+            PathBuf::from("catalog"),
+            "two levels is a search, not a rule"
+        );
+        let _ = std::fs::remove_dir_all(&kit);
+    }
+
+    /// The flat kit still wins WITHOUT climbing: beside the exe is looked at first, so a
+    /// folder already deployed on a share resolves exactly as it did before.
+    #[test]
+    fn content_dirs_prefer_beside_over_above() {
+        let kit = std::env::temp_dir().join(format!("talos-flat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&kit);
+        std::fs::create_dir_all(kit.join("catalog")).unwrap();
+        std::fs::create_dir_all(kit.join("Windows/catalog")).unwrap();
+        let (catalog, _) = content_dirs_in(&kit.join("Windows"));
+        assert_eq!(catalog, kit.join("Windows/catalog"));
+        let _ = std::fs::remove_dir_all(&kit);
+    }
+
+    /// The two unwrappings compose: the `.app` climbs out of its own `Contents/MacOS`,
+    /// and the kit's `MacOS/` folder is the one level `content_dirs_in` then removes.
+    /// Two folders called `MacOS` on the same path, and neither is confused for the other.
+    #[test]
+    fn a_dot_app_inside_the_kits_macos_folder_reaches_the_kit() {
+        let kit = std::env::temp_dir().join(format!("talos-app-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&kit);
+        std::fs::create_dir_all(kit.join("catalog")).unwrap();
+        std::fs::create_dir_all(kit.join("bundles")).unwrap();
+        let exe = kit.join("MacOS/Talos.app/Contents/MacOS/Talos");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        let sibling = exe_sibling_dir(&exe);
+        assert_eq!(
+            sibling,
+            kit.join("MacOS"),
+            "the .app unwraps to the kit's MacOS/"
+        );
+        let (catalog, bundles) = content_dirs_in(&sibling);
+        assert_eq!(catalog, kit.join("catalog"));
+        assert_eq!(bundles, kit.join("bundles"));
+        let _ = std::fs::remove_dir_all(&kit);
     }
 
     #[test]

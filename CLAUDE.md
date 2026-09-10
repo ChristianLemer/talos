@@ -102,12 +102,25 @@ The Mac deliverable is `target/release/bundle/macos/Talos.app`, never the bare b
 is triggered by pushing a `v*` tag: `.github/workflows/release.yml` builds natively per OS
 (Tauri does not cross-compile) and attaches `Talos-macos-aarch64.app.zip`, `Talos.exe`,
 `Talos-linux-x86_64`, `talos-content.zip` (the socle, checked by the Linux build before
-zipping) and `admin/get-talos.sh`.
+zipping) and BOTH kit scripts, `admin/get-talos.sh` + `admin/get-talos.ps1`.
 
 ⚠️ **A release is TWO halves**: the binary *and* `catalog/` + `bundles/`, which the exe reads
-from disk beside itself. Shipping the exe alone tests a mixture and fails misleadingly. Any
-handoff says "copy three things". `admin/get-talos.sh` composes that kit from a release
-and a content folder; `Talos --check` validates the content first.
+from disk. Shipping the exe alone tests a mixture and fails misleadingly. Any handoff says
+"copy three things". `admin/get-talos.sh` (macOS, Linux) and `admin/get-talos.ps1`
+(Windows, 5.1 floor) compose that kit from a release and a content folder, and both
+compose the SAME one:
+
+```
+Talos/  MacOS/Talos.app · Windows/Talos.exe · Linux/Talos · catalog/ · bundles/
+        .talos/  VERSION · KIT.txt · MANIFEST.sha256
+```
+
+One folder per OS so each launcher keeps its standard name; `platform::content_dirs_in`
+therefore looks **beside the exe, then exactly one level up**, then the cwd (the dev
+fallback). One level, never a search upward. After composing, the scripts run `--check`
+with NO arguments from an EMPTY working directory: the engine resolves the content itself,
+which proves the layout — run it from a content repo instead and the cwd fallback quietly
+validates THAT repo's catalog and a broken kit reports 0 errors.
 
 Every binary bakes a build stamp (jj change · sha · timestamp) so you can tell which build is
 running. ⚠️ Stamps from before the 2026-08-09 rewrite point at SHAs that no longer exist; the

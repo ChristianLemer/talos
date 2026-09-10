@@ -27,7 +27,8 @@ build the engine, and your content never lives in this repo.
 
 ### 1 — Your content: `catalog/` + `bundles/`
 
-Two flat folders, read from disk beside the exe at runtime — no build step:
+Two flat folders, read from disk at runtime — beside the launcher, or one level up
+when the kit puts the launchers in an OS folder. No build step:
 
 - **`catalog/`** — one YAML per **package**: what it is called, which route installs
   it (`winget`, `brew`, `cargo`, `npm`, `bun`, `run`, a Claude Code `claude-plugin`, a
@@ -102,9 +103,8 @@ cargo build --release      # Linux → target/release/Talos (bare binary, no bun
 ```
 
 `public/` (the web UI) is **sealed into the binary**; your content is **not** — it is
-read from the folder beside the exe at runtime. That is the hermetic boundary: the
-engine changes rarely, the content often, and the two meet on the target machine,
-never in this repo.
+read from disk at runtime. That is the hermetic boundary: the engine changes rarely,
+the content often, and the two meet on the target machine, never in this repo.
 
 ### 3 — Compose and distribute the kit
 
@@ -113,22 +113,45 @@ one without the other and Talos opens inert (nothing to propose); it won't crash
 just has nothing to say. The binaries are **unsigned** for now (signing/notarisation is
 a separate step).
 
-One script composes the kit, from a Mac, and needs nothing but `curl`:
+One command composes the kit, from **whatever machine you have**, and needs nothing but
+what the OS already ships:
 
 ```bash
-# discovering Talos: a folder that works, ready to double-click
+# macOS or Linux
 curl -fsSL https://github.com/ChristianLemer/talos/releases/latest/download/get-talos.sh | sh -s -- ~/Talos
+```
 
+```powershell
+# Windows (Windows PowerShell 5.1 is enough - no pwsh 7 needed)
+irm https://github.com/ChristianLemer/talos/releases/latest/download/get-talos.ps1 | iex
+```
+
+```bash
 # your team: the same, into the folder it launches from, with YOUR content
 sh get-talos.sh "<kit folder>" --content path/to/your-talos-content
+.\get-talos.ps1 "<kit folder>" -Content path\to\your-talos-content
+```
+
+Both compose the **same kit** — one folder per OS, so every launcher keeps its own
+standard name and whoever receives the folder opens the name of their system:
+
+```
+Talos/
+  MacOS/     Talos.app
+  Windows/   Talos.exe
+  Linux/     Talos
+  catalog/   bundles/
+  .talos/    VERSION · KIT.txt · MANIFEST.sha256
 ```
 
 Without `--content` the kit gets the **socle** of the same release. With it, your
 `.talos-version` picks the release and your content replaces the socle. Either way
-every asset is verified against its published digest, the composed kit is read by
-`Talos --check` with the very binary it ships — a kit that does not pass is not left
-behind — and a `MANIFEST.sha256` lets any synced replica be re-verified offline with
-`get-talos.sh <kit> --verify`.
+every asset is verified against its published digest; the composed kit is then read by
+`--check` **with no arguments**, on the launcher just placed, so the engine resolves the
+content itself and the layout is proven rather than assumed — a kit that does not pass is
+not left behind. The `MANIFEST.sha256` it writes is one artefact three tools read back
+(`shasum -a 256`, `sha256sum`, `Get-FileHash`), so a kit composed on Windows re-verifies
+offline on a colleague's Mac with `get-talos.sh <kit> --verify`.
 
 Built to live on a **shared OneDrive**, launched by many machines from the same
 copy — the exe is never copied per machine:

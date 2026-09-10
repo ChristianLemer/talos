@@ -40,11 +40,16 @@ jobs:
         include:
           - os: macos-14 # Apple Silicon runner → aarch64-apple-darwin
             # the .app (a directory) zipped — a Release asset must be a single file.
-            # The kit script rides along: an integrator fetches it by TAG
-            # (releases/download/<tag>/get-talos.sh), a pin that does not move.
+            # BOTH kit scripts ride along: an integrator fetches one by TAG
+            # (releases/download/<tag>/get-talos.ps1), a pin that does not move. They
+            # compose the same kit — the .sh from macOS or Linux, the .ps1 from Windows —
+            # so which one a release carries must not depend on which runner uploaded it.
+            # They travel with the macOS job because it is the one that has no other
+            # artefact to race with.
             artifacts: |
               Talos-macos-aarch64.app.zip
               admin/get-talos.sh
+              admin/get-talos.ps1
           - os: windows-latest # x64 runner → x86_64-pc-windows-msvc
             # bare exe only — the deliverable is exe + bundles/ rsync'd, no installer
             artifacts: |
