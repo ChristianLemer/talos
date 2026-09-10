@@ -118,13 +118,20 @@ what the OS already ships:
 
 ```bash
 # macOS or Linux
-curl -fsSL https://github.com/ChristianLemer/talos/releases/latest/download/get-talos.sh | sh -s -- ~/Talos
+curl -fsSL https://github.com/ChristianLemer/talos/releases/download/v0.0.1-beta.43/get-talos.sh | sh -s -- ~/Talos
 ```
 
 ```powershell
 # Windows (Windows PowerShell 5.1 is enough - no pwsh 7 needed)
-irm https://github.com/ChristianLemer/talos/releases/latest/download/get-talos.ps1 | iex
+irm https://github.com/ChristianLemer/talos/releases/download/v0.0.1-beta.43/get-talos.ps1 | iex
 ```
+
+⚠️ **The tag is spelled out on purpose, and it moves with each release.** GitHub's
+`releases/latest/download/…` link skips pre-releases, and every Talos release is a
+pre-release until v0.1.0 — so that shorter form answers 404 today. At v0.1.0 these two
+lines become `latest/download/` and stop needing an edit. Until then, the newest tag is on
+the [releases page](https://github.com/ChristianLemer/talos/releases); the script itself
+already picks the newest release once it is running, so only fetching it needs the tag.
 
 ```bash
 # your team: the same, into the folder it launches from, with YOUR content
