@@ -1,6 +1,6 @@
 {
   "name": "talos",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "The authoring assistant for Talos content — catalog/ and bundles/, the kit, and the loop that checks them.",
   "author": {
     "name": "Christian Lemer",

@@ -1,6 +1,6 @@
 ---
 name: talos-kit
-description: Compose and distribute a Talos kit — the released launchers plus your `catalog/` and `bundles/`, in one folder a team launches from a shared drive. Covers `.talos-version` (the pin), `get-talos.sh` and `get-talos.ps1` (compose from any OS, and what they verify), `--verify` on a synced replica, the OneDrive realities (a locked exe, a half-synced .app, self-healing), and the Doctor tab — why a rescue candidate must declare `doctor:` and how `clean:` is measured. Use when shipping content to a team, bumping the Talos version, diagnosing a kit that opens inert or runs stale code, or deciding whether a package belongs in the Doctor.
+description: Compose and distribute a Talos kit — the released launchers plus your `catalog/` and `bundles/`, in one folder a team launches from a shared drive. Covers `.talos-version` (the pin), `get-talos.sh` and `get-talos.ps1` (compose from any OS, and what they verify), `--verify` on a synced replica, a kit for one machine, the OneDrive realities (a locked exe, a half-synced .app, self-healing), and the Doctor tab — why a rescue candidate must declare `doctor:` and how `clean:` is measured. Use when shipping content to a team, bumping the Talos version, diagnosing a kit that opens inert or runs stale code, or deciding whether a package belongs in the Doctor.
 ---
 
 # The Talos kit
@@ -126,6 +126,41 @@ out — and say so instead of blaming your content. Compose with a newer `--vers
 **The manifest is one artefact, three readers.** `shasum -a 256` on macOS, `sha256sum` on
 Linux, `Get-FileHash` on Windows: lowercase hex, two spaces, forward slashes, LF, no BOM.
 A kit composed on Windows re-verifies on a colleague's Mac.
+
+---
+
+## A kit for ONE machine
+
+The same script, a folder of your own, and nothing else to install:
+
+```sh
+curl -fsSL https://github.com/ChristianLemer/talos/releases/download/<tag>/get-talos.sh | sh -s -- ~/Talos
+```
+
+```powershell
+irm https://github.com/ChristianLemer/talos/releases/download/<tag>/get-talos.ps1 | iex
+```
+
+Then open the launcher for the system you are on — `MacOS/Talos.app`, `Windows\Talos.exe`,
+`Linux/Talos`.
+
+⚠️ **Use the URL of a TAG, not `latest/download/`.** GitHub's "latest" link skips
+pre-releases, and every Talos release is a pre-release until v0.1.0, so the `latest` form
+answers 404 today.
+
+⚠️ **Linux needs the WebKitGTK the build links against** — `webkit2gtk-4.1` and
+`libayatana-appindicator`, whatever your distribution calls them. `ldd <kit>/Linux/Talos |
+grep "not found"` says whether anything is missing before you wonder why nothing opens.
+
+⭐ **A kit composes cleanly and can still have little to say on your machine, and that is
+not a failure — it is what the content is for.** The engine knows exactly two system
+managers: `winget` (Windows) and `brew` (macOS *and* Linux). A package routed only through
+`winget` is out of scope on a Mac; one routed through `brew` needs Homebrew present, on
+Linux too. Everything else — `npm`, `cargo`, `bun`, `run`, `claude-plugin`, `skill`,
+`vscode-extension`, `nu-plugin` — depends only on its own tool being there. So a Linux box
+without Homebrew reads the socle mostly as "manager absent": correct, and disappointing if
+nobody said so first. Read the rows before concluding the kit is broken, and remember that
+the answer to a sparse window is **your own content**, not a different kit.
 
 ---
 
