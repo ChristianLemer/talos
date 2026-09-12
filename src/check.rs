@@ -276,9 +276,15 @@ mod tests {
         std::fs::write(root.join(rel), body).unwrap();
     }
 
-    /// What ships must read clean: the socle at the repo root (what a release publishes)
-    /// and the form-per-file fixture under tests/ — or `--check` would refuse the very
-    /// content this repo demonstrates and tests with.
+    /// What ships must read clean: the socle at the repo root (what a release publishes),
+    /// the form-per-file fixture under tests/, and the plugin's scaffold template — or
+    /// `--check` would refuse the very content this repo demonstrates, tests and hands out.
+    ///
+    /// ⭐ The template is here because `/talos:init` COPIES it rather than writing it. The
+    /// first cut had the command retype the files from a prompt: every run produced slightly
+    /// different bytes, nothing could be tested, and the first thing a stranger receives was
+    /// the one artefact with no guard on it. Moving the files to disk made them ordinary
+    /// content — and ordinary content is checked here, like the rest.
     #[test]
     fn the_shipped_content_is_clean() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -288,6 +294,11 @@ mod tests {
                 root.join("tests/fixtures/content/catalog"),
                 root.join("tests/fixtures/content/bundles"),
                 15,
+            ),
+            (
+                root.join("plugin/template/catalog"),
+                root.join("plugin/template/bundles"),
+                4,
             ),
         ] {
             let r = run(&catalog, &bundles);

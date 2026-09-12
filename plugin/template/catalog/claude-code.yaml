@@ -1,0 +1,17 @@
+# Claude Code — THE NPM ROUTE: installed globally, so it requires Node BY NAME. A missing
+# requirement takes the row out of the perimeter, with the reason shown.
+name: Claude Code
+description: Anthropic's coding agent, on the command line
+npm: "@anthropic-ai/claude-code"
+detect: claude --version
+version: latest
+category: [agents]
+requires:
+  - Node.js
+
+# THE DOCTOR: this package may be launched from the Doctor tab as a rescue session.
+# `clean.env` — a fresh directory through CLAUDE_CONFIG_DIR — is MEASURED on macOS: no
+# plugins, no hooks, no memory, and auth survives (credentials come from the keychain).
+# A capability, never a category.
+doctor:
+  clean: { env: CLAUDE_CONFIG_DIR }

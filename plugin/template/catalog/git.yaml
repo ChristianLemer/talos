@@ -1,0 +1,10 @@
+# Git — THE SYSTEM-MANAGER ROUTE. Declare BOTH ids: the engine picks the one native to
+# the machine it runs on. `detect:` is the command whose exit 0 means present; its output
+# is also where the installed version is read from.
+name: Git
+description: Version control — the ground everything else stands on
+winget: Git.Git
+brew: git
+detect: git --version
+version: latest
+category: [foundation]

@@ -1,0 +1,12 @@
+# Base — a BUNDLE is a card: activating it pulls its packages "in" as a group, BY NAME.
+# Purely additive — it never forces anything out, and a manual "out" always wins.
+bundle: Base
+emoji: 🧱
+usage: An agent, an editor, and what they stand on.
+highlights: [Claude Code, Visual Studio Code]
+description: The foundation — Git, Node, the agent, the editor.
+packages:
+  - Git
+  - Node.js
+  - Claude Code
+  - Visual Studio Code

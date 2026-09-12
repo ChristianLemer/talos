@@ -148,6 +148,10 @@ releases that carried them (beta.1–19) were retired on 2026-09-06.
   `plugin/skills/talos-content/references/fields.md`) and `talos-kit` (composing,
   `--verify`, the Doctor) — plus `/talos:init`, which scaffolds an integrator's content
   repo and copies the reference into it **verbatim**.
+- **`plugin/template/`** — the scaffold `/talos:init` COPIES. Files on disk, not prose in a
+  prompt: the command retyping them produced different bytes every run and nothing could be
+  tested. `check::tests::the_shipped_content_is_clean` walks it like the socle and the
+  fixture — three trees, one guard.
 
 ⚠️ **The field reference has ONE source**, and it is the skill. `bundles/README.md` is a
 pointer to it (it used to *be* it), and `check::tests::the_authoring_reference_covers_every_known_key`

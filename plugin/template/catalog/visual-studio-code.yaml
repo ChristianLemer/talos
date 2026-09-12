@@ -1,0 +1,10 @@
+# Visual Studio Code — where you see and edit what the agent produces.
+# `uac: true` is a SEED: observed on Windows, where this install demands elevation.
+name: Visual Studio Code
+description: Where you see and edit what the agent produces
+winget: Microsoft.VisualStudioCode
+brew: visual-studio-code
+detect: code --version
+version: latest
+category: [editors]
+uac: true

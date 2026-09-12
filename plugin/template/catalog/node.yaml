@@ -1,0 +1,11 @@
+# Node.js — what the npm route stands on. Named here so other packages can `requires:` it
+# BY NAME; the file stem is only the id. Current, not LTS: two Node installs confuse the
+# PATH. `uac: true` is a SEED — observed on Windows, where this install elevates.
+name: Node.js
+description: JavaScript runtime — npm, npx and every plugin hook lean on it
+winget: OpenJS.NodeJS
+brew: node
+detect: node --version
+version: latest
+category: [foundation]
+uac: true

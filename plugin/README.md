@@ -17,7 +17,7 @@ claude plugin install talos@talos
 |---|---|
 | skill **`talos-content`** | The doctrine to respect while writing, a snippet per route, the traps, and the loop that ends at `0 errors`. Its `references/fields.md` is the **complete field reference** — the single source, which the socle's `bundles/README.md` points at. |
 | skill **`talos-kit`** | Composing and distributing a kit: `.talos-version`, `get-talos.sh`, what it verifies, `--verify` on a synced replica, the shared-drive realities, and the Doctor tab — why a rescue candidate declares `doctor:` and how `clean:` is measured. |
-| command **`/talos:init`** | Scaffolds a content repo in a folder: `catalog/`, `bundles/`, a `.talos-version` pinned at the newest release, a workflow that runs `--check` in CI, `REFERENCE.md` copied verbatim, and an `AGENTS.md` so an agent without this plugin can still maintain the repo. |
+| command **`/talos:init`** | **Copies** [`template/`](template/) into a folder: `catalog/`, `bundles/`, a `.talos-version` pinned at the newest release, a workflow that runs `--check` in CI, `REFERENCE.md` copied verbatim, and an `AGENTS.md` so an agent without this plugin can still maintain the repo. |
 
 ## Why it lives in the engine's repo
 
