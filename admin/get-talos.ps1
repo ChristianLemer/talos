@@ -12,8 +12,15 @@
 #
 #   -Kit <folder>   where the kit lives -- the shared folder your team launches from, or a
 #                   folder of your own you will double-click in. Piped through `iex` there
-#                   is no way to pass it, so it defaults to `$env:USERPROFILE\Talos` and
-#                   the script says so on screen before it writes anything
+#                   is no way to pass it, so it defaults to `Talos` IN THE CURRENT
+#                   DIRECTORY and says so on screen before it writes anything. The current
+#                   directory, not the home: a command-line tool that produces a folder
+#                   produces it where you are, as `git clone` and `tar x` do. You chose the
+#                   place by standing in it.
+#                   !! So mind where you are when you paste `irm | iex`. An elevated
+#                   PowerShell opens in C:\Windows\System32, which is nobody's kit folder
+#                   -- the target is printed before anything is written, and -Kit is there
+#                   for when you want to name it outright.
 #   -Version TAG    the release to fetch (v0.0.1-beta.42). Default: the `.talos-version`
 #                   file beside the content (or in the current directory) if there is one,
 #                   else the newest release
@@ -148,7 +155,12 @@ function Get-KitFileList([string]$Root) {
 # is nothing to do there; every other host has one, and neither Invoke-WebRequest nor
 # Expand-Archive sets it -- the download lands 644 and the .app's binaries come out of the
 # zip flat. So restore it wherever the notion exists.
-function Set-LauncherExecBit([string]$Path) {
+function Set-LauncherExecBit {
+    # PSScriptAnalyzer asks a `Set-` function to support -WhatIf. This is an internal helper,
+    # not a cmdlet: nothing here is pipeline-facing, and -WhatIf on a chmod inside a kit this
+    # very script just composed would be ceremony with no caller to use it.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
+    param([string]$Path)
     if ($IsWindowsHost) { return }
     if (-not (Test-Path -LiteralPath $Path)) { return }
     & chmod '+x' $Path
@@ -162,9 +174,13 @@ function Write-TextLf([string]$Path, [string[]]$Lines) {
 }
 
 if (-not $Kit) {
-    $base = $env:USERPROFILE
-    if (-not $base) { $base = $HOME }
-    $Kit = Join-Path $base 'Talos'
+    # The CURRENT directory, not the home. `iex` cannot pass an argument, so this default is
+    # the only thing an `irm | iex` user gets -- and the least surprising one is the
+    # convention every command-line tool that produces a folder already follows: it appears
+    # where you are. Announced before a single byte is written, because a default nobody
+    # typed is a folder they would otherwise have to be told about later (-Verify asks for
+    # the path again).
+    $Kit = Join-Path (Get-Location).ProviderPath 'Talos'
     Write-Host "no -Kit given (as when piped through iex) - composing in $Kit"
 }
 

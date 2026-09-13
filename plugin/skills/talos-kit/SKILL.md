@@ -70,7 +70,7 @@ repo, not the operator's memory, decides which engine the team runs.
 sh get-talos.sh "<kit folder>" --content .
 
 # discovering Talos: a folder that works, ready to double-click, with the SOCLE
-sh get-talos.sh ~/Talos
+sh get-talos.sh ./Talos
 
 # a specific release
 sh get-talos.sh "<kit folder>" --version v0.0.1-beta.42 --content .
@@ -134,7 +134,7 @@ A kit composed on Windows re-verifies on a colleague's Mac.
 The same script, a folder of your own, and nothing else to install:
 
 ```sh
-curl -fsSL https://github.com/ChristianLemer/talos/releases/download/<tag>/get-talos.sh | sh -s -- ~/Talos
+curl -fsSL https://github.com/ChristianLemer/talos/releases/download/<tag>/get-talos.sh | sh -s -- ./Talos
 ```
 
 ```powershell
@@ -143,6 +143,17 @@ irm https://github.com/ChristianLemer/talos/releases/download/<tag>/get-talos.ps
 
 Then open the launcher for the system you are on — `MacOS/Talos.app`, `Windows\Talos.exe`,
 `Linux/Talos`.
+
+⭐ **The kit appears where you ARE, not in your home.** `get-talos.sh` takes the folder as a
+required argument and invents nothing; `get-talos.ps1`, which cannot be given one through
+`irm | iex`, defaults to `Talos` in the current directory. That is the convention every
+command-line tool producing a folder already follows — you chose the place by standing in
+it. Both print the target before writing anything.
+
+⚠️ **On a Mac, the `.app` is inside the kit and stays there** — the engine reads `catalog/`
+one level above the launcher, so moving it to `/Applications` would break the kit. For a
+Launchpad entry, link instead of move:
+`ln -s "<kit>/MacOS/Talos.app" ~/Applications/Talos.app`.
 
 ⚠️ **Use the URL of a TAG, not `latest/download/`.** GitHub's "latest" link skips
 pre-releases, and every Talos release is a pre-release until v0.1.0, so the `latest` form

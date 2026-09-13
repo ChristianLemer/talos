@@ -118,7 +118,7 @@ what the OS already ships:
 
 ```bash
 # macOS or Linux
-curl -fsSL https://github.com/ChristianLemer/talos/releases/download/v0.0.1-beta.43/get-talos.sh | sh -s -- ~/Talos
+curl -fsSL https://github.com/ChristianLemer/talos/releases/download/v0.0.1-beta.43/get-talos.sh | sh -s -- ./Talos
 ```
 
 ```powershell
