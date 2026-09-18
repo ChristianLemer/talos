@@ -151,9 +151,8 @@ command-line tool producing a folder already follows — you chose the place by 
 it. Both print the target before writing anything.
 
 ⚠️ **On a Mac, the `.app` is inside the kit and stays there** — the engine reads `catalog/`
-one level above the launcher, so moving it to `/Applications` would break the kit. For a
-Launchpad entry, link instead of move:
-`ln -s "<kit>/MacOS/Talos.app" ~/Applications/Talos.app`.
+one level above the launcher, so moving it to `/Applications` breaks the kit. Opening it from
+the kit folder is the supported gesture; what a Mac user does beyond that is theirs.
 
 ⚠️ **Use the URL of a TAG, not `latest/download/`.** GitHub's "latest" link skips
 pre-releases, and every Talos release is a pre-release until v0.1.0, so the `latest` form
