@@ -99,7 +99,7 @@ On a machine where everything is current, raise the `version:` pins temporarily:
 the installed version makes the action an `upgrade` (`decision::action_for`). That is how the
 spread below was produced (2026-08-02, dev Mac, brew) — `aws-cli` → `2.99.0`, `uv` → `0.99.0`,
 `jq` → `1.99.0`, `nushell` → `0.114.1` (the last one a real available version, not a
-fiction). **Revert the pins afterwards and confirm `jj st` is clean.**
+fiction). **Revert the pins afterwards and confirm `git status` is clean.**
 
 ⚠️ Wait for the header to read `ready` before believing any count. An unfinished scan counts
 un-probed rows as absent, which has produced false readings twice.

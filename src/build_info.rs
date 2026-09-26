@@ -1,29 +1,27 @@
 //! build_info.rs — reads the STAMP baked by build.rs (compile-time env variables)
-//! and exposes it to the front. Shape sent to the front: {tag, change, sha, builtAt}.
-//! The front (app.js showBuild) turns it into the title `Talos · <change>` and the footer
-//! `<tag> · build <change> · <sha> — <builtAt>`. Answers "which binary is really running?".
+//! and exposes it to the front. Shape sent to the front: {tag, sha, builtAt}.
+//! The front (app.js showBuild) turns it into the title `Talos · <tag>` and the footer
+//! `<tag> · <sha> — <builtAt>`. Answers "which binary is really running?".
 
 use serde_json::{json, Value};
 
-/// release tag (v0.0.1-beta.4) — the human-facing version. "untagged" when built
-/// off a commit with no reachable tag. Distinct from the VCS snapshot below.
+/// release tag (v0.0.1-beta.4) — the human-facing version. Locally it is the describe
+/// string: `-<n>-g<sha>` when ahead of the tag, `-dirty` when built on uncommitted
+/// edits. "untagged" when no tag is reachable.
 pub const TAG: &str = env!("TALOS_BUILD_TAG");
-/// change id (stable across amends) — leads, like `jj log`. "git"/"unknown" as fallback.
-pub const CHANGE: &str = env!("TALOS_BUILD_CHANGE");
-/// short git-sha (moves on every edit snapshot).
+/// short git-sha of HEAD at compile time; "unknown" outside a checkout.
 pub const SHA: &str = env!("TALOS_BUILD_SHA");
 /// build timestamp ISO 8601 UTC.
 pub const BUILT_AT: &str = env!("TALOS_BUILD_AT");
 
-/// The stamp as JSON, with the EXACT keys the front expects (tag/change/sha/builtAt).
+/// The stamp as JSON, with the EXACT keys the front expects (tag/sha/builtAt).
 pub fn build_json() -> Value {
-    json!({ "tag": TAG, "change": CHANGE, "sha": SHA, "builtAt": BUILT_AT })
+    json!({ "tag": TAG, "sha": SHA, "builtAt": BUILT_AT })
 }
 
-/// Startup log line — tag leads (the release version), then the `jj log` order
-/// (change, then sha).
+/// Startup log line — tag leads (the release version), then the exact snapshot.
 pub fn start_line() -> String {
-    format!("tag={TAG} build={CHANGE} ({SHA}) built={BUILT_AT}")
+    format!("tag={TAG} sha={SHA} built={BUILT_AT}")
 }
 
 #[cfg(test)]
@@ -32,9 +30,8 @@ mod tests {
 
     #[test]
     fn stamp_bake_non_vide() {
-        // build.rs must have baked all 4 (tag/change/sha/builtAt — never empty).
+        // build.rs must have baked all 3 (tag/sha/builtAt — never empty).
         assert!(!TAG.is_empty(), "tag baked");
-        assert!(!CHANGE.is_empty(), "change baked");
         assert!(!SHA.is_empty(), "sha baked");
         assert!(!BUILT_AT.is_empty(), "builtAt baked");
     }
@@ -43,11 +40,16 @@ mod tests {
     fn json_a_les_cles_du_front() {
         let j = build_json();
         assert!(j.get("tag").is_some());
-        assert!(j.get("change").is_some());
         assert!(j.get("sha").is_some());
         assert!(
             j.get("builtAt").is_some(),
             "front reads builtAt (camelCase)"
+        );
+        // The jj change id left with jj (2026-09-05); a front that still reads it
+        // would print "undefined" in the title.
+        assert!(
+            j.get("change").is_none(),
+            "no change id in a git-only stamp"
         );
     }
 

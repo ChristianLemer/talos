@@ -364,7 +364,7 @@ fn merge_presences(
 /// a slow bind, shared disk/slow machine, left the webview hitting nothing).
 pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::oneshot::Sender<()>>) {
     let os = current_os();
-    // Build stamp at the top of the log — "which binary is really running?" (jj log order).
+    // Build stamp at the top of the log — "which binary is really running?".
     println!("--- start: {}", crate::build_info::start_line());
     println!(
         "--- appmgmt: {}",

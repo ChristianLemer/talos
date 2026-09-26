@@ -1,39 +1,38 @@
-//! build.rs — calls tauri_build AND bakes the BUILD STAMP into the binary (the Rust
-//! counterpart of scripts/gen-build-info.ts). Answers "which binary is actually
-//! running?" — the question that cost a debugging detour when a stale exe lingered
-//! on the share. Queries the VCS AT COMPILE TIME and exposes 3 env vars the code
-//! reads via env!(): TALOS_BUILD_CHANGE, TALOS_BUILD_SHA, TALOS_BUILD_AT.
+//! build.rs — calls tauri_build AND bakes the BUILD STAMP into the binary. Answers
+//! "which binary is actually running?" — the question that cost a debugging detour
+//! when a stale exe lingered on the share. Queries git AT COMPILE TIME and exposes
+//! 3 env vars the code reads via env!(): TALOS_BUILD_TAG, TALOS_BUILD_SHA, TALOS_BUILD_AT.
 //!
-//! Resolution order (graceful — deployment does `git pull`, a GIT clone, not jj):
-//!   jj (change_id + commit_id)  →  git (sha, change="git")  →  "unknown".
+//! Git only. The stamp used to lead with a jj change id (stable across amends) and fall
+//! back to change="git" when jj was absent — which is exactly what every release showed,
+//! since CI builds from a plain git clone: the title printed the name of the fallback.
+//! The repo left jj on 2026-09-05; the git-native answer to "is this build the commit
+//! it claims?" is `--dirty` on the describe string, so that is what the tag carries now.
 //! Re-stamps on the cargo default: when a crate file changes (so after any real
-//! rebuild). An amend/squash WITHOUT an edit does not re-stamp → rebuild (the
-//! talos-build-stamp memory says so). The jj sha moves on every edit snapshot;
-//! the change id stays stable across amends — hence both.
+//! rebuild). A commit WITHOUT an edit does not re-stamp → rebuild.
 
 use std::process::Command;
 
 fn main() {
     tauri_build::build();
 
-    let (change, sha) = resolve_vcs();
+    let sha = resolve_sha();
     let tag = resolve_tag();
-    // ISO 8601 UTC build timestamp (like the TS builtAt). SOURCE_DATE_EPOCH honored
-    // if present (reproducible builds), otherwise the current time.
+    // ISO 8601 UTC build timestamp. SOURCE_DATE_EPOCH honored if present
+    // (reproducible builds), otherwise the current time.
     let built_at = build_timestamp();
 
-    println!("cargo:rustc-env=TALOS_BUILD_CHANGE={change}");
     println!("cargo:rustc-env=TALOS_BUILD_SHA={sha}");
     println!("cargo:rustc-env=TALOS_BUILD_TAG={tag}");
     println!("cargo:rustc-env=TALOS_BUILD_AT={built_at}");
 }
 
 /// Resolves the RELEASE TAG this binary was built from — the human-facing version
-/// (v0.0.1-beta.4), distinct from the VCS snapshot (change/sha).
+/// (v0.0.1-beta.4), distinct from the exact snapshot (sha).
 ///   1. Release CI checks out the tag itself → GITHUB_REF_NAME is authoritative.
-///   2. Local / branch build → `git describe --tags` = nearest tag, with a
-///      `-<n>-g<sha>` suffix when the working copy is ahead of it (colocated repo,
-///      so git works inside the jj tree). "untagged" if no tag is reachable.
+///   2. Local / branch build → `git describe --tags --dirty` = nearest tag, with a
+///      `-<n>-g<sha>` suffix when HEAD is ahead of it and `-dirty` when the working
+///      tree has uncommitted edits. "untagged" if no tag is reachable.
 fn resolve_tag() -> String {
     if std::env::var("GITHUB_REF_TYPE").as_deref() == Ok("tag") {
         if let Ok(t) = std::env::var("GITHUB_REF_NAME") {
@@ -42,7 +41,7 @@ fn resolve_tag() -> String {
             }
         }
     }
-    if let Some(desc) = run("git", &["describe", "--tags"]) {
+    if let Some(desc) = run("git", &["describe", "--tags", "--dirty"]) {
         let desc = desc.trim().to_string();
         if !desc.is_empty() {
             return desc;
@@ -51,59 +50,12 @@ fn resolve_tag() -> String {
     "untagged".to_string()
 }
 
-/// Queries the VCS for (change, sha). jj first (stable change_id + commit_id);
-/// else git (sha only, change="git"); else ("unknown","unknown").
-fn resolve_vcs() -> (String, String) {
-    if let Some(pair) = try_jj() {
-        return pair;
-    }
-    if let Some(sha) = try_git() {
-        return ("git".to_string(), sha);
-    }
-    ("unknown".to_string(), "unknown".to_string())
-}
-
-/// jj: two short templates. change_id = id stable across amends (leads, like
-/// `jj log`); commit_id = git-sha (changes on every edit snapshot).
-fn try_jj() -> Option<(String, String)> {
-    let change = run(
-        "jj",
-        &[
-            "log",
-            "-r",
-            "@",
-            "--no-graph",
-            "-T",
-            "change_id.shortest(8)",
-        ],
-    )?;
-    let sha = run(
-        "jj",
-        &[
-            "log",
-            "-r",
-            "@",
-            "--no-graph",
-            "-T",
-            "commit_id.shortest(8)",
-        ],
-    )?;
-    let (change, sha) = (change.trim().to_string(), sha.trim().to_string());
-    if change.is_empty() || sha.is_empty() {
-        return None;
-    }
-    Some((change, sha))
-}
-
-/// git fallback: short HEAD sha (a machine that has `git pull` but not jj).
-fn try_git() -> Option<String> {
-    let sha = run("git", &["rev-parse", "--short", "HEAD"])?;
-    let sha = sha.trim().to_string();
-    if sha.is_empty() {
-        None
-    } else {
-        Some(sha)
-    }
+/// Short HEAD sha; "unknown" outside a git checkout (a source tarball, say).
+fn resolve_sha() -> String {
+    run("git", &["rev-parse", "--short", "HEAD"])
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Runs a command, returns stdout if exit 0, None otherwise (binary absent, outside

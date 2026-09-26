@@ -2287,16 +2287,12 @@ document.getElementById("sudo-cancel").onclick = () => {
 // window title (always visible) and the Log & settings footer. This is the
 // answer to "which binary is actually running?" that cost us a long detour.
 function showBuild(build) {
-  // Order mirrors `jj log`: change id leads, commit id (git-sha) trails.
-  const label = `${build.change} · ${build.sha}`;
-  document.title = `Talos · ${build.change}`;
+  // Release tag leads (the human-facing version — locally the describe string, with
+  // `-dirty` when built on uncommitted edits), then the exact snapshot (git-sha).
+  document.title = `Talos · ${build.tag}`;
   const el = document.getElementById("buildinfo");
   if (el) {
-    // Release tag leads (the human-facing version), then the source snapshot.
-    // Older backends without a tag → fall back to the pre-tag format.
-    el.textContent = build.tag
-      ? `${build.tag} · build ${label} — ${build.builtAt}`
-      : `build ${label} — ${build.builtAt}`;
+    el.textContent = `${build.tag} · ${build.sha} — ${build.builtAt}`;
   }
 }
 

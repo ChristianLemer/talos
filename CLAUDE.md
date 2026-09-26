@@ -122,8 +122,10 @@ with NO arguments from an EMPTY working directory: the engine resolves the conte
 which proves the layout — run it from a content repo instead and the cwd fallback quietly
 validates THAT repo's catalog and a broken kit reports 0 errors.
 
-Every binary bakes a build stamp (jj change · sha · timestamp) so you can tell which build is
-running. ⚠️ Stamps from before the 2026-08-09 rewrite point at SHAs that no longer exist; the
+Every binary bakes a build stamp (tag · sha · timestamp) so you can tell which build is
+running; locally the tag is `git describe --tags --dirty`, so it also says whether the build
+carried uncommitted edits. The stamp is git-only since 2026-09-27 (the jj change id left
+with jj). ⚠️ Stamps from before the 2026-08-09 rewrite point at SHAs that no longer exist; the
 releases that carried them (beta.1–19) were retired on 2026-09-06.
 
 ## Architecture
