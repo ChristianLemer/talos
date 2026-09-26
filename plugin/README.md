@@ -33,4 +33,4 @@ It also means the marketplace and the engine share a tag: a kit pinned at
 
 The plugin speaks of Talos and nothing else — deliberately separate from any other
 marketplace. It teaches content, not the engine's Rust; for the engine, read
-[`CLAUDE.md`](../CLAUDE.md) at the repo root.
+[`AGENTS.md`](../AGENTS.md) at the repo root.

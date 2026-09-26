@@ -1,5 +1,11 @@
 # Talos — working instructions
 
+> This file follows the `AGENTS.md` convention shared by coding agents. **There is no
+> `CLAUDE.md`, by choice**: Claude Code reads `AGENTS.md` natively whenever no `CLAUDE.md`
+> exists in the directory or above it (the default *Project instructions* setting), so one
+> file serves every agent. ⚠️ Do not add a `CLAUDE.md`: with the default setting it would
+> take precedence and this file would silently stop loading.
+
 Talos is a generic graphical promoter/installer: it shows a machine's real state, lets you
 choose what should be there, and converges. Rust + Tauri backend, plain-JS front in `public/`.
 
