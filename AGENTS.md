@@ -104,6 +104,10 @@ real runtime check is a manual smoke-test on a real Windows machine.
 cargo tauri build     # the deliverable; needs `cargo binstall tauri-cli` once
 ```
 
+`app-icon.png` at the root is the icon MASTER (1024², alpha, the centaur head): it is the
+default input of `cargo tauri icon`, which generates every size under `icons/` from it.
+Edit the master and regenerate; never touch `icons/` by hand.
+
 The Mac deliverable is `target/release/bundle/macos/Talos.app`, never the bare binary. A release
 is triggered by pushing a `v*` tag: `.github/workflows/release.yml` builds natively per OS
 (Tauri does not cross-compile) and attaches `Talos-macos-aarch64.app.zip`, `Talos.exe`,
