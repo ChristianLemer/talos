@@ -2343,6 +2343,14 @@ ws.onmessage = (ev) => {
       if (msg.build) showBuild(msg.build); // stamp the UI with the exact source snapshot
       appmgmtStatus = msg.appmgmt || "na";
       renderAppmgmt();
+      // The Doctor tab exists only when the catalogue declares a rescue candidate. The
+      // engine decides (`doctor`, declared not installed); the CSS hides the tab on the
+      // body class. A reload can take the Doctor away from under an open tab, so fall
+      // back to Changes rather than leave a view without a tab to return to.
+      document.body.classList.toggle("has-doctor", !!msg.doctor);
+      if (!msg.doctor && document.getElementById("view-doctor").classList.contains("active")) {
+        setTab("bundles");
+      }
       break;
     case "log":
       renderLog(msg.consent, msg.history);

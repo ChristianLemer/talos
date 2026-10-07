@@ -24,6 +24,11 @@ intention and a PR to `beta`, squash-merged by the operator.
 
 Rules that stay:
 
+- **Never work in the main checkout.** Every change, a one-line fix included, is made in a
+  worktree of its own (Orca creates them: `orca worktree create --name <intention>
+  --base-branch beta`); the main checkout is only ever pulled, fast-forwarded onto the
+  finished branch and pushed. "Direct on `beta`" says where commits LAND, not where they
+  are made. The `docs` symlink is per checkout, so link it in the worktree too.
 - **Never rewrite pushed history.** The repo has been rewritten twice (2026-08-09, and
   once more after); each time left dead build stamps behind. A third time is not on.
 - **Tag = release.** Pushing `v*` builds and publishes; only tag a commit that passed the

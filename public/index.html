@@ -827,6 +827,9 @@
       body.applying #list-sep { display:none; }
       /* Advanced-only tabs: hidden entirely in simple mode. */
       body:not(.advanced) .tab-adv-only { display:none; }
+      /* The Doctor tab exists only when the catalogue declares a rescue candidate
+         (`plan.doctor`, see app.js). A kit whose author never asked for a Doctor has none. */
+      body:not(.has-doctor) .tab-doctor { display:none; }
       /* The Arbitration view is the SAME list, filtered — rows are never duplicated, exactly
          as tab-bundles / tab-catalog work. */
       body.tab-arbitration #steps > details:not(.is-pending) { display:none; }
@@ -1339,7 +1342,7 @@
            scope controls learned — C caught it twice. -->
       <button class="tab tab-adv-only" data-view="arbitration">Arbitration</button>
       <button class="tab" data-view="log">Log &amp; settings</button>
-      <button class="tab" data-view="doctor">Doctor</button>
+      <button class="tab tab-doctor" data-view="doctor">Doctor</button>
     </nav>
 
     <div id="view-bundles" class="view active">

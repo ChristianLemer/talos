@@ -1050,8 +1050,21 @@ fn plan_message(state: &AppState, steps: &[crate::bundles::Step]) -> Value {
         "profileColumns": state.profiles.columns,
         "consent": read_consent(&state.consent),
         "build": crate::build_info::build_json(), // exact stamp of the source snapshot (no more hardcoding)
-        "appmgmt": appmgmt_wire(state.appmgmt)
+        "appmgmt": appmgmt_wire(state.appmgmt),
+        // Whether the Doctor tab exists at all. The dropdown's contents travel on the
+        // Doctor's own socket, which opens only when the tab is clicked — too late to
+        // decide whether to SHOW the tab. So the answer rides the first message instead.
+        "doctor": doctor_declared(steps)
     })
+}
+
+/// A catalogue that declares no rescue candidate has no Doctor: the tab is not shown.
+/// The floor (the OS shell) is engine-owned and always launchable, but it is a floor
+/// UNDER declared candidates, not a reason to show a rescue tab to a kit whose author
+/// never asked for one. Declared, not present: a candidate that is not installed still
+/// gives the tab a reason to exist (it points at the Catalog row that installs it).
+fn doctor_declared(steps: &[crate::bundles::Step]) -> bool {
+    !doctor_candidates(steps).is_empty()
 }
 
 async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
@@ -2932,6 +2945,30 @@ mod tests {
             "the first word of detect is the binary"
         );
         assert!(out[0].clean.is_none());
+    }
+
+    /// The Doctor tab exists only for a catalogue that declares a candidate — declared,
+    /// not installed. The floor alone (always there) does not earn the tab.
+    #[test]
+    fn the_doctor_tab_needs_a_declared_candidate() {
+        assert!(
+            !doctor_declared(&[brew_step("c", None)]),
+            "no doctor: block, no tab"
+        );
+        let mut blind = brew_step("b", None);
+        blind.doctor = Some(Default::default());
+        blind.detect = None;
+        assert!(
+            !doctor_declared(&[blind]),
+            "a doctor: without detect: is not a candidate, so still no tab"
+        );
+        let mut declared = brew_step("a", None);
+        declared.detect = Some("agent --version".into());
+        declared.doctor = Some(Default::default());
+        assert!(
+            doctor_declared(&[brew_step("c", None), declared]),
+            "one declared candidate is enough"
+        );
     }
 
     fn brew_step(system_id: &str, pin: Option<&str>) -> Step {
