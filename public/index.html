@@ -1014,37 +1014,37 @@
          the operator's live configuration. Reasoned from the two code sites and the two
          z-indexes. */
       .veil { position:fixed; inset:0; z-index:40; display:none;
-              align-items:center; justify-content:center; }
-      /* THE MARK AS A WATERMARK, bleeding into the panel instead of sitting on it.
-         ⚠️ A separate LAYER (`::before`), not `background-image` on `.veil` — each instance
-         already sets its own `background` SHORTHAND (the boot radial, the rescan
-         translucency), and a shorthand resets `background-image`, so putting the mark there
-         would be silently erased by whichever rule wins. A pseudo-element cannot collide.
+              flex-direction:column; align-items:center; justify-content:center; }
+      /* THE MARK, ON TOP; the text BELOW it. A vertical stack: mark, title, subtitle,
+         narration, bar, explanation.
+         ⚠️ It used to be a WATERMARK — an `inset:0` layer centred at 42% with the text
+         centred over it — and the title sat on the face. C's call 2026-10-08: no
+         superimposition. The layer is now a flex ITEM (a pseudo-element of a flex
+         container is one), so it takes its own room above `.veil-inner`.
+         ⚠️ Still a pseudo-element, not `background-image` on `.veil` — each instance sets
+         its own `background` SHORTHAND (the boot radial, the rescan translucency), which
+         would silently reset it. And not an <img>: both instances get it from one rule.
          ⭐ Source: `/talos-icon.png`, the 1024px original — `talos-mark.png` is only 128px
          and would be mush at this size. `talos.svg` scales infinitely but is a DIFFERENT
          mark (a geometric Sagittarius arrow) and carries its own opaque background rect.
-         `pointer-events:none` so the layer never eats a click meant for the panel. */
-      /* ⚠️ THE MASK is what makes this a watermark rather than a tile. The source icon
-         carries its OWN rounded-card background, so at any opacity its square edge shows as
-         a lighter rectangle behind the text — measured on screen, and it read as a box, not
-         as a mark. A radial mask dissolves the card into the panel: opaque out to 52% of the
-         image, then faded to nothing by its edge. The asset is untouched — cropping the face
-         out would mean editing the operator's icon, which is his to decide, not a side
-         effect of a CSS choice. */
-      .veil::before { content:""; position:absolute; inset:0; pointer-events:none;
-              background:url(/talos-icon.png) no-repeat center 42%;
-              background-size:min(520px, 66vw); opacity:.16;
-              -webkit-mask-image:radial-gradient(circle min(250px,32vw) at 50% 42%, #000 42%, transparent 100%);
-              mask-image:radial-gradient(circle min(250px,32vw) at 50% 42%, #000 42%, transparent 100%); }
-      /* ⚠️ An EXPLICIT radius, not `closest-side`. The keyword sizes the gradient against the
-         ::before BOX — which is `inset:0`, i.e. the whole panel, ~1000px wide — so it never
-         reached the 520px image and the card's edge still showed. Measured on screen: the
-         first attempt looked masked and was not. The radius must track the IMAGE (520px
-         wide → ~250px half), so the card's corners, at ~368px from centre, fall fully
-         outside it and the mark fades out well before its own boundary. */
-      /* Above the watermark. Without this the text would share a stacking context with the
-         layer and the mark could wash over it. */
-      .veil-inner { position:relative; z-index:1; }
+         ⭐ SIZE: the same 520px as the watermark (C: the size is right) — EXCEPT when the
+         window is too short to hold the mark AND the ~270px of text under it. The default
+         window is 960×540 (`tauri.conf.json`): 520 + 270 does not fit, so there the mark
+         gives way to the height (`100vh - 280px`) rather than push the title off screen.
+         A tall window shows it at exactly the old size. */
+      /* ⚠️ THE MASK is what keeps it a mark rather than a tile. The source icon carries
+         its OWN rounded-card background, so at any opacity its square edge shows as a
+         lighter rectangle — measured on screen, it read as a box. A radial mask dissolves
+         the card into the panel: opaque out to 42% of the radius, faded to nothing by its
+         edge. The radius tracks the IMAGE (48% of its side, the old 250px on 520), so the
+         card's corners fall fully outside it. The asset is untouched — cropping the face
+         out would mean editing the operator's icon, which is his to decide. */
+      .veil::before { content:""; flex:none; pointer-events:none;
+              --mark:min(520px, 66vw, calc(100vh - 280px));
+              width:var(--mark); height:var(--mark);
+              background:url(/talos-icon.png) no-repeat center / contain; opacity:.16;
+              -webkit-mask-image:radial-gradient(circle calc(var(--mark) * .48) at 50% 50%, #000 42%, transparent 100%);
+              mask-image:radial-gradient(circle calc(var(--mark) * .48) at 50% 50%, #000 42%, transparent 100%); }
       /* 30ch was sized for the title + count alone. A child cannot outgrow its parent, so
          the explanation below was squeezed into ~300px in a 1700px window — three cramped
          lines. The box grows; the SHORT elements keep their own narrow measure. */
