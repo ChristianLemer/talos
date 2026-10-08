@@ -186,7 +186,9 @@ while the old engine scanned two (core + integrator).
 - **Detect, don't remember.** `detectRoutes(pkg)` observed *now* is the truth; a journal is
   partial. But the user's *intention* is a different axis and MUST be persisted.
 - **No TTL cache on detection** — it masks a manual removal. Apply re-scans live and repaints
-  before acting.
+  before acting. The one window is on the machine-wide OUTDATED map, not presence: the Apply
+  reuses the scan's map for 5 minutes, and any step or rescue terminal clears it
+  (`OutdatedSeen`). Its worst case is one upgrade the manager answers "already current".
 - **The row terminal is display-only.** A command that PROMPTS deadlocks the step. Every command
   must be non-interactive (`brew --yes`, `winget --accept-*`, `npx --yes`).
 - **One shell wrapping.** Only `platform::shell_probe` / `pty_shell` build a shell line. Any

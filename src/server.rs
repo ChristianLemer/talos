@@ -193,6 +193,10 @@ struct AppState {
     /// every `requires` reason over them would lie. Remembering the last OBSERVATION
     /// is honest; inventing `false` is not.
     last_seen: tokio::sync::Mutex<Vec<Option<crate::detect::Presence>>>,
+    /// The last READABLE machine-wide outdated map, and when it was read — so an Apply
+    /// shortly after a scan does not run `winget upgrade` again. See `OutdatedSeen` for why
+    /// this is not the presence cache the doctrine forbids. `None` = nothing fresh to reuse.
+    outdated_seen: tokio::sync::Mutex<Option<OutdatedSeen>>,
     /// Behaviour facts observed during the CURRENT Apply, keyed by package id then
     /// `route/os`. Flushed to the share ONCE when the Apply ends, for the packages it
     /// touched only — a per-step write would be 30 chances to collide with another
@@ -460,6 +464,7 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         profiles,
         os,
         last_seen,
+        outdated_seen: tokio::sync::Mutex::new(None),
         appmgmt: crate::platform::app_management_status(os),
         disk_root,
         data_dir,
@@ -757,6 +762,9 @@ async fn handle_doctor_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     // spike had, and it is the honest split: the panel is a view, not a
                     // launcher.
                     Some("doctor-start") => {
+                        // A rescue terminal can change anything, upgrades included, so the
+                        // outdated map read before it is no longer the machine's.
+                        *state.outdated_seen.lock().await = None;
                         let cols = parsed
                             .get("cols")
                             .and_then(|v| v.as_u64())
@@ -1401,8 +1409,17 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
     // who trusts a screen of green rows. The rows still work — presence is a
     // separate probe — but nothing claims to know about upgrades.
     let scan = match &scanned {
-        Ok(map) => map.clone(),
+        Ok(map) => {
+            // Recorded for the Apply that usually follows within minutes. Only a READABLE
+            // map: an unavailable scan must be retried, not remembered as "nothing to do".
+            *state.outdated_seen.lock().await = Some(OutdatedSeen {
+                at: std::time::Instant::now(),
+                map: map.clone(),
+            });
+            map.clone()
+        }
         Err(reason) => {
+            *state.outdated_seen.lock().await = None;
             eprintln!("[scan] outdated UNAVAILABLE: {}", reason.message());
             let _ = socket
                 .send(Message::Text(
@@ -1832,6 +1849,37 @@ fn seeds_for_rescan(
     seeds
 }
 
+/// How long the machine-wide outdated map read by a scan stays good enough for the Apply.
+///
+/// Measured on a Windows 11 VM (2026-10-08): `winget upgrade` costs 3.3 s cold and 0.65 s
+/// once winget's own source cache is warm — and that cache, by default, lasts five minutes.
+/// So a window of the same length never skips a scan winget would have answered from the
+/// network; behind a corporate firewall, where the source refresh is what drags, it skips
+/// the expensive part exactly when it is most expensive.
+const OUTDATED_FRESH_FOR: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// The outdated map a scan read, and when.
+///
+/// ⚠️ A TTL on OUTDATED-NESS, never on presence — "No TTL cache on detection" stands. What
+/// can change inside the window is an upgrade done OUTSIDE Talos, and its worst case is one
+/// upgrade step the manager answers "already current". What Talos does itself clears it —
+/// every step (`do_step`) and every rescue terminal (`doctor-start`) — so the window never
+/// outlives an action of ours; a Refresh replaces it.
+struct OutdatedSeen {
+    at: std::time::Instant,
+    map: std::collections::HashMap<String, crate::managers::Outdated>,
+}
+
+/// The recorded outdated map if it is still fresh at `now`, else `None` (scan again).
+fn reusable_outdated(
+    seen: Option<&OutdatedSeen>,
+    now: std::time::Instant,
+) -> Option<&OutdatedSeen> {
+    let seen = seen?;
+    let age = now.checked_duration_since(seen.at)?;
+    (age < OUTDATED_FRESH_FOR).then_some(seen)
+}
+
 /// The heart: applies the tri-state decision against the machine reality.
 ///   on  = indices wanted PRESENT; off = indices wanted ABSENT.
 /// Re-detects presence NOW (repaint-at-apply: re-observes before acting,
@@ -1871,29 +1919,54 @@ async fn apply_diff(
     // people complained about. No `total` yet (the count belongs to the probes), so
     // the bar stays indeterminate here.
     let started = std::time::Instant::now();
-    let _ = socket
-        .send(Message::Text(
-            json!({ "type": "rescan-progress", "name": "what's out of date" }).to_string(),
-        ))
-        .await;
-    // If the scan is unreadable, `outdated(i)` is false for every row — which
-    // would NARROW the re-probe set on an assumption. seeds_for_rescan already
-    // re-probes anything it has no reliable knowledge of, so the safe reading of
-    // a failed scan is an empty map, never a claim.
-    let scan = tokio::task::spawn_blocking(move || scan_outdated(os))
-        .await
-        .unwrap_or(Err(crate::outdated::ScanFailure::CommandFailed(
-            "the scan task did not finish".into(),
-        )));
-    if let Err(reason) = &scan {
-        eprintln!("[apply] outdated UNAVAILABLE: {}", reason.message());
+    // ⭐ Reused when the scan before this Apply read it less than OUTDATED_FRESH_FOR ago and
+    // no step has acted since — the usual case: people connect, choose, press Apply. The
+    // presence of the rows about to be acted on is still re-probed below, live.
+    let fresh = reusable_outdated(state.outdated_seen.lock().await.as_ref(), started)
+        .map(|s| (s.map.clone(), s.at));
+    let scan = if let Some((map, at)) = fresh {
+        println!(
+            "[apply] outdated reused from the scan {:?} ago ({} entries)",
+            started.duration_since(at),
+            map.len()
+        );
+        map
+    } else {
         let _ = socket
             .send(Message::Text(
-                json!({ "type": "outdated-unavailable", "reason": reason.message() }).to_string(),
+                json!({ "type": "rescan-progress", "name": "what's out of date" }).to_string(),
             ))
             .await;
-    }
-    let scan = scan.unwrap_or_default();
+        // If the scan is unreadable, `outdated(i)` is false for every row — which
+        // would NARROW the re-probe set on an assumption. seeds_for_rescan already
+        // re-probes anything it has no reliable knowledge of, so the safe reading of
+        // a failed scan is an empty map, never a claim.
+        let scanned = tokio::task::spawn_blocking(move || scan_outdated(os))
+            .await
+            .unwrap_or(Err(crate::outdated::ScanFailure::CommandFailed(
+                "the scan task did not finish".into(),
+            )));
+        println!("[apply] outdated (batched) in {:?}", started.elapsed());
+        match scanned {
+            Ok(map) => {
+                *state.outdated_seen.lock().await = Some(OutdatedSeen {
+                    at: std::time::Instant::now(),
+                    map: map.clone(),
+                });
+                map
+            }
+            Err(reason) => {
+                eprintln!("[apply] outdated UNAVAILABLE: {}", reason.message());
+                let _ = socket
+                    .send(Message::Text(
+                        json!({ "type": "outdated-unavailable", "reason": reason.message() })
+                            .to_string(),
+                    ))
+                    .await;
+                std::collections::HashMap::new()
+            }
+        }
+    };
 
     // WHAT to re-probe: the rows where something COULD happen, plus what their
     // `requires` pull, transitively. Not all 30.
@@ -1971,17 +2044,22 @@ async fn apply_diff(
     } else {
         std::sync::Arc::new(None)
     };
-    // ⭐ NO threshold for this one, unlike the bulk listing right above. The snapshot costs one
-    // `code --version` plus one file read (~0.2 s measured), where a `winget list` costs ~3.7 s —
-    // so there is no break-even below which it is a loss, and the fast path stays fast. And the
-    // alternative is not "probe per row" but "no answer at all": without it every extension row
-    // in the diff reads unknown, which is precisely the row Apply is about to act on.
-    let home = crate::detect::user_home();
-    let vs = std::sync::Arc::new(
+    // ⭐ NO count threshold for this one, unlike the bulk listing right above: without it every
+    // extension row in the diff reads unknown, which is precisely the row Apply is about to act
+    // on. But it is taken only when such a row IS in the diff — only `vscode-extension` rows read
+    // it, and it is not free: one `code --version` plus one file read, ~0.2 s on a Mac but 0.74 s
+    // measured on Windows (2026-10-08), paid on every Apply that touches no extension at all.
+    let needs_vscode = to_probe
+        .iter()
+        .any(|&i| steps[i].route.as_deref() == Some("vscode-extension"));
+    let vs = std::sync::Arc::new(if needs_vscode {
+        let home = crate::detect::user_home();
         tokio::task::spawn_blocking(move || crate::vscode::snapshot(os, &home))
             .await
-            .ok(),
-    );
+            .ok()
+    } else {
+        None
+    });
     for (nth, &i) in to_probe.iter().enumerate() {
         // Narrate BEFORE probing: the veil says which package is being checked while
         // it is being checked (`nth of total`) — the same honesty the splash got, now
@@ -2692,6 +2770,10 @@ async fn do_step(
     // pty would flatter exactly the slow packages the number exists to expose.
     let started = std::time::Instant::now();
     let os = state.os;
+    // Whatever this step does — install, upgrade, uninstall, even a failure half-way — the
+    // outdated map read before it may no longer be the machine's. Forgotten HERE, the one
+    // place both callers act through, so the next Apply scans it again.
+    *state.outdated_seen.lock().await = None;
     // A cask Upgrade needs the forced --cask --force command (brew's receipt drift
     // → anti-clobber exit 1 otherwise). Single resolution point for BOTH callers
     // (batch Apply + row button); formulae, non-brew and pinned casks keep step.upgrade.
@@ -3423,6 +3505,31 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_outdated_map_is_reused_a_stale_or_missing_one_is_not() {
+        use std::time::{Duration, Instant};
+        let at = Instant::now();
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "git.git".to_string(),
+            crate::managers::Outdated {
+                current: "2.55.0.3".into(),
+                available: "2.55.0.5".into(),
+                is_cask: false,
+            },
+        );
+        let seen = OutdatedSeen { at, map };
+
+        // Within the window: reused, and it is the very map the scan read.
+        let reused = reusable_outdated(Some(&seen), at + Duration::from_secs(60));
+        assert_eq!(reused.map(|s| s.map.len()), Some(1));
+        // At the edge and beyond: stale, the Apply scans again.
+        assert!(reusable_outdated(Some(&seen), at + OUTDATED_FRESH_FOR).is_none());
+        assert!(reusable_outdated(Some(&seen), at + Duration::from_secs(3600)).is_none());
+        // Nothing recorded (the scan failed, or a step acted since): scan again.
+        assert!(reusable_outdated(None, at).is_none());
+    }
+
+    #[test]
     fn a_fully_converged_plan_needs_no_probes_at_all() {
         // THE regression guard. 30 packages, every one already in its desired state,
         // fed in the shape the UI really sends (all 30 split across on/off). The
@@ -3870,6 +3977,7 @@ mod tests {
             },
             sudo_pw: tokio::sync::Mutex::new(None),
             last_seen: tokio::sync::Mutex::new(Vec::new()),
+            outdated_seen: tokio::sync::Mutex::new(None),
             observed: tokio::sync::Mutex::new(std::collections::BTreeMap::new()),
             // Empty, matching the empty plan above: these tests exercise the WRITE side,
             // and the resolved beliefs are exactly what must never travel that way.
