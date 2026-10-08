@@ -1851,12 +1851,14 @@ fn seeds_for_rescan(
 
 /// How long the machine-wide outdated map read by a scan stays good enough for the Apply.
 ///
-/// Measured on a Windows 11 VM (2026-10-08): `winget upgrade` costs 3.3 s cold and 0.65 s
-/// once winget's own source cache is warm — and that cache, by default, lasts five minutes.
-/// So a window of the same length never skips a scan winget would have answered from the
-/// network; behind a corporate firewall, where the source refresh is what drags, it skips
-/// the expensive part exactly when it is most expensive.
-const OUTDATED_FRESH_FOR: std::time::Duration = std::time::Duration::from_secs(300);
+/// Ten minutes because that is how long people really spend between the scan and Apply —
+/// reading, scrolling, choosing (the operator's call, 2026-10-08). Measured on a Windows 11
+/// VM the same day: `winget upgrade` costs 3.3 s cold and 0.65 s while winget's own source
+/// cache is warm, which lasts five minutes by default. So past five minutes the scan this
+/// skips is the COLD one, the network refresh — the very part that drags behind a corporate
+/// firewall. The price of the longer window is unchanged in kind: an upgrade published or
+/// applied outside Talos in the meantime, worst case one step answered "already current".
+const OUTDATED_FRESH_FOR: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// The outdated map a scan read, and when.
 ///
