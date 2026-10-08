@@ -1042,7 +1042,7 @@
       .veil::before { content:""; flex:none; pointer-events:none;
               --mark:min(520px, 66vw, calc(100vh - 280px));
               width:var(--mark); height:var(--mark);
-              background:url(/talos-icon.png) no-repeat center / contain; opacity:.10; /* .16 read fine; the operator chose the quieter mark, side by side */
+              background:url(/talos-icon.png) no-repeat center / contain; opacity:.16;
               -webkit-mask-image:radial-gradient(circle calc(var(--mark) * .48) at 50% 50%, #000 42%, transparent 100%);
               mask-image:radial-gradient(circle calc(var(--mark) * .48) at 50% 50%, #000 42%, transparent 100%); }
       /* 30ch was sized for the title + count alone. A child cannot outgrow its parent, so
