@@ -1,0 +1,48 @@
+   -    \                                                                                                                            -                                                                                                                         Name                                     Id                                        Version           Available   Source
+-----------------------------------------------------------------------------------------------------------------------
+Git                                      Git.Git                                   2.55.0.3          2.55.0.5    winget
+Nushell                                  Nushell.Nushell                           0.116.0           0.116.1     winget
+Microsoft Edge                           Microsoft.Edge                            154.0.4258.62                 winget
+Virtio-win-guest-tools                   RedHat.VirtIO                             > 0.1.285-1                   winget
+Orca                                     StablyAI.Orca                             1.4.219           1.4.221     winget
+Microsoft OneDrive                       Microsoft.OneDrive                        26.173.0906.0008              winget
+AV1 Video Extension                      MSIX\Microsoft.AV1VideoExtension_2.0.6.0… 2.0.6.0                       
+AVC Encoder Video Extension              MSIX\Microsoft.AVCEncoderVideoExtension_… 1.1.21.0                      
+Windows Application Compatibility Enhan… MSIX\Microsoft.ApplicationCompatibilityE… 1.2511.9.0                    
+App Installer                            Microsoft.AppInstaller                    1.26.509.0        1.29.380    winget
+HEIF Image Extension                     MSIX\Microsoft.HEIFImageExtension_1.2.28… 1.2.28.0                      
+HEVC Video Extensions from Device Manuf… MSIX\Microsoft.HEVCVideoExtension_2.4.39… 2.4.39.0                      
+MPEG-2 Video Extension                   MSIX\Microsoft.MPEG2VideoExtension_1.2.1… 1.2.13.0                      
+Microsoft Edge                           MSIX\Microsoft.MicrosoftEdge.Stable_154.… 154.0.4258.53                 
+Microsoft .Net Native Framework Package… MSIX\Microsoft.NET.Native.Framework.2.2_… 2.2.29512.0                   
+Microsoft .Net Native Runtime Package 2… Microsoft.DotNet.Native.Runtime           2.2.28604.0                   winget
+Paint                                    MSIX\Microsoft.Paint_11.2605.81.0_x64__8… 11.2605.81.0                  
+PowerShell                               Microsoft.PowerShell                      7.6.6.0                       winget
+Raw Image Extension                      MSIX\Microsoft.RawImageExtension_2.5.7.0… 2.5.7.0                       
+Snipping Tool                            MSIX\Microsoft.ScreenSketch_11.2607.23.0… 11.2607.23.0                  
+Windows Security                         MSIX\Microsoft.SecHealthUI_1000.26100.80… 1000.26100.8036.0             
+Store Experience Host                    MSIX\Microsoft.StorePurchaseApp_22509.14… 22509.1400.1.0                
+Microsoft.UI.Xaml.2.8                    Microsoft.UI.Xaml.2.8                     8.2511.26001.0                winget
+Microsoft.UI.Xaml.2.8                    Microsoft.UI.Xaml.2.8                     8.2501.31001.0                winget
+Microsoft Visual C++ 2015 UWP Desktop R… Microsoft.VCLibs.Desktop.14               14.0.33728.0                  winget
+Microsoft Visual C++ 2015 UWP Desktop R… Microsoft.VCLibs.Desktop.14               14.0.33728.0                  winget
+Microsoft Visual C++ 2015 UWP Runtime P… Microsoft.VCLibs.14                       14.0.33519.0                  winget
+Microsoft Visual C++ 2015 UWP Runtime P… Microsoft.VCLibs.14                       14.0.33519.0                  winget
+VP9 Video Extensions                     MSIX\Microsoft.VP9VideoExtensions_1.2.12… 1.2.12.0                      
+Web Media Extensions                     MSIX\Microsoft.WebMediaExtensions_2.1.23… 2.1.23.0                      
+WebP Image Extension                     MSIX\Microsoft.WebpImageExtension_1.2.14… 1.2.14.0                      
+Widgets Platform Runtime                 MSIX\Microsoft.WidgetsPlatformRuntime_1.… 1.6.14.0                      
+Windows Advanced Settings                MSIX\Microsoft.Windows.DevHome_0.2100.85… 0.2100.858.0                  
+Microsoft Photos                         MSIX\Microsoft.Windows.Photos_24.24070.2… 24.24070.23002.0              
+Windows Clock                            MSIX\Microsoft.WindowsAlarms_1.1.61.0_x6… 1.1.61.0                      
+WindowsAppRuntime.2                      Microsoft.WindowsAppRuntime.2             2.5.1.0                       winget
+WindowsAppRuntime.2                      Microsoft.WindowsAppRuntime.2             2.5.1.0                       winget
+Windows Calculator                       MSIX\Microsoft.WindowsCalculator_11.2502… 11.2502.2.0                   
+Windows Camera                           MSIX\Microsoft.WindowsCamera_2025.2510.2… 2025.2510.2.0                 
+Windows Notepad                          MSIX\Microsoft.WindowsNotepad_11.2607.14… 11.2607.14.0                  
+Windows Sound Recorder                   MSIX\Microsoft.WindowsSoundRecorder_1.1.… 1.1.47.0                      
+Microsoft Store                          MSIX\Microsoft.WindowsStore_22608.1401.4… 22608.1401.4.0                
+Windows Terminal                         Microsoft.WindowsTerminal                 1.24.11911.0      1.25.2733.0 winget
+Windows Package Manager Source (winget)… MSIX\Microsoft.Winget.Source_2026.1008.8… 2026.1008.840.54              
+Windows Web Experience Pack              MSIX\MicrosoftWindows.Client.WebExperien… 526.21100.40.0                
+Cross Device Experience Host             MSIX\MicrosoftWindows.CrossDevice_0.2511… 0.25112.60.0                  

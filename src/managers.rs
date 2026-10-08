@@ -185,6 +185,45 @@ fn strip_ansi(s: &str) -> String {
         .into_owned()
 }
 
+/// A fixed-width table's lines as a terminal would SHOW them.
+///
+/// ⚠️ Run without a console, winget writes its progress spinner onto the header's own
+/// line — `\r   - \r<blanks>\rName  Id  Version…` — so the line holds every frame the
+/// screen overwrote. Only what follows the last `\r` was ever visible, and it is what the
+/// columns are aligned to. Counted from the raw start, every header offset lands too far
+/// right and each row slices into nothing: the scan read ZERO rows while `is_recognised`
+/// still saw a header, which reported the machine current and its packages absent.
+fn screen_lines(raw: &str) -> Vec<String> {
+    strip_ansi(raw)
+        .lines()
+        .map(|l| {
+            let l = l.trim_end_matches('\r');
+            l.rsplit('\r').next().unwrap_or(l).to_string()
+        })
+        .collect()
+}
+
+/// Where `needle` starts on a screen line, in COLUMNS — characters, not bytes.
+///
+/// ⚠️ winget ends a truncated cell with `…`: one column on screen, three bytes in UTF-8.
+/// A byte offset taken from the header drifts by two on every such row and slices the
+/// next cell mid-word (or off a char boundary, which `str::get` answers with nothing).
+fn column(line: &str, needle: &str) -> Option<usize> {
+    line.find(needle).map(|b| line[..b].chars().count())
+}
+
+/// The trimmed cell between columns `a` and `b` (`None`, or a `b` not after `a`, means to
+/// the end of the line).
+fn cell(line: &str, a: usize, b: Option<usize>) -> String {
+    let end = b.filter(|&e| e > a);
+    line.chars()
+        .skip(a)
+        .take(end.map_or(usize::MAX, |e| e - a))
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 // winget: "name  Id  Version" — the token after the id (must start with a digit).
 // ⚠️ When MULTIPLE VERSIONS are installed for the same id (field-hit: two Nushell
 // versions on Windows, pin between them → wrong action direction), returns the
@@ -258,11 +297,7 @@ fn parse_brew_version(id: &str, output: &str) -> String {
 // spaces: names/versions contain spaces). Any hiccup → empty map.
 pub fn parse_winget_upgrade(raw: &str) -> HashMap<String, Outdated> {
     let mut map = HashMap::new();
-    let cleaned = strip_ansi(raw);
-    let lines: Vec<String> = cleaned
-        .lines()
-        .map(|l| l.trim_end_matches('\r').to_string())
-        .collect();
+    let lines = screen_lines(raw);
     let Some(h) = lines
         .iter()
         .position(|l| l.contains("Id") && l.contains("Available"))
@@ -271,13 +306,13 @@ pub fn parse_winget_upgrade(raw: &str) -> HashMap<String, Outdated> {
     };
     let header = &lines[h];
     let (Some(id_pos), Some(ver_pos), Some(av_pos)) = (
-        header.find("Id"),
-        header.find("Version"),
-        header.find("Available"),
+        column(header, "Id"),
+        column(header, "Version"),
+        column(header, "Available"),
     ) else {
         return map;
     };
-    let src_pos = header.find("Source");
+    let src_pos = column(header, "Source");
     for line in &lines[h + 1..] {
         if line.trim().is_empty() {
             break;
@@ -286,16 +321,12 @@ pub fn parse_winget_upgrade(raw: &str) -> HashMap<String, Outdated> {
         if line.trim().chars().all(|c| c == '-' || c.is_whitespace()) {
             continue;
         }
-        if line.len() < av_pos {
+        if line.chars().count() < av_pos {
             continue;
         }
-        let slice = |a: usize, b: Option<usize>| -> String {
-            let end = b.filter(|&e| e > a).unwrap_or(line.len()).min(line.len());
-            line.get(a..end).unwrap_or("").trim().to_string()
-        };
-        let id = slice(id_pos, Some(ver_pos));
-        let current = slice(ver_pos, Some(av_pos));
-        let available = slice(av_pos, src_pos.filter(|&s| s > av_pos));
+        let id = cell(line, id_pos, Some(ver_pos));
+        let current = cell(line, ver_pos, Some(av_pos));
+        let available = cell(line, av_pos, src_pos.filter(|&s| s > av_pos));
         if id.is_empty() || available.is_empty() {
             continue;
         }
@@ -315,11 +346,7 @@ pub fn parse_winget_upgrade(raw: &str) -> HashMap<String, Outdated> {
 // of the rows — EVERY row here is an installed package, upgradable or not. Sliced
 // by header offsets, never by spaces (names and versions contain them).
 fn parse_winget_list(raw: &str) -> Result<HashMap<String, String>, ()> {
-    let cleaned = strip_ansi(raw);
-    let lines: Vec<String> = cleaned
-        .lines()
-        .map(|l| l.trim_end_matches('\r').to_string())
-        .collect();
+    let lines = screen_lines(raw);
     // "Available" is optional here: `winget list` prints the column, but a machine
     // with nothing to upgrade leaves every cell empty, so recognition keys on
     // Id + Version — the two columns that always carry meaning.
@@ -330,14 +357,13 @@ fn parse_winget_list(raw: &str) -> Result<HashMap<String, String>, ()> {
         return Err(());
     };
     let header = &lines[h];
-    let (Some(id_pos), Some(ver_pos)) = (header.find("Id"), header.find("Version")) else {
+    let (Some(id_pos), Some(ver_pos)) = (column(header, "Id"), column(header, "Version")) else {
         return Err(());
     };
     // The column after Version bounds the version cell: Available if present, else
     // Source, else the end of the line.
-    let ver_end = header
-        .find("Available")
-        .or_else(|| header.find("Source"))
+    let ver_end = column(header, "Available")
+        .or_else(|| column(header, "Source"))
         .filter(|&e| e > ver_pos);
 
     // Field-reported defect (beta.32): two installed versions of the same id
@@ -357,17 +383,13 @@ fn parse_winget_list(raw: &str) -> Result<HashMap<String, String>, ()> {
         if line.trim().chars().all(|c| c == '-' || c.is_whitespace()) {
             continue;
         }
-        if line.len() < ver_pos {
+        if line.chars().count() < ver_pos {
             continue;
         }
-        let slice = |a: usize, b: Option<usize>| -> String {
-            let end = b.filter(|&e| e > a).unwrap_or(line.len()).min(line.len());
-            line.get(a..end).unwrap_or("").trim().to_string()
-        };
-        let id = slice(id_pos, Some(ver_pos));
+        let id = cell(line, id_pos, Some(ver_pos));
         // ⚠️ winget marks a held/pinned entry with a leading "> ". The marker is not
         // part of the version and must not reach the UI.
-        let version = slice(ver_pos, ver_end)
+        let version = cell(line, ver_pos, ver_end)
             .trim_start_matches('>')
             .trim()
             .to_string();
@@ -743,6 +765,70 @@ Nushell   Nushell.Nushell  0.111.1              winget
             parse_winget_version("Nushell.Nushell", output_rev),
             "0.114.0",
             "must return MAX regardless of order"
+        );
+    }
+
+    /// The bytes winget prints when Talos runs it: no console attached (`quiet_command`),
+    /// stdout a pipe, read raw. Captured on a Windows 11 VM (winget v1.11.510,
+    /// 2026-10-08) with exactly `shell_probe`'s wrapping.
+    ///
+    /// ⚠️ `winget-list-real.txt` above was captured from a console and came out clean, so
+    /// every parser test passed while the live scan read NOTHING. Two shapes only the
+    /// pipe shows:
+    /// - the progress spinner is written onto the header's own line (`\r   - \r…\rName`),
+    ///   so a header offset counted from the start of that line lands columns to the right;
+    /// - a truncated cell ends in `…`, ONE column on screen but three bytes in UTF-8, so a
+    ///   byte offset drifts by two on every row after it.
+    fn no_console_capture(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/managers")
+            .join(name);
+        let bytes =
+            std::fs::read(&path).unwrap_or_else(|e| panic!("{} unreadable: {e}", path.display()));
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    #[test]
+    fn winget_list_reads_the_output_of_a_process_without_a_console() {
+        let m = WINGET
+            .parse_presence(&no_console_capture("winget-list-no-console.txt"))
+            .expect("the header is recognised");
+        assert_eq!(m.get("git.git").map(String::as_str), Some("2.55.0.3"));
+        assert_eq!(
+            m.get("microsoft.windowsterminal").map(String::as_str),
+            Some("1.24.11911.0")
+        );
+        // The row after a truncated name: `…` is three bytes for one column.
+        assert_eq!(
+            m.get("microsoft.dotnet.native.runtime").map(String::as_str),
+            Some("2.2.28604.0")
+        );
+        assert_eq!(
+            m.get("microsoft.vclibs.desktop.14").map(String::as_str),
+            Some("14.0.33728.0")
+        );
+        // The held marker is still stripped on this shape.
+        assert_eq!(
+            m.get("redhat.virtio").map(String::as_str),
+            Some("0.1.285-1")
+        );
+    }
+
+    #[test]
+    fn winget_upgrade_reads_the_output_of_a_process_without_a_console() {
+        let raw = no_console_capture("winget-upgrade-no-console.txt");
+        assert!(WINGET.is_recognised(&raw));
+        let m = parse_winget_upgrade(&raw);
+        assert_eq!(m.len(), 5, "upgradable rows in the capture: {m:?}");
+        assert_eq!(
+            m.get("git.git")
+                .map(|o| (o.current.as_str(), o.available.as_str())),
+            Some(("2.55.0.3", "2.55.0.5"))
+        );
+        assert_eq!(
+            m.get("microsoft.windowsterminal")
+                .map(|o| o.available.as_str()),
+            Some("1.25.2733.0")
         );
     }
 

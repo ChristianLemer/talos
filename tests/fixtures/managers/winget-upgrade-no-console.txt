@@ -1,0 +1,8 @@
+   -                                                                                                                         Name             Id                        Version      Available
+-------------------------------------------------------------------
+Git              Git.Git                   2.55.0.3     2.55.0.5
+Nushell          Nushell.Nushell           0.116.0      0.116.1
+Orca             StablyAI.Orca             1.4.219      1.4.221
+App Installer    Microsoft.AppInstaller    1.26.509.0   1.29.380
+Windows Terminal Microsoft.WindowsTerminal 1.24.11911.0 1.25.2733.0
+5 upgrades available.
