@@ -24,7 +24,7 @@
 #     MacOS/     Talos.app
 #     Windows/   Talos.exe
 #     Linux/     Talos
-#     catalog/   bundles/
+#     catalog/   bundles/   distribution.yaml (when the content names itself)
 #     .talos/    VERSION · KIT.txt · MANIFEST.sha256
 #
 # One folder per OS, so every launcher keeps its own standard name — `Talos` next to
@@ -208,10 +208,13 @@ chmod +x "$DEST/Linux/Talos"
 # The content: yours, or the socle of this release. REPLACED, not merged — a package
 # deleted from the source must leave the kit too, or the kit keeps proposing what the
 # author removed.
-rm -rf "$DEST/catalog" "$DEST/bundles"
+rm -rf "$DEST/catalog" "$DEST/bundles" "$DEST/distribution.yaml"
 if [ -n "$CONTENT" ]; then
     cp -R "$CONTENT/catalog" "$DEST/catalog"
     cp -R "$CONTENT/bundles" "$DEST/bundles"
+    # The content's NAME, optional, beside the two folders — where the engine reads it. The
+    # `--check` below prints `distribution: <name>` when it found it: that line is the proof.
+    [ -f "$CONTENT/distribution.yaml" ] && cp "$CONTENT/distribution.yaml" "$DEST/distribution.yaml"
     echo "content from $CONTENT"
 else
     unzip -q -o "$TMP/$CONTENT_ASSET" -d "$DEST"
@@ -247,10 +250,10 @@ if ! ( cd "$TMP" && "$CHECKER" --check ); then
 fi
 
 # What is on disk now, file by file, in the format `-c` reads back — relative to the kit,
-# so the manifest travels with the replica. The launchers and the content; never `.talos/`
-# itself, which is this bookkeeping.
-( cd "$DEST" && { for d in MacOS Windows Linux catalog bundles; do
-        [ -d "$d" ] && find "$d" -type f
+# so the manifest travels with the replica. The launchers and the content — the two folders
+# and the one file that names them; never `.talos/` itself, which is this bookkeeping.
+( cd "$DEST" && { for d in MacOS Windows Linux catalog bundles distribution.yaml; do
+        [ -e "$d" ] && find "$d" -type f
     done; } | LC_ALL=C sort | while IFS= read -r f; do $SHA "$f"; done ) > "$TMP/MANIFEST.sha256"
 mv "$TMP/MANIFEST.sha256" "$DEST/.talos/MANIFEST.sha256"
 

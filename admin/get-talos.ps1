@@ -37,7 +37,7 @@
 #     MacOS\     Talos.app
 #     Windows\   Talos.exe
 #     Linux\     Talos
-#     catalog\   bundles\
+#     catalog\   bundles\   distribution.yaml (when the content names itself)
 #     .talos\    VERSION, KIT.txt, MANIFEST.sha256
 #
 # One folder per OS, so every launcher keeps its own standard name -- `Talos` next to
@@ -137,9 +137,10 @@ function Get-KitRelativePath([string]$Root, [string]$Full) {
 # could not be written.
 function Get-KitFileList([string]$Root) {
     $rels = New-Object System.Collections.ArrayList
-    foreach ($n in @('MacOS', 'Windows', 'Linux', 'catalog', 'bundles')) {
+    foreach ($n in @('MacOS', 'Windows', 'Linux', 'catalog', 'bundles', 'distribution.yaml')) {
         $dir = Join-Path $Root $n
         if (-not (Test-Path -LiteralPath $dir)) { continue }
+        # One entry is a FILE, the content's name; Get-ChildItem on a file yields that file.
         foreach ($f in Get-ChildItem -LiteralPath $dir -Recurse -File -Force) {
             [void]$rels.Add((Get-KitRelativePath $Root $f.FullName))
         }
@@ -317,13 +318,17 @@ try {
     # The content: yours, or the socle of this release. REPLACED, not merged -- a package
     # deleted from the source must leave the kit too, or the kit keeps proposing what the
     # author removed.
-    foreach ($n in @('catalog', 'bundles')) {
+    foreach ($n in @('catalog', 'bundles', 'distribution.yaml')) {
         $d = Join-Path $KitFull $n
         if (Test-Path -LiteralPath $d) { Remove-Item -LiteralPath $d -Recurse -Force }
     }
     if ($Content) {
         Copy-Item -LiteralPath (Join-Path $Content 'catalog') -Destination (Join-Path $KitFull 'catalog') -Recurse
         Copy-Item -LiteralPath (Join-Path $Content 'bundles') -Destination (Join-Path $KitFull 'bundles') -Recurse
+        # The content's NAME, optional, beside the two folders -- where the engine reads it.
+        # The `--check` below prints `distribution: <name>` when it found it: the proof.
+        $dist = Join-Path $Content 'distribution.yaml'
+        if (Test-Path -LiteralPath $dist) { Copy-Item -LiteralPath $dist -Destination (Join-Path $KitFull 'distribution.yaml') }
         Write-Host "content from $Content"
     }
     else {

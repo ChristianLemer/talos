@@ -41,9 +41,11 @@ const skill = read("../plugin/skills/talos-kit/SKILL.md");
 const set = (xs) => new Set(xs);
 const sorted = (s) => [...s].sort();
 
-/** The folders `get-talos.sh` treats as the kit's own: the manifest walk, plus the ones it
- *  creates outright. `catalog/` and `bundles/` are absent from the mkdir on purpose — they
- *  arrive by `cp -R` or by unzip — so neither anchor alone is the whole layout. */
+/** The entries `get-talos.sh` treats as the kit's own: the manifest walk, plus the ones it
+ *  creates outright. `catalog/`, `bundles/` and `distribution.yaml` are absent from the
+ *  mkdir on purpose — they arrive by `cp` or by unzip — so neither anchor alone is the
+ *  whole layout. The walk holds one FILE among the folders: the content's name travels
+ *  with the content, at the top level, where the engine reads it beside `catalog/`. */
 function layoutFromSh() {
   const walk = sh.match(/for d in ([^;]+); do/);
   assert.ok(walk, "get-talos.sh: the manifest walk `for d in … ; do` moved — re-point this test");
@@ -80,7 +82,12 @@ function layoutFromSkill() {
 test("kit layout: both scripts compose the same set of folders", () => {
   const fromSh = layoutFromSh();
   const fromPs1 = layoutFromPs1();
-  assert.equal(fromSh.size, 6, `get-talos.sh: expected 6 kit folders, got ${sorted(fromSh)}`);
+  assert.equal(fromSh.size, 7, `get-talos.sh: expected 7 kit entries, got ${sorted(fromSh)}`);
+  assert.ok(
+    fromSh.has("distribution.yaml"),
+    "get-talos.sh: the manifest walk no longer carries distribution.yaml — the kit would " +
+      "ship a content with no name, and --verify would not notice the file missing",
+  );
   assert.deepEqual(
     sorted(fromSh),
     sorted(fromPs1),

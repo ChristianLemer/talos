@@ -62,17 +62,19 @@ are the **socle**: what a machine needs to work with an agent, every file writte
 lesson, and every route but two shown by a real package. Copy them, then make them
 yours. (The engine's own tests read a separate, synthetic fixture under `tests/`.)
 
-**Keep the content in a repo of your own.** Two folders and one more file:
+**Keep the content in a repo of your own.** Two folders and two more files:
 
 ```
 your-talos-content/
 ├── catalog/
 ├── bundles/
+├── distribution.yaml   ← optional: what your team calls this content, and which edition
 └── .talos-version      ← one line: the release your kit runs, e.g. v0.0.1-beta.37
 ```
 
 Changing what Talos proposes is a commit. Moving to a newer Talos is a commit that
-changes one line. And before either lands:
+changes one line. Naming the content — `name: Data management`, `version: 2026.10` — puts
+it first in the window title, before the engine's own version. And before any of it lands:
 
 ```bash
 Talos --check catalog bundles     # exit 1 on a broken file, an unknown name, a bad version
@@ -147,7 +149,7 @@ Talos/
   MacOS/     Talos.app
   Windows/   Talos.exe
   Linux/     Talos
-  catalog/   bundles/
+  catalog/   bundles/   distribution.yaml (when the content names itself)
   .talos/    VERSION · KIT.txt · MANIFEST.sha256
 ```
 

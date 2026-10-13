@@ -14,6 +14,7 @@ description: Compose and distribute a Talos kit — the released launchers plus 
 ├── Linux/Talos         ← Linux launcher
 ├── catalog/            ← YOUR content
 ├── bundles/            ← YOUR content
+├── distribution.yaml   ← YOUR content's name (and edition), when it has one — leads the window title
 └── .talos/
     ├── VERSION         ← the tag this kit was composed from
     ├── KIT.txt         ← provenance: tag, date, per-asset size and published digest
@@ -49,10 +50,13 @@ Your content lives in **your own repo**, not in a fork of talos:
 your-talos-content/
 ├── catalog/
 ├── bundles/
+├── distribution.yaml   ← optional: `name:` (and `version:`) — what the team calls this content; leads the window title
 └── .talos-version      ← one line: the release this kit runs, e.g. v0.0.1-beta.42
 ```
 
 - Changing what Talos proposes is a commit in `catalog/` or `bundles/`.
+- Naming an edition of it is a commit in `distribution.yaml` (the `talos-content`
+  reference has the two keys).
 - Moving to a newer Talos is a commit that changes **one line**.
 - Before either lands: `Talos --check catalog bundles` must say `0 errors`. Put it in the
   repo's pipeline; `/talos:init` scaffolds a workflow that does.

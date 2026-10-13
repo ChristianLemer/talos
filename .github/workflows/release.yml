@@ -125,7 +125,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           ./target/release/Talos --check catalog bundles
-          zip -r -q talos-content.zip catalog bundles
+          zip -r -q talos-content.zip catalog bundles distribution.yaml
 
       # A .app is a directory; a Release asset must be a single file. ditto keeps
       # the bundle's symlinks/permissions intact (plain zip would mangle them).

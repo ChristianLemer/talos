@@ -151,8 +151,9 @@ releases that carried them (beta.1–19) were retired on 2026-09-06.
 - **`public/`** — the front, plain ES modules, no framework, no bundler, no CDN. `decision.js`
   is **shared** with the server's logic: one rule, two callers. `model.js` is DOM-free and
   tested.
-- **`catalog/`** + **`bundles/`** — the SOCLE: what a release publishes as content and what
-  a stranger receives. One YAML per package (**19 packages / 21 files**: the rest are `.nu`
+- **`catalog/`** + **`bundles/`** + **`distribution.yaml`** — the SOCLE: what a release
+  publishes as content and what a stranger receives. The YAML file beside the two folders
+  names the content (`name:`, optional `version:`); the window title leads with it. One YAML per package (**19 packages / 21 files**: the rest are `.nu`
   sidecars, `nu-plugin-fetch.nu` and `wt-default.nu`), four bundles — Base ← Manuals, Plus,
   Terminal. Every file is written as a lesson. Never count the sidecars as packages.
 - **`tests/fixtures/content/`** — the FIXTURE: one file per form the engine knows, synthetic

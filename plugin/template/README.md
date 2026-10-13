@@ -6,6 +6,7 @@ everyone; what makes a kit *ours* is what is in these two folders.
 ```
 catalog/          one YAML per package — the file stem is its id, `name:` is what everything refers to
 bundles/          one YAML per card — pulls packages in by name, `needs:` other bundles
+distribution.yaml what this content is called (`name:`), and which edition (`version:`, optional) — leads the window title
 .talos-version    one line: the release this kit runs
 REFERENCE.md      every field, what it means, and the traps
 AGENTS.md         the loop and the doctrine, for whoever picks this up next

@@ -1,8 +1,9 @@
 # Working in this repo
 
 This is a **Talos content repo**. It holds no code. `catalog/` and `bundles/` are the YAML
-a Talos kit reads from disk at runtime, and `.talos-version` names the engine that reads
-them. Changing what Talos proposes is a commit here.
+a Talos kit reads from disk at runtime, `distribution.yaml` is what that content is called
+(it leads the window title), and `.talos-version` names the engine that reads them.
+Changing what Talos proposes is a commit here.
 
 ## The loop
 
