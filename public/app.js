@@ -2286,13 +2286,16 @@ document.getElementById("sudo-cancel").onclick = () => {
 // Stamp the UI with the exact source snapshot this exe was built from — in the
 // window title (always visible) and the Log & settings footer. This is the
 // answer to "which binary is actually running?" that cost us a long detour.
-function showBuild(build) {
-  // Release tag leads (the human-facing version — locally the describe string, with
-  // `-dirty` when built on uncommitted edits), then the exact snapshot (git-sha).
-  document.title = `Talos · ${build.tag}`;
+function showBuild(build, distribution) {
+  // The content's name leads when it has one (`distribution.yaml` beside the catalog),
+  // then the release tag (the human-facing version — locally the describe string, with
+  // `-dirty` when built on uncommitted edits), then the exact snapshot (git-sha). The
+  // rule lives in model.js and is tested there; the engine applies the same one to the
+  // NATIVE title, which this document.title does not reach.
+  document.title = M.windowTitle(distribution, build.tag);
   const el = document.getElementById("buildinfo");
   if (el) {
-    el.textContent = `${build.tag} · ${build.sha} — ${build.builtAt}`;
+    el.textContent = M.buildLine(distribution, build);
   }
 }
 
@@ -2340,7 +2343,7 @@ ws.onmessage = (ev) => {
       );
       applySavedSelection(msg.selection); // restore persisted decisions (yellow)
       if (msg.consent && !msg.consent.decided) consentEl.classList.add("show"); // first boot
-      if (msg.build) showBuild(msg.build); // stamp the UI with the exact source snapshot
+      if (msg.build) showBuild(msg.build, msg.distribution); // stamp the UI: content name + exact source snapshot
       appmgmtStatus = msg.appmgmt || "na";
       renderAppmgmt();
       // The Doctor tab exists only when the catalogue declares a rescue candidate. The

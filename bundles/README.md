@@ -3,6 +3,7 @@
 These two folders — `catalog/` and `bundles/` — **are** the content Talos proposes. The
 engine is generic and knows nothing about your team; what makes a kit *yours* lives here.
 Edit the YAML: no build step, the exe reads both folders from disk beside it at runtime.
+`distribution.yaml` beside them gives that content a name, which leads the window title.
 
 > New here? Copy a file from `catalog/`, rename it, edit it. Then list its `name:` in a
 > bundle. Every file in this socle is written as a lesson — read the one nearest your case.

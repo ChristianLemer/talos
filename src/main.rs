@@ -15,6 +15,7 @@ mod consent;
 mod decision;
 mod deps;
 mod detect;
+mod distribution;
 mod forbidden;
 mod ladder;
 mod managers;
@@ -75,10 +76,14 @@ fn main() {
         // Size/position persistence (see Cargo.toml). Registered BEFORE setup: the
         // plugin restores the saved state at the moment the "main" window is created.
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        // NATIVE window title = "Talos · <tag>". On path A (WS, no IPC), the front does
-        // not drive the native window — the document.title from app.js does NOT propagate
-        // to the OS title bar. So we set it here, on the Rust side, from the build stamp
-        // (answers "which binary is really running?").
+        // NATIVE window title = "<distribution> · Talos <tag>", or "Talos · <tag>" when the
+        // content has no `distribution.yaml`. On path A (WS, no IPC), the front does not
+        // drive the native window — the document.title from app.js does NOT propagate to
+        // the OS title bar. So we set it here, on the Rust side, with the same rule the
+        // front applies (`distribution::window_title`), from the build stamp (answers
+        // "which binary is really running?") and the file beside the catalog (answers
+        // "which content?"). Read once, here: a name edited mid-session reaches the
+        // document title on Refresh, the native one at the next launch.
         //
         // The TAG is the human-facing version, and locally it is the describe string, so
         // it already says "ahead of the tag by n" and "built dirty" — nothing else from
@@ -88,7 +93,9 @@ fn main() {
         .setup(|app| {
             use tauri::Manager;
             if let Some(win) = app.get_webview_window("main") {
-                let _ = win.set_title(&format!("Talos · {}", build_info::TAG));
+                let (catalog_dir, _) = platform::content_dirs();
+                let dist = distribution::read_beside(&catalog_dir);
+                let _ = win.set_title(&distribution::window_title(dist.as_ref(), build_info::TAG));
             }
             Ok(())
         })

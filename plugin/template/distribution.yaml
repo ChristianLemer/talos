@@ -1,0 +1,4 @@
+# What your team calls this content — it leads the window title, before Talos's own
+# version. Rename it; add a `version:` (free text: a date, a number, a codename) when you
+# want an edition named, leave it out otherwise.
+name: Our tools

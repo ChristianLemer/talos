@@ -874,3 +874,21 @@ export function doctorNextActive(ids, activeId, closed) {
   if (at < 0) return rest[0] ?? null;
   return ids[at + 1] ?? rest[at - 1] ?? rest[0] ?? null;
 }
+
+// ── the content's name ──────────────────────────────────────────────────────────────────
+// `distribution` is the first message's `distribution` (name, version, label) or null.
+// ONE rule, mirrored by the engine's `distribution::window_title` for the native title:
+// the distribution leads — it is what a colleague recognises — and the engine's tag
+// follows, for support. Without a distribution, byte for byte the title of every release.
+
+export function windowTitle(distribution, tag) {
+  return distribution && distribution.label
+    ? `${distribution.label} · Talos ${tag}`
+    : `Talos · ${tag}`;
+}
+
+/** The footer: the distribution, then the exact snapshot (tag · sha — builtAt). */
+export function buildLine(distribution, build) {
+  const stamp = `${build.tag} · ${build.sha} — ${build.builtAt}`;
+  return distribution && distribution.label ? `${distribution.label} · ${stamp}` : stamp;
+}

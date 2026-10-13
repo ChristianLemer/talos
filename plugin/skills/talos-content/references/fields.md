@@ -13,6 +13,7 @@ engine and not mentioned here fails `cargo test` — the doc cannot drift from t
 ## The shape
 
 ```
+distribution.yaml       ← optional: what this content is called, and which edition (see below)
 catalog/
 ├── git.yaml            ← one package = one file; the stem is its id
 ├── jq.yaml
@@ -265,6 +266,32 @@ converges a file instead of installing software. The pattern (see `terminal/`):
 - Write the patch so it **upserts only your keys** (a record→record transform): the
   user's own edits pass through untouched. That's why config-atoms usually have no
   uninstall — a leftover config is inert, and removing it could destroy the user's edits.
+
+## `distribution.yaml` — the name of the content
+
+The engine is one binary for everyone; what makes a kit *yours* is the content. This
+file, beside `catalog/` and `bundles/`, gives that content a name — and the window title
+leads with it, before the engine's own version:
+
+```yaml
+name: Data management        # required: what the people in front of it call it
+version: 2026.10 — Saul      # optional free text: a number, a date, a codename
+```
+
+Title: `Data management 2026.10 — Saul · Talos v0.0.1-beta.44`. Without the file, the
+title is `Talos · v0.0.1-beta.44`, exactly as before — the file is optional in both
+directions, and an engine older than it never looks for it.
+
+- **`name:`** — required, not blank. A display name, spaces welcome.
+- **`version:`** — the edition of **your content**, nothing to do with the engine's tag,
+  which the title shows beside it anyway. Free text: `2026.10`, `3`, `Autumn`. Omit it
+  rather than repeat the engine's version.
+
+`--check` reads it strictly — a blank name or an unknown key is a finding named
+`distribution.yaml: …` — and prints `distribution: <name> <version>` before its summary.
+The composing scripts (`get-talos.sh`, `get-talos.ps1`) copy the file into the kit beside
+the two folders and list it in the manifest; that line in their `--check` output is the
+proof it landed where the engine reads it. At runtime a broken file is simply no name.
 
 ## Rare fields
 

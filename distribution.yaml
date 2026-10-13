@@ -1,0 +1,9 @@
+# The NAME of this content. `distribution.yaml` sits beside `catalog/` and `bundles/` and
+# says what the people in front of the window call it; Talos puts it first in the window
+# title, before its own version (`<name> <version> · Talos v0.0.1-beta.44`). Both the
+# engine and `--check` read it from here; the composing scripts carry it into the kit.
+#
+# `name:` is required. `version:` is optional free text — a number, a date, a codename —
+# the edition of YOUR content, nothing to do with the engine's tag. The socle has none:
+# its edition IS the release it ships with, and writing the tag here would state it twice.
+name: Talos socle

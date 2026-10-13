@@ -22,6 +22,11 @@ use crate::bundles::{classify_pin, PinKind};
 pub struct Report {
     pub packages: usize,
     pub bundles: usize,
+    /// The label of `distribution.yaml` beside the catalog, when the file is there and
+    /// clean. Reported, because the composing scripts run this check from an EMPTY
+    /// directory: the name in the output is the proof the kit carried the file to where
+    /// the engine reads it.
+    pub distribution: Option<String>,
     pub errors: Vec<String>,
 }
 
@@ -37,6 +42,9 @@ impl Report {
         for e in &self.errors {
             out.push_str(e);
             out.push('\n');
+        }
+        if let Some(d) = &self.distribution {
+            out.push_str(&format!("distribution: {d}\n"));
         }
         out.push_str(&format!(
             "{} packages, {} bundles, {} error{}\n",
@@ -257,6 +265,22 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
             }
         }
     }
+
+    // ── distribution ───────────────────────────────────────────────────────────────────
+    // Optional, and read STRICTLY here where the runtime reads leniently: a typo in the
+    // one file that names the whole content must not load as "no name".
+    let dist_path = crate::distribution::path_beside(catalog_dir);
+    if dist_path.is_file() {
+        match std::fs::read_to_string(&dist_path) {
+            Err(e) => r
+                .errors
+                .push(format!("{}: unreadable — {e}", crate::distribution::FILE)),
+            Ok(raw) => match crate::distribution::parse(&raw) {
+                Ok(d) => r.distribution = Some(d.label()),
+                Err(e) => r.errors.push(format!("{}: {e}", crate::distribution::FILE)),
+            },
+        }
+    }
     r
 }
 
@@ -303,6 +327,14 @@ mod tests {
         ] {
             let r = run(&catalog, &bundles);
             assert!(r.ok(), "{}: {}", catalog.display(), r.render());
+            // Each tree is NAMED: the socle so a kit composed from it has a title, the
+            // fixture so the form is exercised, the template so what `/talos:init` hands
+            // out already carries the file an integrator is meant to edit.
+            assert!(
+                r.distribution.is_some(),
+                "{}: no distribution.yaml beside the catalog",
+                catalog.display()
+            );
             assert!(
                 r.packages >= min_packages,
                 "{}: {} packages",
@@ -490,5 +522,66 @@ mod tests {
             "{}",
             r.render()
         );
+    }
+    #[test]
+    fn a_distribution_with_a_typo_is_an_error_named_by_file() {
+        let d = tmp("dist-typo");
+        write(&d, "catalog/good.yaml", "name: Good\nbrew: good\n");
+        write(&d, "distribution.yaml", "name: Ops\nvesrion: 3\n");
+        let r = run(&d.join("catalog"), &d.join("bundles"));
+        assert_eq!(r.errors.len(), 1, "{}", r.render());
+        assert!(
+            r.errors[0].starts_with("distribution.yaml: ") && r.errors[0].contains("vesrion"),
+            "{}",
+            r.errors[0]
+        );
+        assert!(r.distribution.is_none(), "a refused file names nothing");
+    }
+
+    #[test]
+    fn a_distribution_is_reported_before_the_summary() {
+        let d = tmp("dist-ok");
+        write(&d, "catalog/good.yaml", "name: Good\nbrew: good\n");
+        write(&d, "distribution.yaml", "name: Ops\nversion: 3\n");
+        let r = run(&d.join("catalog"), &d.join("bundles"));
+        assert!(r.ok(), "{}", r.render());
+        assert_eq!(r.distribution.as_deref(), Some("Ops 3"));
+        let out = r.render();
+        let lines: Vec<&str> = out.lines().collect();
+        // The composing scripts run `--check` from an EMPTY directory: this line in the
+        // output is the proof the kit carried the file to where the engine reads it.
+        assert_eq!(lines[lines.len() - 2], "distribution: Ops 3", "{out}");
+        // The summary stays LAST, so the exit code and the final line still agree.
+        assert!(lines[lines.len() - 1].ends_with("0 errors"), "{out}");
+    }
+
+    #[test]
+    fn no_distribution_is_not_a_finding() {
+        let d = tmp("dist-none");
+        write(&d, "catalog/good.yaml", "name: Good\nbrew: good\n");
+        let r = run(&d.join("catalog"), &d.join("bundles"));
+        assert!(r.ok(), "{}", r.render());
+        assert!(r.distribution.is_none());
+        assert!(!r.render().contains("distribution:"), "{}", r.render());
+    }
+
+    /// The same guard as for package keys, for the distribution file: the reference must
+    /// name the file, and every key it takes, or the doc drifts from the engine.
+    #[test]
+    fn the_authoring_reference_covers_the_distribution_file() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let reference =
+            std::fs::read_to_string(root.join("plugin/skills/talos-content/references/fields.md"))
+                .unwrap();
+        let at = reference
+            .find(&format!("## `{}`", crate::distribution::FILE))
+            .expect("fields.md has a section headed by the file name");
+        let section = &reference[at..];
+        for k in crate::distribution::KNOWN_KEYS {
+            assert!(
+                section.contains(&format!("`{k}:`")),
+                "fields.md's distribution section does not mention `{k}:`"
+            );
+        }
     }
 }

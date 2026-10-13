@@ -1058,6 +1058,10 @@ fn plan_message(state: &AppState, steps: &[crate::bundles::Step]) -> Value {
         "profileColumns": state.profiles.columns,
         "consent": read_consent(&state.consent),
         "build": crate::build_info::build_json(), // exact stamp of the source snapshot (no more hardcoding)
+        // The content's own name, read beside the catalog on every build of this message —
+        // the catalogue is re-read on Refresh, and the file that names it must not lag it.
+        // `null` when the content has none: the front then shows the title it always did.
+        "distribution": crate::distribution::read_beside(&state.catalog_dir).map(|d| d.json()),
         "appmgmt": appmgmt_wire(state.appmgmt),
         // Whether the Doctor tab exists at all. The dropdown's contents travel on the
         // Doctor's own socket, which opens only when the tab is clicked — too late to
@@ -3996,6 +4000,23 @@ mod tests {
         let d = std::env::temp_dir().join(name);
         let _ = std::fs::remove_dir_all(&d);
         d
+    }
+
+    /// The first message names the distribution found beside the catalog, re-read on
+    /// every build of the message like the catalogue itself — and `null`, not absent and
+    /// not `""`, when the content has no such file.
+    #[test]
+    fn the_plan_message_names_the_distribution_beside_the_catalog() {
+        let dir = share("talos-test-plan-distribution");
+        std::fs::create_dir_all(dir.join("catalog")).unwrap();
+        let state = state_with_share(&dir);
+        let m = super::plan_message(&state, &[]);
+        assert!(m["distribution"].is_null(), "{m}");
+        std::fs::write(dir.join("distribution.yaml"), "name: Ops\nversion: 3\n").unwrap();
+        let m = super::plan_message(&state, &[]);
+        assert_eq!(m["distribution"]["label"], "Ops 3", "{m}");
+        assert_eq!(m["distribution"]["name"], "Ops", "{m}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
