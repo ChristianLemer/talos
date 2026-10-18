@@ -175,18 +175,55 @@ fn detect_agent_content(step: &Step) -> Presence {
     }
 }
 
-/// The command that answers "is this plugin registered AND working?".
+/// The command that answers "is this plugin registered AND does it load?".
 ///
-/// ⭐ A STATUS, not a file. `plugin.msgpackz` is a MessagePack-compressed registry, and
-/// parsing it would mean reimplementing nushell's own compatibility check — which is
-/// precisely the fact we want. So this route shells out where the vscode-extension route
-/// reads a manifest natively: the difference is that there, the fact wanted was a record on
-/// disk; here it is a verdict the tool computes.
+/// ⭐ NUSHELL STARTS THE PLUGIN, Talos compares nothing. The registered file is handed to
+/// `plugin add --plugin-config <throwaway>`, which RUNS the binary to read its signatures and
+/// applies nushell's own compatibility check — the very verdict wanted, computed by the tool
+/// that owns it. The throwaway registry keeps the user's own untouched. No version is read or
+/// compared here, on purpose: which minor a plugin loads into is nushell's rule, not ours.
 ///
-/// ⚠️ `status == loaded`, not merely present: `added` means registered but not in the engine.
-/// And ⚠️ single quotes throughout — PowerShell interpolates inside double quotes.
+/// ⚠️ NOT `plugin list | where status == loaded`, which this replaced. `loaded` means the
+/// SIGNATURES are in the registry and the engine; the binary is never run. MEASURED
+/// (2026-10-18): after a `brew upgrade nushell` deleted the Cellar the bundled plugins were
+/// registered from, and for a plugin compiled for the previous minor, `plugin list` still said
+/// `loaded` and Talos painted both rows current. `plugin use` answers `ok` for both too.
+///
+/// It prints ONE verdict word on the first line — `loads`, `broken`, `unregistered` — and,
+/// for `broken`, nushell's own error below it, which becomes the row's evidence. The temp file
+/// lives in `$nu.temp-dir` (`%TEMP%` on Windows, `$TMPDIR` on macOS) and is removed on both
+/// branches; a failed `plugin add` writes nothing, `rm -f` covers that.
+///
+/// ⚠️ NO QUOTES of either kind inside the nushell code, and no `&&`. The whole program is one
+/// single-quoted argument (PowerShell interpolates inside double quotes); a single quote inside
+/// would close it, and PowerShell 5.1 strips embedded double quotes from a native argument.
+/// So every string is a bare word. And `win_and_then` splits on `&&`.
 pub fn nu_plugin_presence_command(name: &str) -> String {
-    format!("nu -c 'plugin list | where name == {name} and status == loaded | length'")
+    format!(
+        "nu -c 'let f = (plugin list --registry | where name == {name} | get filename); \
+         if ($f | is-empty) {{ print unregistered }} else {{ \
+         let t = ($nu.temp-dir | path join (random uuid)); \
+         try {{ plugin add --plugin-config $t ($f | first); rm -f $t; print loads }} \
+         catch {{|e| rm -f $t; print broken; print ($e.rendered | ansi strip) }} }}'"
+    )
+}
+
+/// What the probe's first line says. `None` = an answer this code does not recognise, which
+/// stays indeterminate: only a verdict nushell actually gave may earn `Some(false)`.
+fn nu_plugin_verdict(output: &str) -> Option<NuPluginVerdict> {
+    match output.lines().map(str::trim).find(|l| !l.is_empty())? {
+        "loads" => Some(NuPluginVerdict::Loads),
+        "broken" => Some(NuPluginVerdict::Broken),
+        "unregistered" => Some(NuPluginVerdict::Unregistered),
+        _ => None,
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum NuPluginVerdict {
+    Loads,
+    Broken,
+    Unregistered,
 }
 
 /// Presence of a VS Code extension, from the scan's snapshot.
@@ -496,7 +533,7 @@ pub fn detect_present_detailed_with_vscode(
     if step.route.as_deref() == Some("vscode-extension") {
         return detect_vscode_extension(step, vscode);
     }
-    // 3c. nu-plugin → ask nushell for the plugin's STATUS.
+    // 3c. nu-plugin → ask nushell to START the registered plugin.
     if step.route.as_deref() == Some("nu-plugin") {
         let name = step.detect.as_deref().unwrap_or("").trim();
         if name.is_empty() {
@@ -508,19 +545,31 @@ pub fn detect_present_detailed_with_vscode(
         }
         let probe = shell_probe(os, &nu_plugin_presence_command(name));
         let d = run_probe_detailed(&probe);
-        // The command prints a COUNT: `1` when loaded, `0` when not. An exit code alone would
-        // not distinguish "not loaded" from "nu is missing".
-        let loaded = d.output.trim().starts_with('1');
+        // ⚠️ `nu` itself may be absent (the plugin requires Nushell). Then the probe fails
+        // and nothing is known — indeterminate, not absent, because "absent" would make Apply
+        // try to register a plugin into a shell that is not there.
+        let verdict = if d.ok {
+            nu_plugin_verdict(&d.output)
+        } else {
+            None
+        };
+        let (present, reason) = match verdict {
+            Some(NuPluginVerdict::Loads) => (Some(true), None),
+            // ⭐ Registered but refused by nushell = ABSENT, so Apply re-runs the install,
+            // which re-registers the binary nushell ships or fetches NOW. That is the repair,
+            // measured for both sources: a bundled plugin re-registers from the new Cellar, a
+            // released one is re-fetched for the running minor.
+            Some(NuPluginVerdict::Broken) => (
+                Some(false),
+                Some("registered, but nushell cannot load it".into()),
+            ),
+            Some(NuPluginVerdict::Unregistered) => (Some(false), None),
+            None if d.ok => (None, Some("nushell gave no verdict".into())),
+            None => (None, Some("nushell did not answer".into())),
+        };
         return Presence {
-            // ⚠️ `nu` itself may be absent (the plugin requires Nushell). Then the probe
-            // fails and nothing is known — indeterminate, not absent, because "absent" would
-            // make Apply try to register a plugin into a shell that is not there.
-            present: if d.ok { Some(loaded) } else { None },
-            reason: if d.ok {
-                None
-            } else {
-                Some("nushell did not answer".into())
-            },
+            present,
+            reason,
             diag: Some(d),
             ..Default::default()
         };
@@ -961,22 +1010,98 @@ mod tests {
     }
 
     #[test]
-    #[allow(non_snake_case)]
-    fn a_nu_plugin_presence_is_a_LOADED_status_not_a_file() {
-        // ⚠️ THE LOAD-BEARING RULE. A binary compiled against the wrong nushell is registered,
-        // its file EXISTS, and it does not work. So a file check would report healthy for a
-        // broken plugin — the same false-green class as this repo's first starship check, which
-        // asked only "does the file exist and is it non-empty?" and answered *converged* for a
-        // file containing a comment.
-        //
-        // And `loaded` specifically, not merely present in the registry: `added` means
-        // registered but not in the engine.
+    fn a_nu_plugin_presence_is_a_load_not_a_registry_status() {
+        // ⚠️ THE LOAD-BEARING RULE. A binary compiled for another nushell minor is registered,
+        // its file EXISTS, `plugin list` says `loaded`, and it does not work. A registered file
+        // whose Cellar was deleted by `brew upgrade` says `loaded` too. Only STARTING the
+        // plugin tells, so the probe hands the registered file to `plugin add`, aimed at a
+        // throwaway registry so the user's own is never written.
         let cmd = nu_plugin_presence_command("polars");
-        assert!(cmd.contains("plugin list"), "{cmd}");
-        assert!(cmd.contains("status == loaded"), "{cmd}");
+        assert!(cmd.contains("plugin list --registry"), "{cmd}");
         assert!(cmd.contains("name == polars"), "{cmd}");
-        // ⚠️ Single-quoted, for the PowerShell interpolation reason.
-        assert!(!cmd.contains('"'), "no double quotes: {cmd}");
+        assert!(cmd.contains("plugin add --plugin-config $t"), "{cmd}");
+        assert!(
+            !cmd.contains("status == loaded"),
+            "the registry status is the false green this replaced: {cmd}"
+        );
+        // ⚠️ One single-quoted argument: no quote of either kind INSIDE it, no `&&`.
+        let inner = cmd
+            .strip_prefix("nu -c '")
+            .and_then(|r| r.strip_suffix('\''))
+            .expect("the program is one single-quoted argument");
+        assert!(
+            !inner.contains('\''),
+            "a single quote would close it: {cmd}"
+        );
+        assert!(!inner.contains('"'), "PowerShell 5.1 strips these: {cmd}");
+        assert!(!cmd.contains("&&"), "win_and_then splits on it: {cmd}");
+    }
+
+    #[test]
+    fn a_nu_plugin_verdict_is_read_from_the_first_line() {
+        assert_eq!(nu_plugin_verdict("loads\n"), Some(NuPluginVerdict::Loads));
+        assert_eq!(
+            nu_plugin_verdict("unregistered"),
+            Some(NuPluginVerdict::Unregistered)
+        );
+        // nushell's own error follows the word; it is evidence, not the verdict.
+        assert_eq!(
+            nu_plugin_verdict("broken\nError: x Plugin failed to load: compiled for 0.113.1\n"),
+            Some(NuPluginVerdict::Broken)
+        );
+        // ⭐ Anything else stays indeterminate: an unrecognised answer is not a fact about the
+        // machine, and `Some(false)` makes Apply act.
+        assert_eq!(nu_plugin_verdict(""), None);
+        assert_eq!(nu_plugin_verdict("1"), None);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn the_nu_plugin_probe_runs_in_a_real_nushell() {
+        // The quoting test above proves the shape; this one proves nushell PARSES it and
+        // answers each of the three verdicts. Skipped where `nu`, or a plugin bundled beside
+        // it, is missing (CI). XDG_CONFIG_HOME points nushell at a registry of our own.
+        use std::process::Command;
+        let Ok(out) = Command::new("nu")
+            .args(["-n", "-c", "$nu.current-exe"])
+            .output()
+        else {
+            return;
+        };
+        let nu_dir = std::path::PathBuf::from(String::from_utf8_lossy(&out.stdout).trim())
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_default();
+        let root = std::env::temp_dir().join(format!("talos-nu-probe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let probe = |name: &str| {
+            let o = Command::new("sh")
+                .args(["-c", &nu_plugin_presence_command(name)])
+                .env("XDG_CONFIG_HOME", &root)
+                .output()
+                .expect("sh runs");
+            nu_plugin_verdict(&String::from_utf8_lossy(&o.stdout))
+        };
+        assert_eq!(probe("inc"), Some(NuPluginVerdict::Unregistered));
+
+        let bundled = nu_dir.join("nu_plugin_inc");
+        if bundled.exists() {
+            let copy = root.join("nu_plugin_inc");
+            std::fs::copy(&bundled, &copy).unwrap();
+            let reg = Command::new("nu")
+                // Not `-n`: it disables the registry, and `plugin add` refuses without one.
+                .args(["-c", &format!("plugin add {}", copy.display())])
+                .env("XDG_CONFIG_HOME", &root)
+                .status()
+                .unwrap();
+            assert!(reg.success());
+            assert_eq!(probe("inc"), Some(NuPluginVerdict::Loads));
+            // The file goes, the registration stays: what `brew upgrade` does to a Cellar.
+            std::fs::remove_file(&copy).unwrap();
+            assert_eq!(probe("inc"), Some(NuPluginVerdict::Broken));
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

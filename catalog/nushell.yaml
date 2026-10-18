@@ -1,6 +1,7 @@
 # Nushell — a shell where everything is data: tables in, tables out, no parsing of text.
 # The language Talos's own scripted config-atoms are written in, and the shell an agent
-# is happiest driving. `latest`: the plugins below follow the running minor by themselves.
+# is happiest driving. `latest`: an upgrade breaks the plugin rows below (a plugin loads into
+# one minor), Talos sees it because it STARTS each plugin, and Apply re-registers them.
 name: Nushell
 description: A shell where everything is data — tables in, tables out
 winget: Nushell.Nushell

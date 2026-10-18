@@ -145,8 +145,12 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
 - **The source axis determines the rung.** This is the first route in the catalogue whose
   install rung **depends on the package, not the route name**:
   - **No `plugin-release:` = bundled with nushell** — the binary ships beside `nu`, so
-    `plugin add nu_plugin_polars` resolves via `NU_PLUGIN_DIRS` (which contains the
-    directory holding `nu`) and engages **no network at all**. ⚡ rung, measured.
+    `plugin add nu_plugin_polars` resolves in the directory of the running `nu` and
+    engages **no network at all**. ⚡ rung, measured. The path nushell RECORDS is the
+    resolved one — under brew, `Cellar/nushell/<version>/…` — and `plugin add`
+    canonicalises any path it is given, so the stable `/opt/homebrew/bin/` link cannot be
+    recorded instead. Each Nushell upgrade therefore kills the registration; detection
+    sees it and Apply re-registers (below).
   - **`plugin-release: owner/repo@ref` = fetched from the project's release** — the
     sidecar `catalog/nu-plugin-fetch.nu` fetches the project's own `install.nu` at that
     git ref and runs it with `--dir` and `--register`. The installer picks the archive
@@ -161,16 +165,22 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
     fleet behind one corporate NAT shares the address. For a firewall that blocks it,
     the installer's `--archive <path>` installs from a staged local archive, and an atom
     can pass it — no engine change.
-- **Presence is a STATUS, not a file.** A plugin binary compiled against a different
-  nushell version is registered, its file exists on disk, and it does not work. Talos
-  checks `plugin list | where name == <n> and status == loaded` — `added` is not enough.
-  The status says whether the plugin protocol agreed.
-- ⚠️ **The version coupling is TIGHT and runs BOTH WAYS, and there is no field for it.**
-  `catalog/nushell.yaml` pins Nushell at `0.113.1`; a plugin binary is compiled against a
-  specific nu-plugin protocol version. They agree **by hand**. Bump either side and
-  `plugin add` fails — loudly, with a load error in the row's terminal, which is the honest
-  failure. There is no field expressing "requires Nushell 0.113.x": `requires:` says
-  PRESENT, not a version constraint.
+- **Presence is a LOAD, not a status.** Talos hands the registered file to
+  `plugin add --plugin-config <throwaway>`, which STARTS the plugin and applies nushell's
+  own compatibility check, then discards the throwaway registry. Three verdicts:
+  not registered → absent; registered but nushell refuses to load it → **absent**, with
+  nushell's error as the evidence; loads → present. `nu` missing → indeterminate. Talos
+  compares no version itself: which minor a plugin loads into is nushell's rule.
+  `plugin list`'s `loaded` is NOT this — it means the signatures are in the registry, the
+  binary is never run, and it stays `loaded` for a deleted file or a plugin built for
+  another minor (measured, 2026-10-18).
+- ⚠️ **A Nushell upgrade breaks every plugin row, and Apply is the repair.** A bundled
+  plugin's recorded path dies with the old Cellar; a released one was compiled for the old
+  minor. Both read absent on the next scan, and Apply runs the install again: the bundled
+  line re-registers the binary shipped with the new nu, the sidecar re-fetches the build
+  for the running minor (both measured to load afterwards). There is no field expressing
+  "requires Nushell 0.116.x" — `requires:` says PRESENT, not a version constraint — and
+  none is needed: the load probe is the constraint, checked on the machine.
 
 **`requires:`** — names a package (or a bare command) that must be present first.
 Resolved against the whole plan: a plugin that `requires: [Claude Code]` stays

@@ -659,9 +659,19 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
                 // BUNDLED: the binary is already beside `nu`, so a BARE NAME resolves.
                 //
                 // ⭐ MEASURED: `plugin add nu_plugin_polars` (no path) registers the Cellar
-                // binary, because NU_PLUGIN_DIRS contains the directory holding `nu` by default.
-                // No network, no path resolution, no sidecar — which is exactly what earns this
+                // binary: the directory holding the RUNNING `nu` is searched (it resolved with an
+                // empty NU_PLUGIN_DIRS too, measured on Linux 2026-10-18). No network, no path resolution, no sidecar — which is exactly what earns this
                 // the ⚡ rung, whose promise is "no network at all".
+                //
+                // ⚠️ The recorded path is VERSIONED (`Cellar/nushell/<v>/bin/…` under brew), so
+                // the next `brew upgrade nushell` deletes it. Registering the stable link
+                // (`/opt/homebrew/bin/nu_plugin_*`) instead is NOT possible: `plugin add`
+                // canonicalises whatever it is given — MEASURED 2026-10-18 on Linux, nu 0.113.1
+                // to 0.116.0, a brew-shaped tree of symlinks, the link went in and the Cellar
+                // target was recorded; `plugin add` has no flag against it. So the repair is
+                // not a better path, it is detection: the probe STARTS the plugin, a dead
+                // registration reads absent, and Apply runs this same line again, which
+                // registers the new Cellar. Measured to load after it.
                 return Commands {
                     route: Some("nu-plugin".into()),
                     install: Some(format!("nu -c 'plugin add {binary}'")),
