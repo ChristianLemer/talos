@@ -149,8 +149,8 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
     engages **no network at all**. ⚡ rung, measured. The path nushell RECORDS is the
     resolved one — under brew, `Cellar/nushell/<version>/…` — and `plugin add`
     canonicalises any path it is given, so the stable `/opt/homebrew/bin/` link cannot be
-    recorded instead. Each Nushell upgrade therefore kills the registration; detection
-    sees it and Apply re-registers (below).
+    recorded instead. Each Nushell upgrade therefore kills the registration; the Apply
+    that upgraded Nushell sees it and re-registers (below).
   - **`plugin-release: owner/repo@ref` = fetched from the project's release** — the
     sidecar `catalog/nu-plugin-fetch.nu` fetches the project's own `install.nu` at that
     git ref and runs it with `--dir` and `--register`. The installer picks the archive
@@ -174,11 +174,13 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
   `plugin list`'s `loaded` is NOT this — it means the signatures are in the registry, the
   binary is never run, and it stays `loaded` for a deleted file or a plugin built for
   another minor (measured, 2026-10-18).
-- ⚠️ **A Nushell upgrade breaks every plugin row, and Apply is the repair.** A bundled
-  plugin's recorded path dies with the old Cellar; a released one was compiled for the old
-  minor. Both read absent on the next scan, and Apply runs the install again: the bundled
-  line re-registers the binary shipped with the new nu, the sidecar re-fetches the build
-  for the running minor (both measured to load afterwards). There is no field expressing
+- ⚠️ **A Nushell upgrade breaks plugin rows, and the SAME Apply repairs them.** A bundled
+  plugin's recorded path dies with the old Cellar (brew; winget replaces the file in place);
+  a released one was compiled for the old minor. Once the step that upgraded Nushell has
+  changed its version, Apply re-probes its dependents and installs again the ones that no
+  longer load (see `requires:` below): the bundled line re-registers the binary shipped with
+  the new nu, the sidecar re-fetches the build for the running minor. Measured in a Windows
+  VM: Nushell 0.113.1 → 0.116.1 and Excel for Nushell repaired, in ONE Apply. There is no field expressing
   "requires Nushell 0.116.x" — `requires:` says PRESENT, not a version constraint — and
   none is needed: the load probe is the constraint, checked on the machine.
 
@@ -186,6 +188,11 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
 Resolved against the whole plan: a plugin that `requires: [Claude Code]` stays
 indeterminate until the agent is present or wanted, and Apply installs the dependency
 first (topological order). Example: `requires: [Nushell, Claude Code]`.
+It also works in the other direction, once: when an Apply step CHANGES a package (its
+version or its presence, observed after the step, not merely "a step ran"), the packages
+that `requires:` it directly are probed again, and those the user wants present that now
+read absent are installed in that same Apply. Rows left on Auto are repainted, never
+acted on; a repaired row does not re-check its own dependents.
 
 ## Pinning a version — `version:`
 

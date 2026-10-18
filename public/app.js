@@ -1420,12 +1420,20 @@ setInterval(() => {
 // move. During the Apply the screen is a story instead, and the story follows time.
 // `planOrigin` remembers where each moved row came from, to put it back on done.
 let planOrigin = null;
+// Every row's resting slot, read once when focus mode starts — BEFORE anything moves. A row
+// that joins the plan later (`apply-plan-add`) must be put back where it rested, and by then
+// the planned rows have been re-appended, so its index among siblings is no longer a fact
+// about the resting list.
+let restingSlots = null;
 function enterFocusMode(planIndices) {
   document.body.classList.add("applying");
   const inPlan = new Set(planIndices);
+  restingSlots = new Map();
   for (const i of Object.keys(rows).map(Number)) {
     // focus-show = this row is part of the plan → stays visible throughout.
     rows[i].details.classList.toggle("focus-show", inPlan.has(i));
+    const el = rows[i].details;
+    restingSlots.set(el, { el, parent: el.parentNode, at: indexOfChild(el) });
   }
   // Remember each planned row's original INDEX among its siblings — not the node it
   // sat before. A sibling anchor is only valid while it stays put, and the anchor of
@@ -1437,11 +1445,23 @@ function enterFocusMode(planIndices) {
   planOrigin = planIndices
     .map((i) => rows[i]?.details)
     .filter(Boolean)
-    .map((el) => ({ el, parent: el.parentNode, at: indexOfChild(el) }));
+    .map((el) => restingSlots.get(el));
   for (const i of planIndices) {
     const el = rows[i]?.details;
     if (el) el.parentNode.appendChild(el); // re-append = move to the end, in plan order
   }
+}
+
+// A row the server added to a running plan: a dependent whose requirement this Apply just
+// changed (Nushell upgraded → its plugins no longer load) is installed again in the same
+// Apply. It joins the screen the way a planned row does — shown, moved to the end, in the
+// order it runs — and goes back to its resting slot on done.
+function addToFocusMode(i) {
+  const el = rows[i]?.details;
+  if (!el || !planOrigin || !restingSlots) return;
+  el.classList.add("focus-show");
+  if (!planOrigin.some((o) => o.el === el)) planOrigin.push(restingSlots.get(el));
+  el.parentNode.appendChild(el);
 }
 
 /// Position of `el` among its parent's children — the slot to put it back into.
@@ -1460,6 +1480,7 @@ function exitFocusMode() {
     }
     planOrigin = null;
   }
+  restingSlots = null;
   // Reveal everything again; leave the per-row open/fold state as setStatus left
   // it (failures open, successes folded) — the failures thus stand out on return.
   for (const i of Object.keys(rows).map(Number)) {
@@ -2531,6 +2552,10 @@ ws.onmessage = (ev) => {
       // list shows and progress follows down it.
       hideRescanVeil(); // scan done, plan is here
       enterFocusMode((msg.plan || []).map((p) => p.i));
+      break;
+    case "apply-plan-add":
+      // One more step in the running plan — see addToFocusMode.
+      addToFocusMode(msg.i);
       break;
     case "done":
       overall.textContent = msg.nothing ? "nothing to do" : "done";

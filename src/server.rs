@@ -2266,7 +2266,10 @@ async fn apply_diff(
         ))
         .await;
 
-    for (i, action) in &plan {
+    // Each dependent is re-checked at most ONCE per Apply, whatever number of its requirements
+    // change: half of the bound (`dependents_of` being direct is the other half).
+    let mut rechecked: HashSet<usize> = HashSet::new();
+    'plan: for (pos, (i, action)) in plan.iter().enumerate() {
         // is_cask from the scan we already have → do_step re-issues the forced
         // --cask --force command for cask upgrades (single resolution point).
         let is_cask = outdated_for(steps[*i].system_id.as_deref(), &scan)
@@ -2280,34 +2283,96 @@ async fn apply_diff(
                 .await;
             continue;
         }
-        // A 403 is REPAIRABLE, not a plain failure: the user opens the blocked page
-        // and unblocks it. So we do NOT run on — carrying on would (a) make them read
-        // a page while installs scroll past behind, and (b) burn every FOLLOWING
-        // package that goes through the same blocked source, when one unblock up front
-        // would have saved them all. Instead: the action that was running FINISHES
-        // (never kill a pty mid-flight — a half-installed package is the worst case;
-        // the exit code is the truth), and THEN we wait for the user.
-        //
-        // Resuming is gated on a DECISION, not on success: they may fail to unblock.
-        // Either way it's their call — nothing restarts until they say so. And Retry
-        // means RETRY: the same action runs again HERE, in place, before the plan
-        // moves on. (It used to mean "continue", which left the user to hunt the row
-        // down afterwards — the word on the button lied.)
-        let mut attempt: u32 = 0;
-        let stop_all = loop {
-            attempt += 1;
-            let outcome = do_step(socket, state, *i, *action, &steps[*i], is_cask).await;
-            if !outcome.blocked {
-                break false;
-            }
-            match await_forbidden_decision(socket, *i, attempt).await {
-                ForbiddenChoice::Retry => continue, // same row, same action, again
-                ForbiddenChoice::Continue => break false,
-                ForbiddenChoice::Stop => break true,
-            }
-        };
+        let (outcome, stop_all) =
+            step_with_forbidden_pause(socket, state, *i, *action, &steps[*i], is_cask).await;
         if stop_all {
             break; // "stop everything" → abandon the rest of the plan
+        }
+
+        // ⭐ THE DEPENDENTS PASS. The re-scan above left dependents out — "untouched, presence
+        // unchanged" — and that is false for one family at least: upgrading Nushell kills the
+        // plugins registered against the old one (a deleted Cellar, a binary built for the
+        // previous minor) without touching them. Measured 2026-10-18: Nushell 0.113 → 0.116
+        // took TWO Applies, the first upgrading nu while its plugins, probed before it, read
+        // healthy. So once a step has CHANGED its package, its direct dependents are probed
+        // again, and the ones the user wants present and that now read absent are installed
+        // here, in this Apply, right after the requirement they depend on.
+        //
+        // ⚠️ Triggered by a change OBSERVED (`step_changed_package`), not by a step having run:
+        // a step that changed nothing — winget's "already current" — re-checks nothing.
+        //
+        // Consent: only rows wanted PRESENT (on), which were already present and chosen; this
+        // repairs what the user chose, it adds nothing. Auto and off rows are re-probed and
+        // repainted (detect, don't remember) and never acted on. Every gate the plan passed —
+        // scope, requirements, the rung — is passed again.
+        if !step_changed_package(Some(&presences[*i]), outcome.after.as_ref()) {
+            continue;
+        }
+        let still_planned: HashSet<usize> = plan[pos + 1..].iter().map(|(j, _)| *j).collect();
+        for d in dependents_to_recheck(&requires, &steps[*i].name, &still_planned, &mut rechecked) {
+            let step_c = steps[d].clone();
+            let p = tokio::task::spawn_blocking(move || detect_present_detailed(&step_c, os))
+                .await
+                .unwrap_or_default();
+            remember_presence(state, d, p.clone()).await;
+            let _ = socket
+                .send(Message::Text(
+                    json!({
+                        "type": "state", "i": d, "present": p.present, "reason": p.reason,
+                        "version": p.version.clone().unwrap_or_default(), "external": p.external,
+                        "probe": probe_json(&p.diag)
+                    })
+                    .to_string(),
+                ))
+                .await;
+            let repair = want_on.contains(&d)
+                && !out_of_scope.contains(&d)
+                && !scope_refuses(&sel, &steps[d].name)
+                && requires_blocked(&nodes[d], &nodes, &idx).is_none()
+                && p.present == Some(false)
+                && crate::ladder::rung_allows(
+                    rung,
+                    Action::Install,
+                    steps[d].is_config,
+                    steps[d].is_extension,
+                );
+            if !repair {
+                continue;
+            }
+            println!(
+                "[apply] {} changed; {} no longer reads present → install again",
+                steps[*i].name, steps[d].name
+            );
+            // The row joins the plan on screen (focus mode hides what is not in it), and its
+            // terminal says WHY before the install streams — a gesture leaves a trace.
+            let _ = socket
+                .send(Message::Text(
+                    json!({ "type": "apply-plan-add", "i": d, "action": "install" }).to_string(),
+                ))
+                .await;
+            let why = format!(
+                "\x1b[2m[repair] {} changed in this Apply ({} → {}); this package no longer \
+                 reads present, so it is installed again.\x1b[0m\r\n",
+                steps[*i].name,
+                shown_version(&presences[*i]),
+                shown_version(outcome.after.as_ref().unwrap_or(&presences[*i])),
+            );
+            {
+                use base64::{engine::general_purpose::STANDARD, Engine};
+                let _ = socket
+                    .send(Message::Text(
+                        json!({ "type": "out", "i": d, "data": STANDARD.encode(why.as_bytes()) })
+                            .to_string(),
+                    ))
+                    .await;
+            }
+            // A repair does not re-check ITS dependents: one extra pass, never a cascade.
+            let (_, stop_all) =
+                step_with_forbidden_pause(socket, state, d, Action::Install, &steps[d], false)
+                    .await;
+            if stop_all {
+                break 'plan;
+            }
         }
     }
     // ONE write per Apply, here at the end, for the packages it touched. Reached on every
@@ -2746,15 +2811,96 @@ fn benign_code(code: i32) -> bool {
     matches!(code, -1978335189 | -1978335212)
 }
 
+/// One step of an Apply, with the 403 pause around it. Returns the LAST attempt's outcome
+/// and whether the user chose to stop everything.
+///
+/// A 403 is REPAIRABLE, not a plain failure: the user opens the blocked page and unblocks
+/// it. So we do NOT run on — carrying on would (a) make them read a page while installs
+/// scroll past behind, and (b) burn every FOLLOWING package that goes through the same
+/// blocked source, when one unblock up front would have saved them all. Instead: the action
+/// that was running FINISHES (never kill a pty mid-flight — a half-installed package is the
+/// worst case; the exit code is the truth), and THEN we wait for the user.
+///
+/// Resuming is gated on a DECISION, not on success: they may fail to unblock. Either way
+/// it's their call — nothing restarts until they say so. And Retry means RETRY: the same
+/// action runs again HERE, in place, before the plan moves on. (It used to mean "continue",
+/// which left the user to hunt the row down afterwards — the word on the button lied.)
+async fn step_with_forbidden_pause(
+    socket: &mut WebSocket,
+    state: &AppState,
+    i: usize,
+    action: crate::decision::Action,
+    step: &crate::bundles::Step,
+    is_cask: bool,
+) -> (StepOutcome, bool) {
+    let mut attempt: u32 = 0;
+    loop {
+        attempt += 1;
+        let outcome = do_step(socket, state, i, action, step, is_cask).await;
+        if !outcome.blocked {
+            return (outcome, false);
+        }
+        match await_forbidden_decision(socket, i, attempt).await {
+            ForbiddenChoice::Retry => continue, // same row, same action, again
+            ForbiddenChoice::Continue => return (outcome, false),
+            ForbiddenChoice::Stop => return (outcome, true),
+        }
+    }
+}
+
+/// Did a step CHANGE the package it acted on? Presence or version, compared between what the
+/// Apply decided from and what `do_step` re-probed after. `None` after = the step failed or
+/// did nothing observable, so nothing changed that we know of.
+///
+/// ⭐ The trigger of the dependents pass, chosen over "a step ran": winget answering "already
+/// current" exits benign and changes nothing, and must not cost a probe per dependent.
+fn step_changed_package(
+    before: Option<&crate::detect::Presence>,
+    after: Option<&crate::detect::Presence>,
+) -> bool {
+    let Some(after) = after else { return false };
+    let Some(before) = before else { return true };
+    let v = |p: &crate::detect::Presence| p.version.as_deref().unwrap_or("").trim().to_string();
+    before.present != after.present || v(before) != v(after)
+}
+
+/// Which dependents of the package called `name` the Apply re-probes after that package
+/// changed: the direct ones, minus those still ahead in the plan (they will run anyway, after
+/// their requirement — topo_sort put them there), minus those already re-checked in this
+/// Apply. `rechecked` is updated: each dependent is re-checked at most once per Apply.
+fn dependents_to_recheck(
+    requires: &[Vec<String>],
+    name: &str,
+    still_planned: &std::collections::HashSet<usize>,
+    rechecked: &mut std::collections::HashSet<usize>,
+) -> Vec<usize> {
+    crate::deps::dependents_of(requires, name)
+        .into_iter()
+        .filter(|d| !still_planned.contains(d) && rechecked.insert(*d))
+        .collect()
+}
+
+/// A version for a sentence: the probed one, or `?` when none was read.
+fn shown_version(p: &crate::detect::Presence) -> String {
+    match p.version.as_deref().map(str::trim) {
+        Some(v) if !v.is_empty() => v.to_string(),
+        _ => "?".into(),
+    }
+}
+
 /// The outcome of one step. `ok` = it succeeded (kept for callers that will want it;
 /// the front already learns it from the `step` event). `blocked` = it failed BECAUSE
 /// the corporate firewall answered 403 — the distinction the Apply loop needs: a plain
 /// failure moves on, a 403 is REPAIRABLE by the user, so the loop pauses and waits.
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone)]
 struct StepOutcome {
     #[allow(dead_code)]
     ok: bool,
     blocked: bool,
+    /// The presence re-probed right after a SUCCESSFUL step; `None` when it failed, was
+    /// cancelled or had no command. What the Apply compares with the presence it decided from,
+    /// to learn whether the step changed the package (`step_changed_package`).
+    after: Option<crate::detect::Presence>,
 }
 
 /// Runs ONE step (install/upgrade/uninstall): streams the command, reads the exit
@@ -2894,9 +3040,9 @@ async fn do_step(
     // and the next Apply then reads desire == observation, skips the probe, and decides
     // "nothing to do" against a state that no longer exists: uncheck + Apply (removes
     // it), re-check + Apply → the install silently never happens. Every site that
-    // OBSERVES a presence must write it. There are three: scan_and_emit, the apply
-    // re-scan, and here.
-    let version = if ok {
+    // OBSERVES a presence must write it. There are four: scan_and_emit, the apply
+    // re-scan, here, and the Apply's dependents pass.
+    let (version, after) = if ok {
         let step_c = step.clone();
         let p = tokio::task::spawn_blocking(move || detect_present_detailed(&step_c, os))
             .await
@@ -2915,13 +3061,14 @@ async fn do_step(
             ))
             .await;
         // The journal records what an INSTALL/UPGRADE landed; a removal has no version.
-        if action == Action::Uninstall {
+        let v = if action == Action::Uninstall {
             String::new()
         } else {
             v
-        }
+        };
+        (v, Some(p))
     } else {
-        String::new()
+        (String::new(), None)
     };
     // What this step OBSERVED, for the shared behaviour file. Accumulated in memory
     // only; the write happens once, when the Apply ends.
@@ -3000,7 +3147,7 @@ async fn do_step(
             secs: started.elapsed().as_secs(),
         },
     );
-    StepOutcome { ok, blocked }
+    StepOutcome { ok, blocked, after }
 }
 
 #[cfg(test)]
@@ -3014,6 +3161,68 @@ mod tests {
     /// matter here, the rest are inert defaults.
     /// A candidate needs BOTH a `doctor:` block and a `detect:` to take a binary from;
     /// one without the other is not launchable and is left out, in catalogue order.
+    fn observed(present: Option<bool>, version: &str) -> crate::detect::Presence {
+        crate::detect::Presence {
+            present,
+            version: Some(version.into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_step_changed_its_package_when_the_version_or_the_presence_moved() {
+        let before = observed(Some(true), "0.113.1");
+        // The Nushell case: upgraded in place, present before and after.
+        assert!(step_changed_package(
+            Some(&before),
+            Some(&observed(Some(true), "0.116.1"))
+        ));
+        // An install: absent before.
+        assert!(step_changed_package(
+            Some(&observed(Some(false), "")),
+            Some(&observed(Some(true), "0.116.1"))
+        ));
+        // ⭐ winget's "already current": the step ran, exited benign, and changed NOTHING —
+        // it must not cost a probe per dependent. Whitespace is not a version change either.
+        assert!(!step_changed_package(
+            Some(&before),
+            Some(&observed(Some(true), " 0.113.1\n"))
+        ));
+        // A failed or skipped step re-probed nothing: no claim of change.
+        assert!(!step_changed_package(Some(&before), None));
+        // Nothing observed before, something after: not knowably unchanged.
+        assert!(step_changed_package(None, Some(&before)));
+    }
+
+    #[test]
+    fn dependents_are_rechecked_once_per_apply_and_never_ahead_of_the_plan() {
+        // 0 Nushell; 1 Polars, 2 Excel, 3 Formats require it; 4 Git does not.
+        let reqs: Vec<Vec<String>> = vec![
+            vec![],
+            vec!["Nushell".into()],
+            vec!["Nushell".into()],
+            vec!["Nushell".into()],
+            vec![],
+        ];
+        let mut done = std::collections::HashSet::new();
+        // Excel is still ahead in the plan: it runs anyway, after Nushell.
+        let ahead = std::collections::HashSet::from([2]);
+        assert_eq!(
+            dependents_to_recheck(&reqs, "Nushell", &ahead, &mut done),
+            vec![1, 3]
+        );
+        // A second change of the same requirement (a retried step) re-checks nothing again.
+        assert!(dependents_to_recheck(&reqs, "Nushell", &ahead, &mut done).is_empty());
+        assert!(dependents_to_recheck(&reqs, "Git", &Default::default(), &mut done).is_empty());
+    }
+
+    #[test]
+    fn a_version_in_a_sentence_is_never_blank() {
+        assert_eq!(shown_version(&observed(Some(true), " 0.116.1 ")), "0.116.1");
+        assert_eq!(shown_version(&observed(Some(false), "")), "?");
+        assert_eq!(shown_version(&Default::default()), "?");
+    }
+
     #[test]
     fn doctor_candidates_need_a_doctor_block_and_a_detect() {
         let mut declared = brew_step("a", None);
@@ -3890,11 +4099,28 @@ mod tests {
         // Both `find`s are FIRST occurrences, which is exact here only because each string
         // appears once in the non-test source — asserted, so a second call site cannot make
         // this comparison quietly meaningless.
+        //
+        // ⭐ TWO sites since the dependents pass (2026-10-18): a repair is part of the batch, so
+        // it passes the rung like any planned row. Each is pinned below by its own text, so a
+        // THIRD still turns this red.
         assert_eq!(
             code.matches("rung_allows(").count(),
-            1,
-            "a second rung_allows call site appeared — this ordering check reads only the \
-             first, so re-write it rather than trusting it"
+            2,
+            "a third rung_allows call site appeared — this check pins the plan filter and the \
+             dependents pass only, so re-write it rather than trusting it"
+        );
+        let pass = code
+            .find("THE DEPENDENTS PASS")
+            .expect("the dependents pass moved — re-point this test");
+        let repair = pass
+            + code[pass..]
+                .find("rung_allows(")
+                .expect("the dependents pass repairs without consulting the rung");
+        assert!(
+            code[repair..].starts_with(
+                "rung_allows(\n                    rung,\n                    Action::Install,\n                    steps[d].is_config,\n                    steps[d].is_extension,"
+            ),
+            "a repair is an INSTALL of the dependent `d`, judged on d's own flags"
         );
         let decides = code
             .find("action_for(desired, &facts)")

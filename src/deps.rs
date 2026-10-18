@@ -198,6 +198,26 @@ pub fn rescan_scope(
     scope
 }
 
+/// The packages that `requires:` the package called `name` — DIRECTLY, in catalogue order.
+///
+/// ⭐ The other direction from `rescan_scope`, and asked at a different moment. Before an
+/// Apply, a dependent is untouched and its presence unchanged, so the scope leaves it out.
+/// AFTER a step changed its requirement, that no longer holds for every family: upgrading
+/// Nushell kills the plugins registered against the old one (a deleted Cellar, a binary built
+/// for the previous minor), without touching them. So the Apply asks this once the step has
+/// run, and re-probes what it returns.
+///
+/// Direct only, on purpose: it is the bound. A dependent repaired by that pass does not make
+/// ITS dependents re-checked — one extra pass per Apply, never a cascade.
+pub fn dependents_of(requires: &[Vec<String>], name: &str) -> Vec<usize> {
+    requires
+        .iter()
+        .enumerate()
+        .filter(|(_, reqs)| reqs.iter().any(|r| r == name))
+        .map(|(i, _)| i)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,6 +406,21 @@ mod tests {
         let reqs = vec![vec!["b".into()], vec![]];
         let idx = index_of_names(["a", "b"].into_iter());
         assert_eq!(rescan_scope(&reqs, &idx, &[1]), HashSet::from([1]));
+    }
+
+    #[test]
+    fn dependents_are_the_direct_requirers_in_catalogue_order() {
+        // polars and xlsx require Nushell; a plugin of polars requires polars only.
+        let reqs = vec![
+            vec!["Nushell".into()],
+            vec![],
+            vec!["Polars".into()],
+            vec!["Git".into(), "Nushell".into()],
+        ];
+        assert_eq!(dependents_of(&reqs, "Nushell"), vec![0, 3]);
+        // ⭐ Direct only: Polars's own dependent is not Nushell's — that is the bound.
+        assert_eq!(dependents_of(&reqs, "Polars"), vec![2]);
+        assert!(dependents_of(&reqs, "Nobody").is_empty());
     }
 
     #[test]
