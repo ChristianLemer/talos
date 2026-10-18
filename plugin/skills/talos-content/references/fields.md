@@ -167,16 +167,21 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
     can pass it — no engine change.
 - **Presence is a LOAD, not a status.** Talos hands the registered file to
   `plugin add --plugin-config <throwaway>`, which STARTS the plugin and applies nushell's
-  own compatibility check, then discards the throwaway registry. Three verdicts:
+  own compatibility check, then discards the throwaway registry. Four verdicts:
   not registered → absent; registered but nushell refuses to load it → **absent**, with
-  nushell's error as the evidence; loads → present. `nu` missing → indeterminate. Talos
-  compares no version itself: which minor a plugin loads into is nushell's rule.
+  nushell's error as the evidence; loads but **stale** → absent; loads → present. `nu`
+  missing → indeterminate. Talos judges no compatibility itself: which minor a plugin loads
+  into is nushell's rule. *Stale* compares two records nushell wrote — the version in the
+  user's registry and the one the throwaway registry just read from the binary on disk.
+  winget upgrades Nushell by replacing the bundled `nu_plugin_*.exe` in place: the file
+  loads, but the registry keeps the old version and the old signatures, so a command the
+  new plugin adds stays invisible until `plugin add` runs again.
   `plugin list`'s `loaded` is NOT this — it means the signatures are in the registry, the
   binary is never run, and it stays `loaded` for a deleted file or a plugin built for
   another minor (measured, 2026-10-18).
 - ⚠️ **A Nushell upgrade breaks plugin rows, and the SAME Apply repairs them.** A bundled
-  plugin's recorded path dies with the old Cellar (brew; winget replaces the file in place);
-  a released one was compiled for the old minor. Once the step that upgraded Nushell has
+  plugin's recorded path dies with the old Cellar (brew), or its file is replaced in place
+  and its registration goes stale (winget); a released one was compiled for the old minor. Once the step that upgraded Nushell has
   changed its version, Apply re-probes its dependents and installs again the ones that no
   longer load (see `requires:` below): the bundled line re-registers the binary shipped with
   the new nu, the sidecar re-fetches the build for the running minor. Measured in a Windows

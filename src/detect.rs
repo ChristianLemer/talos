@@ -180,8 +180,16 @@ fn detect_agent_content(step: &Step) -> Presence {
 /// ⭐ NUSHELL STARTS THE PLUGIN, Talos compares nothing. The registered file is handed to
 /// `plugin add --plugin-config <throwaway>`, which RUNS the binary to read its signatures and
 /// applies nushell's own compatibility check — the very verdict wanted, computed by the tool
-/// that owns it. The throwaway registry keeps the user's own untouched. No version is read or
-/// compared here, on purpose: which minor a plugin loads into is nushell's rule, not ours.
+/// that owns it. The throwaway registry keeps the user's own untouched. Talos judges no
+/// compatibility itself: which minor a plugin loads into is nushell's rule, not ours.
+///
+/// ⭐ STALE is the one comparison made, and it is between two records NUSHELL wrote: the
+/// version in the user's registry (written when the plugin was added) and the version the
+/// throwaway registry just recorded from the binary now on disk. MEASURED 2026-10-18 in the
+/// Windows VM and on Linux: winget upgrades Nushell by replacing the bundled
+/// `nu_plugin_*.exe` IN PLACE, so the file loads, but the registry still carries the old
+/// version and the old SIGNATURES — a command the new plugin adds or renames stays invisible
+/// until `plugin add` runs again. Reading it absent makes Apply run that `plugin add`.
 ///
 /// ⚠️ NOT `plugin list | where status == loaded`, which this replaced. `loaded` means the
 /// SIGNATURES are in the registry and the engine; the binary is never run. MEASURED
@@ -189,8 +197,9 @@ fn detect_agent_content(step: &Step) -> Presence {
 /// registered from, and for a plugin compiled for the previous minor, `plugin list` still said
 /// `loaded` and Talos painted both rows current. `plugin use` answers `ok` for both too.
 ///
-/// It prints ONE verdict word on the first line — `loads`, `broken`, `unregistered` — and,
-/// for `broken`, nushell's own error below it, which becomes the row's evidence. The temp file
+/// It prints ONE verdict word on the first line — `loads`, `stale`, `broken`, `unregistered` —
+/// and below it the evidence: for `broken` nushell's own error, for `stale` the version the
+/// binary reports now. The temp file
 /// lives in `$nu.temp-dir` (`%TEMP%` on Windows, `$TMPDIR` on macOS) and is removed on both
 /// branches; a failed `plugin add` writes nothing, `rm -f` covers that.
 ///
@@ -200,10 +209,12 @@ fn detect_agent_content(step: &Step) -> Presence {
 /// So every string is a bare word. And `win_and_then` splits on `&&`.
 pub fn nu_plugin_presence_command(name: &str) -> String {
     format!(
-        "nu -c 'let f = (plugin list --registry | where name == {name} | get filename); \
-         if ($f | is-empty) {{ print unregistered }} else {{ \
+        "nu -c 'let r = (plugin list --registry | where name == {name} | select filename version); \
+         if ($r | is-empty) {{ print unregistered }} else {{ \
          let t = ($nu.temp-dir | path join (random uuid)); \
-         try {{ plugin add --plugin-config $t ($f | first); rm -f $t; print loads }} \
+         try {{ plugin add --plugin-config $t ($r | get 0.filename); \
+         let v = (plugin list --plugin-config $t --registry | get 0.version); rm -f $t; \
+         if $v == ($r | get 0.version) {{ print loads }} else {{ print stale; print $v }} }} \
          catch {{|e| rm -f $t; print broken; print ($e.rendered | ansi strip) }} }}'"
     )
 }
@@ -213,6 +224,7 @@ pub fn nu_plugin_presence_command(name: &str) -> String {
 fn nu_plugin_verdict(output: &str) -> Option<NuPluginVerdict> {
     match output.lines().map(str::trim).find(|l| !l.is_empty())? {
         "loads" => Some(NuPluginVerdict::Loads),
+        "stale" => Some(NuPluginVerdict::Stale),
         "broken" => Some(NuPluginVerdict::Broken),
         "unregistered" => Some(NuPluginVerdict::Unregistered),
         _ => None,
@@ -222,6 +234,7 @@ fn nu_plugin_verdict(output: &str) -> Option<NuPluginVerdict> {
 #[derive(Debug, PartialEq)]
 enum NuPluginVerdict {
     Loads,
+    Stale,
     Broken,
     Unregistered,
 }
@@ -562,6 +575,12 @@ pub fn detect_present_detailed_with_vscode(
             Some(NuPluginVerdict::Broken) => (
                 Some(false),
                 Some("registered, but nushell cannot load it".into()),
+            ),
+            // ⭐ Loads, but registered from an older build of the same file: absent, so Apply
+            // registers it again and nushell re-reads its signatures.
+            Some(NuPluginVerdict::Stale) => (
+                Some(false),
+                Some("registered from an older build; nushell must read it again".into()),
             ),
             Some(NuPluginVerdict::Unregistered) => (Some(false), None),
             None if d.ok => (None, Some("nushell gave no verdict".into())),
@@ -1041,6 +1060,10 @@ mod tests {
     fn a_nu_plugin_verdict_is_read_from_the_first_line() {
         assert_eq!(nu_plugin_verdict("loads\n"), Some(NuPluginVerdict::Loads));
         assert_eq!(
+            nu_plugin_verdict("stale\n0.116.0\n"),
+            Some(NuPluginVerdict::Stale)
+        );
+        assert_eq!(
             nu_plugin_verdict("unregistered"),
             Some(NuPluginVerdict::Unregistered)
         );
@@ -1100,6 +1123,34 @@ mod tests {
             // The file goes, the registration stays: what `brew upgrade` does to a Cellar.
             std::fs::remove_file(&copy).unwrap();
             assert_eq!(probe("inc"), Some(NuPluginVerdict::Broken));
+        }
+        // ⭐ Stale: registered from another build, then replaced IN PLACE by the running
+        // nushell's own — what winget does. Needs an older nushell beside this one (mise keeps
+        // them as sibling version folders); skipped otherwise.
+        let older = nu_dir
+            .parent()
+            .and_then(|v| v.parent())
+            .and_then(|all| std::fs::read_dir(all).ok())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            // Not this nushell, and not a link to it (`latest`, `0` point back here).
+            .filter(|p| !nu_dir.starts_with(p) && !p.is_symlink())
+            .flat_map(|v| std::fs::read_dir(v).into_iter().flatten().flatten())
+            .map(|e| e.path())
+            .find(|d| d.join("nu").exists() && d.join("nu_plugin_inc").exists());
+        if let (Some(old), true) = (older, bundled.exists()) {
+            let file = root.join("nu_plugin_inc");
+            std::fs::copy(old.join("nu_plugin_inc"), &file).unwrap();
+            let reg = Command::new(old.join("nu"))
+                .args(["-c", &format!("plugin add {}", file.display())])
+                .env("XDG_CONFIG_HOME", &root)
+                .status()
+                .unwrap();
+            assert!(reg.success());
+            std::fs::copy(&bundled, &file).unwrap();
+            assert_eq!(probe("inc"), Some(NuPluginVerdict::Stale));
         }
         let _ = std::fs::remove_dir_all(&root);
     }
