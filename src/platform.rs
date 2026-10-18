@@ -419,7 +419,14 @@ pub fn exe_sibling() -> PathBuf {
 ///
 /// Resolved from the REAL exe first, never the cwd alone: a `.app` launched by Finder has
 /// cwd=/ and a relative "bundles" opened empty. Absent everywhere → the relative name,
-/// which loads empty. PURE over `sibling` → testable without launching a process.
+/// which loads empty. Pure over `sibling` for steps 1 and 2; step 3 reads the cwd.
+///
+/// ⚠️ Step 3 returns an ABSOLUTE path. This folder becomes `{dir}` in every sidecar command,
+/// and on Windows a step's terminal starts in System32 (`pty::safe_working_dir`), so a
+/// relative `catalog` named a folder that was not there. MEASURED 2026-10-18 in the Windows
+/// VM: run from a content folder, Excel for Nushell failed with *'catalog/nu-plugin-fetch.nu'
+/// does not exist*. `std::path::absolute`, not `canonicalize`: the latter returns a `\\?\`
+/// path on Windows, which PowerShell and nushell read differently.
 pub fn content_dirs_in(sibling: &std::path::Path) -> (PathBuf, PathBuf) {
     let pick = |name: &str| -> PathBuf {
         let beside = sibling.join(name);
@@ -431,7 +438,13 @@ pub fn content_dirs_in(sibling: &std::path::Path) -> (PathBuf, PathBuf) {
                 return above;
             }
         }
-        PathBuf::from(name)
+        let here = PathBuf::from(name);
+        if here.is_dir() {
+            if let Ok(abs) = std::path::absolute(&here) {
+                return abs;
+            }
+        }
+        here
     };
     (pick("catalog"), pick("bundles"))
 }
@@ -712,15 +725,15 @@ mod tests {
         assert!(profile_free, "{args:?}");
     }
 
-    /// Beside the exe when the folder is there; the bare relative name otherwise — each of
-    /// the two independently, so a kit with only `bundles/` beside still reads it.
+    /// Beside the exe when the folder is there; the cwd's otherwise — each of the two
+    /// independently, so a kit with only `bundles/` beside still reads it.
     #[test]
     fn content_dirs_fall_back_per_folder() {
         let d = std::env::temp_dir().join(format!("talos-content-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("bundles")).unwrap();
         let (catalog, bundles) = content_dirs_in(&d);
-        assert_eq!(catalog, PathBuf::from("catalog"));
+        assert_eq!(catalog, std::env::current_dir().unwrap().join("catalog"));
         assert_eq!(bundles, d.join("bundles"));
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -749,12 +762,24 @@ mod tests {
         std::fs::create_dir_all(kit.join("catalog")).unwrap();
         std::fs::create_dir_all(kit.join("a/b")).unwrap();
         let (catalog, _) = content_dirs_in(&kit.join("a/b"));
-        assert_eq!(
-            catalog,
-            PathBuf::from("catalog"),
-            "two levels is a search, not a rule"
+        // What it falls back to is the cwd's (step 3), never the kit two levels up.
+        assert!(
+            !catalog.starts_with(&kit),
+            "two levels is a search, not a rule: {}",
+            catalog.display()
         );
         let _ = std::fs::remove_dir_all(&kit);
+    }
+
+    /// The dev fallback (step 3) is ABSOLUTE: it becomes `{dir}`, and a step's terminal does
+    /// not start in our cwd (System32 on Windows). The tests run from the repo root, which
+    /// has a `catalog/`.
+    #[test]
+    fn the_cwd_fallback_is_an_absolute_path() {
+        let nowhere = std::env::temp_dir().join(format!("talos-none-{}", std::process::id()));
+        let (catalog, _) = content_dirs_in(&nowhere);
+        assert!(catalog.is_absolute(), "{}", catalog.display());
+        assert_eq!(catalog, std::env::current_dir().unwrap().join("catalog"));
     }
 
     /// The flat kit still wins WITHOUT climbing: beside the exe is looked at first, so a
