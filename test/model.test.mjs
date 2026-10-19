@@ -23,6 +23,7 @@ import {
   isProfileActive,
   isTouched,
   applyPlan,
+  holdReason,
   loadPlan,
   PERSONAL_BUNDLE,
   persistableActiveBundles,
@@ -249,7 +250,7 @@ test("buttonAction: an OUTDATED package the user turned OUT → uninstall, not u
 // A pin plan seeds one pinned package the user WANTS (setDecision in — nothing is
 // wanted by default now), so the installed version drives the three-way action.
 // See memory talos-version-pin.
-function seedPinned() {
+function seedPinned(extra = {}) {
   const m = createModel();
   loadPlan(
     m,
@@ -261,6 +262,7 @@ function seedPinned() {
       // stays locked-from-manual; a pin test just needs a WANTED package)
       canUninstall: true,
       pin: "1.8",
+      ...extra,
     }],
   );
   setDecision(m, 0, "in"); // wanted — bundle-driven model has no default-in
@@ -364,13 +366,31 @@ test("versionSummary: pinned BELOW → installed→pin, pin on target, not muted
   });
 });
 
-test("versionSummary: pinned ABOVE → installed→pin, MUTED (downgrade is manual, never pushed)", () => {
-  const m = seedPinned(); // pin 1.8
+test("versionSummary: pinned ABOVE with a route down → installed→pin, a real push", () => {
+  // Since 2026-10-10 the Apply takes a downgrade (an uninstall + reinstall at the pin), so a
+  // route that can go down shows its target like any push — the Apply WILL go there.
+  const m = seedPinned({ canDowngrade: true }); // pin 1.8
   setStatusData(m, 0, "ok");
   setInstalledVersion(m, 0, "2.0");
-  // A downgrade is manual-only (never in Apply), so its target reads muted —
-  // same "not pushed" grey as an upgrade past a pin. Below the pin (a real
-  // upgrade Apply runs) stays not-muted. The direction sign is what differs.
+  assert.deepEqual(versionSummary(m, 0), {
+    from: "2.0",
+    to: "1.8",
+    pinned: "to",
+    muted: false,
+    held: false,
+  });
+});
+
+test("versionSummary: pinned ABOVE with NO route down → installed→pin, MUTED, and it says why", () => {
+  // The route builds no downgrade command (the server sends `canDowngrade: false`), so the
+  // Apply cannot go there: the target reads muted, and holdReason names the obstacle.
+  const m = seedPinned(); // pin 1.8, canDowngrade absent → false
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "2.0");
+  assert.equal(holdReason(m, 0), "above its pin — this route cannot go down to it");
+  setInstalledVersion(m, 0, "1.5");
+  assert.equal(holdReason(m, 0), null, "an upgrade has nothing to explain");
+  setInstalledVersion(m, 0, "2.0");
   assert.deepEqual(versionSummary(m, 0), {
     from: "2.0",
     to: "1.8",
@@ -392,14 +412,15 @@ test("versionSummary: absent → empty (nothing installed to show)", () => {
   });
 });
 
-test("isActionable: a downgrade is NOT in the auto plan (mirrors server AUTO_ACTS)", () => {
-  const m = seedPinned();
+test("isActionable: a downgrade is batched — the Apply honours a pin both ways", () => {
+  // Mirrors the server's `batch_action`: a downgrade runs when the route can go down, and is
+  // held (with holdReason) when it cannot.
+  const m = seedPinned({ canDowngrade: true });
   setStatusData(m, 0, "ok");
   setInstalledVersion(m, 0, "2.0"); // above pin → downgrade
-  // The button offers a downgrade, but Apply must NOT act — so the row is not
-  // "in plan" and its Apply-preview stays neutral (no green/red tint).
-  assert.deepEqual(buttonAction(m, 0)?.type, "downgrade");
-  assert.deepEqual(isActionable(m, 0), false);
+  assert.deepEqual(isActionable(m, 0), true);
+  m.pkgs.get(0).canDowngrade = false;
+  assert.deepEqual(isActionable(m, 0), false, "no route down → held, not batched");
   // Below the pin (upgrade) IS in the plan.
   setInstalledVersion(m, 0, "1.5");
   assert.deepEqual(isActionable(m, 0), true);

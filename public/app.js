@@ -523,9 +523,9 @@ function paintPkg(i) {
 // isActionable) decides vivid-vs-neutral, not this text.
 // ONE colour language, shared with the buttons (refreshLiveness):
 //   current version   → BLUE  (.v-cur)    — the machine state, what a button acts FROM
-//   pushed target      → GREEN (.v-push)   — install/upgrade Apply WILL run
+//   pushed target      → GREEN (.v-push)   — install/upgrade/reinstall-at-the-pin Apply WILL run
 //   removal target     → RED   (.v-remove) — uninstall → "absent"
-//   not-pushed target  → GREY  (.v-muted)  — downgrade / upgrade past a pin (manual only)
+//   not-pushed target  → GREY  (.v-muted)  — upgrade past a pin, or a pin the route cannot reach
 // So the eye follows one thread: a green button leads to a green target, a red
 // button to a red "absent", a blue/avail button to a grey (not-pushed) number.
 // The 📌 pin marker rides along inside its number's colour (no separate tint).
@@ -545,11 +545,16 @@ function paintVersion(i) {
   //
   // Length is not the constraint it looked like: this screen already carries
   // `blocked by firewall` (19 chars) in a row label, against `arbitration`'s 11.
+  // A pin the route cannot go down to is HELD the same way, with its own word: the Apply leaves
+  // the row, so the row says why (every gesture leaves a trace).
+  const why = M.holdReason(model, i);
   const muted = (t, held) =>
     held
       ? `<span class="v-muted" title="arbitration pending — seen, not pushed">${t}</span>` +
         ` <span class="v-held">arbitration</span>`
-      : `<span class="v-muted" title="available — not pushed (manual)">${t}</span>`;
+      : why
+      ? `<span class="v-muted" title="${why}">${t}</span> <span class="v-held">held</span>`
+      : `<span class="v-muted" title="available — not pushed past your pin">${t}</span>`;
   const pin = (t) => `📌${t}`;
 
   // A PENDING uninstall reads current(blue) → absent(red) — same red as its
@@ -569,8 +574,8 @@ function paintVersion(i) {
     r.delta.innerHTML = cur(v.pinned === "from" ? pin(v.from) : v.from);
     return;
   }
-  // Two numbers: current(blue) → target. Target colour = the button that leads
-  // there: muted (downgrade / upgrade-past-pin) → grey; else a real push → green.
+  // Two numbers: current(blue) → target. Muted (upgrade past a pin, or a pin the route
+  // cannot reach) → grey; else a real push the Apply will run → green.
   const left = cur(v.pinned === "from" ? pin(v.from) : v.from);
   const rightTxt = v.pinned === "to" ? pin(v.to) : v.to;
   const right = v.muted ? muted(rightTxt, v.held) : push(rightTxt);

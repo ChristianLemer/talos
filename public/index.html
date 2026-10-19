@@ -332,9 +332,9 @@
       /* The row's version display (paintVersion) — ONE colour language shared with
          the buttons, so a coloured target matches the button that leads there:
            .v-cur    current/installed state — BLUE  (same family as the avail btn)
-           .v-push   install/upgrade target  — GREEN (#9ece6a, the add button)
+           .v-push   install/upgrade/reinstall-at-the-pin target — GREEN (#9ece6a)
            .v-remove uninstall → "absent"    — RED   (#f7768e, the remove button)
-           .v-muted  downgrade / past-pin     — GREY  (manual, not pushed)
+           .v-muted  past-pin / unreachable pin — GREY  (seen, not pushed)
          The 📌 pin marker rides inside its number's colour (no separate tint). */
       .verdelta { font-family:"JetBrains Mono",monospace; font-size:11px; margin-left:6px; }
       .verdelta .v-cur    { color:#7aa2f7; }

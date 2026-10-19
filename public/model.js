@@ -61,6 +61,9 @@ export function loadPlan(model, steps, profiles = []) {
       bundle: s.bundle,
       posture: s.posture || "mandatory",
       canUninstall: !!s.canUninstall,
+      // Can the Apply take this row DOWN to its pin? Sent by the server (`step_json`): only a
+      // route that builds a downgrade (an uninstall + a pinned reinstall) can. False when absent.
+      canDowngrade: !!s.canDowngrade,
       isConfig: !!s.isConfig,
       // Derived on the SERVER from the route (`bundles::is_extension_route`), never declared
       // in YAML — carried here for the 🧩 glyph on the row.
@@ -381,11 +384,11 @@ export function versionSummary(model, i) {
     }
     const cmp = compareVersions(inst, p.pin);
     if (cmp !== 0) {
-      // Off the pin → migration TO the pin. BELOW (cmp<0) is an upgrade Apply
-      // runs → not muted (a push). ABOVE (cmp>0) is a downgrade — manual only,
-      // never batched by Apply → muted, same "not pushed" grey as an upgrade
-      // past a pin. Mirrors AUTO_ACTS excluding downgrade. See talos-version-pin.
-      return { from: inst, to: p.pin, pinned: "to", muted: cmp > 0, held: false };
+      // Off the pin → migration TO the pin, in either direction: BELOW (cmp<0) is an
+      // upgrade, ABOVE (cmp>0) a downgrade (an uninstall + reinstall) — both batched by the
+      // Apply since 2026-10-10, so both are pushes. The one exception is a route that cannot
+      // go down: muted, and `holdReason` says why.
+      return { from: inst, to: p.pin, pinned: "to", muted: cmp > 0 && !p.canDowngrade, held: false };
     }
     // At the pin: normally just the pinned number. But if the machine-wide scan
     // found something newer, SHOW it greyed (muted) — visible to test, not pushed.
@@ -400,14 +403,23 @@ export function versionSummary(model, i) {
   }
   return { from: inst, to: null, pinned: null, muted: false, held: false };
 }
-// Would a PLAIN APPLY act here? Mirrors the server's AUTO_ACTS filter exactly:
-// install/uninstall/upgrade are batched by Apply; "downgrade" is NOT (it's the
-// destructive path, a manual per-row button only). Keeping this in lockstep with
-// the server is what stops the button-preview from lighting for a change Apply
-// won't make. See talos-version-pin.
-const AUTO_ACTS = ["install", "uninstall", "upgrade"];
+// Would a PLAIN APPLY act here? Mirrors the server's `batch_action` exactly: every action the
+// rule returns is batched, the downgrade included (until 2026-10-10 it was the per-row button's
+// alone) — except a downgrade on a route that builds no command for it, which is HELD and says
+// why (`holdReason`). Keeping this in lockstep with the server is what stops the preview from
+// lighting for a change the Apply won't make. See talos-version-pin.
+const AUTO_ACTS = ["install", "uninstall", "upgrade", "downgrade"];
 export function isActionable(model, i) {
-  return AUTO_ACTS.includes(actionOf(model, i));
+  const a = actionOf(model, i);
+  if (a === "downgrade" && !model.pkgs.get(i)?.canDowngrade) return false;
+  return AUTO_ACTS.includes(a);
+}
+// WHY the Apply leaves a row it would otherwise act on, or null. Today one case: a pinned row
+// above its pin whose route cannot go down. The words are the server's `NO_DOWNGRADE_ROUTE`,
+// word for word, so the row and the log say the same thing.
+export function holdReason(model, i) {
+  if (actionOf(model, i) !== "downgrade") return null;
+  return model.pkgs.get(i)?.canDowngrade ? null : "above its pin — this route cannot go down to it";
 }
 // Is this row's version HELD, with something to decide?
 //
