@@ -481,21 +481,9 @@
                border-radius:6px; cursor:pointer; font-size:12px; opacity:.55; transition:opacity .12s; }
       details:hover .rerun { opacity:1; }
       .rerun:hover { color:var(--fg); border-color:var(--line); background:var(--line); }
-      /* The row button IS the preview. Its text says what (install/update/
-         uninstall); its colour says whether it's part of the Apply PLAN:
-           green/red (add/remove) = a plain Apply WILL do this now — directional.
-           blue (avail)           = Apply won't touch it (already as desired);
-                                     the button is a manual escape hatch only.
-         So green/red always means "pending change on Apply", blue means stable. */
-      .rerun.live { opacity:1; }
-      .rerun.live.add    { color:#9ece6a; border-color:#3d5a3d; }
-      .rerun.live.add:hover    { color:#16161e; background:#9ece6a; border-color:#9ece6a; }
-      .rerun.live.remove { color:#f7768e; border-color:#5a3d44; }
-      .rerun.live.remove:hover { color:#16161e; background:#f7768e; border-color:#f7768e; }
-      /* avail = a manual escape hatch, NOT part of the plan → muted, not vivid.
-         Dim blue-grey; it only brightens on hover when you actually reach for it. */
-      .rerun.avail { opacity:.6; color:var(--dim); border-color:var(--line); }
-      .rerun.avail:hover { opacity:1; color:#7aa2f7; border-color:#3d59a1; }
+      /* The row button no longer ACTS (2026-10-10): the Apply is the one path. It shows only
+         Stop on a running row and diff on a config-atom you own; the row's tint, not the
+         button, previews what the Apply will do. */
       .rerun:disabled { opacity:.35; cursor:default; background:none; }
       .panel { position:relative; border-top:1px solid var(--line); }
       .term-host { padding:12px 16px; }

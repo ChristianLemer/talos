@@ -448,46 +448,14 @@ export function applyPlan(model) {
   }
   return items;
 }
-// The manual invert action a row button performs (label + direction + msg type).
-// ALWAYS inverts current machine state: absent→install, present→uninstall,
-// present-but-stale→update. null only when present and un-uninstallable.
-export function buttonAction(model, i) {
+// The one gesture a row offers outside a run: INSPECT a config-atom the user turned off and
+// owns. Until 2026-10-10 this was `buttonAction`, which also installed, removed, updated and
+// downgraded one row on its own — a second path that built the same partial states the
+// ladder did. The Apply is now the only path that acts.
+export function rowGesture(model, i) {
   const p = model.pkgs.get(i);
-  if (!p) return null;
-  // A config-atom the user turned OFF is self-managed: the button inspects
-  // (diff) rather than installs — it has no install path, and re-applying would
-  // clobber the file the user chose to own.
-  if (p.isConfig && desiredOf(model, i) === "absent") {
-    return { verb: "diff", dir: "", type: "diff" };
-  }
-  // A pinned & present package: the action is the direction to the pin. This wins
-  // over the outdated branch below (a pin is the reference, not "latest"). The
-  // "downgrade" button is the ONLY way to run a downgrade — Apply never does it.
-  if (p.present && p.pin) {
-    const a = actionOf(model, i);
-    if (a === "downgrade") {
-      return { verb: "downgrade", dir: "remove", type: "downgrade" };
-    }
-    if (a === "upgrade") return { verb: "update", dir: "add", type: "upgrade" };
-    // at the pin → satisfied: fall through to the present/uninstall logic below.
-  }
-  // Desired-ABSENT wins over "outdated → update": you don't update something you
-  // asked to remove. So a present, uninstallable package the user turned out reads
-  // uninstall even when a newer version exists (otherwise the button said "update"
-  // while the plan said uninstall — button/text contradiction). Only offer update
-  // for a package that's staying (desired present).
-  if (p.present && p.canUninstall && desiredOf(model, i) === "absent") {
-    return { verb: "uninstall", dir: "remove", type: "uninstall" };
-  }
-  if (p.present && p.outdated) {
-    return { verb: "update", dir: "add", type: "upgrade" };
-  }
-  if (p.present) {
-    return p.canUninstall
-      ? { verb: "uninstall", dir: "remove", type: "uninstall" }
-      : null;
-  }
-  return { verb: "install", dir: "add", type: "install" };
+  if (p?.isConfig && desiredOf(model, i) === "absent") return { verb: "diff", type: "diff" };
+  return null;
 }
 
 // --- touched: a gesture must leave a trace ----------------------------------

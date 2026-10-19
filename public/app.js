@@ -558,7 +558,7 @@ function paintVersion(i) {
   const pin = (t) => `📌${t}`;
 
   // A PENDING uninstall reads current(blue) → absent(red) — same red as its
-  // button. Keyed on the PLAN action (actionOf), not buttonAction: the latter is
+  // button. Keyed on the PLAN action (actionOf), not the row's old button: that was
   // the manual invert (still "upgrade" for an outdated pkg), while actionOf is
   // what Apply will really do — "uninstall" only when the user wants it absent.
   if (M.actionOf(model, i) === "uninstall" && v.from) {
@@ -620,12 +620,10 @@ document.getElementById("sc-ok").onclick = () => {
 // Would applying package `i` actually DO something, given its EFFECTIVE
 // decision? on & absent → install; on & present & outdated → upgrade;
 // off & present → remove. auto → never (left as the machine has it).
-// The action clicking a row's button does — it ALWAYS inverts the current
-// state: absent → install, present → uninstall, present-but-stale → update
-// (the useful move, not a pointless remove). null only when present and
-// un-uninstallable. This is the row's immediate manual actuator.
-function buttonAction(i) {
-  return M.buttonAction(model, i);
+// The gesture a row's button offers when nothing runs: a diff on a self-owned config-atom,
+// or nothing. It no longer ACTS — the Apply is the one path (model.js `rowGesture`).
+function rowGesture(i) {
+  return M.rowGesture(model, i);
 }
 // Would a plain Apply act here? Delegates to the SHARED rule (actionFor) — the
 // exact same call the server makes — so the button's green/red preview always
@@ -669,8 +667,7 @@ const ROW_FACTS = {
 function refreshLiveness() {
   const busy = applyRunning || scanning; // no action while running OR still scanning
   const ids = Object.keys(rows).map(Number);
-  // Per-row buttons: light the ones that would act; all stay clickable at
-  // hover for a manual re-run, but disabled while a run is on.
+  // Per-row buttons: Stop on a running row, diff on a config-atom you own, nothing else.
   for (const i of ids) {
     const r = rows[i];
     // A RUNNING row's button becomes Stop. No new DOM and no second control: the row
@@ -680,6 +677,7 @@ function refreshLiveness() {
     // one thing to do here, and it is not an install.
     const st = model.pkgs.get(i)?.status;
     if (st && RUNNING.has(st)) {
+      r.apply.hidden = false;
       r.apply.textContent = "Stop";
       r.apply.disabled = false; // the ONE button that must stay live during a run
       r.apply.className = "rerun remove"; // red: it interrupts, like a removal
@@ -688,31 +686,23 @@ function refreshLiveness() {
       r.details.classList.remove("plan-add", "plan-remove");
       continue;
     }
-    // Out of scope → NO row action either. Found at a real click: in advanced mode
-    // the per-row button stayed live and read "update" on an out-of-scope row, and
-    // the server (correctly) refused it — an inert-but-clickable control, exactly
-    // the fault the 403 work removed once already. `buttonAction` answers "what
-    // would invert this row", which is a different question from "may we act", so
-    // the gate belongs here rather than in the model.
+    // Not running: the button is shown only for a gesture that INSPECTS (a diff), never one
+    // that acts — the Apply is the one path. Out of scope never shows one either: the gate
+    // that a real click once found missing (an inert "update" on an out-of-scope row).
     const inScope = M.scopeOf(model, i) === "in";
-    const act = inScope ? buttonAction(i) : null; // always the invert action (label)
-    const inPlan = isActionable(i); // would a plain Apply act here?
-    const show = !!act && !busy;
-    // Colour follows the PLAN: directional green/red only if Apply will act
-    // now; otherwise blue (available manual escape hatch, no pending change).
-    r.apply.classList.toggle("live", show && inPlan);
-    r.apply.classList.toggle("add", show && inPlan && act.dir === "add");
-    r.apply.classList.toggle("remove", show && inPlan && act.dir === "remove");
-    r.apply.classList.toggle("avail", show && !inPlan);
-    r.apply.textContent = act ? act.verb : "—"; // button IS the action; — if none possible
-    r.apply.disabled = busy || !act;
-    // Tint the WHOLE row when it's in the plan — the change is unmissable, not
-    // hidden in a small button. When in-plan, act.dir is the plan's direction.
-    r.details.classList.toggle("plan-add", inPlan && act && act.dir === "add");
-    r.details.classList.toggle(
-      "plan-remove",
-      inPlan && act && act.dir === "remove",
-    );
+    const gesture = inScope ? rowGesture(i) : null;
+    r.apply.className = "rerun";
+    r.apply.hidden = !gesture;
+    r.apply.textContent = gesture ? gesture.verb : "";
+    r.apply.title = gesture ? "Show how your file differs from the shipped one" : "";
+    r.apply.disabled = busy || !gesture;
+    // Tint the WHOLE row when it's in the plan — the change is unmissable. Keyed on what
+    // the Apply WILL do: green when the row ends up present (install, update, reinstall at
+    // the pin), red when it ends up absent.
+    const inPlan = isActionable(i);
+    const action = inPlan ? M.actionOf(model, i) : null;
+    r.details.classList.toggle("plan-add", !!action && action !== "uninstall");
+    r.details.classList.toggle("plan-remove", action === "uninstall");
     paintPkg(i); // switch colour follows the plan — refresh it as machine state lands
     paintVersion(i); // version display follows the plan too: toggling a row OUT
     // flips its target to "→ absent" (uninstall), so it must repaint here, not
@@ -999,8 +989,7 @@ function render(steps, profiles = [], columns = 2) {
     st.textContent = "checking…"; // until its probe answers — never pre-say "absent"
     const apply = document.createElement("button");
     apply.className = "rerun";
-    apply.textContent = "apply";
-    apply.title = "Apply this one now";
+    apply.hidden = true; // shown by refreshLiveness for Stop or Diff only
     apply.onclick = (e) => {
       e.preventDefault();
       // Pressing this button is a GESTURE, so the row must stay visible for the rest of
@@ -1019,12 +1008,11 @@ function render(steps, profiles = [], columns = 2) {
         return;
       }
       if (applyRunning) return;
-      const act = buttonAction(s.i); // send EXACTLY what the button shows
-      if (!act) return;
+      if (!rowGesture(s.i)) return; // the only non-running gesture is a diff
       applyRunning = true;
       refreshLiveness();
-      overall.textContent = act.type === "diff" ? "diffing…" : "applying…";
-      ws.send(JSON.stringify({ type: act.type, i: s.i }));
+      overall.textContent = "diffing…";
+      ws.send(JSON.stringify({ type: "diff", i: s.i }));
     };
     // Wanting is now the ✓ cell of the segmented toggle (spec §20) — no separate
     // Add button. "My extras" = the packages set to ✓ (manualToggle "in").
@@ -1481,13 +1469,15 @@ function retryStep(i) {
     return;
   }
   if (applyRunning) return;
-  const act = buttonAction(i); // recomputed from current model → the original action
-  if (!act) return;
+  // The action the Apply chose for this row, from the same rule the batch used — a retry is
+  // not a new choice. A downgrade retries as a downgrade.
+  const action = M.actionOf(model, i);
+  if (!action) return;
   clearForbidden(i);
   applyRunning = true;
   refreshLiveness();
   overall.textContent = "retrying…";
-  ws.send(JSON.stringify({ type: "retry-step", i, action: act.type }));
+  ws.send(JSON.stringify({ type: "retry-step", i, action }));
 }
 
 function giveUp(i) {
@@ -2160,12 +2150,12 @@ ws.onmessage = (ev) => {
       // to constate here — don't claim absent).
       if (rows[msg.i]) {
         // Record the live installed version BEFORE setStatus, so the pin
-        // comparison in actionOf/buttonAction sees it when liveness refreshes.
+        // comparison in actionOf sees it when liveness refreshes.
         // "" when the probe found no version (absent, or a route with no version).
         M.setInstalledVersion(model, msg.i, msg.version || "");
         // A config-atom the user turned OFF is out of scope: neutral, not
         // "absent". Talos won't touch the file, so we don't judge it — the row
-        // says "yours" and its button offers a diff (see buttonAction).
+        // says "yours" and its button offers a diff (see rowGesture).
         if (model.pkgs.get(msg.i)?.isConfig && M.desiredOf(model, msg.i) === "absent") {
           setStatus(msg.i, "self");
           break;

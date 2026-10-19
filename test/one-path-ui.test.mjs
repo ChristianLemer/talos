@@ -46,3 +46,14 @@ test("the empty state speaks without a rung, in the list, never mid-scan", () =>
   // An un-probed row must never count as absent: no "nothing to send" while scanning.
   assert.match(appjs, /hint\.hidden = plan\.length !== 0 \|\| scanning/);
 });
+
+test("no row sends an action verb; retry re-sends the Apply's own action", () => {
+  // The row button sent `{ type: act.type }` — install, uninstall, upgrade, downgrade. It left
+  // on 2026-10-10; what a row may still send is a Stop (`cancel-step`) or a `diff`.
+  assert.doesNotMatch(appjs, /type:\s*act\.type/);
+  assert.doesNotMatch(appjs, /buttonAction/);
+  const at = appjs.indexOf("function retryStep(");
+  assert.notEqual(at, -1, "retryStep moved — re-point this test");
+  const body = appjs.slice(at, appjs.indexOf("\n}", at));
+  assert.match(body, /M\.actionOf\(model,\s*i\)/, "a retry re-runs what the Apply chose");
+});

@@ -10,7 +10,7 @@ import {
   applySavedActiveBundles,
   applySavedScope,
   applySavedSelection,
-  buttonAction,
+  rowGesture,
   canReset,
   clearAllDecisions,
   createModel,
@@ -222,28 +222,13 @@ test("actionOf: wanted+absent → install; wanted+present+current → null", () 
   assert.deepEqual(actionOf(m, 1), null); // wanted + satisfied → nothing
 });
 
-test("buttonAction always inverts machine state", () => {
-  const m = seed();
-  setStatusData(m, 1, "waiting"); // absent
-  assert.deepEqual(buttonAction(m, 1)?.type, "install");
-  setStatusData(m, 1, "ok"); // present
-  assert.deepEqual(buttonAction(m, 1)?.type, "uninstall");
-});
-
-test("buttonAction: an OUTDATED package the user turned OUT → uninstall, not update", () => {
+test("actionOf: an OUTDATED package the user turned OUT → uninstall, not update", () => {
   const m = seed(); // pkg 1 = opt-in rg, canUninstall
   setStatusData(m, 1, "ok"); // present
   setOutdated(m, 1, true, "9.9"); // and outdated
   setDecision(m, 1, "out"); // but the user wants it GONE
-  // The desired state (absent) must win: you don't "update" something you're
-  // removing. Button + plan agree → uninstall. (Was showing "update" — the
-  // outdated branch fired before the desired-absent check.)
-  assert.deepEqual(buttonAction(m, 1), {
-    verb: "uninstall",
-    dir: "remove",
-    type: "uninstall",
-  });
-  assert.deepEqual(actionOf(m, 1), "uninstall"); // plan agrees
+  // The desired state (absent) must win: you don't "update" something you're removing.
+  assert.deepEqual(actionOf(m, 1), "uninstall");
 });
 
 // --- version pinning at the model layer -------------------------------------
@@ -278,17 +263,6 @@ test("actionOf: pinned + installed below pin → upgrade, at pin → null, above
   assert.deepEqual(actionOf(m, 0), null); // at the pin → satisfied
   setInstalledVersion(m, 0, "2.0");
   assert.deepEqual(actionOf(m, 0), "downgrade");
-});
-
-test("buttonAction: pinned + installed above pin → downgrade button", () => {
-  const m = seedPinned();
-  setStatusData(m, 0, "ok");
-  setInstalledVersion(m, 0, "2.0");
-  assert.deepEqual(buttonAction(m, 0), {
-    verb: "downgrade",
-    dir: "remove",
-    type: "downgrade",
-  });
 });
 
 // versionSummary — the SINGLE source of the row's version display. Never more
@@ -426,13 +400,6 @@ test("isActionable: a downgrade is batched — the Apply honours a pin both ways
   assert.deepEqual(isActionable(m, 0), true);
 });
 
-test("buttonAction: pinned + installed below pin → update button", () => {
-  const m = seedPinned();
-  setStatusData(m, 0, "ok");
-  setInstalledVersion(m, 0, "1.5");
-  assert.deepEqual(buttonAction(m, 0)?.type, "upgrade");
-});
-
 test("persist + restore selection by key", () => {
   const m = seed();
   setDecision(m, 1, "in");
@@ -554,35 +521,22 @@ test("clearAllDecisions drops author profiles but keeps personal empty+active", 
   assert.deepEqual(profileStateOf(m, "All tools"), "off");
 });
 
-test("buttonAction: config-atom turned out → diff (not install)", () => {
+test("rowGesture offers diff on a self-owned config-atom, and nothing else", () => {
+  // The row button lost its ACTION role on 2026-10-10 — the Apply is the one path that
+  // acts. What stays is inspection: the diff of a config the user chose to own.
   const m = createModel();
   loadPlan(m, [
-    {
-      i: 0,
-      name: "Starship config",
-      bundle: "Terminal",
-      posture: "opt-out",
-      isConfig: true,
-    },
+    { i: 0, name: "Starship config", bundle: "Terminal", posture: "opt-out", isConfig: true },
+    { i: 1, name: "ripgrep", bundle: "Terminal", posture: "opt-in", canUninstall: true },
   ], []);
   setDecision(m, 0, "out");
-  assert.deepEqual(buttonAction(m, 0), { verb: "diff", dir: "", type: "diff" });
-});
-
-test("buttonAction: config-atom left in → install path unchanged", () => {
-  const m = createModel();
-  loadPlan(m, [
-    {
-      i: 0,
-      name: "Starship config",
-      bundle: "Terminal",
-      posture: "opt-out",
-      isConfig: true,
-    },
-  ], []);
-  setDecision(m, 0, "in"); // wanted (nothing-by-default → pull it in)
-  // in + absent (not present) → install, unchanged behaviour
-  assert.deepEqual(buttonAction(m, 0)?.type, "install");
+  setDecision(m, 1, "in");
+  setStatusData(m, 1, "waiting"); // absent → the Apply would install it
+  assert.equal(actionOf(m, 1), "install", "the fixture is what it claims");
+  assert.deepEqual(rowGesture(m, 0), { verb: "diff", type: "diff" });
+  assert.equal(rowGesture(m, 1), null, "an install is the Apply's, not the row's");
+  setDecision(m, 0, "in");
+  assert.equal(rowGesture(m, 0), null, "a managed config-atom is converged, not inspected");
 });
 
 // --- B5: transitive requires pull (spec Consolidation §8) --------------------
