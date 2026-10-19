@@ -39,6 +39,21 @@ impl SystemManager {
             _ => format!("brew install --yes {id}@{version}"),
         }
     }
+    /// Down to a pin: an uninstall, then the pinned install. ⚠️ For brew the pin is the
+    /// versioned formula `id@version`, which exists only if the tap ships it — so it is
+    /// CHECKED first: without that, a missing formula failed AFTER the uninstall and left
+    /// the package removed. winget pins with a flag on the same id, so its chain is plain.
+    pub fn downgrade(&self, id: &str, version: &str) -> String {
+        let chain = format!(
+            "{} && {}",
+            self.uninstall(id),
+            self.install_pinned(id, version)
+        );
+        match self.route {
+            "winget" => chain,
+            _ => format!("brew info --formula {id}@{version} >/dev/null && {chain}"),
+        }
+    }
     pub fn uninstall(&self, id: &str) -> String {
         match self.route {
             // --all-versions: with several versions of the same id installed, a
@@ -576,6 +591,29 @@ mod tests {
         // ⚠️ brew's empty output is genuinely ambiguous — no header to recognise —
         // so unlike winget it CANNOT report a recognised-but-empty machine.
         assert!(BREW.parse_presence("").is_err());
+    }
+
+    #[test]
+    fn a_brew_downgrade_checks_the_versioned_formula_before_removing_anything() {
+        // A downgrade is `uninstall && install id@ver`. brew has no version flag, so the pin is
+        // the versioned formula `id@ver`, which exists only if the tap ships it — and when it
+        // does not, the uninstall had already run: the package was GONE. The check comes first,
+        // so a missing formula fails the step with the package still in place.
+        let brew = native_manager(Os::Darwin).unwrap();
+        let cmd = brew.downgrade("nushell", "0.113.1");
+        let check = cmd
+            .find("brew info --formula nushell@0.113.1")
+            .expect("the formula is checked");
+        let removes = cmd
+            .find("brew uninstall nushell")
+            .expect("then it uninstalls");
+        assert!(check < removes, "{cmd}");
+        assert!(cmd.ends_with("brew install --yes nushell@0.113.1"), "{cmd}");
+        // winget pins with a flag on the same id; its chain is the plain one.
+        let winget = native_manager(Os::Windows).unwrap();
+        assert!(winget
+            .downgrade("Git.Git", "2.50.1")
+            .starts_with("winget uninstall"));
     }
 
     #[test]

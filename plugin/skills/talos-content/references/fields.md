@@ -228,10 +228,14 @@ downgrade leaves the row as it is and says so on it (`held`).
 **Per-route reality:** winget / cargo / bun pin natively (`--version` / `@version`).
 **brew has no version flag** — a pin resolves to the versioned formula `id@version`
 (e.g. `nushell@0.113.1`), which exists *only* if the tap ships it. If it doesn't, a
-pinned install/downgrade fails at run time and the row simply stays as it was (Talos
-re-scans and shows the real state — it never lies about what's on the machine). While
-you sit *at* the pin, nothing runs, so an unavailable versioned formula is harmless
-until you actually drift.
+pinned install fails at run time, and a downgrade fails **before** it uninstalls anything
+(the formula is checked first), so the row stays as it was. While you sit *at* the pin,
+nothing runs, so an unavailable versioned formula is harmless until you actually drift.
+
+⚠️ **A downgrade can still end with the package removed**: its uninstall succeeded and the
+reinstall then failed — a 403 on a corporate network, a winget source that no longer
+serves that version. The row says *failed*; **Retry** (or the next Apply) installs it at
+the pin, since the machine now reads absent.
 
 There's no "floor" mode — an exact pin is exact, **at the precision you write**: the
 installed version is compared on as many segments as the pin has, so `2.50.1.windows.1`

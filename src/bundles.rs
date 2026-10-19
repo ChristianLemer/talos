@@ -386,7 +386,7 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
                     install: Some(inst.clone()),
                     uninstall: Some(mgr.uninstall(id)),
                     upgrade: Some(inst.clone()),
-                    downgrade: Some(format!("{} && {}", mgr.uninstall(id), inst)),
+                    downgrade: Some(mgr.downgrade(id, &ver)),
                 };
             }
             return Commands {

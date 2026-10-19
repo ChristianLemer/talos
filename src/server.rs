@@ -71,6 +71,18 @@ fn batch_action(
     }
 }
 
+/// The action a 403 retry really runs. A downgrade is `uninstall && install@pin`; when its
+/// reinstall half failed, the package is already gone, and re-running the chain fails at
+/// once on the uninstall — the download is never attempted again. So a retried downgrade
+/// asks the machine first: absent means install at the pin. Unknown is NOT absent.
+fn retry_action(asked: crate::decision::Action, present: Option<bool>) -> crate::decision::Action {
+    use crate::decision::Action;
+    match (asked, present) {
+        (Action::Downgrade, Some(false)) => Action::Install,
+        (a, _) => a,
+    }
+}
+
 /// True when this row is OUT OF SCOPE by the user's explicit hand, so no action may
 /// run on it. Reads the persisted overrides only: the DERIVED half (!canUninstall /
 /// external) is the front's to compute and it already declines to offer the action,
@@ -1706,6 +1718,17 @@ async fn retry_step(socket: &mut WebSocket, state: &AppState, i: usize, action: 
         "upgrade" => Action::Upgrade,
         "downgrade" => Action::Downgrade,
         _ => return,
+    };
+    // A retried downgrade may find the package already removed by its own first half.
+    let act = if act == Action::Downgrade {
+        let (step_c, os) = (step.clone(), state.os);
+        let now = tokio::task::spawn_blocking(move || detect_present_detailed(&step_c, os))
+            .await
+            .ok()
+            .and_then(|p| p.present);
+        retry_action(act, now)
+    } else {
+        act
     };
     // A row-upgrade is only meaningful for an outdated package; determine cask-ness
     // via a fresh outdated scan (blocking → spawn_blocking, like the other sites),
@@ -3525,6 +3548,27 @@ mod tests {
                  the panel freezes on it with no error and no recovery"
             );
         }
+    }
+
+    #[test]
+    fn a_downgrade_retried_on_a_package_already_gone_reinstalls_at_the_pin() {
+        use crate::decision::Action::*;
+        // A downgrade is `uninstall && install@pin`. When the reinstall half fails (a 403 on a
+        // corporate network), the package is already removed — and re-running the same chain
+        // fails at once on the uninstall, so the download is never attempted again. The retry
+        // asks the machine first: gone means install at the pin.
+        assert_eq!(retry_action(Downgrade, Some(false)), Install);
+        assert_eq!(retry_action(Downgrade, Some(true)), Downgrade);
+        assert_eq!(
+            retry_action(Downgrade, None),
+            Downgrade,
+            "unknown is not absent"
+        );
+        assert_eq!(
+            retry_action(Upgrade, Some(false)),
+            Upgrade,
+            "only a downgrade is re-derived"
+        );
     }
 
     #[test]
