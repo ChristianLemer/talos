@@ -12,7 +12,7 @@ import {
   toggleState,
 } from "./decision.js";
 import { scopeOf as scopeRule, scopeReason as scopeReasonRule } from "./scope.js";
-import { compareVersions } from "./version.js";
+import { compareToPin, compareVersions } from "./version.js";
 
 // The user's own editable bundle — always active, promotes what the user ADDED
 // from the Catalog. "Wanting" lives here (force is retired, spec §17): a package
@@ -382,7 +382,7 @@ export function versionSummary(model, i) {
       }
       return { from: inst, to: null, pinned: null, muted: false, held: false };
     }
-    const cmp = compareVersions(inst, p.pin);
+    const cmp = compareToPin(inst, p.pin);
     if (cmp !== 0) {
       // Off the pin → migration TO the pin, in either direction: BELOW (cmp<0) is an
       // upgrade, ABOVE (cmp>0) a downgrade (an uninstall + reinstall) — both batched by the

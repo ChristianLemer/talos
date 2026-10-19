@@ -30,6 +30,17 @@ pub fn compare_versions(a: &str, b: &str) -> i32 {
     0
 }
 
+/// Installed vs PIN, at the pin's own precision: the installed version is cut to as many
+/// segments as the author wrote, so `2.50.1.windows.1` IS the pin "2.50.1" and a pin of
+/// "1.8" is any 1.8.x. Since 2026-10-10 the Apply batches a downgrade (an uninstall +
+/// reinstall), so a suffix read as "above the pin" would reinstall the package on every
+/// Apply and never converge. Twin of `version.js::compareToPin`.
+pub fn compare_to_pin(installed: &str, pin: &str) -> i32 {
+    let n = pin.split('.').count();
+    let cut: Vec<&str> = installed.split('.').take(n).collect();
+    compare_versions(&cut.join("."), pin)
+}
+
 // NOTE — the "intention resolution" half (posture → desire) is NOT here anymore.
 // In the bundle-driven model the FRONT resolves the desired state (bundles pull +
 // manual toggles, see public/decision.js + model.js) and sends on/off to the
@@ -107,7 +118,7 @@ pub fn action_for(desired: Desired, f: &MachineFacts) -> Option<Action> {
             // nothing, and not redundant with it: a catalogue meant to be copied from must be
             // able to say "yes, newest here" rather than merely omit the field.
             if !pin.eq_ignore_ascii_case("latest") {
-                return match compare_versions(f.installed_version, pin) {
+                return match compare_to_pin(f.installed_version, pin) {
                     c if c < 0 => Some(Action::Upgrade),
                     c if c > 0 => Some(Action::Downgrade),
                     _ => None, // at the pin → satisfied
@@ -158,6 +169,39 @@ mod tests {
             installed_version: "1.0",
         };
         assert_eq!(action_for(Desired::Present, &f), Some(Action::Upgrade));
+    }
+
+    #[test]
+    fn a_pin_is_matched_to_its_own_precision_so_a_suffix_never_reinstalls() {
+        // Found at the final review of the batched downgrade: Git on Windows reports
+        // `2.50.1.windows.1`, which compares as [2,50,1,0,1] > [2,50,1] — a pin of "2.50.1" read
+        // as "installed ABOVE the pin", so every Apply uninstalled and reinstalled Git, and the
+        // probe read the same suffix afterwards: it could never converge. A pin is matched to
+        // the precision its author wrote.
+        assert_eq!(compare_to_pin("2.50.1.windows.1", "2.50.1"), 0);
+        assert_eq!(
+            compare_to_pin("1.8.2", "1.8"),
+            0,
+            "a pin of 1.8 is any 1.8.x"
+        );
+        assert_eq!(compare_to_pin("2.51.0", "2.50.1"), 1);
+        assert_eq!(
+            compare_to_pin("2.50", "2.50.1"),
+            -1,
+            "a shorter install still pads"
+        );
+        let f = MachineFacts {
+            present: true,
+            outdated: false,
+            can_uninstall: true,
+            pin: Some("2.50.1"),
+            installed_version: "2.50.1.windows.1",
+        };
+        assert_eq!(
+            action_for(Desired::Present, &f),
+            None,
+            "at the pin, never a reinstall"
+        );
     }
 
     #[test]

@@ -26,3 +26,13 @@ export function compareVersions(a, b) {
   }
   return 0;
 }
+
+// Installed vs PIN, at the pin's own precision: the installed version is cut to as many
+// segments as the author wrote, so `2.50.1.windows.1` IS the pin "2.50.1" and a pin of "1.8"
+// is any 1.8.x. Since 2026-10-10 the Apply batches a downgrade (an uninstall + reinstall), so
+// a suffix read as "above the pin" would reinstall the package on every Apply, and never
+// converge — the probe reads the same suffix afterwards. Twin of `decision::compare_to_pin`.
+export function compareToPin(installed, pin) {
+  const n = String(pin).split(".").length;
+  return compareVersions(String(installed).split(".").slice(0, n).join("."), pin);
+}

@@ -7,7 +7,7 @@
 //
 // Everything is a pure function of its arguments: same inputs, same output, no
 // side effects. That is what makes decision.test.mjs possible.
-import { compareVersions } from "./version.js";
+import { compareToPin, compareVersions } from "./version.js";
 
 // A posture is a two-level thing: WHERE its toggle starts (the author's default,
 // "in" | "out") and WHETHER the user may move it. Guillaume's model: the only
@@ -129,12 +129,12 @@ export function forbiddenMessage(gesture, paused) {
 //
 // A `pin` (exact version declared in the YAML) REFRAMES "outdated": the reference
 // is no longer "latest" but the pin, so the machine-wide outdated flag is ignored
-// when a pin is present. compareVersions(installed, pin) decides the direction:
-//   installed <  pin → upgrade    (Apply runs it — install/upgrade only)
+// when a pin is present. compareToPin(installed, pin) — at the pin's own precision —
+// decides the direction:
+//   installed <  pin → upgrade
 //   installed == pin → null       (satisfied — the whole point of an exact pin)
-//   installed >  pin → downgrade  (a distinct action Apply FILTERS OUT: it's the
-//                                   only destructive path — uninstall+install — so
-//                                   it's a manual per-row button, never batched)
+//   installed >  pin → downgrade  (an uninstall + reinstall at the pin; batched by the
+//                                   Apply since 2026-10-10, when the per-row button left)
 export function actionFor(
   desired,
   { present, outdated, canUninstall, pin, installedVersion },
@@ -157,7 +157,7 @@ export function actionFor(
       // `latest`: the author decided to take the newest. Falls through to the `outdated` check
       // below, so exactly one place decides "newest ⇒ upgrade".
       if (p !== "latest") {
-        const cmp = compareVersions(installedVersion || "", pin);
+        const cmp = compareToPin(installedVersion || "", pin);
         if (cmp < 0) return "upgrade";
         if (cmp > 0) return "downgrade";
         return null; // at the pin → satisfied

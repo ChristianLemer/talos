@@ -233,7 +233,10 @@ re-scans and shows the real state — it never lies about what's on the machine)
 you sit *at* the pin, nothing runs, so an unavailable versioned formula is harmless
 until you actually drift.
 
-There's no "floor" mode — an exact pin is exact.
+There's no "floor" mode — an exact pin is exact, **at the precision you write**: the
+installed version is compared on as many segments as the pin has, so `2.50.1.windows.1`
+satisfies `version: "2.50.1"` and `1.8.2` satisfies `version: "1.8"`. Write more segments to
+pin tighter.
 
 ### `version:` takes three forms, and the two words are not decoration
 

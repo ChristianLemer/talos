@@ -13,7 +13,7 @@ import {
   profileState,
   toggleState,
 } from "../public/decision.js";
-import { compareVersions } from "../public/version.js";
+import { compareVersions, compareToPin } from "../public/version.js";
 
 test("403 recovery: Retry while paused RETRIES — it does not just continue", () => {
   // The bug this pins: the button labelled "Retry" (and the modal step that says
@@ -258,4 +258,17 @@ test("actionFor: `latest` and an undeclared version are INDISTINGUISHABLE", () =
       }
     }
   }
+});
+
+test("a pin is matched to its own precision, so a suffix never reinstalls", () => {
+  // Twin of decision.rs's test: `2.50.1.windows.1` against a pin of "2.50.1" is AT the pin.
+  // Read as above it, every Apply would uninstall and reinstall the package, forever.
+  assert.equal(compareToPin("2.50.1.windows.1", "2.50.1"), 0);
+  assert.equal(compareToPin("1.8.2", "1.8"), 0);
+  assert.equal(compareToPin("2.51.0", "2.50.1"), 1);
+  assert.equal(compareToPin("2.50", "2.50.1"), -1);
+  assert.equal(
+    actionFor("present", { present: true, outdated: false, canUninstall: true, pin: "2.50.1", installedVersion: "2.50.1.windows.1" }),
+    null,
+  );
 });
