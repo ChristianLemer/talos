@@ -77,9 +77,9 @@ fn batch_action(
 /// so refusing on it here would break every ordinary row (the map is sparse — an
 /// absent entry means "follow the derivation", not "out").
 ///
-/// WHY the server checks at all, when the front already filters: `row_action` is a
-/// SEPARATE path that never sees the `on`/`off` lists, and it is the path the
-/// per-row button uses. Git declares `brew: git`, so `canUninstall` is true and the
+/// WHY the server checks at all, when the front already filters: `retry_step` is a
+/// SEPARATE path that never sees the `on`/`off` lists (it was the per-row button's
+/// path until 2026-10-10, and a 403 retry still takes it). Git declares `brew: git`, so `canUninstall` is true and the
 /// button would happily run `brew uninstall git` on an Xcode-CLT binary. A
 /// front-only guard is a cosmetic guard (talos-measure-from-the-ui-not-the-socket).
 fn scope_refuses(sel: &Selection, name: &str) -> bool {
@@ -1130,12 +1130,12 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     // button). "Detect, don't remember".
     scan_and_emit(&mut socket, &state).await;
 
-    // 4) Message loop from the front. Two families:
-    //  - `apply` (global Apply button, app.js:499) → apply_diff (re-scan, plan, execution).
-    //  - ROW actions (app.js:598) → a single button on a row sends
-    //    {type:"install"|"uninstall"|"upgrade"|"downgrade", i}. + `retry-step`
-    //    {type, i, action}. We run do_step on that index (downgrade ALLOWED here:
-    //    it's an explicit manual click, whereas the batch Apply excludes it).
+    // 4) Message loop from the front. The Apply is the one path that acts:
+    //  - `apply` (the Apply button) → apply_diff (re-scan, plan, execution).
+    //  - `retry-step` {i, action} → re-runs the action the Apply chose for one row, after
+    //    a 403. Not a choice: the front sends what `actionOf` derived.
+    //  - `diff` and `cancel-step` inspect or stop a row; they never install anything.
+    //  The per-row install/uninstall/upgrade/downgrade verbs were retired on 2026-10-10.
     while let Some(Ok(msg)) = socket.recv().await {
         let Message::Text(txt) = msg else { continue };
         let parsed: serde_json::Value = serde_json::from_str(&txt).unwrap_or_default();
@@ -1155,13 +1155,17 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 // sends a `rung` (the ladder that filtered by kind); it is ignored, not parsed.
                 apply_diff(&mut socket, &state, on, off, unmanaged).await;
             }
-            "install" | "uninstall" | "upgrade" | "downgrade" => {
-                if let Some(i) = parsed.get("i").and_then(|v| v.as_u64()).map(|n| n as usize) {
-                    row_action(&mut socket, &state, i, kind).await;
-                }
+            // The per-row action verbs RETIRED on 2026-10-10: the Apply is the one path that
+            // acts. A stale front may still send one after locking its UI, so it is answered
+            // with `done` — never acted on, never left hanging.
+            v if RETIRED_ROW_VERBS.contains(&v) => {
+                println!("[apply] ignored retired row verb {v}");
+                let _ = socket
+                    .send(Message::Text(json!({ "type": "done" }).to_string()))
+                    .await;
             }
             // diff: a config-atom the user turned OFF is self-managed, so its row
-            // button INSPECTS instead of installing (model.js::buttonAction) — the atom
+            // button INSPECTS (model.js::rowGesture) — the atom
             // has no install path, and re-applying would clobber the file the user chose
             // to own. Runs the atom's `check:` (its dry-run: exit 0 = converged, 1 =
             // drifted) through the pty so the output lands in the row's own terminal,
@@ -1181,12 +1185,12 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     .send(Message::Text(json!({ "type": "done" }).to_string()))
                     .await;
             }
-            // retry-step: re-runs the named action on row i (after a 403 failure).
+            // retry-step: re-runs the action the Apply chose for row i (after a 403 failure).
             "retry-step" => {
                 let i = parsed.get("i").and_then(|v| v.as_u64()).map(|n| n as usize);
                 let action = parsed.get("action").and_then(|v| v.as_str());
                 if let (Some(i), Some(action)) = (i, action) {
-                    row_action(&mut socket, &state, i, action).await;
+                    retry_step(&mut socket, &state, i, action).await;
                 }
             }
             // set-selection: persists intent (toggles). The client already applied
@@ -1586,8 +1590,8 @@ fn probe_json(diag: &Option<crate::detect::ProbeResult>) -> serde_json::Value {
 /// Does this client message make the front OPTIMISTICALLY lock its UI, so that the
 /// server owes it a `done` to unlock again?
 ///
-/// The front sets `applyRunning = true` before sending any row-button verb and any
-/// `apply` (see app.js: the row `onclick` and `applyScoped`), and `refreshLiveness()`
+/// The front sets `applyRunning = true` before sending a `diff`, a `retry-step` or an
+/// `apply` (see app.js: the row `onclick`, `retryStep` and `applyAll`), and `refreshLiveness()`
 /// then disables every button in the panel. Nothing but a server message clears it —
 /// there is no timeout, by design (a real install can take minutes, so a watchdog
 /// would either fire during a legitimate install or be useless).
@@ -1595,22 +1599,19 @@ fn probe_json(diag: &Option<crate::detect::ProbeResult>) -> serde_json::Value {
 /// ⚠️ THE FAILURE MODE THIS EXISTS TO PREVENT: a verb the front sends and the server's
 /// match does not handle falls into `_ => {}`, no `done` is ever emitted, and the panel
 /// is dead until the window is closed — no error, no recovery, indistinguishable from a
-/// hang. That happened for real with `diff` (config-atom rows): `model.js::buttonAction`
-/// returns `{type:"diff"}` for a config-atom the user turned OFF, the front sent it
-/// verbatim, and the server had no arm for it. `Starship config` ships in
+/// hang. That happened for real with `diff` (config-atom rows): the row button (then
+/// `model.js::buttonAction`, now `rowGesture`) returned `{type:"diff"}` for a config-atom
+/// the user turned OFF, the front sent it verbatim, and the server had no arm for it. `Starship config` ships in
 /// `bundles/terminal.yaml`, so it was reachable with the shipped catalogue.
 ///
 /// Keeping this list next to the handler — and asserting the handler covers it — makes
 /// the next added verb a compile-adjacent concern rather than a silent freeze.
-const LOCKING_CLIENT_MSGS: &[&str] = &[
-    "apply",
-    "install",
-    "uninstall",
-    "upgrade",
-    "downgrade",
-    "diff",
-    "retry-step",
-];
+const LOCKING_CLIENT_MSGS: &[&str] = &["apply", "diff", "retry-step"];
+
+/// The per-row action verbs RETIRED on 2026-10-10, when the Apply became the one path that
+/// acts. A stale front may still send one after locking its UI, so `handle_socket` answers
+/// each with `done` — never acted on, never left hanging.
+const RETIRED_ROW_VERBS: &[&str] = &["install", "uninstall", "upgrade", "downgrade"];
 
 /// Extracts an array of indices from a JSON field ("on"/"off").
 fn json_indices(v: &serde_json::Value, key: &str) -> Vec<usize> {
@@ -1624,11 +1625,11 @@ fn json_indices(v: &serde_json::Value, key: &str) -> Vec<usize> {
         .unwrap_or_default()
 }
 
-/// Is this row IMPOSSIBLE here because a `requires:` can never hold — the row-button
+/// Is this row IMPOSSIBLE here because a `requires:` can never hold — the retry
 /// half of the requirement gate, reusing `deps::requires_blocked` rather than
 /// re-deriving the rule (one rule, three callers: model.js, apply_diff, here).
 ///
-/// The desires are NOT knowable on this path — `row_action` never receives the wire's
+/// The desires are NOT knowable on this path — `retry_step` never receives the wire's
 /// `on`/`off` lists, and recomputing the front's transitive pull server-side would be a
 /// second implementation of `wantedNames` in Rust. So `will_be_present` is read
 /// OPTIMISTICALLY (true for every node): the formula then reduces to
@@ -1659,10 +1660,10 @@ async fn requirement_blocks_row(state: &AppState, step: &crate::bundles::Step) -
     requires_blocked(&nodes[me], &nodes, &idx)
 }
 
-/// ROW action: a single button on a row (install/uninstall/upgrade/
-/// downgrade). Runs do_step on that index then emits `done` to unfreeze the UI.
-/// downgrade is allowed (explicit manual click, the only destructive path outside the batch).
-async fn row_action(socket: &mut WebSocket, state: &AppState, i: usize, action: &str) {
+/// Re-runs the action the Apply chose for row i, after that step failed (a 403). Not a
+/// choice: the front sends the action `actionOf` derived, the same rule the batch used.
+/// Runs do_step on that index then emits `done` to unfreeze the UI.
+async fn retry_step(socket: &mut WebSocket, state: &AppState, i: usize, action: &str) {
     use crate::decision::Action;
     // Cloned out of the lock: the action below runs a pty, and holding a read guard
     // across it would block a Refresh for the whole install.
@@ -1670,9 +1671,9 @@ async fn row_action(socket: &mut WebSocket, state: &AppState, i: usize, action: 
         return;
     };
     let step = &step;
-    // THE TEETH. A row the user put out of scope is not ours to touch — and this
-    // path is the one the per-row button uses, so without this check the button
-    // stays live on a row the panel already greyed out.
+    // THE TEETH. A row the user put out of scope is not ours to touch — and this path
+    // never sees the wire lists, so without this check a retry could act on a row the
+    // panel already put out of scope.
     let sel = read_selection(&state.data_dir);
     if scope_refuses(&sel, &step.name) {
         println!("[scope] refused {} on {} (out of scope)", action, step.name);
@@ -1684,9 +1685,9 @@ async fn row_action(socket: &mut WebSocket, state: &AppState, i: usize, action: 
     // THE SECOND SET OF TEETH: an IMPOSSIBLE requirement. This path never sees the wire's
     // `on`/`off`, so it asks a deliberately NARROWER question than the batch does — not
     // "will the requirement be there after this Apply?" but "could it ever be here?".
-    // A single button is an explicit gesture about one thing, and refusing it because a
-    // requirement is merely not-yet-installed would break the legitimate click that
-    // installs a plugin knowing the host is on its way.
+    // A retry is about one row the Apply already chose, and refusing it because a
+    // requirement is merely not-yet-installed would break the legitimate retry of a
+    // plugin whose host is on its way in the same Apply.
     if let Some(why) = requirement_blocks_row(state, step).await {
         println!("[scope] refused {} on {} ({})", action, step.name, why);
         let _ = socket
@@ -1708,8 +1709,8 @@ async fn row_action(socket: &mut WebSocket, state: &AppState, i: usize, action: 
     };
     // A row-upgrade is only meaningful for an outdated package; determine cask-ness
     // via a fresh outdated scan (blocking → spawn_blocking, like the other sites),
-    // ONLY for Upgrade (don't scan on install/uninstall clicks). This makes the
-    // single-row button use the SAME forced-cask path as the batch Apply.
+    // ONLY for Upgrade (don't scan on an install/uninstall retry). This makes the
+    // retry use the SAME forced-cask path as the batch Apply.
     let is_cask = if act == Action::Upgrade {
         let os = state.os;
         // An unreadable scan cannot tell cask from formula. Defaulting to false
@@ -2350,7 +2351,7 @@ async fn apply_diff(
     // rows were all cancelled: those `break`s leave the loop, not this function.
     //
     // The `done/nothing` early return above DOES skip it, and so do all four of
-    // row_action's guards: unknown index, out of scope, an unknown action verb (reachable
+    // retry_step's guards: unknown index, out of scope, an unknown action verb (reachable
     // — `retry-step` forwards an arbitrary wire string), and needs-appmgmt. Every one of
     // them returns BEFORE any do_step, so there is nothing accumulated to lose — but that
     // is WHY they are safe, not an accident to rely on: a future early exit placed AFTER a
@@ -2898,7 +2899,7 @@ async fn do_step(
     *state.outdated_seen.lock().await = None;
     // A cask Upgrade needs the forced --cask --force command (brew's receipt drift
     // → anti-clobber exit 1 otherwise). Single resolution point for BOTH callers
-    // (batch Apply + row button); formulae, non-brew and pinned casks keep step.upgrade.
+    // (batch Apply + retry-step); formulae, non-brew and pinned casks keep step.upgrade.
     let forced = if action == Action::Upgrade {
         forced_cask_upgrade_cmd(step, os, is_cask)
     } else {
@@ -3524,6 +3525,37 @@ mod tests {
                  the panel freezes on it with no error and no recovery"
             );
         }
+    }
+
+    #[test]
+    fn a_row_verb_is_no_longer_an_action_but_never_freezes_an_old_front() {
+        // The per-row install/uninstall/upgrade/downgrade left on 2026-10-10. A stale
+        // WebView may still send one: it must not ACT, and it must not FREEZE — the front
+        // locked its UI before sending, and only `done` releases it.
+        //
+        // ⚠️ `handle_socket`'s own body, not `handled_client_msgs`: that one runs from
+        // `match kind {` to the next `_ => {}`, which lies past `handle_socket` (its
+        // catch-all is `other =>`) and reaches `retry_step`'s `"install" => Action::Install`.
+        let arms = fn_body("handle_socket");
+        for verb in ["install", "uninstall", "upgrade", "downgrade"] {
+            assert!(
+                !LOCKING_CLIENT_MSGS.contains(&verb),
+                "`{verb}` is still listed as a locking client message"
+            );
+            assert!(
+                !arms.contains(&format!("\"{verb}\" =>"))
+                    && !arms.contains(&format!("\"{verb}\" |")),
+                "`{verb}` still has an action arm"
+            );
+            assert!(
+                RETIRED_ROW_VERBS.contains(&verb),
+                "`{verb}` is not answered as retired → an old front freezes on it"
+            );
+        }
+        assert!(
+            fn_body("handle_socket").contains("RETIRED_ROW_VERBS"),
+            "a retired verb is not answered with `done` → an old front freezes"
+        );
     }
 
     #[test]
@@ -4509,14 +4541,14 @@ mod tests {
     }
 
     #[test]
-    fn the_row_button_refuses_a_requirement_blocked_row_too() {
-        // The per-row button never sees the wire lists, so it needs its own teeth —
-        // exactly the asymmetry `scope_refuses` was added to close, now closed on the
-        // second derivation as well.
-        let body = fn_body("row_action");
+    fn a_retry_refuses_a_requirement_blocked_row_too() {
+        // A retry never sees the wire lists, so it needs its own teeth — exactly the
+        // asymmetry `scope_refuses` was added to close, now closed on the second
+        // derivation as well.
+        let body = fn_body("retry_step");
         assert!(
             body.contains("requirement_blocks_row"),
-            "row_action has teeth for the user's explicit scope override but not for an \
+            "retry_step has teeth for the user's explicit scope override but not for an \
              impossible requirement → the button stays live on a row the panel greyed out"
         );
         // And the helper must DELEGATE, not re-derive: a second copy of the rule is how
@@ -4531,7 +4563,7 @@ mod tests {
     #[test]
     fn the_batch_gate_sits_where_the_other_two_scope_gates_sit() {
         // ONE skip, three sources, one place. A second `continue` further down would be
-        // the drift that made `row_action` and the batch path disagree once already.
+        // the drift that made the row path and the batch path disagree once already.
         let body = fn_body("apply_diff");
         let gate = body
             .find("if out_of_scope.contains(&i)")
