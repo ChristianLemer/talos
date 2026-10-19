@@ -50,6 +50,27 @@ fn cask_upgrade_blocked(
     action == Action::Upgrade && is_cask && appmgmt == AppMgmtStatus::Missing
 }
 
+/// The reason a pinned row ABOVE its pin stays where it is: this route builds no downgrade
+/// command (a manager package whose pin is `latest`-shaped, a `run:` package). Logged here and
+/// shown on the row by the front, which reads `canDowngrade` off the plan — never swallowed.
+const NO_DOWNGRADE_ROUTE: &str = "above its pin — this route cannot go down to it";
+
+/// What the batch does with the rule's answer. Every action `action_for` returns is now
+/// batched — the downgrade included, since the per-row button that used to be its only
+/// path left on 2026-10-10 (the Apply is the one path that acts). A downgrade is an
+/// uninstall + reinstall, so a route with no downgrade command cannot take it: that row
+/// gets a reason instead of an empty command, which `do_step` would skip in silence.
+fn batch_action(
+    a: Option<crate::decision::Action>,
+    can_downgrade: bool,
+) -> Result<Option<crate::decision::Action>, &'static str> {
+    use crate::decision::Action;
+    match a {
+        Some(Action::Downgrade) if !can_downgrade => Err(NO_DOWNGRADE_ROUTE),
+        other => Ok(other),
+    }
+}
+
 /// True when this row is OUT OF SCOPE by the user's explicit hand, so no action may
 /// run on it. Reads the persisted overrides only: the DERIVED half (!canUninstall /
 /// external) is the front's to compute and it already declines to offer the action,
@@ -999,6 +1020,9 @@ fn step_json(
         "i": i, "name": s.name, "description": s.description, "bundle": s.bundle,
         "canUninstall": s.uninstall.is_some(), "posture": s.posture.as_str(),
         "isConfig": s.is_config, "isExtension": s.is_extension,
+        // Can the Apply take this row DOWN to its pin? Only when the route builds a downgrade
+        // (an uninstall + a pinned reinstall); otherwise the row shows why it stays above.
+        "canDowngrade": s.downgrade.is_some(),
         "pin": s.pin, "categories": s.categories,
         "requires": s.requires, // package names this one needs (B5 transitive pull, §8)
         "uac": f.uac, "forbidden": f.forbidden, "slow": crate::plan_facts::is_slow(&f),
@@ -2188,11 +2212,12 @@ async fn apply_diff(
             pin: step.pin.as_deref(),
             installed_version: presences[i].version.as_deref().unwrap_or(""),
         };
-        // DOWNGRADE excluded from the Apply (only destructive path → manual button).
-        if let Some(a @ (Action::Install | Action::Uninstall | Action::Upgrade)) =
-            action_for(desired, &facts)
-        {
-            visual_plan.push((i, a));
+        match batch_action(action_for(desired, &facts), step.downgrade.is_some()) {
+            Ok(Some(a)) => visual_plan.push((i, a)),
+            Ok(None) => {}
+            // The front already shows this row's reason (it reads `canDowngrade`), so the
+            // trace here is the log line — the row is not acted on, and it says why.
+            Err(why) => println!("[apply] {} held: {why}", step.name),
         }
     }
     // Order by dependencies (required before dependents; visual order = tie-break).
@@ -2891,7 +2916,7 @@ async fn do_step(
     let running = match action {
         Action::Uninstall => "uninstalling",
         Action::Upgrade => "upgrading",
-        Action::Downgrade => "downgrading",
+        Action::Downgrade => "reinstalling at the pin",
         Action::Install => "installing",
     };
     let _ = socket
@@ -3245,6 +3270,37 @@ mod tests {
             version: Some(version.into()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_pin_is_honoured_both_ways_and_a_missing_downgrade_says_so() {
+        use crate::decision::Action::*;
+        // The per-row button was the only way down to a pin; it left on 2026-10-10, so the
+        // batch takes the downgrade — or SAYS why it cannot, never a silent skip.
+        let cases = [
+            (Some(Install), true, Ok(Some(Install))),
+            (Some(Uninstall), false, Ok(Some(Uninstall))),
+            (Some(Upgrade), false, Ok(Some(Upgrade))),
+            (Some(Downgrade), true, Ok(Some(Downgrade))),
+            (Some(Downgrade), false, Err(NO_DOWNGRADE_ROUTE)),
+            (None, true, Ok(None)),
+        ];
+        for (a, can, want) in cases {
+            assert_eq!(batch_action(a, can), want, "{a:?} can_downgrade={can}");
+        }
+    }
+
+    #[test]
+    fn a_row_says_on_the_wire_whether_its_route_can_go_down_to_its_pin() {
+        // The front previews what the Apply will do, so it must know BEFORE the click that a
+        // pinned row above its pin cannot be taken down — and show it, not light a downgrade.
+        let no_timings = crate::timings::Timings::new();
+        let mut s = brew_step("nushell", Some("0.113.1"));
+        let row = super::step_json(&s, 0, &[], &no_timings, Os::Darwin);
+        assert_eq!(row["canDowngrade"], false, "no downgrade command → false");
+        s.downgrade = Some("brew uninstall nushell && brew install nushell@0.113.1".into());
+        let row = super::step_json(&s, 0, &[], &no_timings, Os::Darwin);
+        assert_eq!(row["canDowngrade"], true);
     }
 
     #[test]

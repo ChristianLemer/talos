@@ -79,7 +79,7 @@ pub struct MachineFacts<'a> {
 /// reference becomes the pin, not "latest".
 ///   present desired & absent            → install
 ///   present desired & present & <pin    → upgrade (to the pin)
-///   present desired & present & >pin    → downgrade (MANUAL, filtered out of Apply)
+///   present desired & present & >pin    → downgrade (an uninstall + reinstall, batched)
 ///   present desired & present & stale (no pin) → upgrade (latest)
 ///   absent desired  & present & removable → uninstall
 pub fn action_for(desired: Desired, f: &MachineFacts) -> Option<Action> {
@@ -91,8 +91,9 @@ pub fn action_for(desired: Desired, f: &MachineFacts) -> Option<Action> {
             // ⭐ THE TWO KEYWORDS FIRST, because they are statements about POLICY, not versions
             // to converge on — and `compare_versions` would happily read them as 0.0.0.
             // MEASURED: `compare_versions("2.50.1", "pending") == 1`, i.e. "installed is above
-            // the pin" → Downgrade → the manual `uninstall && install pkg@pending` button. So
-            // the order of these checks is load-bearing, not stylistic.
+            // the pin" → Downgrade → an `uninstall && install pkg@pending` that the Apply
+            // batches (since 2026-10-10). So the order of these checks is load-bearing, not
+            // stylistic.
             //
             // `pending` = nobody has arbitrated this version yet. Present ⇒ do nothing, and
             // `outdated` is deliberately IGNORED: the gap is still emitted to the front
@@ -326,8 +327,8 @@ mod tests {
     fn a_keyword_is_never_compared_as_a_version() {
         // ⚠️ The defect this closes, pinned as a FACT rather than as prose. `compare_versions`
         // takes the leading digits of each segment, so a word has none and reads as 0.0.0 —
-        // "installed is ABOVE the pin" → Downgrade → the manual `uninstall && install pkg@word`
-        // button, the only destructive path in the app.
+        // "installed is ABOVE the pin" → Downgrade → an `uninstall && install pkg@word` that
+        // the Apply batches — a reinstall of every such package on every Apply.
         //
         // Recording the measurement here is what stops someone "simplifying" the keyword branch
         // back into the comparison.
