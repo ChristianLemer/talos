@@ -478,9 +478,9 @@ export function rowGesture(model, i) {
 // --- touched: a gesture must leave a trace ----------------------------------
 //
 // A row the user acted on stays VISIBLE for the rest of the session, even when the
-// action turns out to be a no-op. C's report: "quand un utilisateur agit sur une
-// entrée et qu'elle disparaît sous ses yeux c'est bizarre et ennuyeux… surtout si
-// c'est une erreur". Exactly so — the Changes tab shows only `.will-change` rows, so
+// action turns out to be a no-op. C's report, paraphrased: a row that vanishes under the
+// user's eyes right after they act on it is odd and annoying, worse when the act was a
+// mistake. Exactly so — the Changes tab shows only `.will-change` rows, so
 // UNDOING a mistake made the row vanish, which means correcting an error destroyed
 // the evidence that you had corrected it. There was no way to check your own work.
 //

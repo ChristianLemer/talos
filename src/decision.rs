@@ -109,8 +109,7 @@ pub fn action_for(desired: Desired, f: &MachineFacts) -> Option<Action> {
             // `pending` = nobody has arbitrated this version yet. Present ⇒ do nothing, and
             // `outdated` is deliberately IGNORED: the gap is still emitted to the front
             // (`emit_outdated_if` runs regardless) and the row shows it greyed, so this is a
-            // HOLD, not a blindfold. The per-row button still offers the update — a cost
-            // control, never a lock.
+            // HOLD, not a blindfold. To take the update, the author edits the pin.
             if pin.eq_ignore_ascii_case("pending") {
                 return None;
             }

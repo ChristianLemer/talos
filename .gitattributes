@@ -4,7 +4,7 @@
 # tree are TEXT-LEVEL guards: they `include_str!` a source file and assert on the shape of
 # what they find, because the defect they hold is the ABSENCE or POSITION of a call, which
 # no unit test can reach (`every_presence_observation_is_recorded`,
-# `every_ui_locking_message_has_a_handler`, `the_ladder_filters_the_batch_…`,
+# `every_ui_locking_message_has_a_handler`, `the_apply_takes_no_rung_and_filters_nothing_…`,
 # `probes_and_actions_agree_on_where_they_run`). `include_str!` embeds the bytes AS THEY SIT
 # ON DISK.
 #

@@ -540,7 +540,7 @@ function paintVersion(i) {
   const remove = (t) => `<span class="v-remove">${t}</span>`;
   // The word the operator reads when a gap is shown but not pushed.
   //
-  // ⚠️ `arbitration`, and NOT "to arbitrate" / "à examiner": the reader of this screen is NOT
+  // ⚠️ `arbitration`, and NOT "to arbitrate" / "to examine": the reader of this screen is NOT
   // the arbiter and has no power to be — the decision lands in the catalogue, in git. A label
   // that ordered them would name the wrong person. And not "in arbitration" either, which
   // would promise work is underway; on day one it is underway for none of them.
@@ -559,10 +559,9 @@ function paintVersion(i) {
       : `<span class="v-muted" title="available — not pushed past your pin">${t}</span>`;
   const pin = (t) => `📌${t}`;
 
-  // A PENDING uninstall reads current(blue) → absent(red) — same red as its
-  // button. Keyed on the PLAN action (actionOf), not the row's old button: that was
-  // the manual invert (still "upgrade" for an outdated pkg), while actionOf is
-  // what Apply will really do — "uninstall" only when the user wants it absent.
+  // A PENDING uninstall reads current(blue) → absent(red) — same red as the row's
+  // tint. Keyed on the PLAN action (actionOf): what Apply will really do —
+  // "uninstall" only when the user wants it absent.
   if (M.actionOf(model, i) === "uninstall" && v.from) {
     r.delta.innerHTML = `${cur(v.from)} → ${remove("absent")}`;
     return;
@@ -632,9 +631,8 @@ function rowGesture(i) {
   return M.rowGesture(model, i);
 }
 // Would a plain Apply act here? Delegates to the SHARED rule (actionFor) — the
-// exact same call the server makes — so the button's green/red preview always
-// matches what Apply will really do. Lights the button; the label above still
-// shows the manual invert action regardless.
+// exact same call the server makes — so the row's green/red preview always
+// matches what Apply will really do.
 function isActionable(i) {
   return M.isActionable(model, i);
 }
@@ -837,7 +835,7 @@ function applyAll() {
   // Focus mode engages on the server's `apply-plan` reply (it computes the plan),
   // not here — so we show the exact set of steps that will run.
   // `unmanaged` is a THIRD list, not an omission from on/off: an omitted index is
-  // indistinguishable from `auto` server-side, and `row_action` never sees these
+  // indistinguishable from `auto` server-side, and `retry_step` never sees these
   // lists at all — so the server needs to be told, not left to infer.
   ws.send(JSON.stringify({
     type: "apply",

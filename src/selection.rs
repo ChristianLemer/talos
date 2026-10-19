@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 /// bundle's member list (`personal`: package names the user added from the
 /// Catalog — spec §14). BTreeMap for deterministic writes / clean diffs.
 /// Pure UI preferences (display only, not intent): kept in the SAME file so all
-/// config lives in one place (spec — C: "toute la configuration au même endroit").
+/// config lives in one place (spec — C asked for all the configuration in one place).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct UiPrefs {
     #[serde(default)]

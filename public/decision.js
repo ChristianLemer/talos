@@ -123,7 +123,7 @@ export function forbiddenMessage(gesture, paused) {
 // front previews; they must agree, so they call the same function.
 //   desired present & absent                     → install
 //   desired present & present & below pin        → upgrade   (to the pin)
-//   desired present & present & above pin         → downgrade (to the pin) — MANUAL
+//   desired present & present & above pin         → downgrade (to the pin)
 //   desired present & present & stale (no pin)    → upgrade   (to latest)
 //   desired absent  & present                     → uninstall (only if removable)
 //
@@ -145,11 +145,11 @@ export function actionFor(
       // ⭐ THE TWO KEYWORDS FIRST — they state POLICY, not a version to converge on, and
       // compareVersions would read them as 0.0.0. MEASURED:
       // compareVersions("2.50.1", "pending") === 1, i.e. "installed is above the pin" →
-      // "downgrade" → the manual uninstall+install button. The order is load-bearing.
+      // "downgrade" → an uninstall + reinstall the Apply batches. The order is load-bearing.
       //
       // ⚠️ AND THIS MUST MATCH src/decision.rs EXACTLY. The server executes the rule, this
-      // previews it; a divergence here does not merely mislabel — it would draw a downgrade
-      // button for a row the server holds.
+      // previews it; a divergence here does not merely mislabel — the button would count a
+      // reinstall the server never runs, or run one the button never announced.
       const p = String(pin).toLowerCase();
       // `pending`: nobody has arbitrated this version. Do nothing, and ignore `outdated` —
       // the gap is still SHOWN (greyed, see versionSummary), so this is a hold, not a blindfold.
