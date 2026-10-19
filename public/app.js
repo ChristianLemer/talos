@@ -745,7 +745,10 @@ function refreshLiveness() {
   if (hint) {
     hint.hidden = plan.length !== 0 || scanning;
     if (!hint.hidden) {
-      hint.textContent = "Nothing to send — this machine already matches what you asked for.";
+      const held = M.heldRows(model).length;
+      hint.textContent = held
+        ? `Nothing to send — ${held} held at a pin this route cannot reach (see the row).`
+        : "Nothing to send — this machine already matches what you asked for.";
     }
   }
   // Reset is available only when it would do something (model.canReset decides:

@@ -24,6 +24,7 @@ import {
   isTouched,
   applyPlan,
   holdReason,
+  heldRows,
   planCounts,
   loadPlan,
   PERSONAL_BUNDLE,
@@ -373,6 +374,18 @@ test("versionSummary: pinned ABOVE with NO route down → installed→pin, MUTED
     muted: true,
     held: false,
   });
+});
+
+test("heldRows: the rows the Apply leaves at a gap it cannot close", () => {
+  // The empty state reads this: with one held row, "this machine already matches" is false.
+  const m = seedPinned(); // canDowngrade absent → no route down
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "1.8");
+  assert.deepEqual(heldRows(m), [], "at the pin: nothing held");
+  setInstalledVersion(m, 0, "2.0");
+  assert.deepEqual(heldRows(m), [0], "above the pin, no route down: held");
+  m.pkgs.get(0).canDowngrade = true;
+  assert.deepEqual(heldRows(m), [], "a route down: batched, not held");
 });
 
 test("versionSummary: absent → empty (nothing installed to show)", () => {

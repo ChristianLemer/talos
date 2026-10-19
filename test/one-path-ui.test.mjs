@@ -89,3 +89,19 @@ test("the button and the row both say a downgrade reinstalls", () => {
   const pv = appjs.slice(appjs.indexOf("function paintVersion("), appjs.indexOf("\n}\n", appjs.indexOf("function paintVersion(")));
   assert.match(pv, />reinstall</, "the row names the reinstall beside its target");
 });
+
+test("the empty state does not claim a match while a row is held", () => {
+  const at = appjs.indexOf('getElementById("steps-empty")');
+  assert.notEqual(at, -1, "the empty state moved — re-point this test");
+  const body = appjs.slice(at, appjs.indexOf("\n  }\n", at));
+  assert.match(body, /M\.heldRows\(model\)/, "the empty state must ask which rows are held");
+  assert.match(body, /held/, "and say so instead of 'already matches'");
+});
+
+test("the held reason is the same words on the row and in the server log", () => {
+  const server = readFileSync(new URL("../src/server.rs", import.meta.url), "utf8");
+  const model = readFileSync(new URL("../public/model.js", import.meta.url), "utf8");
+  const rs = server.match(/const NO_DOWNGRADE_ROUTE: &str = "([^"]+)";/);
+  assert.ok(rs, "NO_DOWNGRADE_ROUTE moved — re-point this test");
+  assert.ok(model.includes(`"${rs[1]}"`), "model.js holdReason drifted from the server's words");
+});

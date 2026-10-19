@@ -433,6 +433,11 @@ export function holdReason(model, i) {
   if (actionOf(model, i) !== "downgrade") return null;
   return model.pkgs.get(i)?.canDowngrade ? null : "above its pin — this route cannot go down to it";
 }
+// The rows the Apply leaves at a gap it cannot close, in index order. The empty state asks,
+// so it never says "already matches" while one is held.
+export function heldRows(model) {
+  return [...model.pkgs.keys()].filter((i) => holdReason(model, i) !== null).sort((a, b) => a - b);
+}
 // Is this row's version HELD, with something to decide?
 //
 // ⚠️ The count this feeds is "rows with something to arbitrate", NOT "packages carrying the
