@@ -581,7 +581,11 @@ function paintVersion(i) {
   const left = cur(v.pinned === "from" ? pin(v.from) : v.from);
   const rightTxt = v.pinned === "to" ? pin(v.to) : v.to;
   const right = v.muted ? muted(rightTxt, v.held) : push(rightTxt);
-  r.delta.innerHTML = `${left} → ${right}`;
+  // A downgrade the Apply WILL take says so before the click: it is an uninstall first.
+  const re = !v.muted && M.actionOf(model, i) === "downgrade"
+    ? ` <span class="v-held" title="uninstalled, then installed at the pin">reinstall</span>`
+    : "";
+  r.delta.innerHTML = `${left} → ${right}${re}`;
 }
 function setToggle(i, state, opts = {}) {
   if (!M.setDecision(model, i, state)) return; // locked → refused
@@ -720,21 +724,22 @@ function refreshLiveness() {
   //
   // The removals are named on the button because Apply honours the rows you unchecked, and a
   // count that hid them would be the label lying.
+  // A reinstall (a downgrade to a pin) is counted apart: it removes the package first.
   const plan = M.applyPlan(model);
   const g = document.getElementById("install-all");
   if (g) {
-    let removes = 0;
-    for (const i of plan) if (M.actionOf(model, i) === "uninstall") removes++;
-    const applies = plan.length - removes;
-    g.classList.toggle("live", plan.length > 0 && !busy);
-    g.disabled = busy || plan.length === 0;
-    g.textContent = plan.length === 0
-      ? "Apply"
-      : `Apply — ${applies} to apply` + (removes ? ` · ${removes} to remove` : "");
-    g.title = plan.length === 0 ? "Nothing to do — this machine already matches" : "";
+    const n = M.planCounts(model);
+    g.classList.toggle("live", n.total > 0 && !busy);
+    g.disabled = busy || n.total === 0;
+    const parts = [];
+    if (n.applies) parts.push(`${n.applies} to apply`);
+    if (n.reinstalls) parts.push(`${n.reinstalls} to reinstall`);
+    if (n.removes) parts.push(`${n.removes} to remove`);
+    g.textContent = n.total === 0 ? "Apply" : `Apply — ${parts.join(" · ")}`;
+    g.title = n.total === 0 ? "Nothing to do — this machine already matches" : "";
   }
-  // ⭐ THE EMPTY STATE LIVES IN THE LIST. C: "je préférerais que ce soit le panneau de sélection
-  // en dessous qui indique qu'il n'y a rien à envoyer" — the LIST is what is empty. And NOT
+  // ⭐ THE EMPTY STATE LIVES IN THE LIST — C asked for the panel below, not a note above it,
+  // to say there is nothing to send: the LIST is what is empty. And NOT
   // during the scan: an un-probed row must never count as absent.
   const hint = document.getElementById("steps-empty");
   if (hint) {

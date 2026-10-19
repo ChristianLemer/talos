@@ -80,3 +80,12 @@ test("every running status the server emits is one the row treats as running", (
     assert.match(label, new RegExp(`\\b${st}:`), `LABEL lacks ${st}`);
   }
 });
+
+test("the button and the row both say a downgrade reinstalls", () => {
+  const at = appjs.indexOf("function refreshLiveness()");
+  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
+  assert.match(body, /M\.planCounts\(model\)/, "the button counts through the shared helper");
+  assert.match(body, /to reinstall/);
+  const pv = appjs.slice(appjs.indexOf("function paintVersion("), appjs.indexOf("\n}\n", appjs.indexOf("function paintVersion(")));
+  assert.match(pv, />reinstall</, "the row names the reinstall beside its target");
+});

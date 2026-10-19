@@ -414,6 +414,18 @@ export function isActionable(model, i) {
   if (a === "downgrade" && !model.pkgs.get(i)?.canDowngrade) return false;
   return AUTO_ACTS.includes(a);
 }
+// What the Apply button counts, by what each row ends up as. A downgrade is apart: it is an
+// uninstall first, and the spec wants that said before the click.
+export function planCounts(model) {
+  const plan = applyPlan(model);
+  let reinstalls = 0, removes = 0;
+  for (const i of plan) {
+    const a = actionOf(model, i);
+    if (a === "downgrade") reinstalls++;
+    else if (a === "uninstall") removes++;
+  }
+  return { applies: plan.length - reinstalls - removes, reinstalls, removes, total: plan.length };
+}
 // WHY the Apply leaves a row it would otherwise act on, or null. Today one case: a pinned row
 // above its pin whose route cannot go down. The words are the server's `NO_DOWNGRADE_ROUTE`,
 // word for word, so the row and the log say the same thing.

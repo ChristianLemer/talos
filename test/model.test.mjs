@@ -24,6 +24,7 @@ import {
   isTouched,
   applyPlan,
   holdReason,
+  planCounts,
   loadPlan,
   PERSONAL_BUNDLE,
   persistableActiveBundles,
@@ -1171,4 +1172,15 @@ test("profileProgress: an out-of-scope member is not counted as missing", () => 
     { present: 0, total: 0 },
     "a row that cannot be installed is not a goal",
   );
+});
+
+test("planCounts names the reinstalls apart — a downgrade is an uninstall first", () => {
+  // Spec: the row and the button say "reinstall" BEFORE the click. A downgrade counted
+  // under "to apply" would hide that the package is removed first.
+  const m = seedPinned({ canDowngrade: true }); // pin 1.8
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "2.0");
+  assert.deepEqual(planCounts(m), { applies: 0, reinstalls: 1, removes: 0, total: 1 });
+  setInstalledVersion(m, 0, "1.5");
+  assert.deepEqual(planCounts(m), { applies: 1, reinstalls: 0, removes: 0, total: 1 });
 });
