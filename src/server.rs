@@ -1674,8 +1674,18 @@ async fn requirement_blocks_row(state: &AppState, step: &crate::bundles::Step) -
 
 /// Re-runs the action the Apply chose for row i, after that step failed (a 403). Not a
 /// choice: the front sends the action `actionOf` derived, the same rule the batch used.
-/// Runs do_step on that index then emits `done` to unfreeze the UI.
+/// Emits `done` whatever the attempt did: the front froze itself when it sent the retry, and
+/// `done` is the only thing that unfreezes it.
 async fn retry_step(socket: &mut WebSocket, state: &AppState, i: usize, action: &str) {
+    retry_attempt(socket, state, i, action).await;
+    let _ = socket
+        .send(Message::Text(json!({ "type": "done" }).to_string()))
+        .await;
+}
+
+/// One retry, which may end early (out of scope, an impossible requirement, an unknown row
+/// or verb, a missing App Management permission). It never sends `done`: its caller does.
+async fn retry_attempt(socket: &mut WebSocket, state: &AppState, i: usize, action: &str) {
     use crate::decision::Action;
     // Cloned out of the lock: the action below runs a pty, and holding a read guard
     // across it would block a Refresh for the whole install.
@@ -1689,9 +1699,6 @@ async fn retry_step(socket: &mut WebSocket, state: &AppState, i: usize, action: 
     let sel = read_selection(&state.data_dir);
     if scope_refuses(&sel, &step.name) {
         println!("[scope] refused {} on {} (out of scope)", action, step.name);
-        let _ = socket
-            .send(Message::Text(json!({ "type": "done" }).to_string()))
-            .await;
         return;
     }
     // THE SECOND SET OF TEETH: an IMPOSSIBLE requirement. This path never sees the wire's
@@ -1706,9 +1713,6 @@ async fn retry_step(socket: &mut WebSocket, state: &AppState, i: usize, action: 
             .send(Message::Text(
                 json!({ "type": "state", "i": i, "reason": why }).to_string(),
             ))
-            .await;
-        let _ = socket
-            .send(Message::Text(json!({ "type": "done" }).to_string()))
             .await;
         return;
     }
@@ -1760,7 +1764,7 @@ async fn retry_step(socket: &mut WebSocket, state: &AppState, i: usize, action: 
         return;
     }
     do_step(socket, state, i, act, step, is_cask).await;
-    // A row action is an Apply of ONE step, and what it observed is just as real. So the
+    // A retry is an Apply of ONE step, and what it observed is just as real. So the
     // flush belongs on THIS ending as much as on the batch one.
     //
     // There are two other endings, and neither flushes. `run_in_pty`'s sudo refusal is
@@ -1771,10 +1775,7 @@ async fn retry_step(socket: &mut WebSocket, state: &AppState, i: usize, action: 
     // reaches that handler. `quit` is therefore only ever HANDLED between Applies, when
     // the accumulator is already empty and there is nothing to flush.
     flush_behaviour(state).await;
-    clear_sudo_pw(state).await; // row action finished: clear the cached password
-    let _ = socket
-        .send(Message::Text(json!({ "type": "done" }).to_string()))
-        .await;
+    clear_sudo_pw(state).await; // the retry finished: clear the cached password
 }
 
 /// Decide whether an outdated row is worth re-probing. A row is outdated AND an upgrade
@@ -2374,7 +2375,7 @@ async fn apply_diff(
     // rows were all cancelled: those `break`s leave the loop, not this function.
     //
     // The `done/nothing` early return above DOES skip it, and so do all four of
-    // retry_step's guards: unknown index, out of scope, an unknown action verb (reachable
+    // retry_attempt's guards: unknown index, out of scope, an unknown action verb (reachable
     // — `retry-step` forwards an arbitrary wire string), and needs-appmgmt. Every one of
     // them returns BEFORE any do_step, so there is nothing accumulated to lose — but that
     // is WHY they are safe, not an accident to rely on: a future early exit placed AFTER a
@@ -4589,10 +4590,10 @@ mod tests {
         // A retry never sees the wire lists, so it needs its own teeth — exactly the
         // asymmetry `scope_refuses` was added to close, now closed on the second
         // derivation as well.
-        let body = fn_body("retry_step");
+        let body = fn_body("retry_attempt");
         assert!(
             body.contains("requirement_blocks_row"),
-            "retry_step has teeth for the user's explicit scope override but not for an \
+            "retry_attempt has teeth for the user's explicit scope override but not for an \
              impossible requirement → the button stays live on a row the panel greyed out"
         );
         // And the helper must DELEGATE, not re-derive: a second copy of the rule is how
@@ -4601,6 +4602,23 @@ mod tests {
             fn_body("requirement_blocks_row").contains("requires_blocked"),
             "the row gate re-implements the requirement rule instead of calling it → two \
              behaviours for one question, which is the defect `scope_refuses` exists for"
+        );
+    }
+
+    #[test]
+    fn every_ending_of_a_retry_unfreezes_the_front() {
+        // The front sets `applyRunning` when it sends `retry-step` and only `done` clears it.
+        // So `done` is sent ONCE, by the wrapper, after whatever the attempt did: an early
+        // return inside the attempt (an unknown row or verb, a missing App Management
+        // permission) can no longer leave the window frozen.
+        let wrapper = fn_body("retry_step");
+        assert!(
+            wrapper.contains("retry_attempt(") && wrapper.contains(r#""type": "done""#),
+            "retry_step must run the attempt and THEN send done, whatever it returned"
+        );
+        assert!(
+            !fn_body("retry_attempt").contains(r#""type": "done""#),
+            "a `done` inside the attempt means some other return path can still skip it"
         );
     }
 
