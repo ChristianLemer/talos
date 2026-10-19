@@ -33,7 +33,7 @@ pub struct HistEntry {
     /// is harmless: the consumer keeps the WORST duration (a `max`), so a 0 never wins.
     ///
     /// ⚠️ `timings.rs` DISAGREES about 0, deliberately. There it means "never measured
-    /// here" and nothing else, because the ladder's estimate must be able to tell an
+    /// here" and nothing else, because the estimate must be able to tell an
     /// unmeasured row from a fast one — so a sub-second run is floored to 1s before it is
     /// stored. This journal keeps the raw truncation instead: it is the TRACE, and a 0 here
     /// is an honest "under a second or from before the field existed". Two files, two

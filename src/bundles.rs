@@ -143,7 +143,7 @@ pub struct RawPkg {
     /// Where the binary comes from, as `owner/repo@tag`. ABSENT means the plugin ships with
     /// nushell itself and is already beside the `nu` binary.
     ///
-    /// ⭐ This absence is the SOURCE AXIS, and it decides the rung: bundled ⇒ ⚡ (no network
+    /// ⭐ This absence is the SOURCE AXIS, and it decides the row's nature: bundled ⇒ ⚡ (no network
     /// at all), released ⇒ 🧩 (downloads, never elevates, writes in the user's profile).
     #[serde(default, rename = "plugin-release")]
     pub plugin_release: Option<String>,
@@ -215,9 +215,9 @@ pub struct Overrides {
 /// The duration a declared `slow: true` stands in for when nothing was ever measured.
 /// A sentinel, not a real timing — the honest number always comes from the share.
 ///
-/// It is an ANCHOR: the ladder's "slow" threshold must stay strictly BELOW it, or every
+/// It is an ANCHOR: the `slow` label's threshold must stay strictly BELOW it, or every
 /// `slow: true` in the catalogue goes silently inert. It is `pub` for exactly that reason —
-/// `ladder::SLOW_SECS` is asserted against it, which is the comparison the Part A plan
+/// `plan_facts::SLOW_SECS` is asserted against it, which is the comparison the Part A plan
 /// could only describe in a comment because this was a function-local const.
 ///
 /// It sits ABOVE `resolve_facts`'s doc essay rather than between the essay and the `fn`:
@@ -255,13 +255,13 @@ pub const DECLARED_SLOW_SECS: u64 = 600;
 ///
 /// ⚠️ That 0 COLLIDES with a documented convention: `Facts::slow_secs` and
 /// `consent::HistEntry::secs` both read 0 as "never measured". So a `slow: false` package
-/// will be counted among the UNKNOWNS in a total the ladder spec asks to report explicitly
+/// will be counted among the UNKNOWNS in a total the estimate reports explicitly
 /// (`at most ~4 min (3 unknown)`), rather than as a measured-quick one. Harmless for the
-/// rung filter — 0 is not slow, which is the right answer — but a caller building that
+/// `slow` label — 0 is not slow, which is the right answer — but a caller building that
 /// count should know the two are indistinguishable here.
 // The `allow(dead_code)` this mechanism carried on both `overrides` and this function is
 // GONE, stripped one at a time under `-D warnings` rather than as a batch. The caller is
-// `ladder::resolve_plan_facts`, reached from `server::serve`: it looks each step's collected
+// `plan_facts::resolve_plan_facts`, reached from `server::serve`: it looks each step's collected
 // facts up on the share and lays `Step::overrides` over them, which is what finally makes an
 // override written in catalog/ change something observable.
 //
@@ -313,8 +313,8 @@ pub struct Step {
     /// cross-agent skill — and, when its route lands, an editor extension.
     ///
     /// ⭐ DERIVED from the route (`is_extension_route`), never declared in YAML, exactly like
-    /// `is_config` above. It earns its own ladder rung because it carries a promise the two
-    /// neighbouring rungs do not: it TOUCHES THE NETWORK (a clone, a download) and it NEVER
+    /// `is_config` above. It earns its own glyph (🧩) because it carries a promise the two
+    /// neighbouring natures do not: it TOUCHES THE NETWORK (a clone, a download) and it NEVER
     /// TOUCHES THE MACHINE — nothing enters Program Files or /Applications, nothing elevates.
     ///
     /// ✅ That second half is a measured property of the corpus, not a hope: across the 34
@@ -661,7 +661,7 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
                 // ⭐ MEASURED: `plugin add nu_plugin_polars` (no path) registers the Cellar
                 // binary: the directory holding the RUNNING `nu` is searched (it resolved with an
                 // empty NU_PLUGIN_DIRS too, measured on Linux 2026-10-18). No network, no path resolution, no sidecar — which is exactly what earns this
-                // the ⚡ rung, whose promise is "no network at all".
+                // the ⚡ glyph, whose promise is "no network at all".
                 //
                 // ⚠️ The recorded path is VERSIONED (`Cellar/nushell/<v>/bin/…` under brew), so
                 // the next `brew upgrade nushell` deletes it. Registering the stable link
@@ -747,7 +747,7 @@ pub fn load_from_catalog(
         });
         let is_config =
             p.check.is_some() && (cmd.route.is_none() || cmd.route.as_deref() == Some("run"));
-        // ⭐ Asked of the PACKAGE, not the route: `nu-plugin` maps to two rungs depending on
+        // ⭐ Asked of the PACKAGE, not the route: `nu-plugin` maps to two natures depending on
         // whether the binary must be fetched. Every other route is unaffected — the helper
         // falls through to `is_extension_route` for them.
         let is_extension = is_extension_route_for(p, os);
@@ -830,13 +830,13 @@ pub fn load_from_catalog(
 
 /// Is this route one that installs INTO a host rather than onto the machine?
 ///
-/// The single place the class is decided, so the ladder, the wire and the tests cannot drift
+/// The single place the class is decided, so the glyph, the wire and the tests cannot drift
 /// apart. `claude-plugin` clones a marketplace into `~/.claude`; `skill` drops a SKILL.md into
 /// `~/.claude/skills` or `~/.agents/skills`. Neither writes outside the user's profile and
 /// neither can elevate.
 ///
-/// ⚠️ A `run:` route is NOT here even though it also stays local: it is a config-atom, the rung
-/// BELOW, and its promise is stronger still (no network at all). The two classes are disjoint
+/// ⚠️ A `run:` route is NOT here even though it also stays local: it is a config-atom, the ⚡
+/// nature, and its promise is stronger still (no network at all). The two classes are disjoint
 /// by construction — a config-atom is recognised by having a `check:`, which no extension has.
 ///
 /// ✅ `vscode-extension` landed on 2026-08-15 and cost exactly one arm here, which is what the
@@ -860,11 +860,11 @@ pub fn is_extension_route(route: Option<&str>) -> bool {
 /// ⭐ WHY BOTH FUNCTIONS EXIST. `is_extension_route` answers from the route string alone, and
 /// that is enough for every route where one name implies one cost. `nu-plugin` breaks that:
 /// a bundled plugin engages NO network (its binary ships with nushell — measured), while a
-/// released one fetches ~9 MB. One route, two rungs, decided by the source.
+/// released one fetches ~9 MB. One route, two natures, decided by the source.
 ///
 /// ⚠️ Do NOT "simplify" this by adding `nu-plugin` to `is_extension_route`. Every bundled
-/// plugin would move to 🧩, and ⚡ would then silently skip a gesture that engages nothing —
-/// a rung that promises less than it can deliver is as much a lie as one that promises more.
+/// plugin would move to 🧩, and its row would promise a download that never happens — a
+/// glyph that promises more than the gesture engages is as much a lie as one that promises less.
 pub fn is_extension_route_for(pkg: &RawPkg, os: Os) -> bool {
     let route = commands_for(pkg, os).route;
     if route.as_deref() == Some("nu-plugin") {
@@ -1056,7 +1056,7 @@ mod tests {
         assert!(!is_extension_route(
             commands_for(&q, Os::Darwin).route.as_deref()
         ));
-        // Nor is a config-atom — it is the rung BELOW, and the two classes must not overlap
+        // Nor is a config-atom — it is the ⚡ nature, and the two classes must not overlap
         // (a config-atom has a `check:` and no manager route; an extension has neither).
         let mut c = pkg("Starship config");
         c.run = Some("nu patch.nu".into());
@@ -1067,12 +1067,12 @@ mod tests {
     }
 
     #[test]
-    fn a_bundled_plugin_is_rung_zero_and_a_released_one_is_rung_one() {
-        // ⭐ THE POINT OF THE ROUTE. A rung is a promise about what the gesture ENGAGES:
-        //   ⚡ Config only  — no network AT ALL
-        //   🧩 Extensions   — downloads, never elevates, writes in your profile
+    fn a_bundled_plugin_is_config_and_a_released_one_is_an_extension() {
+        // ⭐ THE POINT OF THE ROUTE. A row's glyph is a promise about what the gesture ENGAGES:
+        //   ⚡ config     — no network AT ALL
+        //   🧩 extension  — downloads, never elevates, writes in your profile
         // A bundled plugin engages no network (the binary is beside `nu`, measured). A released
-        // one fetches ~9 MB. Same route, two costs — so the rung follows the SOURCE, and this is
+        // one fetches ~9 MB. Same route, two costs — so the glyph follows the SOURCE, and this is
         // the first route where it does.
         let mut bundled = pkg("Polars for Nushell");
         bundled.nu_plugin = Some("polars".into());
@@ -1091,11 +1091,11 @@ mod tests {
     }
 
     #[test]
-    fn the_route_alone_cannot_decide_a_nu_plugins_rung() {
+    fn the_route_alone_cannot_decide_a_nu_plugins_nature() {
         // ⚠️ The guard against the obvious refactor. `is_extension_route(route)` takes ONLY the
         // route string, so it CANNOT answer for `nu-plugin` — both sources share one route name.
-        // Adding "nu-plugin" to that list would put every bundled plugin on 🧩 and make ⚡ lie by
-        // omission (it would silently skip a gesture that engages nothing).
+        // Adding "nu-plugin" to that list would put every bundled plugin on 🧩, a row promising
+        // a download that never happens.
         assert!(
             !is_extension_route(Some("nu-plugin")),
             "the route name alone must NOT classify — the source does"
@@ -1165,15 +1165,15 @@ mod tests {
         p.vscode_extension = Some("thenuprojectcontributors.vscode-nushell-lang".into());
         let route = commands_for(&p, Os::Darwin).route;
         // 🧩, not ⚡: it DOWNLOADS from the gallery (measured 4.3 s for a fresh install), so the
-        // "no network at all" promise of rung 0 does not hold. It never elevates and writes only
-        // inside the user's profile, which is what rung 1 promises.
+        // "no network at all" promise of ⚡ does not hold. It never elevates and writes only
+        // inside the user's profile, which is what 🧩 promises.
         assert!(is_extension_route(route.as_deref()), "route {route:?}");
     }
 
     #[test]
     fn a_system_route_still_wins_over_a_vscode_extension_declaration() {
         // Route arbitration is ORDERED, and the system manager is family 1. A package declaring
-        // both must not silently become an extension — the rung would then promise "never
+        // both must not silently become an extension — its glyph would then promise "never
         // elevates" about a winget install that can.
         let mut p = pkg("Confused");
         p.brew = Some("git".into());
@@ -1267,10 +1267,10 @@ mod tests {
             ("claude-plugin", true),
             ("skill", true),
             ("vscode-ext", true),
-            // Fetched from a release: the 🧩 rung, because it fetches.
+            // Fetched from a release: 🧩, because it fetches.
             ("nu-plugin-released", true),
             // The controls: a binary, a config-atom, and a plugin shipped BESIDE nu — the
-            // rungs on either side.
+            // natures on either side.
             ("two-managers", false),
             ("config-atom", false),
             ("nu-plugin-bundled", false),
@@ -1712,7 +1712,7 @@ mod tests {
     #[test]
     fn a_declared_slow_works_with_no_measurement_and_never_lowers_one() {
         use crate::behaviour::Facts;
-        // Nothing measured. `slow: true` must still land somewhere a rung will call slow,
+        // Nothing measured. `slow: true` must still land where the `slow` label will say so,
         // otherwise declaring it would be inert on exactly the fresh machine it is for.
         let seeded = resolve_facts(&Facts::default(), &slow_is(Some(true)));
         assert!(
@@ -2288,7 +2288,7 @@ slow: true
         // ⭐ MEASURED: `plugin add nu_plugin_polars` (no path) registers the bundled binary,
         // because NU_PLUGIN_DIRS already contains the directory holding `nu`. So the bundled
         // source needs no path resolution at all — and therefore no network, which is what
-        // earns it the ⚡ rung.
+        // earns it the ⚡ glyph.
         let mut p = pkg("Polars for Nushell");
         p.nu_plugin = Some("polars".into());
         let c = commands_for(&p, Os::Darwin);
@@ -2359,7 +2359,7 @@ slow: true
     fn a_nu_plugin_route_is_not_a_config_atom() {
         // ⚠️ `is_config` is `check.is_some() && (route.is_none() || route == "run")`. A nu-plugin
         // package declares a route, so it can never be misread as a config-atom even though it
-        // may sit on the same rung. The two classes must stay disjoint: a config-atom promises
+        // may carry the same glyph. The two classes must stay disjoint: a config-atom promises
         // NO NETWORK, and a released plugin downloads.
         let mut p = pkg("Excel for Nushell");
         p.nu_plugin = Some("xlsx".into());
@@ -2371,7 +2371,7 @@ slow: true
     #[test]
     fn a_system_route_still_wins_over_a_nu_plugin_declaration() {
         // Route arbitration is ORDERED and the system manager is family 1. A package declaring
-        // both must not become a plugin — the rung would then promise the wrong thing.
+        // both must not become a plugin — its glyph would then promise the wrong thing.
         let mut p = pkg("Confused");
         p.brew = Some("nushell".into());
         p.nu_plugin = Some("polars".into());

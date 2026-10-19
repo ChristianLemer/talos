@@ -7,11 +7,11 @@
 //! |---|---|---|
 //! | holds | the WORST any machine ever saw | this machine's LAST-SEEN duration |
 //! | means | "this package is slow" | "expect about this long, here" |
-//! | must be | IDENTICAL on every machine, so a rung means the same thing to everyone | personal, free to differ |
+//! | must be | IDENTICAL on every machine, so the `slow` label means the same to everyone | personal, free to differ |
 //! | merge | monotone `max`, many writers | LAST-SEEN WINS, one writer |
 //!
-//! ⚠️ THE CONSEQUENCE SOMEBODY WILL FILE AS A BUG: a package can be CLASSIFIED slow — last
-//! rung, for everyone — while announcing "~20 s" here, because this machine's cache is
+//! ⚠️ THE CONSEQUENCE SOMEBODY WILL FILE AS A BUG: a package can be CLASSIFIED slow — the `slow`
+//! label, for everyone — while announcing "~20 s" here, because this machine's cache is
 //! warm. Measured: 7-Zip took 1 second on the dev Mac because its brew bottle was already
 //! cached; a fresh corporate machine behind the firewall would take far longer, and that
 //! far-longer number is exactly what belongs in the shared classification. Two questions,

@@ -463,7 +463,7 @@ pub fn detect_present_detailed_with_vscode(
     if step.detect.is_some()
         && !crate::bundles::is_extension_route(step.route.as_deref())
         // ⚠️ `nu-plugin` is NOT in `is_extension_route` (a bundled one is not an extension —
-        // see the rung split), so it must be excluded HERE explicitly. This guard is an
+        // see `is_extension_route_for`), so it must be excluded HERE explicitly. This guard is an
         // allowlist-by-negation: every content route is wrong by default until named.
         && step.route.as_deref() != Some("nu-plugin")
     {

@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 // There are NO `allow(dead_code)` left in this module. There were two while nothing read
 // the facts back; the first went when the Apply path started flushing its observations
-// through `merge_and_write`, and `read_all`'s went when the ladder gave it the caller it
+// through `merge_and_write`, and `read_all`'s went when it got the caller it
 // was waiting for — `server::serve` loads every package's facts once at startup, beside the
 // catalogue. Being reached, those two roots now keep `read_all_from`, `read_one`,
 // `write_one`, `behaviour_path`, `behaviour_dir` and `note_if_whole_file_loss` alive with no
@@ -371,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_fixtures_parse_and_reach_every_rung() {
+    fn the_shipped_fixtures_parse_and_cover_every_fact() {
         // The fixtures under tests/fixtures/behaviour/ are CHECKED IN, so they can rot
         // exactly like a catalogue file can. This reads THEM, not a synthetic copy — a
         // fixture that exists but parses to nothing is the failure mode that actually
@@ -389,27 +389,27 @@ mod tests {
         assert_eq!(
             all.len(),
             4,
-            "four fixtures, one per rung-relevant fact: {all:?}"
+            "four fixtures, one per fact a row can show: {all:?}"
         );
 
-        // Rung 4 🏗️: slow DOMINATES, so this one is admitted nowhere below Everything.
+        // `slow`: the row says so.
         let slow = &all["chain-a"]["brew/darwin"];
         assert!(
-            crate::ladder::is_slow(slow),
+            crate::plan_facts::is_slow(slow),
             "the slow fixture must actually CLASSIFY as slow, not merely carry a big number"
         );
-        // Rung 3 👀, the two halves. `uac` is the one that cannot be observed on macOS at
-        // all (the watcher is `#[cfg(target_os = "windows")]`); `403` merely saves a trip to
-        // the office. Same rung, very different standing — see the fixtures' README.
+        // `403` and `uac`. `uac` is the one that cannot be observed on macOS at all (the
+        // watcher is `#[cfg(target_os = "windows")]`); `403` merely saves a trip to the
+        // office. Same kind of label, very different standing — see the fixtures' README.
         assert!(
             all["chain-b"]["brew/darwin"].forbidden,
             "the 403 fixture — and if this fails, suspect the KEY before the value"
         );
         assert!(all["chain-c"]["brew/darwin"].uac, "the uac fixture");
-        // Rung 2 ☕: the control. Without it the set would only ever prove EXCLUSION.
+        // The control: no label. Without it the set would only ever prove PRESENCE.
         let fast = &all["editor"]["brew/darwin"];
         assert!(
-            fast.slow_secs > 0 && !crate::ladder::is_slow(fast),
+            fast.slow_secs > 0 && !crate::plan_facts::is_slow(fast),
             "the fast fixture must be MEASURED and quick — a 0 would read as unknown"
         );
 

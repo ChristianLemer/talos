@@ -147,7 +147,7 @@ releases that carried them (beta.1–19) were retired on 2026-09-06.
 
 - **`src/`** — 25 Rust modules. `server.rs` (axum + WS), `catalog.rs` / `bundles.rs` (read YAML
   from disk), `detect.rs` / `outdated.rs` (real machine state), `pty.rs` (portable-pty),
-  `decision.rs`, `ladder.rs`, `behaviour.rs`, `platform.rs`.
+  `decision.rs`, `plan_facts.rs`, `behaviour.rs`, `platform.rs`.
 - **`public/`** — the front, plain ES modules, no framework, no bundler, no CDN. `decision.js`
   is **shared** with the server's logic: one rule, two callers. `model.js` is DOM-free and
   tested.

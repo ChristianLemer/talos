@@ -26,12 +26,12 @@
 //! of the decision. (Emptying the shared file would be an invisible gesture nobody would
 //! remember making.) It is BUILT and now CONSULTED: `bundles::resolve_facts` applies a
 //! package's declared overrides over what was collected here, `RawPkg::overrides` is the one
-//! lift from the YAML, and `ladder::resolve_plan_facts` runs the pair over every step at
+//! lift from the YAML, and `plan_facts::resolve_plan_facts` runs the pair over every step at
 //! startup — so an override written in catalog/ finally changes what a row says.
 //!
-//! ⚠️ And it is ACTED on now: `ladder::rung_allows` reads these facts in `visual_plan`'s
-//! build loop, so a `uac`/`403`/`slow` flag decides whether a step is in a given rung's
-//! Apply at all. Only the BATCH — a per-row button consults no rung.
+//! ⚠️ It is SHOWN, never acted on: the facts reach the row as labels (`server::step_json`)
+//! and nothing filters on them. The ladder that once did (`rung_allows`, which kept a
+//! `uac`/`403`/`slow` step out of a smaller rung's Apply) left on 2026-10-10.
 //!
 //! ⚠️ And it must stay on the reading side. What `resolve_facts` returns is a BELIEF, not
 //! an observation, and it is the same `Facts` type `merge_into` accepts — so feeding one
@@ -63,8 +63,8 @@ use std::collections::BTreeMap;
 //
 // And nowhere else is, either: the three that survived Part A — `read_all` in
 // behaviour_io.rs, `resolve_facts` and `RawPkg::overrides` in bundles.rs, all on the READING
-// side — left together when the ladder gave them their caller. `server::serve` reads every
-// package's facts at startup and `ladder::resolve_plan_facts` lays the catalogue's
+// side — left together when the facts got their reader at startup. `server::serve` reads every
+// package's facts at startup and `plan_facts::resolve_plan_facts` lays the catalogue's
 // declarations over them. The behaviour mechanism now carries no `allow(dead_code)` at all,
 // across all three of its files.
 //
@@ -78,8 +78,8 @@ use std::collections::BTreeMap;
 //   `install`/`upgrade`/`downgrade`/`requires` — are REDUNDANT: every one of those items is
 //   read somewhere. That predates this work and is left alone rather than swept in, verified
 //   by stripping the same five against an earlier commit where clippy is equally silent.
-//   (The ladder's three came out when the filter was wired into `visual_plan`; the count was
-//   ten while they stood.)
+//   (Three more came out when the facts first got a reader; the count was ten while they
+//   stood.)
 // - An `allow` on the reading side did NOT go away when the Apply path started COLLECTING
 //   facts. That wiring only writes observations, and feeding a resolved fact back into it is
 //   the one thing this module forbids. It took a READER.
