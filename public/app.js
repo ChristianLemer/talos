@@ -122,6 +122,7 @@ const GLYPH = {
   installing: "⠹",
   uninstalling: "⠹",
   upgrading: "⠹",
+  reinstalling: "⠹",
   ok: "✓",
   absent: "·",
   self: "·",
@@ -139,6 +140,7 @@ const LABEL = {
   installing: "installing…",
   uninstalling: "removing…",
   upgrading: "updating…",
+  reinstalling: "reinstalling at the pin…", // a downgrade: uninstall, then install the pin
   ok: "present",
   absent: "removed",
   // The server's `self` step-status: a config-atom that settled without acting.
@@ -1148,7 +1150,7 @@ function flushProbe(i) {
   r.probeWritten = true;
 }
 
-const RUNNING = new Set(["installing", "uninstalling", "upgrading"]);
+const RUNNING = new Set(["installing", "uninstalling", "upgrading", "reinstalling"]);
 
 // Braille spinner: the static "⠹" looked frozen. A single global ticker cycles
 // the canonical braille frames on every badge currently in an active state
@@ -1156,7 +1158,7 @@ const RUNNING = new Set(["installing", "uninstalling", "upgrading"]);
 // animate. One interval for the whole panel — cheap, and only touches spinning
 // badges. The badge's status CLASS (set by setStatus) is the source of truth.
 const SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const SPIN_STATES = ["checking", "installing", "uninstalling", "upgrading"];
+const SPIN_STATES = ["checking", "installing", "uninstalling", "upgrading", "reinstalling"];
 let spinFrame = 0;
 setInterval(() => {
   spinFrame = (spinFrame + 1) % SPIN_FRAMES.length;

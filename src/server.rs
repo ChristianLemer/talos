@@ -2917,7 +2917,7 @@ async fn do_step(
     let running = match action {
         Action::Uninstall => "uninstalling",
         Action::Upgrade => "upgrading",
-        Action::Downgrade => "reinstalling at the pin",
+        Action::Downgrade => "reinstalling",
         Action::Install => "installing",
     };
     let _ = socket

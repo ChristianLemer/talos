@@ -57,3 +57,26 @@ test("no row sends an action verb; retry re-sends the Apply's own action", () =>
   const body = appjs.slice(at, appjs.indexOf("\n}", at));
   assert.match(body, /M\.actionOf\(model,\s*i\)/, "a retry re-runs what the Apply chose");
 });
+
+test("every running status the server emits is one the row treats as running", () => {
+  // Found at the final review: the batched downgrade emitted "reinstalling at the pin", which
+  // no front set listed — the row lost its Stop button, its spinner and its terminal while an
+  // uninstall + reinstall ran. Read the statuses off `do_step` itself, so a new one cannot
+  // be added on one side only.
+  const rs = readFileSync(new URL("../src/server.rs", import.meta.url), "utf8");
+  const at = rs.indexOf("let running = match action {");
+  assert.notEqual(at, -1, "do_step's running statuses moved — re-point this test");
+  const block = rs.slice(at, rs.indexOf("};", at));
+  const statuses = [...block.matchAll(/=> "([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(statuses.length, 4, "one status per action");
+  const set = (name) => appjs.slice(appjs.indexOf(`const ${name} =`), appjs.indexOf("\n", appjs.indexOf(`const ${name} =`)));
+  for (const st of statuses) {
+    assert.match(st, /^[a-z]+$/, `"${st}" must be one token — it becomes a CSS class`);
+    assert.ok(set("RUNNING").includes(`"${st}"`), `RUNNING lacks "${st}" → no Stop button`);
+    assert.ok(set("SPIN_STATES").includes(`"${st}"`), `SPIN_STATES lacks "${st}"`);
+    const glyph = appjs.slice(appjs.indexOf("const GLYPH = {"), appjs.indexOf("};", appjs.indexOf("const GLYPH = {")));
+    const label = appjs.slice(appjs.indexOf("const LABEL = {"), appjs.indexOf("};", appjs.indexOf("const LABEL = {")));
+    assert.match(glyph, new RegExp(`\\b${st}:`), `GLYPH lacks ${st}`);
+    assert.match(label, new RegExp(`\\b${st}:`), `LABEL lacks ${st}`);
+  }
+});
