@@ -121,7 +121,7 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
   (`extensions.autoUpdate` defaults to true), so Talos installs and removes; keeping
   them current is the editor's job.
 
-### `nu-plugin` — the rung follows the source
+### `nu-plugin` — the network follows the source
 
 ```yaml
   - name: Polars for Nushell
@@ -142,11 +142,12 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
   plugin named `polars`, and the engine derives `nu_plugin_polars` or `nu_plugin_polars.exe`
   — that `nu_plugin_` prefix is a **nushell requirement** (validated in hard code), not a
   convention. The source name is what you write.
-- **The source axis determines the rung.** This is the first route in the catalogue whose
-  install rung **depends on the package, not the route name**:
+- **The source axis determines what the install touches.** This is the first route in the
+  catalogue whose cost **depends on the package, not the route name** — and the row's glyph
+  follows it (⚡ or 🧩):
   - **No `plugin-release:` = bundled with nushell** — the binary ships beside `nu`, so
     `plugin add nu_plugin_polars` resolves in the directory of the running `nu` and
-    engages **no network at all**. ⚡ rung, measured. The path nushell RECORDS is the
+    engages **no network at all**. ⚡, measured. The path nushell RECORDS is the
     resolved one — under brew, `Cellar/nushell/<version>/…` — and `plugin add`
     canonicalises any path it is given, so the stable `/opt/homebrew/bin/` link cannot be
     recorded instead. Each Nushell upgrade therefore kills the registration; the Apply
@@ -156,7 +157,7 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
     git ref and runs it with `--dir` and `--register`. The installer picks the archive
     built for the Nushell **minor** that runs it (a plugin loads into exactly one), on
     this OS and arch, verifies the published `.sha256`, places and registers the binary.
-    🧩 rung, because it fetches. `ref` pins the installer, not the binary: `HEAD` (the
+    🧩, because it fetches. `ref` pins the installer, not the binary: `HEAD` (the
     default when `@ref` is omitted) follows the project, a tag or a sha freezes the
     installer's behaviour. A plugin qualifies by shipping that `install.nu` at its root;
     `nu_plugin_xlsx` is the reference.
@@ -216,11 +217,13 @@ installed to the pin and acts by direction:
 |---|---|
 | below the pin | **upgrade** to the pin — runs in Apply |
 | at the pin | satisfied (green), nothing to do |
-| above the pin | **downgrade** button on the row — **manual only, never in Apply** |
+| above the pin | **downgrade** — uninstall + reinstall at the pin, in Apply |
 | absent | install at the pin |
 
-Downgrade is deliberately excluded from Apply: it's the only destructive path
-(uninstall + reinstall), so it's a single deliberate click on the row, never batched.
+An exact pin below what is installed is honoured by the Apply: the package is
+uninstalled and reinstalled at the pin. The version belongs to the author — whoever wants
+*their own* version takes the row out of Talos's hands. A route that cannot build a
+downgrade leaves the row as it is and says so on it (`held`).
 
 **Per-route reality:** winget / cargo / bun pin natively (`--version` / `@version`).
 **brew has no version flag** — a pin resolves to the versioned formula `id@version`
@@ -246,8 +249,8 @@ intention and an absence of decision — and in a catalogue meant to be copied f
 maintainer must be able to say "yes, newest here" rather than merely leave a blank.
 
 **`pending` is a HOLD, not a blindfold.** The row still *shows* the newer version, greyed,
-with the word `arbitration` beside it; the **per-row button still offers the update**. What
-disappears is only the batched action in Apply. Use it when a package costs enough to
+with the word `arbitration` beside it, and the Arbitration tab lists it. Apply does not
+update it — the decision is an edit to the pin, not a click. Use it when a package costs enough to
 install that somebody should decide, and nobody has yet. Replace it with `latest` or an
 exact version once the decision is made — then
 `grep -c 'version: "pending"' catalog/*.yaml` is the work still left.
@@ -255,7 +258,8 @@ exact version once the decision is made — then
 ⚠️ **Anything else is REFUSED at load**, named in the log, and the package behaves as if
 nothing was declared. That guard is not politeness: a word has no leading digits, so the
 version comparison reads it as `0.0.0`, concludes the machine is *above* the pin, and
-offers a **downgrade** — the only destructive path there is. A typo used to be enough.
+**downgrades** it on the next Apply — an uninstall + reinstall nobody asked for. A typo used
+to be enough.
 
 ⚠️ **An extension route (`claude-plugin`, `skill`, `vscode-extension`) carries no pin at
 all**, keyword included. None of them builds an upgrade command, so a pin would produce an
@@ -340,8 +344,8 @@ proof it landed where the engine reads it. At runtime a broken file is simply no
   the first word of `detect:`; `--check` refuses a `doctor:` without one.
 - **`category:`** — one or more tags, e.g. `category: [editors]`. The **first** one groups
   the package under a header in the Catalog view; the rest are shown as tags. Omitted →
-  `misc`. ⚠️ It is a *display* axis only: a category never decides an install, an order, or
-  a rung.
+  `misc`. ⚠️ It is a *display* axis only: a category never decides an install or an
+  order.
 
 ## Behaviour seeds — `uac:` · `403:` · `slow:`
 

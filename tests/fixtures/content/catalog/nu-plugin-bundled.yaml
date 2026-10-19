@@ -1,4 +1,4 @@
-# FORM: a nushell plugin that ships BESIDE nu — no `plugin-release:`, so the ⚡ rung.
+# FORM: a nushell plugin that ships BESIDE nu — no `plugin-release:`, so ⚡.
 name: Bundled Plugin
 description: A plugin nushell ships in its own directory
 nu-plugin: bundled

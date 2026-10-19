@@ -1,6 +1,5 @@
-# THE SLOW ONE. `slow_secs` is well above `ladder::SLOW_SECS` (60), so an UPGRADE of this
-# row is admitted only at the last rung 🏗️ Everything — `rung_allows` gives slow the
-# dominating branch (`needed = 4`).
+# THE SLOW ONE. `slow_secs` is well above `plan_facts::SLOW_SECS` (60), so the row reads
+# "takes a while".
 #
 # The stem matches `catalog/aws-cli.yaml`, the same correspondence the real share uses: this
 # file stands in for the durations a fleet would have collected about the AWS CLI.

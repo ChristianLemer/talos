@@ -71,7 +71,7 @@ on the same package, and the engine picks the one native to the machine. Two *di
 routes on one package is two packages.
 
 **5 — Capability, not category.** `category:` is a **display** axis and decides nothing —
-not an install, not an order, not a rung. Anything the engine acts on is a capability
+not an install, not an order. Anything the engine acts on is a capability
 with its own key. `doctor:` is the worked example: it says this package can be launched
 as a rescue session, and it is read by the engine, never shown as a group. If you are
 tempted to make behaviour depend on a category, you want a new key.
@@ -206,10 +206,10 @@ packages:
 
 **`version:` has three forms, and the words are not decoration.** `"0.113.1"` converges
 exactly, `"latest"` is a *decision* to take the newest, `"pending"` is a HOLD — the row
-still shows the update and still offers it per-row, but Apply skips it. Omitted means
+still shows the update, greyed, and Apply skips it. Omitted means
 nobody wrote anything, which behaves as `latest`. Anything else is **refused at load**:
 a word has no leading digits, so the comparison would read `0.0.0`, decide the machine is
-*above* the pin, and offer a **downgrade** — the only destructive path there is.
+*above* the pin, and **downgrade** it on the next Apply — an uninstall + reinstall.
 **Quote the value.**
 
 **An extension route carries no pin at all.** `claude-plugin`, `skill` and
@@ -229,7 +229,7 @@ config-atom calls. `--check` reads only the YAML. When you count packages, count
 | the displayed version is wrong | `version-regex:` — override how the version is pulled from the output |
 | the row is greyed / indeterminate | an unmet `requires:` — the reason is shown on the row |
 | the step hangs forever | the command prompts (rule 2) |
-| a downgrade is offered out of nowhere | an invalid `version:` word read as `0.0.0` |
+| a downgrade appears out of nowhere | an invalid `version:` word read as `0.0.0` |
 | a `--check` finding names an unknown field | serde ignores it: the field did nothing. Check the spelling against `references/fields.md` |
 | a VS Code extension reads present after uninstalling the editor | the host is missing from `requires:` |
 

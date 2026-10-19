@@ -3,7 +3,7 @@
 # `install.nu`; the sidecar `nu-plugin-fetch.nu` beside this file fetches that installer
 # and runs it. The installer picks the archive built for the Nushell MINOR running here
 # and verifies the checksum — the version coupling is solved where it lives, and a minor
-# the project has not published for fails LOUDLY in the row's terminal. The 🧩 rung,
+# the project has not published for fails LOUDLY in the row's terminal. 🧩,
 # because it fetches. `@HEAD` pins the installer, never the binary.
 name: Excel for Nushell
 description: Read and write .xlsx files from the shell

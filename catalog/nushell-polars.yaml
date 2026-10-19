@@ -1,6 +1,6 @@
 # Polars for Nushell — DataFrames in the shell. THE NU-PLUGIN ROUTE, BUNDLED: no
 # `plugin-release:`, so the binary ships beside `nu` and registering it engages no network
-# at all — the ⚡ rung. `nu-plugin:` is the plugin NAME; the `nu_plugin_` prefix and the
+# at all — hence ⚡. `nu-plugin:` is the plugin NAME; the `nu_plugin_` prefix and the
 # `.exe` are derived, because nushell validates that prefix in hard code.
 name: Polars for Nushell
 description: DataFrames in the shell — the plugin an agent wants nu for

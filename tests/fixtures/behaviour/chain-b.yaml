@@ -1,5 +1,4 @@
-# THE BLOCKED ONE. `"403": true` puts an UPGRADE of this row at 👀 Stay nearby: excluded at
-# ☕ Unattended, admitted at 👀 (`rung_allows`'s `f.uac || f.forbidden` branch, `needed = 3`).
+# THE BLOCKED ONE. `"403": true` makes the row read "was blocked".
 #
 # ⚠️ THE KEY IS `"403"`, NOT `forbidden`. The Rust field is `forbidden` (an identifier cannot
 # start with a digit) and carries `#[serde(rename = "403")]`, so serde matches the KEY's
