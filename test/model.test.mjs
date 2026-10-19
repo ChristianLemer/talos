@@ -22,6 +22,7 @@ import {
   isLocked,
   isProfileActive,
   isTouched,
+  applyPlan,
   loadPlan,
   PERSONAL_BUNDLE,
   persistableActiveBundles,
@@ -33,8 +34,6 @@ import {
   removeFromPersonal,
   removeProfile,
   requiresReason,
-  rungPlan,
-  rungSeconds,
   scopeOf,
   scopeReason,
   setDecision,
@@ -793,13 +792,13 @@ test("touched: Reset clears the traces — it is the 'forget my choices' gesture
   assert.equal(isTouched(m, 0), false, "witnesses to discarded choices go with them");
 });
 
-// --- the ladder's per-rung count ---------------------------------------------
+// --- the plan an Apply would run ---------------------------------------------
 //
-// rungPlan is the WIDGET's input, not the plan: the server filters (ladder.js's header
-// says why). What it must never do is disagree with `isActionable` about which rows are
-// candidates at all, or read the rung off the wrong row.
+// applyPlan is the button's input. Until 2026-10-10 it was `rungPlan(model, rung)`, which kept
+// only the actions a rung of the ladder admitted; the ladder left, and the nature of a row
+// (⚡ / 🧩 / 📦) is displayed, never filtered on.
 
-test("ladder: the three discriminants and `secs` arrive from the plan, defaulted false/0", () => {
+test("the three facts and `secs` arrive from the plan, defaulted false/0", () => {
   const m = createModel();
   loadPlan(m, [
     { i: 0, name: "AWS CLI", canUninstall: true, uac: true, forbidden: false, slow: true, secs: 242 },
@@ -809,7 +808,7 @@ test("ladder: the three discriminants and `secs` arrive from the plan, defaulted
     { uac: m.pkgs.get(0).uac, forbidden: m.pkgs.get(0).forbidden, slow: m.pkgs.get(0).slow, secs: m.pkgs.get(0).secs },
     { uac: true, forbidden: false, slow: true, secs: 242 },
   );
-  // An absent field is FALSE and 0, never undefined: rungAllows reads them directly, and
+  // An absent field is FALSE and 0, never undefined: the row labels read them directly, and
   // `0` is the "never measured here" sentinel the estimate must show as unknown.
   assert.deepEqual(
     { uac: m.pkgs.get(1).uac, forbidden: m.pkgs.get(1).forbidden, slow: m.pkgs.get(1).slow, secs: m.pkgs.get(1).secs },
@@ -817,19 +816,16 @@ test("ladder: the three discriminants and `secs` arrive from the plan, defaulted
   );
 });
 
-test("ladder: rungPlan grows monotonically, and each row enters at ITS rung", () => {
+test("applyPlan lists every actionable row, whatever its nature", () => {
+  // ⚡, 🧩 and 📦 rows alike, and the elevating and the slow one too: the nature and the facts
+  // are shown on the row, they no longer separate anything.
   const m = createModel();
   loadPlan(m, [
-    // 0 — a config-atom to install: rung 0. canUninstall:false would derive it OUT of
-    // scope, so it is given a route back; scope is a different gate and gates first.
+    // canUninstall:true everywhere: without a route back a row derives OUT of scope, which is
+    // a different gate and gates first.
     { i: 0, name: "Starship config", canUninstall: true, isConfig: true },
-    // 1 — an EXTENSION: rung 1. One row per rung, so the fixture demonstrates the whole scale.
     { i: 1, name: "Chiron", canUninstall: true, isExtension: true },
-    // 2 — an app to install: rung 2
     { i: 2, name: "rg", canUninstall: true },
-    // 3, 4, 5 — apps to UPGRADE, one per fact. ⭐ All three now land on the SAME rung: the
-    // rungs that sorted by `uac` / `slow` are gone, and those facts are shown on the row
-    // instead. Kept in the fixture precisely to prove they no longer separate anything.
     { i: 3, name: "bat", canUninstall: true },
     { i: 4, name: "AWS CLI", canUninstall: true, uac: true },
     { i: 5, name: "Xcode CLT", canUninstall: true, slow: true },
@@ -842,13 +838,9 @@ test("ladder: rungPlan grows monotonically, and each row enters at ITS rung", ()
   assert.deepEqual([0, 1, 2, 3, 4, 5].map((i) => actionOf(m, i)),
     ["install", "install", "install", "upgrade", "upgrade", "upgrade"],
     "the fixture is what it claims");
-  assert.deepEqual(rungPlan(m, 0), [0], "⚡ the config-atom alone");
-  assert.deepEqual(rungPlan(m, 1), [0, 1], "🧩 adds the extension and NOT the app");
-  assert.deepEqual(rungPlan(m, 2), [0, 1, 2, 3, 4, 5],
-    "📦 adds every app at once — including the elevating and the slow one");
-  // The top rung is exactly the rows a plain Apply would touch — the widget's count there
-  // must equal what the diff view already shows, or the ladder contradicts the panel.
-  assert.deepEqual(rungPlan(m, 2), [0, 1, 2, 3, 4, 5].filter((i) => isActionable(m, i)));
+  assert.deepEqual(applyPlan(m), [0, 1, 2, 3, 4, 5]);
+  // Exactly the rows the diff view shows — the button and the panel cannot disagree.
+  assert.deepEqual(applyPlan(m), [0, 1, 2, 3, 4, 5].filter((i) => isActionable(m, i)));
 });
 
 test("a RESTORE leaves no trace — only a gesture of this session does", () => {
@@ -891,15 +883,8 @@ test("a RESTORE leaves no trace — only a gesture of this session does", () => 
   assert.equal(scopeOf(m3, 0), "out", "…while the override itself is restored");
 });
 
-test("ladder: a removal rides its KIND, and an out-of-scope row is in no rung at all", () => {
-  // ⭐ THIS TEST ASSERTED THE OPPOSITE, and the reversal is C's: a removal used to be in every
-  // rung ("the ladder governs how far to GO; a ✕ is honoured or it is not"). That was right
-  // while the axis was TIME. The axis is WHERE IT LANDS now, and removing an app touches the
-  // machine — so ⚡ Config only, whose whole promise is "your own files only", cannot be the
-  // rung that quietly uninstalls software.
-  //
-  // The facts on row 0 are kept deliberately: they no longer move it, which is the other half
-  // of the reshape.
+test("applyPlan honours a removal, and an out-of-scope row is never in it", () => {
+  // The facts on row 0 are kept deliberately: they do not move it.
   const m = createModel();
   loadPlan(m, [
     { i: 0, name: "Miro", canUninstall: true, uac: true, forbidden: true, slow: true },
@@ -909,64 +894,8 @@ test("ladder: a removal rides its KIND, and an out-of-scope row is in no rung at
   for (const i of [0, 1]) setStatusData(m, i, "ok");
   setExternal(m, 1, true);
   assert.equal(actionOf(m, 0), "uninstall");
-  assert.equal(actionOf(m, 1), null, "scope gates before the rung does");
-  assert.deepEqual(rungPlan(m, 0), [], "⚡ removes nothing from the machine");
-  assert.deepEqual(rungPlan(m, 1), [], "🧩 neither — Miro is an app, not an extension");
-  assert.deepEqual(rungPlan(m, 2), [0], "📦 honours the ✕ — and the external row still does not");
-});
-
-test("ladder: a downgrade is in NO rung — it mirrors AUTO_ACTS, not the ladder", () => {
-  const m = createModel();
-  loadPlan(m, [{ i: 0, name: "Nushell", canUninstall: true, pin: "0.113.1" }]);
-  setDecision(m, 0, "in");
-  setStatusData(m, 0, "ok");
-  setInstalledVersion(m, 0, "0.114.0"); // above the pin → downgrade, manual only
-  assert.equal(actionOf(m, 0), "downgrade");
-  assert.equal(isActionable(m, 0), false);
-  for (const r of [0, 1, 2]) assert.deepEqual(rungPlan(m, r), [], `rung ${r}`);
-});
-
-test("ladder: rungSeconds reads the LOCAL secs of exactly the rung's rows", () => {
-  // Two things this must not do, and both would be invisible on screen:
-  //
-  // 1. Read the SHARED classification. `slow` is a fleet-wide max reduced to a boolean, so
-  //    minutes derived from it could only be an invented constant — and a row is legitimately
-  //    `slow: true, secs: 1` when this machine's cache is warm (timings.rs, measured on 7-Zip).
-  // 2. Describe a different set of rows than the count beside it. It goes through rungPlan
-  //    for exactly that reason.
-  const m = createModel();
-  loadPlan(m, [
-    { i: 0, name: "Starship config", canUninstall: true, isConfig: true, secs: 3 },
-    // ⭐ An extension with NO measurement — which is the real situation, not a convenience:
-    // nothing has ever timed a plugin or skill route (timings.yaml holds five brew entries),
-    // so rung 1 legitimately reads "unknown" and must COUNT the row rather than drop it.
-    { i: 1, name: "Chiron", canUninstall: true, isExtension: true },
-    { i: 2, name: "rg", canUninstall: true, secs: 12 },
-    { i: 3, name: "bat", canUninstall: true }, // never measured here → 0, the unknown sentinel
-    { i: 4, name: "AWS CLI", canUninstall: true, uac: true, secs: 242 },
-    // slow for EVERYONE (last rung), and one second HERE. Not a contradiction: the shared
-    // file classifies, the local file estimates.
-    { i: 5, name: "7-Zip", canUninstall: true, slow: true, secs: 1 },
-  ]);
-  for (const i of [0, 1, 2, 3, 4, 5]) setDecision(m, i, "in");
-  for (const i of [3, 4, 5]) {
-    setStatusData(m, i, "ok");
-    setOutdated(m, i, true, "9.9.9");
-  }
-  assert.deepEqual(rungSeconds(m, 0), [3]);
-  assert.deepEqual(rungSeconds(m, 1), [3, 0], "the extension is counted, at 0 = unknown");
-  assert.deepEqual(
-    rungSeconds(m, 2),
-    [3, 0, 12, 0, 242, 1],
-    "📦 carries every app's seconds, unmeasured rows present as 0 rather than dropped — and " +
-      "the slow-for-everyone row is 1s HERE, which is not a contradiction: the shared file " +
-      "classifies, the local one estimates",
-  );
-  // One value per row the rung touches, always — a length mismatch is how "N items" and the
-  // minutes beside it would come to describe different sets.
-  for (const r of [0, 1, 2]) {
-    assert.equal(rungSeconds(m, r).length, rungPlan(m, r).length, `rung ${r}`);
-  }
+  assert.equal(actionOf(m, 1), null, "scope gates first");
+  assert.deepEqual(applyPlan(m), [0], "the ✕ is honoured — and the external row still is not touched");
 });
 
 test("a catalogue RELOAD replaces the plan — it does not accumulate", () => {

@@ -11,7 +11,6 @@ import {
   profileState,
   toggleState,
 } from "./decision.js";
-import { RUNGS, rungAllows } from "./ladder.js";
 import { scopeOf as scopeRule, scopeReason as scopeReasonRule } from "./scope.js";
 import { compareVersions } from "./version.js";
 
@@ -64,14 +63,14 @@ export function loadPlan(model, steps, profiles = []) {
       canUninstall: !!s.canUninstall,
       isConfig: !!s.isConfig,
       // Derived on the SERVER from the route (`bundles::is_extension_route`), never declared
-      // in YAML — carried here so the ladder's live counts match what the server will filter.
+      // in YAML — carried here for the 🧩 glyph on the row.
       isExtension: !!s.isExtension,
       // Installed outside our manager (Xcode-CLT Git, say). Arrives with the
       // per-row `state` message, NOT with the plan — so it starts false and the
       // scan flips it. A switch that pre-guessed would be the bug.
       external: false,
       requires: s.requires ?? [], // package names this one needs (transitive pull, §8)
-      // The ladder's three discriminants, resolved SERVER-side (fleet observation with the
+      // The three behaviour facts the row labels show, resolved SERVER-side (fleet observation with the
       // catalogue's declaration laid over it) and sent with the plan. The front does not
       // compute them and does not hold the durations behind them — it is told the verdict.
       uac: !!s.uac,
@@ -425,86 +424,17 @@ export function isPending(model, i) {
   if (String(p.pin || "").toLowerCase() !== "pending") return false;
   return !!(p.outdated && p.available);
 }
-// Which rows a given rung would touch, in catalogue order. The FRONT needs this only to
-// show the choice; the SERVER is what filters (see ladder.js's header).
-//
-// Returns indices rather than a number because Task 6's estimate needs the rows
-// themselves (each carries its own `secs`), and one traversal should answer both.
-//
-// ⚠️ The AUTO_ACTS gate is REDUNDANT today and kept as a COUPLING guard, not as a live
-// filter — measured, not assumed: deleting the line kills nothing, because `rungAllows`
-// independently refuses `downgrade` and a null action, which are the only two things
-// AUTO_ACTS excludes. Its job is to keep the two lists tied: if a verb is ever added to
-// `rungAllows` without being added to AUTO_ACTS, the count would promise a batch action
-// Apply does not take, and this line is what stops it. Stated plainly because an
-// "obviously necessary" filter that in fact filters nothing is the kind of line a later
-// reader trusts too much.
-export function rungPlan(model, rung) {
+// The rows an Apply would act on — the WHOLE desire, in catalogue order. Until 2026-10-10 this
+// was `rungPlan(model, rung)` and kept only the actions a rung of the ladder admitted; the
+// ladder left because applying part of a desire built states nothing reasons about (a fresh
+// config over a stale app). The server builds its own batch with the same rule (`action_for`);
+// this is the preview the Apply button counts.
+export function applyPlan(model) {
   const items = [];
   for (const i of [...model.pkgs.keys()].sort((a, b) => a - b)) {
-    const a = actionOf(model, i);
-    if (!AUTO_ACTS.includes(a)) continue;
-    const p = model.pkgs.get(i);
-    if (!rungAllows(rung, a, p.isConfig, p.isExtension === true)) continue;
-    items.push(i);
+    if (isActionable(model, i)) items.push(i);
   }
   return items;
-}
-// The local durations, in seconds, for the rows a rung would touch — ladder.js's `estimate`
-// turns them into "~4 min for 6 and 3 unknown". `0` = never measured HERE, which the estimate
-// COUNTS and SHOWS as unknown rather than treating as free.
-//
-// ⚠️ `p.secs`, the LOCAL last-seen duration, and NOT the shared classification. `p.slow` is
-// the other file's verdict — a max over the whole fleet, which exists so that a rung means
-// the same thing on every machine — and it is a BOOLEAN here, so deriving minutes from it
-// could only mean inventing a constant. A row can legitimately be `slow: true, secs: 1`
-// (measured: a brew bottle already cached); the rung puts it last for everyone and the
-// estimate still says "<1 min", because those are two different questions.
-//
-// Built on rungPlan rather than walking the packages again, so the count under the thumb and
-// the minutes beside it can never describe different sets of rows.
-export function rungSeconds(model, rung) {
-  return rungPlan(model, rung).map((i) => model.pkgs.get(i).secs || 0);
-}
-// WHY a row is out of this rung's reach, or null when it is in. A KEY, not a sentence:
-// this module is the rule layer and holds no copy — the words live in app.js beside the
-// other user-facing strings (`RUNG_WHY`), so they can be read and reworded in one place.
-// Returns "slow" | "hand" | "blocked" | "update" | "install" | null.
-//
-// ⚠️ DERIVED from `rungAllows`, never a second rule. Every branch below asks the rule and
-// only then explains, so the two cannot disagree — a copied table would eventually put a
-// reason on a row that IS in the plan, which is the one failure mode that would make the
-// dimming a lie rather than a hint.
-//
-// The order mirrors rung_allows's: the ACTION excludes before any fact does. A quiet
-// upgrade at 📦 is out for being an update, not for any behaviour — and so is a SLOW one,
-// which is the case that makes the order load-bearing: labelling it "slow" at 📦 would be
-// a lie the user could check by stepping one rung right and seeing it stay out.
-export function rungReason(rung, action, p) {
-  const isConfig = p?.isConfig === true;
-  const isExt = p?.isExtension === true;
-  const top = RUNGS.length - 1; // read from RUNGS so another rung cannot leave this behind
-  // Ask the rule FIRST. In reach → there is nothing to explain.
-  if (rungAllows(rung, action, isConfig, isExt)) return null;
-  // Out at EVERY rung — a null action (out of scope, nothing to do) or a `downgrade`, which
-  // Apply never batches. The RUNG is not what excludes these, so they get no rung reason and
-  // the panel leaves them alone: dimming them would blame the slider for a row it does not
-  // govern, and on this machine that is most of the list.
-  if (!rungAllows(top, action, isConfig, isExt)) return null;
-  // ⭐ WHAT IS LEFT is the KIND, and only the kind. Three reasons became two, and the two that
-  // went ("slow", "hand", "blocked") are the point of the reshape: a fact can no longer hold a
-  // row out of a rung, so it can no longer be the reason one is dimmed. Those words did not
-  // disappear — they moved from "why this row is out of reach" to "what this row will do to
-  // you", shown on every row at every rung.
-  //
-  // ⚠️ And the walk that derived the fact is gone with them. It existed because `slow`
-  // dominated `uac`/`403` and the dominance had to be ASKED rather than assumed; with the
-  // facts out of the rule there is nothing left to ask.
-  // A config-atom is admitted at rung 0, so it can never be out of reach and never reaches
-  // here. What remains is: an EXTENSION held out at rung 0 ("move to 🧩"), or an app held out
-  // at 0 or 1 ("move to 📦"). The key names WHERE it enters, which is the only actionable
-  // thing left to say.
-  return isExt ? "extension" : "app";
 }
 // The manual invert action a row button performs (label + direction + msg type).
 // ALWAYS inverts current machine state: absent→install, present→uninstall,

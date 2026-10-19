@@ -4,7 +4,6 @@ import {
   forbiddenMessage,
   postureDefault as _postureDefault,
 } from "./decision.js";
-import * as L from "./ladder.js";
 import * as M from "./model.js";
 const model = M.createModel();
 
@@ -643,31 +642,12 @@ let appmgmtStatus = "na";
 // a reality the user never saw. Freeze every action (general, bundle, row) until
 // the scan settles, exactly like applyRunning freezes them during a run.
 let scanning = false;
-// The reason a row is out of the chosen rung's reach, in the USER's terms rather than the
-// mechanism's: "needs your hand" is what happens TO THEM; `uac` is our word for it. Keyed by
-// what model.js's rungReason returns, which is a key precisely so these five strings can be
-// read together — this is the first place the collected behaviour facts reach a user's eye,
-// and a wrongly flagged package becomes findable by eye only if the words are honest.
+// ⭐ WHAT A ROW WILL DO TO YOU — always shown, for every row that carries a fact. These three
+// words used to appear ONLY when a slider hid the row, because its rungs sorted by exactly
+// these facts. The slider is gone (2026-10-10); the words stayed and live here.
 //
-// ⚠️ Every one of these is a CONTRACT with `rungAllows`, verified in ladder.test.mjs by
-// asking the rule rather than by reading these strings: "slow" only ever appears on a row
-// that 🏗️ alone admits, "an update" only on a row excluded for its VERB. The titles say what
-// the slider can do about it, because that is the question a dimmed row raises.
-const RUNG_WHY = {
-  extension: "an extension",
-  app: "an app",
-};
-const RUNG_WHY_TITLE = {
-  extension: "This rung applies config only. Move to 🧩 Extensions to include it.",
-  app: "This one installs on the machine. Move to 📦 Apps to include it.",
-};
-
-// ⭐ WHAT A ROW WILL DO TO YOU — always shown, at every rung, for every row that carries a
-// fact. These three words used to appear ONLY when the slider hid the row, because ☕ 👀 🏗️
-// sorted by exactly these facts. Those rungs are gone; the words stayed and moved here.
-//
-// The reasoning C gave, and it is the better design: a rung SORTS, a label INFORMS. Filtered,
-// the same information could only be discovered by dragging the slider until a row came back —
+// The reasoning C gave, and it is the better design: a filter SORTS, a label INFORMS. Filtered,
+// the same information could only be discovered by moving the filter until a row came back —
 // so the app knew something about the package and made the user hunt for it. Written on the
 // row, it is read before clicking and the decision stays per package.
 //
@@ -701,7 +681,6 @@ function refreshLiveness() {
       r.apply.title =
         "Stop this install. The package may be left half-installed — the next scan will show what is really there.";
       r.details.classList.remove("plan-add", "plan-remove");
-      setRungOut(i, null); // a row that is RUNNING is manifestly not out of reach
       continue;
     }
     // Out of scope → NO row action either. Found at a real click: in advanced mode
@@ -729,47 +708,43 @@ function refreshLiveness() {
       "plan-remove",
       inPlan && act && act.dir === "remove",
     );
-    // THE LADDER'S THIRD STATE — derived here, persisted nowhere. A row keeps its gesture
-    // (✕/auto/✓, what the user WANTS) and its diff colour (what an Apply WOULD do); the rung
-    // is neither of those, so it may write neither. It dims the row and says why instead.
-    // C asked for the rows to "react as if selected or deselected" and then said "I don't
-    // know how it should look" — that hesitation is the design: if this wrote the gesture,
-    // going to ⚡ to look and back to 🏗️ would raise "did my ✓ survive?", and a control for
-    // LOOKING would be destroying intent.
-    //
-    // From `M.rungReason`, which asks `rungAllows` — never a second rule, or a row IN the
-    // plan could be dimmed. It returns null for a row no rung admits (out of scope, a
-    // downgrade), so the dimming marks only rows the slider can actually bring back.
-    setRungOut(i, M.rungReason(rung, M.actionOf(model, i), model.pkgs.get(i)));
     paintPkg(i); // switch colour follows the plan — refresh it as machine state lands
     paintVersion(i); // version display follows the plan too: toggling a row OUT
     // flips its target to "→ absent" (uninstall), so it must repaint here, not
     // only on state/outdated messages. Without this the number stayed stale
     // (e.g. "→ 15.2.0 update") while the button already said uninstall.
   }
-  // Global button: live if anything anywhere would act — AT THE CHOSEN RUNG.
+  // Global button: live if anything anywhere would act. One path, the whole desire.
   //
-  // ⚠️ `isActionable` answers "would a plain Apply touch this row", which is the machine's
-  // truth and knows nothing about the ladder. The rung can narrow that to nothing (⚡ on a
-  // machine with no config-atom to run), and then Apply must refuse: a button that promises
-  // an action with nothing to do is the dishonesty this app already paid for once, at the
-  // 403 retry card that offered a download and did nothing. It also costs a full server
-  // round-trip — re-scan, full-window veil — to be told `done {nothing:true}`.
+  // ⚠️ It must refuse an empty plan: a button that promises an action with nothing to do is the
+  // dishonesty this app already paid for once, at the 403 retry card that offered a download
+  // and did nothing. It also costs a full server round-trip — re-scan, full-window veil — to be
+  // told `done {nothing:true}`.
   //
-   // ⭐ APPLY IS BACK, so its liveness is back too — and it asks the SAME question the dial does,
-  // through the same function, so the button and the zones cannot disagree about what "nothing"
-  // means. A button that offers an action with nothing to do is the dishonesty this app already
-  // paid for once at the 403 retry card.
+  // The removals are named on the button because Apply honours the rows you unchecked, and a
+  // count that hid them would be the label lying.
+  const plan = M.applyPlan(model);
   const g = document.getElementById("install-all");
   if (g) {
-    const scopeEmpty = M.rungPlan(model, rung).length === 0;
-    g.classList.toggle("live", ids.some(isActionable) && !scopeEmpty && !busy);
-    g.disabled = busy || scopeEmpty;
-    // It applies THE SELECTED SCOPE, not everything — so the title has to say which, or the
-    // button would quietly mean something narrower than its word.
-    g.title = scopeEmpty
-      ? "Nothing to do at this scope — pick a wider one"
-      : `Apply ${L.RUNGS[rung].name} — ${L.RUNGS[rung].where}`;
+    let removes = 0;
+    for (const i of plan) if (M.actionOf(model, i) === "uninstall") removes++;
+    const applies = plan.length - removes;
+    g.classList.toggle("live", plan.length > 0 && !busy);
+    g.disabled = busy || plan.length === 0;
+    g.textContent = plan.length === 0
+      ? "Apply"
+      : `Apply — ${applies} to apply` + (removes ? ` · ${removes} to remove` : "");
+    g.title = plan.length === 0 ? "Nothing to do — this machine already matches" : "";
+  }
+  // ⭐ THE EMPTY STATE LIVES IN THE LIST. C: "je préférerais que ce soit le panneau de sélection
+  // en dessous qui indique qu'il n'y a rien à envoyer" — the LIST is what is empty. And NOT
+  // during the scan: an un-probed row must never count as absent.
+  const hint = document.getElementById("steps-empty");
+  if (hint) {
+    hint.hidden = plan.length !== 0 || scanning;
+    if (!hint.hidden) {
+      hint.textContent = "Nothing to send — this machine already matches what you asked for.";
+    }
   }
   // Reset is available only when it would do something (model.canReset decides:
   // a moved package or an active profile). The view just reflects that verdict.
@@ -790,10 +765,6 @@ function refreshLiveness() {
       ? "Can't quit while applying — an install is running and would be interrupted"
       : "Close Talos";
   }
-  // The ladder's counts follow the same facts every button above does, so it repaints from
-  // the same hook rather than from each caller: a toggle, a scan verdict and an `outdated`
-  // pill all change what a rung would touch, and all of them already route through here.
-  renderDial();
   refreshArbitration();
 }
 
@@ -817,189 +788,6 @@ function refreshArbitration() {
   const tab = document.querySelector('.tab[data-view="arbitration"]');
   if (tab) tab.textContent = n ? `Arbitration (${n})` : "Arbitration";
 }
-
-// The chosen rung, 0..4. NOT PERSISTED, deliberately: the question the ladder asks is "do I
-// have time RIGHT NOW?", which is about this moment and not a preference — the emoji ramp
-// says so explicitly. So every launch resets to Everything, which is also exactly the
-// behaviour that shipped before the ladder existed. (If C lives with it and wants a slow
-// network's rung to stick, persistence goes in selection.json's `ui` block — the plan's
-// deferred table names it rather than guessing.)
-let rung = L.RUNGS.length - 1;
-
-// Dim one row and label it, or clear both. `why` is model.js's key or null — ONE function so
-// the class and the word can never disagree (a dimmed row with no reason is the "greyed out
-// teaches nothing" failure, and a reason on an undimmed row is invisible).
-function setRungOut(i, why) {
-  const r = rows[i];
-  if (!r) return;
-  r.details.classList.toggle("rung-out", !!why);
-  r.why.textContent = why ? RUNG_WHY[why] : "";
-  r.why.title = why ? RUNG_WHY_TITLE[why] || "" : "";
-}
-
-/// Repaint the dial: three buttons, their counts, and which one is chosen.
-//
-// ⭐ NO `armed` STATE ANY MORE, and its removal is the simplification. C, once Apply was back in
-// the bar: "ils ne peuvent pas déclencher le apply… il n'y a apply qui peut fonctionner" — a zone
-// SELECTS, the button RUNS, and nothing else does. The two-click arming existed only because the
-// dial had to carry the run, and it was the fragile part: a second click on the same spot is what
-// people do when the first seems not to have worked, and here it installed software.
-//
-// So one variable is left, `rung`, and the whole dial is a picture of it. Fewer states, and the
-// irreversible act has exactly one door.
-
-function renderDial() {
-  const host = document.getElementById("dial");
-  if (!host) return;
-  const busy = applyRunning || scanning;
-  host.classList.toggle("busy", busy);
-  for (const zone of host.querySelectorAll(".zone")) {
-    const r = Number(zone.dataset.rung);
-    const spec = L.RUNGS[r];
-    if (!spec) continue;
-    const plan = M.rungPlan(model, r);
-    // Split by VERB: "3 to apply · 1 to remove" is a different promise from "4 items", and the
-    // removals are the half a user must not discover afterwards — Apply honours the rows you
-    // unchecked, so a scope that counted them silently would be the label lying.
-    let removes = 0;
-    for (const i of plan) if (M.actionOf(model, i) === "uninstall") removes++;
-    const applies = plan.length - removes;
-    // ⭐ ON = this zone is the chosen one OR it is INSIDE the chosen one. Choosing 📦 lights all
-    // three, which is C's whole point: the inclusion is painted, not merely drawn. Derived from
-    // the rung NUMBER rather than from the DOM, so it comes from the same source as the counts.
-    const on = r <= rung;
-    const chosen = r === rung;
-    const empty = plan.length === 0;
-
-    // ⭐ TWO STATES, both derived from `rung` alone: `on` = this zone is in the chosen scope
-    // (itself or inside it), painted vivid. Outside it, barely there.
-    //
-    // C: "quand apps est vert, extension doit être vert et config doit être vert aussi" — the
-    // selection is a property of the SCOPE, not of one button, so it spreads inward exactly like
-    // inclusion does. A vivid fill on 📦 alone would claim a smaller reach than the choice has.
-    //
-    // ⚠️ NOT gated on emptiness. That gate was a real defect C caught on the running app: 🧩's
-    // scope is empty on this machine, so the fill was withheld and clicking it looked like it had
-    // done nothing. Emptiness speaks in the WORDS and disables Apply; it must never hide the
-    // selection the user just made.
-    // ⚠️ ONE class, not two. With the run moved to the Apply button there are only TWO visual
-    // states left — in the chosen scope, or outside it — so a second class would be an alias for
-    // the first and the next reader would hunt for the difference.
-    zone.classList.toggle("on", on);
-    // ⚠️ NOT `empty` while the scan is still running, and this was a real defect caught on the
-    // rendered panel: during the scan nothing is actionable yet, so every rung looked empty and
-    // the fill drained out of all three zones — the dial read as "nothing selected" when in fact
-    // nothing was KNOWN. An un-probed row must never count as absent (the same rule the Apply
-    // button already follows), so emptiness is only asserted once the scan has settled.
-    zone.classList.toggle("empty", chosen && empty && !scanning);
-
-    // Only the label of THIS zone — `querySelector` would reach into the nested ones and every
-    // zone would end up writing every label.
-    const label = [...zone.children].find((c) => c.classList.contains("zone-label"));
-    if (!label) continue;
-    label.replaceChildren();
-    const name = document.createElement("span");
-    name.className = "zone-name";
-    name.textContent = `${spec.emoji} ${spec.name}`;
-    const where = document.createElement("span");
-    where.className = "zone-where";
-    where.textContent = spec.where;
-    const count = document.createElement("span");
-    count.className = "zone-count";
-    // ⚠️ NO VERB HERE ANY MORE. The chosen zone used to read "▶ apply 7 · remove 2", because its
-    // own second click was the run. With the run in the Apply button, a verb on a zone would
-    // promise a gesture the zone no longer performs — so the zone states the COUNT and the button
-    // states the act. The removals are still named, below, because Apply honours the rows you
-    // unchecked and a scope that hid them would be the label lying.
-    if (r > 0 && plan.length === M.rungPlan(model, r - 1).length && !empty) {
-      // ⭐ CUMULATIVE, and it has to SAY so. C: the counts read as three independent tallies when
-      // they are one running total — 📦's "5 items" already includes whatever ⚡ and 🧩 hold. So a
-      // zone that adds NOTHING to the one inside it says exactly that, rather than repeating a
-      // number that would look like its own.
-      count.textContent = "nothing more";
-    } else if (scanning) {
-      // ⚠️ "checking…", never "nothing to do": until the scan settles the count is not zero, it
-      // is UNKNOWN — and an un-probed row must not read as absent. Saying "nothing to do" here
-      // was the same defect the fill had, in words.
-      count.textContent = "checking…";
-    } else if (empty) {
-      // The innermost zone has nothing INSIDE it to be cumulative about, so it says the plain
-      // thing. The outer two get "nothing more" (above) when they add nothing to their child.
-      count.textContent = r === 0 ? "nothing to do" : "nothing more";
-    } else {
-      count.textContent = removes
-        ? `${applies} to apply · ${removes} to remove`
-        : `${applies} ${applies === 1 ? "item" : "items"}${r > 0 ? " in all" : ""}`;
-    }
-    label.append(name, where, count);
-    // The announcement carries all three lines plus the state, because a screen reader cannot
-    // read a fill: "chosen" and "click again to run" are the two things colour alone says.
-    // No "click again to run" any more — the run lives in the Apply button, and saying otherwise
-    // would promise a gesture that no longer exists.
-    zone.setAttribute(
-      "aria-label",
-      `${spec.name}. ${spec.where}. ${count.textContent}.` + (chosen ? " Chosen." : ""),
-    );
-    zone.setAttribute("aria-pressed", String(on));
-    zone.setAttribute("aria-disabled", String(busy));
-  }
-  // ⭐ THE EMPTY STATE LIVES IN THE LIST, not under the dial. C: "je préférerais que ce soit le
-  // panneau de sélection en dessous qui indique qu'il n'y a rien à envoyer" — and the note under
-  // the dial had a second fault beyond being misplaced: it PUSHED the whole panel down as it
-  // appeared, so the layout moved while you were choosing.
-  //
-  // It says what is true and where to go, without scolding: an empty scope is ordinary.
-  const hint = document.getElementById("steps-empty");
-  if (hint) {
-    const here = M.rungPlan(model, rung).length;
-    const wider = M.rungPlan(model, L.RUNGS.length - 1).length;
-    hint.hidden = here !== 0 || scanning;
-    if (!hint.hidden) {
-      hint.innerHTML = wider > 0
-        ? `Nothing to send at <b>${L.RUNGS[rung].name}</b>.<br>` +
-          `${wider} ${wider === 1 ? "row" : "rows"} waiting further out — widen the scope above.`
-        : "Nothing to send — this machine already matches what you asked for.";
-    }
-  }
-}
-
-/// One click on a zone chooses that scope. Nothing else — the run lives in the Apply button.
-//
-// ⭐ This function used to arm and then fire on a second click, and dropping that is C's call once
-// Apply was back in the bar. It is the safer shape as well as the simpler one: a second click on
-// the same spot is what people do when the first appears not to have worked, and here it installed
-// software. Now the irreversible act has exactly one door, and it is labelled.
-function onZoneClick(r) {
-  if (applyRunning || scanning) return;
-  rung = r;
-  // ⚠️ refreshLiveness, not renderDial: the ROWS answer the scope too (dimmed, with a reason), and
-  // they are what C asked to see move. Repainting the dial alone would leave a zone saying
-  // "3 items" above rows that all look included.
-  refreshLiveness();
-}
-
-// ⚠️ ONE listener on the container, and it resolves the INNERMOST zone under the pointer.
-//
-// This is the price of "the zone is the button": the zones are nested, so a click on ⚡ also
-// lands on 🧩 and 📦 as it bubbles. Three separate listeners would fire three times and the
-// outermost would win — clicking the small frame would choose 📦, the exact opposite of what the
-// eye picked. `closest` from the real target answers "which zone did the pointer actually hit",
-// innermost first, which is the only reading that matches the drawing.
-document.getElementById("dial")?.addEventListener("click", (e) => {
-  const zone = e.target.closest?.(".zone");
-  if (!zone) return;
-  onZoneClick(Number(zone.dataset.rung));
-});
-// A div with role=button gets no keyboard activation for free — that is what a real <button>
-// would have given us, and buttons cannot nest in HTML. So Enter and Space are wired by hand,
-// which is the whole cost of the nesting.
-document.getElementById("dial")?.addEventListener("keydown", (e) => {
-  if (e.key !== "Enter" && e.key !== " ") return;
-  const zone = e.target.closest?.(".zone");
-  if (!zone) return;
-  e.preventDefault(); // Space would scroll the panel
-  onZoneClick(Number(zone.dataset.rung));
-});
 
 // The re-scan veil covers the WHOLE window (position:fixed, top-level), so the
 // class rides <body> — not #steps, whose containing block used to trap it over the
@@ -1051,15 +839,6 @@ function applyAll() {
     on,
     off,
     unmanaged: M.unmanagedIndices(model),
-    // How far to go. Sent exactly as `unmanaged` is, and for the same reason: the server
-    // BUILDS the plan, so it must be told rather than handed a pre-filtered list. The
-    // per-row buttons ignore this entirely — clicking install on one row is an explicit
-    // gesture about one thing, and the ladder calibrates the BATCH.
-    //
-    // ⚠️ An INTEGER, never the input's string: `server::rung_from_wire` reads it with
-    // `as_u64`, which rejects a string or a float and then falls back to Everything. See
-    // ladder.js's `rungFromInput`, which is the only place `.value` is converted.
-    rung,
   }));
 }
 
@@ -1169,15 +948,9 @@ function render(steps, profiles = [], columns = 2) {
     note.className = "untouched-note";
     note.textContent = "unchanged";
     note.title = "You changed this in this session — nothing will happen to it";
-    // WHY the ladder leaves this row out, when it does. Created on every row and hidden by
-    // CSS until `.rung-out`, like `.untouched-note` above — a row's DOM does not change
-    // shape as the slider moves, only its classes do.
-    const why = document.createElement("span");
-    why.className = "rung-why";
-    // ⭐ The row's FACTS, always visible — what this package will do to you, independent of
-    // the slider. Built here once, from the plan, because these values arrive with the plan
-    // and never change during a session: the ladder no longer sorts by them, so nothing
-    // re-computes them either.
+    // ⭐ The row's FACTS, always visible — what this package will do to you. Built here once,
+    // from the plan, because these values arrive with the plan and never change during a
+    // session: nothing filters on them, so nothing re-computes them either.
     const facts = document.createElement("span");
     facts.className = "row-facts";
     for (const key of ["uac", "forbidden", "slow"]) {
@@ -1254,7 +1027,7 @@ function render(steps, profiles = [], columns = 2) {
     // is spatial and needs no legend: [scope switch][its word] │ [desire][its word].
     // `facts` sits right after the name and BEFORE the version delta: it describes the
     // package, so it belongs with the name rather than with the numbers.
-    sum.append(sc, swScope, chk, swDesire, badge, name, facts, note, why, delta, st, apply);
+    sum.append(sc, swScope, chk, swDesire, badge, name, facts, note, delta, st, apply);
     const panel = document.createElement("div");
     panel.className = "panel";
     const copy = document.createElement("button");
@@ -1293,7 +1066,6 @@ function render(steps, profiles = [], columns = 2) {
       swDesire,
       badge,
       statusLabel: st,
-      why,
       delta,
       apply,
       host,
@@ -1801,8 +1573,7 @@ const ws = new WebSocket(`ws://${location.host}`);
 
 // Apply = enact your decisions (on/off) against the machine; auto is left
 // alone. Server acts only on the difference — every decided package, in one go.
-// Apply, back in the bar. ⚠️ It and the dial's second click BOTH land here — one entry point, so
-// there is no second rule about what a run includes. The dial says how far; this says go.
+// The Apply button is the one door: no other control runs anything (applyAll, above).
 
 // Reset = drop every user toggle AND active profile back to the author's
 // defaults (clearAllDecisions clears both). repaintAll refreshes chips too.
@@ -1823,20 +1594,6 @@ document.getElementById("quit-all").onclick = () => {
   if (applyRunning) return; // belt to the disabled attribute's braces
   ws.send(JSON.stringify({ type: "quit" }));
 };
-// The ladder. `input` and not `change`, so dragging repaints the word and the count live —
-// the whole point of the widget is to answer "how many?" BEFORE you let go. The value is
-// parsed through ladder.js's rungFromInput: a range input's `.value` is a string, and
-// `server::rung_from_wire`'s `as_u64` would read a string as absent → Everything.
-//
-// ⚠️ The dial's handler is `onZoneClick`, wired where the dial is rendered, and it calls
-// `refreshLiveness` — NOT renderDial. The ROWS answer the scope too (`.rung-out` and its
-// reason), and they are what C asked to see move: "j'aurais voulu que les packages en dessous
-// réagissent". Repainting the dial alone would leave a button saying "3 items" above rows that
-// all look included — the exact contradiction this control exists to remove.
-//
-// ⚠️ The slider that used to live here is gone, and with it its `input` listener. A
-// `getElementById("ladder-range")` left behind would throw on a null and take every listener
-// registered after it down with it — which is why this note replaces it rather than nothing.
 document.getElementById("install-all").onclick = () => applyAll();
 document.getElementById("reset-all").onclick = () =>
   resetConfirmEl.classList.add("show");
