@@ -5,6 +5,7 @@ import {
   postureDefault as _postureDefault,
 } from "./decision.js";
 import * as M from "./model.js";
+import { estimate, formatEstimate } from "./estimate.js";
 const model = M.createModel();
 
 const stepsEl = document.getElementById("steps");
@@ -733,8 +734,15 @@ function refreshLiveness() {
     if (n.applies) parts.push(`${n.applies} to apply`);
     if (n.reinstalls) parts.push(`${n.reinstalls} to reinstall`);
     if (n.removes) parts.push(`${n.removes} to remove`);
+    // How long, from what these rows took on THIS machine last time. The never-measured rows
+    // are counted and shown ("2 unknown"), so a short total never reads as a promise.
+    const est = formatEstimate(estimate(M.planSeconds(model)));
+    if (est) parts.push(est);
     g.textContent = n.total === 0 ? "Apply" : `Apply — ${parts.join(" · ")}`;
-    g.title = n.total === 0 ? "Nothing to do — this machine already matches" : "";
+    g.title = n.total === 0
+      ? "Nothing to do — this machine already matches"
+      : "The time is what these rows took on this machine last time; " +
+        "\"unknown\" rows have never run here.";
   }
   // ⭐ THE EMPTY STATE LIVES IN THE LIST — C asked for the panel below, not a note above it,
   // to say there is nothing to send: the LIST is what is empty. And NOT

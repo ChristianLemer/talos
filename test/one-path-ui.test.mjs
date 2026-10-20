@@ -105,3 +105,12 @@ test("the held reason is the same words on the row and in the server log", () =>
   assert.ok(rs, "NO_DOWNGRADE_ROUTE moved — re-point this test");
   assert.ok(model.includes(`"${rs[1]}"`), "model.js holdReason drifted from the server's words");
 });
+
+test("the Apply button says how long, from what these rows took here", () => {
+  // The estimate used to sit beside the ladder's rungs; the ladder left and took the only
+  // display with it. It belongs on the one button that runs the plan.
+  const at = appjs.indexOf("function refreshLiveness()");
+  const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
+  assert.match(body, /formatEstimate\(estimate\(M\.planSeconds\(model\)\)\)/);
+  assert.match(appjs, /from "\.\/estimate\.js"/);
+});

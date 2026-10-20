@@ -426,6 +426,11 @@ export function planCounts(model) {
   }
   return { applies: plan.length - reinstalls - removes, reinstalls, removes, total: plan.length };
 }
+// What each row the Apply would run took HERE last time, in plan order; 0 = never measured.
+// The button's estimate sums them, and counts the zeros as unknown instead of free.
+export function planSeconds(model) {
+  return applyPlan(model).map((i) => model.pkgs.get(i)?.secs ?? 0);
+}
 // WHY the Apply leaves a row it would otherwise act on, or null. Today one case: a pinned row
 // above its pin whose route cannot go down. The words are the server's `NO_DOWNGRADE_ROUTE`,
 // word for word, so the row and the log say the same thing.

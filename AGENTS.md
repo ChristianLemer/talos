@@ -90,7 +90,7 @@ Run all four before claiming anything works. These are exactly what CI enforces:
 cargo test --all-targets                      # 350 + 8 tests (2026-10-19)
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings     # any lint fails the build
-node --test "test/*.test.mjs"                 # 165 tests
+node --test "test/*.test.mjs"                 # 167 tests
 ```
 
 A fifth, for content rather than code: `cargo run -- --check catalog bundles` reads

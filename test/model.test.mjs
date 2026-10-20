@@ -26,6 +26,7 @@ import {
   holdReason,
   heldRows,
   planCounts,
+  planSeconds,
   loadPlan,
   PERSONAL_BUNDLE,
   persistableActiveBundles,
@@ -1196,4 +1197,17 @@ test("planCounts names the reinstalls apart — a downgrade is an uninstall firs
   assert.deepEqual(planCounts(m), { applies: 0, reinstalls: 1, removes: 0, total: 1 });
   setInstalledVersion(m, 0, "1.5");
   assert.deepEqual(planCounts(m), { applies: 1, reinstalls: 0, removes: 0, total: 1 });
+});
+
+test("planSeconds: what each row the Apply would run took here, 0 when never measured", () => {
+  // The button's estimate sums these. Only the rows the Apply runs count: a row at its pin
+  // costs nothing, and its old duration must not inflate the total.
+  const m = seedPinned({ secs: 42 }); // pin 1.8
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "1.8");
+  assert.deepEqual(planSeconds(m), [], "at the pin: not in the plan, not in the estimate");
+  setInstalledVersion(m, 0, "1.5");
+  assert.deepEqual(planSeconds(m), [42]);
+  m.pkgs.get(0).secs = 0;
+  assert.deepEqual(planSeconds(m), [0], "never measured stays 0 — the estimate counts it unknown");
 });

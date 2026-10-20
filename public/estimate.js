@@ -4,7 +4,7 @@
 // ⚡ config only, 🧩 extensions, 📦 apps — choosing which actions one Apply runs) left: applying
 // PART of a desire built states nothing reasons about, such as a fresh config over a stale app,
 // and nobody ever moved the slider. What stays is what never depended on a rung: the slow threshold
-// and the estimate.
+// and the estimate, which the Apply button now shows for the whole plan.
 //
 // Named twins, so a reader can find the other half: `isSlow` ↔ `plan_facts::is_slow`,
 // `SLOW_SECS` ↔ `plan_facts::SLOW_SECS`.
