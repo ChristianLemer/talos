@@ -60,6 +60,30 @@ pub fn winget_installed_name(id: &str, list_output: &str) -> Option<String> {
     })
 }
 
+/// What `winget list --id X` says about an id: installed (with the name and the version it
+/// shows), absent — only when winget SAYS so — or unknown: a source error, an empty output,
+/// an Id cell winget truncated. Unknown is never read as absent.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Listing {
+    Installed { name: String, version: String },
+    Absent,
+    Unknown,
+}
+
+pub fn winget_listing(id: &str, output: &str) -> Listing {
+    if let Some(name) = winget_installed_name(id, output) {
+        return Listing::Installed {
+            name,
+            version: parse_winget_version(id, output),
+        };
+    }
+    if strip_ansi(output).contains("No installed package found") {
+        Listing::Absent
+    } else {
+        Listing::Unknown
+    }
+}
+
 /// The PowerShell probe behind `scope_from_arp`. First the folders whose owner is KNOWN — the
 /// user's (profile, LOCALAPPDATA, APPDATA) and the machine's (Program Files, ProgramData,
 /// Windows) — then every uninstall entry (64-bit, 32-bit, per-user) whose DisplayName starts
@@ -902,6 +926,38 @@ mod tests {
             "a non-string value must not throw"
         );
         assert!(!cmd.contains("&&"), "win_and_then would split the probe");
+    }
+
+    #[test]
+    fn a_winget_listing_says_installed_absent_or_unknown_never_guesses_absent() {
+        // Review 2 of beta.49: a FAILED `winget list` read as "not installed" sent a downgrade
+        // down the install-only path over a newer copy, and an upgrade down the in-place one
+        // over a machine-wide copy — the measured second copy again. Absent is only what
+        // winget SAYS; anything else it printed is unknown.
+        let listed = "Name     Id               Version  Source\n\
+                      ---------------------------------------\n\
+                      Nushell  Nushell.Nushell  0.116.1  winget\n";
+        assert_eq!(
+            winget_listing("Nushell.Nushell", listed),
+            Listing::Installed {
+                name: "Nushell".into(),
+                version: "0.116.1".into()
+            }
+        );
+        let absent = "No installed package found matching input criteria.\n";
+        assert_eq!(winget_listing("Nushell.Nushell", absent), Listing::Absent);
+        // A source error, an empty output, or the Id cell truncated by winget: unknown.
+        for out in [
+            "Failed when searching source: winget\n",
+            "",
+            "Nushell  Nushell.Nush…  0.116.1\n",
+        ] {
+            assert_eq!(
+                winget_listing("Nushell.Nushell", out),
+                Listing::Unknown,
+                "{out:?}"
+            );
+        }
     }
 
     #[test]

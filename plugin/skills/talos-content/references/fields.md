@@ -255,6 +255,11 @@ reads where the installed copy is, and the row's terminal says what it found:
 | elsewhere, or where cannot be read | uninstall, then install there | the same |
 | not installed any more | — | install at the pin there (nothing to uninstall) |
 
+⚠️ "Cannot be read" has a price: as long as the copy's location stays unreadable (an empty
+InstallLocation is common for MSI packages), **every** upgrade of a package with `scope:`
+uninstalls before it installs. A listing winget could not produce changes nothing: the
+stored command runs, as without `scope:` probing.
+
 Why not `winget upgrade`, and why not always install in place — all MEASURED on Nushell's
 MSI: `winget upgrade` on a per-user copy put the new version machine-wide beside it;
 `winget upgrade --scope user` did not even find it (winget files that copy as machine); and

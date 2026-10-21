@@ -271,7 +271,7 @@ struct AppState {
     /// A fact read minutes ago in this session, kept so a retry that finds the package gone
     /// reinstalls it there; never written to disk.
     found_scope:
-        tokio::sync::Mutex<std::collections::HashMap<usize, crate::managers::InstallScope>>,
+        tokio::sync::Mutex<std::collections::HashMap<String, crate::managers::InstallScope>>,
 }
 
 /// Records one observed presence in `last_seen` (grows the vector if the plan is
@@ -1287,6 +1287,9 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     seen.clear();
                     seen.resize(n, None);
                 }
+                // Lines queued for a row's terminal name a row by its INDEX, which this
+                // reload may have given to another package.
+                state.notes.lock().await.clear();
                 if before == n {
                     println!("[catalog] reloaded: {n} packages");
                 } else {
@@ -1891,10 +1894,8 @@ fn winget_plan(
                 return None;
             }
             let sc = remembered?;
-            let cmd = match step.pin.as_deref() {
-                Some(p) if p != "latest" && p != "pending" => {
-                    mgr.install_pinned_in(id, p, Some(sc))
-                }
+            let cmd = match crate::bundles::classify_pin(step.pin.as_deref()) {
+                Some(crate::bundles::PinKind::Exact(p)) => mgr.install_pinned_in(id, &p, Some(sc)),
                 _ => mgr.install_in(id, Some(sc)),
             };
             Some((
@@ -1915,19 +1916,16 @@ fn winget_plan(
 /// decision needs them, nothing runs. The scope found is remembered for the row.
 async fn winget_in_place(
     state: &AppState,
-    i: usize,
     action: crate::decision::Action,
     step: &crate::bundles::Step,
     os: Os,
 ) -> Option<(String, String)> {
     use crate::decision::Action;
-    use crate::managers::{
-        arp_probe_command, parse_winget_version, scope_from_arp, winget_installed_name,
-    };
+    use crate::managers::{arp_probe_command, scope_from_arp, winget_listing, Listing};
     if os != Os::Windows || step.route.as_deref() != Some("winget") {
         return None;
     }
-    let remembered = state.found_scope.lock().await.get(&i).copied();
+    let remembered = state.found_scope.lock().await.get(&step.id).copied();
     let probes = match action {
         Action::Downgrade => step.pin.is_some(),
         Action::Upgrade => step.scope.is_some(),
@@ -1940,26 +1938,29 @@ async fn winget_in_place(
             let probe = |cmd: &str| {
                 crate::detect::run_probe_detailed(&crate::platform::shell_probe(os, cmd))
             };
-            let list = probe(&mgr.presence_command(&id)).output;
-            let Some(name) = winget_installed_name(&id, &list) else {
-                return (None, None);
-            };
-            let installed = parse_winget_version(&id, &list);
+            // Absent only when winget SAYS so: a failed or unreadable listing is unknown,
+            // and unknown leaves the stored command alone (outer None).
+            let (name, installed) =
+                match winget_listing(&id, &probe(&mgr.presence_command(&id)).output) {
+                    Listing::Installed { name, version } => (name, version),
+                    Listing::Absent => return Some((None, None)),
+                    Listing::Unknown => return None,
+                };
             let arp = probe(&arp_probe_command(&name));
             let found = if arp.ok {
                 scope_from_arp(&arp.output, &name, &installed)
             } else {
                 None
             };
-            (Some((name, installed)), found)
+            Some((Some((name, installed)), found))
         })
         .await
-        .ok()?
+        .ok()??
     } else {
         (None, None)
     };
     if let Some(sc) = found {
-        state.found_scope.lock().await.insert(i, sc);
+        state.found_scope.lock().await.insert(step.id.clone(), sc);
     }
     let listed = listed.as_ref().map(|(n, v)| (n.as_str(), v.as_str()));
     winget_plan(action, step, listed, found, remembered)
@@ -2541,7 +2542,9 @@ async fn apply_diff(
                 shown_version(&presences[*i]),
                 shown_version(outcome.after.as_ref().unwrap_or(&presences[*i])),
             );
-            queue_note(state, d, why).await;
+            if steps[d].install.is_some() {
+                queue_note(state, d, why).await;
+            }
             // A repair does not re-check ITS dependents: one extra pass, never a cascade.
             let (_, stop_all) =
                 step_with_forbidden_pause(socket, state, d, Action::Install, &steps[d], false)
@@ -3112,7 +3115,7 @@ async fn do_step(
     };
     // A winget version change is rebuilt HERE, for where the package must live — a fact of
     // the machine, read just before acting, that the command stored at load cannot hold.
-    let rebuilt = winget_in_place(state, i, action, step, os).await;
+    let rebuilt = winget_in_place(state, action, step, os).await;
     if let Some((_, note)) = &rebuilt {
         queue_note(state, i, format!("[{}] {note}", action.as_str())).await;
     }
@@ -4940,6 +4943,35 @@ mod tests {
                 None
             ),
             None
+        );
+    }
+
+    #[test]
+    fn what_a_probe_learnt_about_a_row_does_not_outlive_the_plan_it_was_read_in() {
+        // Review 2 of beta.49: `found_scope` was keyed by row INDEX, and a Refresh that adds
+        // a package shifts every index — another package then inherited Nushell's scope and
+        // a false note. Keyed by the package's id, and the queued notes go with the plan.
+        let flat: String = include_str!("server.rs").split_whitespace().collect();
+        assert!(
+            flat.contains("found_scope:tokio::sync::Mutex<std::collections::HashMap<String,"),
+            "found_scope is keyed by something a Refresh renumbers"
+        );
+        let refresh = fn_body("handle_socket");
+        let at = refresh
+            .find("seen.clear()")
+            .expect("the Refresh's own reset moved");
+        assert!(
+            refresh[at..].contains("notes.lock().await.clear()"),
+            "a queued note survives a Refresh"
+        );
+        // And a [repair] line is queued only for a row that has an install to run.
+        let apply = fn_body("apply_diff");
+        let q = apply
+            .find("queue_note(state, d")
+            .expect("the repair note moved");
+        assert!(
+            apply[..q].contains("steps[d].install.is_some()"),
+            "a repair note can leak to a later step"
         );
     }
 
