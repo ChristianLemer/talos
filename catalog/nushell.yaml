@@ -8,6 +8,10 @@ winget: Nushell.Nushell
 brew: nushell
 detect: nu --version
 version: latest
+# `user`: Nushell is a personal tool, never one an IT department installs. Declared, every
+# winget install lands in the profile — and a downgrade puts it back there, wherever the copy
+# it replaces was (its uninstall removes every copy).
+scope: user
 category: [terminal]
 uac: true
 # A shell is a legitimate rescue too: when the agent is what is broken, this is what is

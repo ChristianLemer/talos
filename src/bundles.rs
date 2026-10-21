@@ -93,6 +93,7 @@ impl RawPkg {
         "check",
         "version-regex",
         "version",
+        "scope",
         "requires",
         "category",
         "uac",
@@ -155,6 +156,10 @@ pub struct RawPkg {
     pub version_regex: Option<String>,
     #[serde(default)]
     pub version: Option<String>,
+    /// winget only: where the package lives — `user` or `machine`. Every install, pinned
+    /// install and downgrade reinstall passes it, so a copy found elsewhere is put back.
+    #[serde(default)]
+    pub scope: Option<String>,
     #[serde(default)]
     pub requires: Vec<String>,
     #[serde(default)]
@@ -323,6 +328,9 @@ pub struct Step {
     pub is_extension: bool,
     pub version_regex: Option<String>,
     pub pin: Option<String>,
+    /// The declared `scope:` (winget), or None: then a downgrade reads where the installed
+    /// copy is just before acting (`server::winget_downgrade_in_place`).
+    pub scope: Option<crate::managers::InstallScope>,
     #[allow(dead_code)]
     pub requires: Vec<String>,
     pub posture: Posture,
@@ -334,6 +342,7 @@ pub struct Step {
     pub overrides: Overrides,
 }
 
+#[derive(Debug)]
 pub struct Commands {
     pub route: Option<String>,
     pub install: Option<String>,
@@ -379,19 +388,24 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
             IdField::Brew => &pkg.brew,
         };
         if let Some(id) = id {
+            // The author's `scope:` (winget only — the manager ignores it elsewhere).
+            let scope = pkg
+                .scope
+                .as_deref()
+                .and_then(crate::managers::InstallScope::from_word);
             if !ver.is_empty() {
-                let inst = mgr.install_pinned(id, &ver);
+                let inst = mgr.install_pinned_in(id, &ver, scope);
                 return Commands {
                     route: Some(mgr.route.into()),
                     install: Some(inst.clone()),
                     uninstall: Some(mgr.uninstall(id)),
                     upgrade: Some(inst.clone()),
-                    downgrade: Some(mgr.downgrade(id, &ver)),
+                    downgrade: Some(mgr.downgrade_in(id, &ver, scope)),
                 };
             }
             return Commands {
                 route: Some(mgr.route.into()),
-                install: Some(mgr.install(id)),
+                install: Some(mgr.install_in(id, scope)),
                 uninstall: Some(mgr.uninstall(id)),
                 upgrade: Some(mgr.upgrade(id, false)), // formula form; server.rs re-forces for casks at apply
                 downgrade: None,
@@ -813,6 +827,10 @@ pub fn load_from_catalog(
                     Some(PinKind::Invalid(_)) | None => None,
                 }
             },
+            scope: p
+                .scope
+                .as_deref()
+                .and_then(crate::managers::InstallScope::from_word),
             requires: p.requires.clone(),
             posture: Posture::OptIn, // catalog default: free + out-by-default
             // (bundle-driven: the bundle pull decides "in", not the posture).
@@ -1311,6 +1329,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_declared_scope_is_where_every_winget_command_puts_the_package() {
+        // The author decides where a package lives, as it decides its version: an install, a
+        // pinned install and a downgrade's reinstall all land there, and a copy found elsewhere
+        // is put back — the uninstall half removes every copy (`--all-versions`).
+        let mut p = pkg("Nushell");
+        p.winget = Some("Nushell.Nushell".into());
+        p.scope = Some("user".into());
+        let c = commands_for(&p, Os::Windows);
+        assert!(
+            c.install.as_deref().unwrap().ends_with(" --scope user"),
+            "{c:?}"
+        );
+        assert!(c.downgrade.is_none(), "no pin, no downgrade");
+        p.version = Some("0.113.1".into());
+        let c = commands_for(&p, Os::Windows);
+        for cmd in [&c.install, &c.upgrade, &c.downgrade] {
+            assert!(cmd.as_deref().unwrap().ends_with(" --scope user"), "{c:?}");
+        }
+        let steps = steps_from_pkgs(&[("nushell.yaml", p.clone())], Os::Windows);
+        assert_eq!(steps[0].scope, Some(crate::managers::InstallScope::User));
+        // Off winget the word means nothing, and a word that is not a scope is no scope.
+        p.brew = Some("nushell".into());
+        assert!(!commands_for(&p, Os::Darwin)
+            .install
+            .unwrap()
+            .contains("--scope"));
+        p.scope = Some("everywhere".into());
+        assert!(!commands_for(&p, Os::Windows)
+            .install
+            .unwrap()
+            .contains("--scope"));
+    }
+
     fn pkg(name: &str) -> RawPkg {
         RawPkg {
             name: name.into(),
@@ -1338,6 +1390,9 @@ mod tests {
             }
             if let Some(v) = &p.version {
                 y.push_str(&format!("version: \"{v}\"\n"));
+            }
+            if let Some(s) = &p.scope {
+                y.push_str(&format!("scope: {s}\n"));
             }
             std::fs::write(dir.join(format!("{stem}.yaml")), y).expect("write fixture");
         }

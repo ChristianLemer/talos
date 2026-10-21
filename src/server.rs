@@ -1801,6 +1801,17 @@ async fn winget_downgrade_in_place(
     let mgr = native_manager(os).filter(|m| m.route == "winget")?;
     let id = step.system_id.clone()?;
     let pin = step.pin.clone()?;
+    // The AUTHOR's scope is the answer when there is one: the package goes where it was
+    // declared, wherever the copy being replaced happened to be. No probe.
+    if let Some(sc) = step.scope {
+        return Some((
+            mgr.downgrade_in(&id, &pin, Some(sc)),
+            format!(
+                "{pin} is reinstalled where the catalogue puts it (--scope {})",
+                sc.as_str()
+            ),
+        ));
+    }
     tokio::task::spawn_blocking(move || {
         let probe = |cmd: &str| {
             crate::detect::run_probe_detailed(&crate::platform::shell_probe(os, cmd)).output
@@ -3359,6 +3370,7 @@ mod tests {
             is_extension: false,
             version_regex: None,
             pin: pin.map(|p| p.into()),
+            scope: None,
             requires: Vec::new(),
             posture: Posture::OptIn,
             categories: Vec::new(),
@@ -4691,6 +4703,13 @@ mod tests {
         assert!(
             body.contains("winget_downgrade_in_place("),
             "do_step runs the stored downgrade → a machine-wide copy comes back per-user"
+        );
+        // A scope the AUTHOR declared is the answer; the probe only stands in when none is.
+        let declared = fn_body("winget_downgrade_in_place");
+        let at = |s: &str| declared.find(s).unwrap_or_else(|| panic!("`{s}` missing"));
+        assert!(
+            at("step.scope") < at("arp_probe_command("),
+            "the probe runs before the declaration is read"
         );
         let helper = fn_body("winget_downgrade_in_place");
         assert!(helper.contains("scope_from_arp(") && helper.contains("downgrade_in("));

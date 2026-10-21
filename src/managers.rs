@@ -29,6 +29,14 @@ pub enum InstallScope {
 }
 
 impl InstallScope {
+    /// The catalogue's `scope:` word. Anything else is no scope (and `--check` says so).
+    pub fn from_word(w: &str) -> Option<Self> {
+        match w.trim().to_lowercase().as_str() {
+            "user" => Some(InstallScope::User),
+            "machine" => Some(InstallScope::Machine),
+            _ => None,
+        }
+    }
     pub fn as_str(self) -> &'static str {
         match self {
             InstallScope::User => "user",
@@ -130,6 +138,24 @@ impl SystemManager {
             _ => format!("brew install --yes {id}"),
         }
     }
+    /// `install`, in a declared scope. winget only: brew has no scope.
+    pub fn install_in(&self, id: &str, scope: Option<InstallScope>) -> String {
+        self.scoped(self.install(id), scope)
+    }
+    pub fn install_pinned_in(
+        &self,
+        id: &str,
+        version: &str,
+        scope: Option<InstallScope>,
+    ) -> String {
+        self.scoped(self.install_pinned(id, version), scope)
+    }
+    fn scoped(&self, cmd: String, scope: Option<InstallScope>) -> String {
+        match (self.route, scope) {
+            ("winget", Some(sc)) => format!("{cmd} --scope {}", sc.as_str()),
+            _ => cmd,
+        }
+    }
     pub fn install_pinned(&self, id: &str, version: &str) -> String {
         match self.route {
             "winget" => format!("winget install --id {id} -e --version {version} --source winget --accept-source-agreements --accept-package-agreements"),
@@ -148,16 +174,7 @@ impl SystemManager {
     /// `--scope` lands in winget's default, which is not where a machine-wide copy was —
     /// see `scope_from_arp`. brew has no scope, so it ignores it.
     pub fn downgrade_in(&self, id: &str, version: &str, scope: Option<InstallScope>) -> String {
-        let install = match (self.route, scope) {
-            ("winget", Some(sc)) => {
-                format!(
-                    "{} --scope {}",
-                    self.install_pinned(id, version),
-                    sc.as_str()
-                )
-            }
-            _ => self.install_pinned(id, version),
-        };
+        let install = self.install_pinned_in(id, version, scope);
         let chain = format!("{} && {install}", self.uninstall(id));
         match self.route {
             "winget" => chain,
@@ -808,6 +825,27 @@ mod tests {
             Some("Very Long Product")
         );
         assert_eq!(winget_installed_name("Absent.Id", out), None);
+    }
+
+    #[test]
+    fn a_declared_scope_reaches_every_winget_install_and_no_brew_one() {
+        assert_eq!(InstallScope::from_word("user"), Some(InstallScope::User));
+        assert_eq!(
+            InstallScope::from_word("Machine"),
+            Some(InstallScope::Machine)
+        );
+        assert_eq!(InstallScope::from_word("everywhere"), None);
+        let winget = native_manager(Os::Windows).unwrap();
+        let u = Some(InstallScope::User);
+        assert!(winget
+            .install_in("Nushell.Nushell", u)
+            .ends_with(" --scope user"));
+        assert!(winget
+            .install_pinned_in("Nushell.Nushell", "0.113.1", u)
+            .ends_with(" --scope user"));
+        assert_eq!(winget.install_in("X.Y", None), winget.install("X.Y"));
+        let brew = native_manager(Os::Darwin).unwrap();
+        assert_eq!(brew.install_in("nushell", u), brew.install("nushell"));
     }
 
     #[test]

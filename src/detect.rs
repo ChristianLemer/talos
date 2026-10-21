@@ -658,6 +658,7 @@ mod tests {
             is_extension: false,
             version_regex: None,
             pin: None,
+            scope: None,
             requires: vec![],
             posture: Posture::OptIn,
             categories: vec!["misc".into()],

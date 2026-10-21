@@ -242,6 +242,24 @@ installed version is compared on as many segments as the pin has, so `2.50.1.win
 satisfies `version: "2.50.1"` and `1.8.2` satisfies `version: "1.8"`. Write more segments to
 pin tighter.
 
+### Where a winget package lives — `scope:`
+
+`scope: user` or `scope: machine` (winget only) decides where the package is installed:
+every install, pinned install and downgrade reinstall passes `--scope`. Declare it when the
+package must sit in one place: the downgrade's uninstall removes **every** copy
+(`--all-versions`), and the reinstall then lands where you declared — so a copy someone put
+elsewhere is moved back, never duplicated.
+
+Without it, a downgrade reads where the installed copy lives (the InstallLocation of its
+uninstall entry: under the user's profile → `user`, elsewhere → `machine`) and reinstalls
+there; the row's terminal says what it found. That fallback exists because winget's default
+is not where the copy was — MEASURED: a machine-wide Nushell, downgraded with no scope,
+came back per-user, and the next upgrade added a second, machine-wide copy beside it.
+
+⚠️ Declare only a scope the package's installer offers: many winget packages are
+machine-only, and `--scope user` fails on them. A wrong word, or `scope:` on a package with
+no `winget:` id, is a `--check` error.
+
 ### `version:` takes three forms, and the two words are not decoration
 
 | written | meaning | what Apply does |

@@ -151,6 +151,21 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
                  — the runtime ignores it, which is not what you meant"
             ));
         }
+        // `scope:` says where winget puts the package. A word that is not one is no scope at
+        // all at runtime, and on another route it means nothing — both are the author's
+        // mistake, and both are said here rather than left to a machine to reveal.
+        if let Some(w) = cp.pkg.scope.as_deref() {
+            if crate::managers::InstallScope::from_word(w).is_none() {
+                r.errors.push(format!(
+                    "{label}: scope \"{w}\" is not `user` nor `machine` — winget would be \
+                     given no scope, which is not what you meant"
+                ));
+            } else if cp.pkg.winget.is_none() {
+                r.errors.push(format!(
+                    "{label}: scope is a winget setting, and this package has no `winget:` id"
+                ));
+            }
+        }
         // `doctor:` is a capability the engine acts on, so its two inputs are checked
         // here rather than discovered at launch: a binary to resolve (the first word of
         // `detect:`) and, if a clean env var is declared, a name that IS a variable name.
@@ -412,6 +427,29 @@ mod tests {
             r.errors,
             vec!["bundles/base.yaml: package `Ghost` — no package with that name in the catalog"]
         );
+    }
+
+    #[test]
+    fn a_scope_is_user_or_machine_and_only_on_winget() {
+        let d = tmp("scope");
+        write(
+            &d,
+            "catalog/a.yaml",
+            "name: A\nwinget: A.A\nscope: everywhere\n",
+        );
+        write(&d, "catalog/b.yaml", "name: B\nbrew: b\nscope: user\n");
+        write(
+            &d,
+            "catalog/c.yaml",
+            "name: C\nwinget: C.C\nscope: machine\n",
+        );
+        let text = run(&d.join("catalog"), &d.join("bundles")).render();
+        assert!(
+            text.contains("catalog/a.yaml: scope \"everywhere\""),
+            "{text}"
+        );
+        assert!(text.contains("catalog/b.yaml: scope"), "{text}");
+        assert!(!text.contains("catalog/c.yaml"), "{text}");
     }
 
     #[test]
