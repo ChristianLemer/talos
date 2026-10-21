@@ -245,7 +245,11 @@ pin tighter.
 ### Where a winget package lives — `scope:`
 
 `scope: user` or `scope: machine` (winget only) decides where the package is installed:
-every install, pinned install and downgrade reinstall passes `--scope`. Declare it when the
+every install, upgrade, pinned install and downgrade reinstall passes `--scope`. An upgrade
+is then a `winget install --scope`, not a `winget upgrade` — MEASURED: `winget upgrade` on a
+per-user Nushell put the new version machine-wide beside it, and `winget upgrade --scope
+user` did not even find it (winget files that copy as machine); `winget install --scope
+user` upgraded it in place. Declare it when the
 package must sit in one place: the downgrade's uninstall removes **every** copy
 (`--all-versions`), and the reinstall then lands where you declared — so a copy someone put
 elsewhere is moved back, never duplicated.

@@ -407,7 +407,14 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
                 route: Some(mgr.route.into()),
                 install: Some(mgr.install_in(id, scope)),
                 uninstall: Some(mgr.uninstall(id)),
-                upgrade: Some(mgr.upgrade(id, false)), // formula form; server.rs re-forces for casks at apply
+                // A declared scope upgrades by INSTALLING there: `winget upgrade` keeps no
+                // scope (measured: a per-user copy got a machine-wide twin), while
+                // `winget install --scope` upgrades in place. Otherwise the formula form;
+                // server.rs re-forces for casks at apply.
+                upgrade: Some(match scope {
+                    Some(_) => mgr.install_in(id, scope),
+                    None => mgr.upgrade(id, false),
+                }),
                 downgrade: None,
             };
         }
@@ -1343,6 +1350,15 @@ mod tests {
             "{c:?}"
         );
         assert!(c.downgrade.is_none(), "no pin, no downgrade");
+        // ⚠️ And NOT `winget upgrade`. MEASURED (Windows VM, 2026-10-21): upgrading a per-user
+        // Nushell with `winget upgrade` put 0.116.1 in Program Files BESIDE it, and
+        // `winget upgrade --scope user` found nothing (winget files that per-user copy as
+        // machine). `winget install --scope user` upgraded it in place: one copy, one entry.
+        let up = c.upgrade.as_deref().unwrap();
+        assert!(
+            up.starts_with("winget install --id Nushell.Nushell") && up.ends_with(" --scope user"),
+            "{up}"
+        );
         p.version = Some("0.113.1".into());
         let c = commands_for(&p, Os::Windows);
         for cmd in [&c.install, &c.upgrade, &c.downgrade] {
