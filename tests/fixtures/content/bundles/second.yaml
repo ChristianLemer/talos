@@ -1,10 +1,12 @@
 # FORM: a bundle that `needs:` another — activating it activates Base too.
+# FORM: `default: on` — active on a first launch, so Base, which it needs, is too.
 bundle: Second
 emoji: 🔗
 usage: Stands on Base.
 highlights: [Claude Plugin]
 description: The second rung of the chain.
 needs: [Base]
+default: on
 packages:
   - Claude Plugin
   - Some Skill

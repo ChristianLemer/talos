@@ -23,7 +23,9 @@ use crate::detect::detect_present_detailed;
 use crate::outdated::{outdated_for, scan_outdated};
 use crate::platform::{current_os, local_data_dir, Os};
 use crate::profiles::{load_profiles, Profiles};
-use crate::selection::{read_selection, write_selection, Selection};
+use crate::selection::{
+    read_selection, read_selection_or_first_launch, write_selection, Selection,
+};
 
 /// Below this many rows to probe, the machine-wide presence listing costs more than
 /// the per-package probes it replaces (~3.7 s for one `winget list` vs ~1.3 s per
@@ -1076,6 +1078,9 @@ fn plan_message(state: &AppState, steps: &[crate::bundles::Step]) -> Value {
         .collect();
     // The top-panel "needs" (profiles.yaml), loaded at boot. Same keys the front
     // expects (renderProfiles, app.js:164): name/emoji/usage/highlights/description/packages.
+    // `defaultOn` is the CLOSED set (a card a default one needs is on too), computed once
+    // here for both the cards and the first-launch selection below.
+    let default_cards = crate::profiles::default_active(&state.profiles);
     let profiles_json: Vec<_> = state
         .profiles
         .items
@@ -1084,7 +1089,8 @@ fn plan_message(state: &AppState, steps: &[crate::bundles::Step]) -> Value {
             json!({
                 "name": p.name, "emoji": p.emoji, "usage": p.usage,
                 "highlights": p.highlights, "description": p.description,
-                "packages": p.packages, "needs": p.needs
+                "packages": p.packages, "needs": p.needs,
+                "defaultOn": default_cards.contains(&p.name)
             })
         })
         .collect();
@@ -1100,7 +1106,9 @@ fn plan_message(state: &AppState, steps: &[crate::bundles::Step]) -> Value {
     json!({
         "type": "plan",
         "steps": steps_json,
-        "selection": read_selection(&state.data_dir),
+        // On a FIRST launch (no file yet) the author's `default: on` cards come back as the
+        // active set — the engine decides, the front restores what it is handed.
+        "selection": read_selection_or_first_launch(&state.data_dir, &default_cards),
         "profiles": profiles_json,
         "profileColumns": state.profiles.columns,
         "consent": read_consent(&state.consent),
@@ -4410,6 +4418,42 @@ mod tests {
         let m = super::plan_message(&state, &[]);
         assert_eq!(m["distribution"]["label"], "Ops 3", "{m}");
         assert_eq!(m["distribution"]["name"], "Ops", "{m}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A first launch (no `selection.json` yet) hands the front the author's default-on
+    /// cards, needs included; the first saved selection replaces them, for good.
+    #[test]
+    fn the_plan_message_seeds_the_default_cards_on_a_first_launch_only() {
+        let dir = share("talos-test-plan-default-cards");
+        let mut state = state_with_share(&dir);
+        state.profiles = crate::profiles::Profiles {
+            columns: 2,
+            items: vec![
+                crate::profiles::parse_one_bundle("bundle: Base\n").unwrap(),
+                crate::profiles::parse_one_bundle("bundle: Data\ndefault: on\nneeds: [Base]\n")
+                    .unwrap(),
+                crate::profiles::parse_one_bundle("bundle: Legacy\n").unwrap(),
+            ],
+        };
+        let m = super::plan_message(&state, &[]);
+        assert_eq!(
+            m["selection"]["activeBundles"],
+            json!(["Base", "Data"]),
+            "{m}"
+        );
+        // Each card says whether it is a default one — what the front's Reset returns to.
+        let on: Vec<bool> = (0..3)
+            .map(|i| m["profiles"][i]["defaultOn"] == true)
+            .collect();
+        assert_eq!(on, vec![true, true, false], "{m}");
+        let saved = crate::selection::Selection {
+            active_bundles: vec!["Legacy".into()],
+            ..Default::default()
+        };
+        crate::selection::write_selection(&state.data_dir, &saved);
+        let m = super::plan_message(&state, &[]);
+        assert_eq!(m["selection"]["activeBundles"], json!(["Legacy"]), "{m}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

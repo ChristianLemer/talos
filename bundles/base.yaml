@@ -1,8 +1,10 @@
 # Base — what a machine needs to work with an agent, and nothing else. A BUNDLE is a
 # card: activating it pulls its packages "in" as a group, by NAME. Purely additive; a
 # manual "out" always wins. Every other bundle here `needs:` this one, so activating any
-# of them activates Base too.
+# of them activates Base too. `default: on`: a machine opening Talos for the first time —
+# no selection saved yet — finds this card already checked. Unchecking it is saved, and wins.
 bundle: Base
+default: on
 emoji: 🧱
 usage: An agent, an editor, and what they stand on.
 highlights: [Claude Code, Visual Studio Code, uv]

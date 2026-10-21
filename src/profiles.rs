@@ -28,7 +28,27 @@ struct RawProfile {
     // cascade, spec §23). Empty for standalone bundles.
     #[serde(default)]
     needs: Vec<String>,
+    // `default: on` — the card is active on a FIRST launch (no saved selection yet), and
+    // pulls its `needs:` as a click would. Read as a YAML value, not a bool: `on` is a
+    // string to YAML 1.2, and a misspelt value must leave the card off, not drop it.
+    #[serde(default)]
+    default: Option<serde_yaml::Value>,
 }
+
+/// Every YAML key a bundle file may carry, as `--check` enforces it. Kept by hand beside
+/// the struct for the reason `RawPkg::KNOWN_KEYS` is; `known_keys_match_the_struct` fails
+/// when the two drift. `profile` is the legacy spelling of `bundle`.
+pub const KNOWN_KEYS: &[&str] = &[
+    "bundle",
+    "profile",
+    "emoji",
+    "usage",
+    "highlights",
+    "description",
+    "packages",
+    "needs",
+    "default",
+];
 
 #[derive(Debug, Deserialize, Default)]
 struct RawProfilesFile {
@@ -48,6 +68,8 @@ pub struct Profile {
     pub description: String,
     pub packages: Vec<String>,
     pub needs: Vec<String>,
+    /// `default: on` — active on a first launch. See `default_active`.
+    pub default_on: bool,
 }
 
 /// The whole profiles panel: the cards + the grid column count.
@@ -77,6 +99,7 @@ pub fn parse_profiles(raw: &str) -> Profiles {
                 highlights: p.highlights,
                 description: p.description.unwrap_or_default(),
                 packages: p.packages,
+                default_on: is_on(&p.default),
                 needs: p.needs,
             })
         })
@@ -106,8 +129,44 @@ pub fn parse_one_bundle_strict(raw: &str) -> Result<Option<Profile>, String> {
         highlights: p.highlights,
         description: p.description.unwrap_or_default(),
         packages: p.packages,
+        default_on: is_on(&p.default),
         needs: p.needs,
     }))
+}
+
+/// The cards active on a first launch: every `default: on` card plus, transitively, what
+/// it `needs:`.
+///
+/// ⭐ The engine decides this, not the front: which cards are on is the user's intention,
+/// and the intention is an engine rule (one rule, every caller). The front only restores
+/// the list it is handed. A need naming no card is dropped; a cycle stops where it closes.
+pub fn default_active(profiles: &Profiles) -> Vec<String> {
+    fn pull(profiles: &Profiles, name: &str, on: &mut std::collections::BTreeSet<String>) {
+        let Some(p) = profiles.items.iter().find(|p| p.name == name) else {
+            return;
+        };
+        if on.insert(p.name.clone()) {
+            for n in &p.needs {
+                pull(profiles, n, on);
+            }
+        }
+    }
+    let mut on = std::collections::BTreeSet::new();
+    for p in profiles.items.iter().filter(|p| p.default_on) {
+        pull(profiles, &p.name, &mut on);
+    }
+    // Card order, not alphabetical: the list is shown and persisted as it comes.
+    profiles
+        .items
+        .iter()
+        .filter(|p| on.contains(&p.name))
+        .map(|p| p.name.clone())
+        .collect()
+}
+
+/// `default: on` and nothing else. Lenient by design — `--check` names any other value.
+fn is_on(v: &Option<serde_yaml::Value>) -> bool {
+    matches!(v, Some(serde_yaml::Value::String(s)) if s == "on")
 }
 
 /// Load the bundle cards: every `*.yaml` under `dir` that names a bundle becomes
@@ -258,5 +317,105 @@ profiles:
         assert_eq!(p.items[0].name, "First"); // sorted path order
         assert_eq!(p.items[1].name, "Second");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_one_bundle_reads_default_on() {
+        let on = parse_one_bundle("bundle: Base\ndefault: on\npackages: [Git]\n").unwrap();
+        assert!(on.default_on);
+        let off = parse_one_bundle("bundle: Base\ndefault: off\npackages: [Git]\n").unwrap();
+        assert!(!off.default_on);
+        let absent = parse_one_bundle("bundle: Base\npackages: [Git]\n").unwrap();
+        assert!(!absent.default_on);
+    }
+
+    /// The runtime is lenient, `--check` is strict: a value that is not `on` — `true`, `yes`,
+    /// a list — leaves the card OFF, and never takes the card off the screen.
+    #[test]
+    fn a_misspelt_default_keeps_the_card_and_leaves_it_off() {
+        for v in ["true", "yes", "[on]", "On"] {
+            let p = parse_one_bundle(&format!("bundle: Base\ndefault: {v}\npackages: [Git]\n"))
+                .unwrap_or_else(|| panic!("`default: {v}` dropped the card"));
+            assert!(!p.default_on, "`default: {v}` read as on");
+        }
+    }
+
+    fn card(name: &str, default_on: bool, needs: &[&str]) -> Profile {
+        Profile {
+            name: name.into(),
+            emoji: String::new(),
+            usage: String::new(),
+            highlights: vec![],
+            description: String::new(),
+            packages: vec![],
+            needs: needs.iter().map(|n| n.to_string()).collect(),
+            default_on,
+        }
+    }
+
+    /// A default-on card pulls its `needs:` as a click on it does: Data needs Base, so a
+    /// first launch with Data on has Base on too. Card order, each name once.
+    #[test]
+    fn default_active_follows_needs_transitively() {
+        let p = Profiles {
+            columns: 2,
+            items: vec![
+                card("Base", false, &[]),
+                card("Data", false, &["Base"]),
+                card("Team", true, &["Data"]),
+                card("Legacy", false, &[]),
+                card("Terminal", true, &[]),
+            ],
+        };
+        assert_eq!(default_active(&p), vec!["Base", "Data", "Team", "Terminal"]);
+    }
+
+    #[test]
+    fn default_active_survives_a_cycle_and_an_unknown_need() {
+        let p = Profiles {
+            columns: 2,
+            items: vec![card("A", true, &["B", "Ghost"]), card("B", false, &["A"])],
+        };
+        assert_eq!(default_active(&p), vec!["A", "B"]);
+        assert!(default_active(&Profiles::default()).is_empty());
+    }
+
+    /// The hand-kept key list and the struct agree — the same guard as `RawPkg`'s: a YAML
+    /// carrying every known key parses, and the list counts one entry per struct field plus
+    /// the legacy alias (`profile` and `bundle` are one field, so only one goes in the YAML).
+    #[test]
+    fn known_keys_match_the_struct() {
+        let yaml: String = KNOWN_KEYS
+            .iter()
+            .filter(|k| **k != "profile")
+            .map(|k| match *k {
+                "highlights" | "packages" | "needs" => format!("{k}: []\n"),
+                _ => format!("{k}: x\n"),
+            })
+            .collect();
+        let parsed: Result<RawProfile, _> = serde_yaml::from_str(&yaml);
+        assert!(parsed.is_ok(), "{parsed:?}");
+        let fields = format!("{:?}", RawProfile::default()).matches(": ").count();
+        assert_eq!(
+            fields + 1,
+            KNOWN_KEYS.len(),
+            "RawProfile has {fields} fields"
+        );
+    }
+
+    /// Every bundle key is named in the authoring reference, as `key:` — the bundle half of
+    /// the guard `RawPkg` has. A field the reference does not name is a field nobody uses.
+    #[test]
+    fn every_bundle_key_is_documented_in_the_authoring_reference() {
+        let reference =
+            include_str!("../plugin/skills/talos-content/references/fields.md").replace('\r', "");
+        let undocumented: Vec<&&str> = KNOWN_KEYS
+            .iter()
+            .filter(|k| !reference.contains(&format!("{k}:")))
+            .collect();
+        assert!(
+            undocumented.is_empty(),
+            "undocumented bundle keys: {undocumented:?}"
+        );
     }
 }

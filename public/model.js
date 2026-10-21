@@ -51,6 +51,9 @@ export function loadPlan(model, steps, profiles = []) {
       highlights: p.highlights ?? [],
       packages: p.packages ?? [],
       needs: p.needs ?? [], // other bundles this one depends on (cascade, §23)
+      // On at a first launch — `default: on`, or needed by a card that is. The ENGINE
+      // computes it (profiles.rs default_active); the model only returns to it on Reset.
+      defaultOn: p.defaultOn === true,
     });
   }
   for (const s of steps) {
@@ -527,11 +530,13 @@ export function setExternal(model, i, external) {
   const p = model.pkgs.get(i);
   if (p) p.external = external === true;
 }
-// Reset: back to posture defaults — clears BOTH manual toggles AND active
-// profiles (profiles are additive intention; a true reset drops them too).
+// Reset: back to a first launch — clears BOTH manual toggles AND active profiles
+// (profiles are additive intention; a true reset drops them too), then puts back the
+// author's default cards, which is what a machine with no saved selection shows.
 export function clearAllDecisions(model) {
   model.decision.clear();
   model.activeProfiles.clear();
+  for (const name of defaultCards(model)) model.activeProfiles.add(name);
   // Reset clears the TRACES too. Everywhere else a gesture must leave one, but Reset
   // is the gesture that says "forget my choices" — keeping witnesses to choices that
   // no longer exist would fill the view with rows the user just asked to be rid of.
@@ -630,17 +635,24 @@ export function removeProfile(model, name) {
   };
   deactivate(name);
 }
+// The author cards on at a first launch, as the engine marked them.
+function defaultCards(model) {
+  return new Set([...model.profiles.values()].filter((p) => p.defaultOn).map((p) => p.name));
+}
 export function isProfileActive(model, name) {
   return model.activeProfiles.has(name);
 }
 // Would a Reset do anything? True if the user moved a package off its author
-// default OR has an active profile — both are cleared by clearAllDecisions. The
+// default OR the active cards are not the default ones — clearAllDecisions undoes both. The
 // domain answer to "is Reset meaningful right now?", kept out of the view.
 export function canReset(model) {
-  // Any ACTIVE author bundle (not the always-on personal one) is a change.
+  // The active author cards differ from the default ones (the always-on personal bundle
+  // aside): a card beyond them, or a default card unchecked, is a change.
+  const defaults = defaultCards(model);
   for (const name of model.activeProfiles) {
-    if (name !== PERSONAL_BUNDLE) return true;
+    if (name !== PERSONAL_BUNDLE && !defaults.has(name)) return true;
   }
+  for (const name of defaults) if (!model.activeProfiles.has(name)) return true;
   // A non-empty personal bundle (the user added packages) is a change.
   if ((model.profiles.get(PERSONAL_BUNDLE)?.packages.length ?? 0) > 0) return true;
   // A manual override (veto) on any package is a change.

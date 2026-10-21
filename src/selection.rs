@@ -116,6 +116,24 @@ pub fn read_selection(local_dir: &Path) -> Selection {
     }
 }
 
+/// Reads the persisted intent, or — when no selection was EVER saved on this machine —
+/// starts from the author's default-on cards (`profiles::default_active`).
+///
+/// ⚠️ "First" is decided by the FILE's absence, never by an empty active set: a user who
+/// unchecked every card saved an empty list, and that list must win. A file that exists but
+/// does not parse was a selection too, so it reads empty rather than re-seeding. Nothing is
+/// written here — the first gesture persists, as on any launch.
+pub fn read_selection_or_first_launch(local_dir: &Path, default_bundles: &[String]) -> Selection {
+    match std::fs::read_to_string(selection_path(local_dir)) {
+        Ok(raw) => parse_selection(&raw),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Selection {
+            active_bundles: default_bundles.to_vec(),
+            ..Selection::default()
+        },
+        Err(_) => Selection::default(),
+    }
+}
+
 /// Persists the intent. Best-effort: a failed write never sinks a
 /// session (at worst we restart from the author's defaults on the next launch).
 pub fn write_selection(local_dir: &Path, sel: &Selection) {
@@ -235,6 +253,43 @@ mod tests {
         sel.scope.insert("Obsidian".into(), "out".into());
         write_selection(&dir, &sel);
         assert_eq!(read_selection(&dir), sel);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FIRST launch = no `selection.json` at all. Then, and only then, the author's
+    /// default-on cards are the active set.
+    #[test]
+    fn a_first_launch_starts_from_the_authors_default_cards() {
+        let dir = std::env::temp_dir().join("talos-test-sel-first");
+        let _ = std::fs::remove_dir_all(&dir);
+        let sel = read_selection_or_first_launch(&dir, &["Base".into(), "Data".into()]);
+        assert_eq!(sel.active_bundles, vec!["Base", "Data"]);
+        assert!(sel.pkgs.is_empty());
+    }
+
+    /// A saved selection always wins — including one where the user unchecked every card,
+    /// which is an EMPTY list in a file that exists. Migration is the same case: a machine
+    /// that already has a file sees no change.
+    #[test]
+    fn a_saved_selection_wins_even_when_it_is_empty() {
+        let dir = std::env::temp_dir().join("talos-test-sel-saved-empty");
+        let _ = std::fs::remove_dir_all(&dir);
+        write_selection(&dir, &Selection::default());
+        let sel = read_selection_or_first_launch(&dir, &["Base".into()]);
+        assert!(sel.active_bundles.is_empty(), "{:?}", sel.active_bundles);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A corrupt file is a selection the user HAD: it reads as empty (never sinks the
+    /// session), and it is not a first launch — the defaults do not come back over it.
+    #[test]
+    fn a_corrupt_selection_is_not_a_first_launch() {
+        let dir = std::env::temp_dir().join("talos-test-sel-corrupt");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("selection.json"), "pas du json").unwrap();
+        let sel = read_selection_or_first_launch(&dir, &["Base".into()]);
+        assert!(sel.active_bundles.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

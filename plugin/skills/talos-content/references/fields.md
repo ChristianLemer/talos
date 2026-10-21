@@ -61,6 +61,7 @@ usage: Teach the agent how to work, and keep a second one at hand.
 highlights: [Superpowers, astral]      # 2-3 names to advertise the card
 description: Plugins and skills that shape how the agent works, plus Copilot CLI.
 needs: [Base]                          # bundles this one stands on (real cascade)
+default: on                            # checked on a FIRST launch; omit for off
 packages:
   - Superpowers
   - astral
@@ -70,6 +71,25 @@ A bundle is a **button**: activating it pulls its packages "in" as a group. Pure
 additive — it never forces anything out, and a manual "out" always wins. Several can
 be active at once; their pulls union. `needs:` chains bundles: the shipped chain is
 Base ← Manuals, Plus, Terminal — each of the three `needs: [Base]`.
+
+`default: on` makes the card **checked when Talos opens on a machine for the first
+time** — that is, when no selection has ever been saved there (`selection.json` in the
+local data dir does not exist). What it does, exactly:
+
+- **It pulls its `needs:`**, as a click on the card does: `default: on` on Manuals
+  opens with Manuals *and* Base checked.
+- **It is a proposal, not a lock.** The user can uncheck the card; the first gesture
+  saves the selection, and from then on the SAVED selection decides, on every launch —
+  an unchecked default card stays unchecked. A machine that already has a selection
+  sees no change when you add `default: on` to a bundle.
+- **Reset returns to it.** Reset puts the default cards back, as on a first launch.
+- **Nothing is installed by it.** A checked card is intention; only Apply acts.
+- **Values: `on` or `off`** (`off` is the same as omitting the key). Write `on`, not
+  `true` or `yes`: the runtime reads any other value as off, and `--check` refuses it.
+
+⚠️ **There is no bundle-level `posture:`.** An older version of this reference
+described one (`mandatory` / `opt-out` / `opt-in` / `forbidden`); the engine never read
+it. `--check` now names any key a bundle file does not support, `posture:` included.
 
 ## Routes — a package is a *need*, satisfied by one named route
 

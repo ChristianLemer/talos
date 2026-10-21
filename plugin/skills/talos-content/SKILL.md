@@ -14,7 +14,7 @@ content is editing YAML, and shipping it is a commit.
 - **`catalog/`** — one YAML per **package**. The file stem is its id; `name:` is what
   everything else refers to.
 - **`bundles/`** — one YAML per **card**. A bundle owns nothing; it pulls packages in by
-  `name:`, and `needs:` other bundles.
+  `name:`, `needs:` other bundles, and `default: on` checks it on a first launch.
 
 The complete field-by-field semantics live in
 [`references/fields.md`](references/fields.md). Read that when you need to know exactly

@@ -536,6 +536,45 @@ test("clearAllDecisions drops author profiles but keeps personal empty+active", 
   assert.deepEqual(profileStateOf(m, "All tools"), "off");
 });
 
+// The author's `default: on` cards. The ENGINE computes the list (needs included) and marks
+// each card `defaultOn`; the model only restores it. A Reset goes back to that first-launch
+// state — "forget my choices" means the author's proposal, not an empty screen.
+function seedWithDefaultCards() {
+  const m = createModel();
+  loadPlan(
+    m,
+    [
+      { i: 0, name: "Node", canUninstall: true },
+      { i: 1, name: "rg", canUninstall: true },
+    ],
+    [
+      { name: "Base", packages: ["Node"], defaultOn: true },
+      { name: "Search", packages: ["rg"], needs: ["Base"] },
+    ],
+  );
+  return m;
+}
+
+test("clearAllDecisions returns to the author's default cards", () => {
+  const m = seedWithDefaultCards();
+  applyProfile(m, "Search");
+  setDecision(m, 0, "out");
+  clearAllDecisions(m);
+  assert.deepEqual([...m.activeProfiles].sort(), ["Base", PERSONAL_BUNDLE].sort());
+  assert.equal(m.decision.size, 0);
+});
+
+test("canReset is false on the default cards, true once one is unchecked", () => {
+  const m = seedWithDefaultCards();
+  applyProfile(m, "Base"); // what a first launch restores
+  assert.equal(canReset(m), false, "the author's proposal is the rest state");
+  removeProfile(m, "Base");
+  assert.equal(canReset(m), true, "unchecking a default card is a change");
+  applyProfile(m, "Base");
+  applyProfile(m, "Search");
+  assert.equal(canReset(m), true, "a card beyond the defaults is a change");
+});
+
 test("rowGesture offers diff on a self-owned config-atom, and nothing else", () => {
   // The row button lost its ACTION role on 2026-10-10 — the Apply is the one path that
   // acts. What stays is inspection: the diff of a config the user chose to own.

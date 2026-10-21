@@ -81,6 +81,27 @@ fn file_label(dir: &Path, path: &Path) -> String {
     format!("{dir_name}/{file}")
 }
 
+/// A key the engine does not know is a FIELD THAT DOES NOTHING: serde ignores it, the
+/// runtime never sees it, and the author believes it took. `requries:`, `npm-flags:` for
+/// `npmFlags:`, a field from a future release on an older engine — all read as "fine"
+/// without this. `known` comes from the struct's hand-kept list.
+fn unknown_keys(r: &mut Report, label: &str, raw: &str, known: impl Fn(&str) -> bool) {
+    if let Ok(serde_yaml::Value::Mapping(m)) = serde_yaml::from_str::<serde_yaml::Value>(raw) {
+        for k in m.keys() {
+            let key = match k {
+                serde_yaml::Value::String(s) => s.clone(),
+                serde_yaml::Value::Number(n) => n.to_string(),
+                other => format!("{other:?}"),
+            };
+            if !known(&key) {
+                r.errors.push(format!(
+                    "{label}: unknown field `{key}` — the engine ignores it, so it does nothing"
+                ));
+            }
+        }
+    }
+}
+
 pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
     let mut r = Report::default();
 
@@ -106,24 +127,9 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
                 continue;
             }
         };
-        // A key the engine does not know is a FIELD THAT DOES NOTHING: serde ignores it,
-        // the runtime never sees it, and the author believes it took. `requries:`,
-        // `npm-flags:` for `npmFlags:`, a field from a future release on an older
-        // engine — all read as "fine" without this. The names come from the struct.
-        if let Ok(serde_yaml::Value::Mapping(m)) = serde_yaml::from_str::<serde_yaml::Value>(&raw) {
-            for k in m.keys() {
-                let key = match k {
-                    serde_yaml::Value::String(s) => s.clone(),
-                    serde_yaml::Value::Number(n) => n.to_string(),
-                    other => format!("{other:?}"),
-                };
-                if !crate::bundles::RawPkg::KNOWN_KEYS.contains(&key.as_str()) && key != "id" {
-                    r.errors.push(format!(
-                        "{label}: unknown field `{key}` — the engine ignores it, so it does nothing"
-                    ));
-                }
-            }
-        }
+        unknown_keys(&mut r, &label, &raw, |k| {
+            crate::bundles::RawPkg::KNOWN_KEYS.contains(&k) || k == "id"
+        });
         let cp = match crate::catalog::parse_catalog_entry_strict(&raw, stem) {
             Ok(cp) => cp,
             Err(e) => {
@@ -243,6 +249,24 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
                 continue;
             }
         };
+        // The same guard as a catalog file's: `posture:` sat in an old README for months,
+        // read by nothing, and this check let it through.
+        unknown_keys(&mut r, &label, &raw, |k| {
+            crate::profiles::KNOWN_KEYS.contains(&k)
+        });
+        // `default:` is `on` or `off`. The runtime reads any other value as off, leniently —
+        // which is exactly why the strict reader must say so.
+        if let Ok(serde_yaml::Value::Mapping(m)) = serde_yaml::from_str::<serde_yaml::Value>(&raw) {
+            if let Some(v) = m.get("default") {
+                if !matches!(v, serde_yaml::Value::String(s) if s == "on" || s == "off") {
+                    let shown = serde_yaml::to_string(v).unwrap_or_default();
+                    r.errors.push(format!(
+                        "{label}: `default: {}` — write `on` or `off`; anything else reads as off",
+                        shown.trim()
+                    ));
+                }
+            }
+        }
         let profile = match crate::profiles::parse_one_bundle_strict(&raw) {
             Ok(Some(p)) => p,
             Ok(None) => {
@@ -397,6 +421,31 @@ mod tests {
         );
     }
 
+    /// The same completeness for bundles: every bundle key has a form in the fixture —
+    /// `profile`, the legacy spelling of `bundle`, aside.
+    #[test]
+    fn the_fixture_covers_every_bundle_key() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/content/bundles");
+        let mut seen = std::collections::BTreeSet::new();
+        for path in yaml_files(&dir) {
+            let raw = std::fs::read_to_string(&path).unwrap();
+            if let Ok(serde_yaml::Value::Mapping(m)) =
+                serde_yaml::from_str::<serde_yaml::Value>(&raw)
+            {
+                seen.extend(m.keys().filter_map(|k| k.as_str().map(str::to_string)));
+            }
+        }
+        let missing: Vec<&str> = crate::profiles::KNOWN_KEYS
+            .iter()
+            .copied()
+            .filter(|k| *k != "profile" && !seen.contains(*k))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "bundle keys with no form in the fixture: {missing:?}"
+        );
+    }
+
     #[test]
     fn a_broken_yaml_is_named_not_skipped() {
         let d = tmp("broken");
@@ -509,6 +558,59 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("catalog/fine.yaml"), "{text}");
+    }
+
+    /// The bundle half of the same guard. `posture:` is the case that made it necessary: an
+    /// old README promised it, the engine never read it, and `--check` said nothing.
+    #[test]
+    fn an_unknown_bundle_field_is_named_not_ignored() {
+        let d = tmp("unknown-bundle-key");
+        write(&d, "catalog/git.yaml", "name: Git\nbrew: git\n");
+        write(
+            &d,
+            "bundles/base.yaml",
+            "bundle: Base\nposture: opt-out\npackages: [Git]\n",
+        );
+        write(
+            &d,
+            "bundles/fine.yaml",
+            "bundle: Fine\ndefault: on\nneeds: [Base]\npackages: [Git]\n",
+        );
+        let text = run(&d.join("catalog"), &d.join("bundles")).render();
+        assert!(
+            text.contains("bundles/base.yaml: unknown field `posture`"),
+            "{text}"
+        );
+        assert!(!text.contains("bundles/fine.yaml"), "{text}");
+    }
+
+    /// `default:` takes `on` or `off`. The runtime reads anything else as off, so a `true`
+    /// or a `yes` would ship a card the author believes is on.
+    #[test]
+    fn a_bundle_default_other_than_on_or_off_is_an_error() {
+        let d = tmp("bundle-default");
+        write(&d, "catalog/git.yaml", "name: Git\nbrew: git\n");
+        write(
+            &d,
+            "bundles/a.yaml",
+            "bundle: A\ndefault: true\npackages: [Git]\n",
+        );
+        write(
+            &d,
+            "bundles/b.yaml",
+            "bundle: B\ndefault: yes\npackages: [Git]\n",
+        );
+        write(
+            &d,
+            "bundles/c.yaml",
+            "bundle: C\ndefault: off\npackages: [Git]\n",
+        );
+        let r = run(&d.join("catalog"), &d.join("bundles"));
+        let text = r.render();
+        assert!(text.contains("bundles/a.yaml: `default: true`"), "{text}");
+        assert!(text.contains("bundles/b.yaml: `default: yes`"), "{text}");
+        assert!(!text.contains("bundles/c.yaml"), "{text}");
+        assert_eq!(r.bundles, 3, "a bad default never drops the card");
     }
 
     #[test]

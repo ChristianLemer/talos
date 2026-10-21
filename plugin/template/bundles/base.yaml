@@ -1,6 +1,8 @@
 # Base — a BUNDLE is a card: activating it pulls its packages "in" as a group, BY NAME.
 # Purely additive — it never forces anything out, and a manual "out" always wins.
+# `default: on`: checked on a first launch (no selection saved yet); the user can uncheck it.
 bundle: Base
+default: on
 emoji: 🧱
 usage: An agent, an editor, and what they stand on.
 highlights: [Claude Code, Visual Studio Code]
