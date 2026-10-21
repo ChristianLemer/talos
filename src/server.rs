@@ -2205,7 +2205,7 @@ async fn apply_diff(
         //   · the front's `unmanaged` list carries the DERIVED half (`external`,
         //     `!canUninstall`) — live facts the server does not hold;
         //   · the persisted overrides carry the user's EXPLICIT half, and reading
-        //     them here gives the batch path the same teeth `row_action` has.
+        //     them here gives the batch path the same teeth `retry_attempt` has.
         // Without the second, a client that simply omitted the list would still get
         // its uninstall: the batch path would trust the wire where the row path does
         // not. Same predicate, same disk, one asymmetry closed.
