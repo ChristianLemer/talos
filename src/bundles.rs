@@ -1390,7 +1390,11 @@ mod tests {
     /// `load_from_catalog` uses. ⚠️ Test-only, and it must call the SAME code: a helper that
     /// re-implemented the derivation would bless a copy instead of testing the original.
     fn steps_from_pkgs(pkgs: &[(&str, RawPkg)], os: Os) -> Vec<Step> {
-        let dir = std::env::temp_dir().join(format!("talos-pin-cat-{}", std::process::id()));
+        // One folder PER CALL: tests run in parallel in one process, and a folder named by the
+        // pid alone was removed by one test while another was still reading it.
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("talos-pin-cat-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("a temp catalogue dir");
         for (stem, p) in pkgs {
@@ -1420,7 +1424,9 @@ mod tests {
     /// Same, but capturing the log so a refusal can be asserted.
     fn load_from_catalog_with_pkgs(pkgs: &[(&str, RawPkg)], os: Os) -> (Vec<Step>, Vec<String>) {
         use std::cell::RefCell;
-        let dir = std::env::temp_dir().join(format!("talos-pin-log-{}", std::process::id()));
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("talos-pin-log-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("a temp catalogue dir");
         for (stem, p) in pkgs {

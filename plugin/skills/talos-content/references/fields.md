@@ -245,20 +245,27 @@ pin tighter.
 ### Where a winget package lives — `scope:`
 
 `scope: user` or `scope: machine` (winget only) decides where the package is installed:
-every install, upgrade, pinned install and downgrade reinstall passes `--scope`. An upgrade
-is then a `winget install --scope`, not a `winget upgrade` — MEASURED: `winget upgrade` on a
-per-user Nushell put the new version machine-wide beside it, and `winget upgrade --scope
-user` did not even find it (winget files that copy as machine); `winget install --scope
-user` upgraded it in place. Declare it when the
-package must sit in one place: the downgrade's uninstall removes **every** copy
-(`--all-versions`), and the reinstall then lands where you declared — so a copy someone put
-elsewhere is moved back, never duplicated.
+every install, upgrade, pinned install and downgrade reinstall passes `--scope`, and a copy
+found elsewhere is **moved**, never duplicated. Just before an upgrade or a downgrade, Talos
+reads where the installed copy is, and the row's terminal says what it found:
 
-Without it, a downgrade reads where the installed copy lives (the InstallLocation of its
-uninstall entry: under the user's profile → `user`, elsewhere → `machine`) and reinstalls
-there; the row's terminal says what it found. That fallback exists because winget's default
-is not where the copy was — MEASURED: a machine-wide Nushell, downgraded with no scope,
-came back per-user, and the next upgrade added a second, machine-wide copy beside it.
+| the copy is… | upgrade | downgrade |
+|---|---|---|
+| already in the declared scope | `winget install --scope` — in place | uninstall, then reinstall at the pin there |
+| elsewhere, or where cannot be read | uninstall, then install there | the same |
+| not installed any more | — | install at the pin there (nothing to uninstall) |
+
+Why not `winget upgrade`, and why not always install in place — all MEASURED on Nushell's
+MSI: `winget upgrade` on a per-user copy put the new version machine-wide beside it;
+`winget upgrade --scope user` did not even find it (winget files that copy as machine); and
+`winget install --scope user` over a **machine-wide** copy added a per-user one beside it.
+
+Without `scope:`, a downgrade reinstalls where the installed copy was, read from the
+InstallLocation of its uninstall entry: under the profile, LOCALAPPDATA or APPDATA →
+`user`; under Program Files, ProgramData or Windows → `machine`; anywhere else → unknown,
+and winget's own default is used (the row says so). Never a guess: a wrong scope would fail
+the reinstall after the uninstall had run. A retry that finds the package gone reinstalls it
+where it was found. An undeclared upgrade stays a plain `winget upgrade`.
 
 ⚠️ Declare only a scope the package's installer offers: many winget packages are
 machine-only, and `--scope user` fails on them. A wrong word, or `scope:` on a package with

@@ -264,6 +264,14 @@ struct AppState {
     /// ratchets to a MAX within one Apply (a 403 + Retry runs the same step twice), and
     /// this file wants the LAST run. Same site, different semantics.
     timed: tokio::sync::Mutex<crate::timings::Timings>,
+    /// Lines waiting for a row's terminal, written by do_step right AFTER the running status
+    /// — the front resets the terminal on that status, so a line sent earlier is wiped.
+    notes: tokio::sync::Mutex<std::collections::HashMap<usize, Vec<String>>>,
+    /// Where a winget row's installed copy was found, by the probe before a version change.
+    /// A fact read minutes ago in this session, kept so a retry that finds the package gone
+    /// reinstalls it there; never written to disk.
+    found_scope:
+        tokio::sync::Mutex<std::collections::HashMap<usize, crate::managers::InstallScope>>,
 }
 
 /// Records one observed presence in `last_seen` (grows the vector if the plan is
@@ -507,6 +515,8 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         facts,
         timings,
         timed: tokio::sync::Mutex::new(crate::timings::Timings::new()),
+        notes: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        found_scope: tokio::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
     let state_for_root = state.clone();
@@ -1778,72 +1788,181 @@ async fn retry_attempt(socket: &mut WebSocket, state: &AppState, i: usize, actio
     clear_sudo_pw(state).await; // the retry finished: clear the cached password
 }
 
-/// A winget downgrade's chain, rebuilt in the scope of the copy it replaces, with a line for
-/// the row's terminal saying what was found. None off winget: brew has no scope, and its
-/// stored chain is already the whole answer.
+/// Queues a line for row `i`'s terminal; do_step writes it after the running status.
+async fn queue_note(state: &AppState, i: usize, line: String) {
+    state.notes.lock().await.entry(i).or_default().push(line);
+}
+
+/// The lines queued for row `i`, emptied.
+async fn take_notes(state: &AppState, i: usize) -> Vec<String> {
+    state.notes.lock().await.remove(&i).unwrap_or_default()
+}
+
+/// A winget version change, rebuilt for where the package must live — or None, and the
+/// stored command stands. PURE: `listed` is (name, version) from `winget list` (None = not
+/// installed), `found` the scope the uninstall entries show (None = unreadable), `remembered`
+/// the scope an earlier probe of this session found. Returns the command and the row's line.
 ///
-/// MEASURED in the Windows VM (2026-10-21): without `--scope`, the reinstall after the
-/// uninstall went PER-USER although the copy it replaced was machine-wide, and the next
-/// upgrade added a second, machine-wide copy beside it — two `nu` on one machine. winget
-/// cannot say which scope a package is in (see `managers::scope_from_arp`), so the uninstall
-/// entry's InstallLocation is read instead. Unknown → the plain chain, and the line says so.
-async fn winget_downgrade_in_place(
+/// - Downgrade: the uninstall removes every copy; the reinstall goes to the declared scope,
+///   else the one found. Already gone (a retried reinstall half) → only the install: an
+///   uninstall of an absent package exits -1978335212, which `benign_code` accepts, and the
+///   chain would stop there reading ok with nothing reinstalled (MEASURED).
+/// - Upgrade, scope declared: in place only when the copy is already there; otherwise it is
+///   removed first. MEASURED: `winget install --scope user` over a machine-wide copy added a
+///   per-user one beside it.
+/// - Install, nothing declared: the scope remembered from the downgrade that removed it.
+fn winget_plan(
+    action: crate::decision::Action,
     step: &crate::bundles::Step,
-    os: Os,
+    listed: Option<(&str, &str)>,
+    found: Option<crate::managers::InstallScope>,
+    remembered: Option<crate::managers::InstallScope>,
 ) -> Option<(String, String)> {
-    use crate::managers::{
-        arp_probe_command, native_manager, parse_winget_version, scope_from_arp,
-        winget_installed_name,
-    };
+    use crate::decision::Action;
+    use crate::managers::InstallScope;
     if step.route.as_deref() != Some("winget") {
         return None;
     }
-    let mgr = native_manager(os).filter(|m| m.route == "winget")?;
-    let id = step.system_id.clone()?;
-    let pin = step.pin.clone()?;
-    // The AUTHOR's scope is the answer when there is one: the package goes where it was
-    // declared, wherever the copy being replaced happened to be. No probe.
-    if let Some(sc) = step.scope {
-        return Some((
-            mgr.downgrade_in(&id, &pin, Some(sc)),
-            format!(
-                "{pin} is reinstalled where the catalogue puts it (--scope {})",
-                sc.as_str()
-            ),
-        ));
+    let mgr = crate::managers::native_manager(Os::Windows)?;
+    let id = step.system_id.as_deref()?;
+    let declared = step.scope;
+    let who = |sc: InstallScope| match sc {
+        InstallScope::User => "for this user",
+        InstallScope::Machine => "for every user",
+    };
+    let flag = |sc: Option<InstallScope>| match sc {
+        Some(sc) => format!(" (--scope {})", sc.as_str()),
+        None => " in winget's default scope".to_string(),
+    };
+    match action {
+        Action::Downgrade => {
+            let pin = step.pin.as_deref()?;
+            let Some((name, installed)) = listed else {
+                let sc = declared.or(remembered);
+                return Some((
+                    mgr.install_pinned_in(id, pin, sc),
+                    format!(
+                        "{id} is not installed any more; {pin} is installed{}",
+                        flag(sc)
+                    ),
+                ));
+            };
+            let note = match (declared, found) {
+                (Some(sc), _) => format!(
+                    "{pin} is reinstalled where the catalogue puts it (--scope {})",
+                    sc.as_str()
+                ),
+                (None, Some(sc)) => format!(
+                    "{name} {installed} is installed {}; {pin} is reinstalled there (--scope {})",
+                    who(sc),
+                    sc.as_str()
+                ),
+                (None, None) => format!(
+                    "where {name} {installed} is installed could not be read; \
+                     reinstalling in winget's default scope"
+                ),
+            };
+            Some((mgr.downgrade_in(id, pin, declared.or(found)), note))
+        }
+        Action::Upgrade => {
+            let sc = declared?;
+            let (name, installed) = listed?;
+            if found == Some(sc) {
+                return None;
+            }
+            let up = step.upgrade.as_deref()?;
+            let note = match found {
+                Some(f) => format!(
+                    "{name} {installed} is installed {}; it is moved to --scope {} as it is \
+                     upgraded",
+                    who(f),
+                    sc.as_str()
+                ),
+                None => format!(
+                    "where {name} {installed} is installed could not be read; it is removed \
+                     and installed with --scope {} rather than risk a second copy",
+                    sc.as_str()
+                ),
+            };
+            Some((format!("{} && {up}", mgr.uninstall(id)), note))
+        }
+        Action::Install => {
+            if declared.is_some() {
+                return None;
+            }
+            let sc = remembered?;
+            let cmd = match step.pin.as_deref() {
+                Some(p) if p != "latest" && p != "pending" => {
+                    mgr.install_pinned_in(id, p, Some(sc))
+                }
+                _ => mgr.install_in(id, Some(sc)),
+            };
+            Some((
+                cmd,
+                format!(
+                    "{id} was installed {}; it is installed there again (--scope {})",
+                    who(sc),
+                    sc.as_str()
+                ),
+            ))
+        }
+        Action::Uninstall => None,
     }
-    tokio::task::spawn_blocking(move || {
-        let probe = |cmd: &str| {
-            crate::detect::run_probe_detailed(&crate::platform::shell_probe(os, cmd)).output
-        };
-        let list = probe(&mgr.presence_command(&id));
-        let Some(name) = winget_installed_name(&id, &list) else {
-            return (
-                mgr.downgrade(&id, &pin),
-                format!("{id} is not in winget's list; reinstalling in winget's default scope"),
-            );
-        };
-        let installed = parse_winget_version(&id, &list);
-        let scope = scope_from_arp(&probe(&arp_probe_command(&name)), &name, &installed);
-        let note = match scope {
-            Some(sc) => format!(
-                "{name} {installed} is installed {}; {pin} is reinstalled there (--scope {})",
-                if sc == crate::managers::InstallScope::User {
-                    "for this user"
-                } else {
-                    "for every user"
-                },
-                sc.as_str()
-            ),
-            None => format!(
-                "where {name} {installed} is installed could not be read; \
-                 reinstalling in winget's default scope"
-            ),
-        };
-        (mgr.downgrade_in(&id, &pin, scope), note)
-    })
-    .await
-    .ok()
+}
+
+/// The probes behind `winget_plan`, run just before acting: where the installed copy is is a
+/// fact of the machine, which the command stored at load cannot hold. Off winget, or when no
+/// decision needs them, nothing runs. The scope found is remembered for the row.
+async fn winget_in_place(
+    state: &AppState,
+    i: usize,
+    action: crate::decision::Action,
+    step: &crate::bundles::Step,
+    os: Os,
+) -> Option<(String, String)> {
+    use crate::decision::Action;
+    use crate::managers::{
+        arp_probe_command, parse_winget_version, scope_from_arp, winget_installed_name,
+    };
+    if os != Os::Windows || step.route.as_deref() != Some("winget") {
+        return None;
+    }
+    let remembered = state.found_scope.lock().await.get(&i).copied();
+    let probes = match action {
+        Action::Downgrade => step.pin.is_some(),
+        Action::Upgrade => step.scope.is_some(),
+        _ => false,
+    };
+    let (listed, found) = if probes {
+        let id = step.system_id.clone()?;
+        let mgr = crate::managers::native_manager(os)?;
+        tokio::task::spawn_blocking(move || {
+            let probe = |cmd: &str| {
+                crate::detect::run_probe_detailed(&crate::platform::shell_probe(os, cmd))
+            };
+            let list = probe(&mgr.presence_command(&id)).output;
+            let Some(name) = winget_installed_name(&id, &list) else {
+                return (None, None);
+            };
+            let installed = parse_winget_version(&id, &list);
+            let arp = probe(&arp_probe_command(&name));
+            let found = if arp.ok {
+                scope_from_arp(&arp.output, &name, &installed)
+            } else {
+                None
+            };
+            (Some((name, installed)), found)
+        })
+        .await
+        .ok()?
+    } else {
+        (None, None)
+    };
+    if let Some(sc) = found {
+        state.found_scope.lock().await.insert(i, sc);
+    }
+    let listed = listed.as_ref().map(|(n, v)| (n.as_str(), v.as_str()));
+    winget_plan(action, step, listed, found, remembered)
 }
 
 /// Decide whether an outdated row is worth re-probing. A row is outdated AND an upgrade
@@ -2413,22 +2532,16 @@ async fn apply_diff(
                     json!({ "type": "apply-plan-add", "i": d, "action": "install" }).to_string(),
                 ))
                 .await;
+            // Queued, not sent: the install's running status resets the row's terminal, so a
+            // line sent now would be wiped as it was written. do_step writes it after.
             let why = format!(
-                "\x1b[2m[repair] {} changed in this Apply ({} → {}); this package no longer \
-                 reads present, so it is installed again.\x1b[0m\r\n",
+                "[repair] {} changed in this Apply ({} → {}); this package no longer reads \
+                 present, so it is installed again.",
                 steps[*i].name,
                 shown_version(&presences[*i]),
                 shown_version(outcome.after.as_ref().unwrap_or(&presences[*i])),
             );
-            {
-                use base64::{engine::general_purpose::STANDARD, Engine};
-                let _ = socket
-                    .send(Message::Text(
-                        json!({ "type": "out", "i": d, "data": STANDARD.encode(why.as_bytes()) })
-                            .to_string(),
-                    ))
-                    .await;
-            }
+            queue_note(state, d, why).await;
             // A repair does not re-check ITS dependents: one extra pass, never a cascade.
             let (_, stop_all) =
                 step_with_forbidden_pause(socket, state, d, Action::Install, &steps[d], false)
@@ -2997,31 +3110,20 @@ async fn do_step(
     } else {
         None
     };
-    // A winget downgrade is rebuilt HERE, in the scope the installed copy is in — a fact of
-    // the machine, read just before acting, that the chain stored at load cannot hold.
-    let scoped = if action == Action::Downgrade {
-        winget_downgrade_in_place(step, os).await
-    } else {
-        None
-    };
-    if let Some((_, note)) = &scoped {
-        use base64::{engine::general_purpose::STANDARD, Engine};
-        let line = format!("\x1b[2m[downgrade] {note}\x1b[0m\r\n");
-        let _ = socket
-            .send(Message::Text(
-                json!({ "type": "out", "i": i, "data": STANDARD.encode(line.as_bytes()) })
-                    .to_string(),
-            ))
-            .await;
+    // A winget version change is rebuilt HERE, for where the package must live — a fact of
+    // the machine, read just before acting, that the command stored at load cannot hold.
+    let rebuilt = winget_in_place(state, i, action, step, os).await;
+    if let Some((_, note)) = &rebuilt {
+        queue_note(state, i, format!("[{}] {note}", action.as_str())).await;
     }
-    let cmd = match action {
-        Action::Install => step.install.as_deref(),
-        Action::Uninstall => step.uninstall.as_deref(),
-        Action::Upgrade => forced.as_deref().or(step.upgrade.as_deref()),
-        Action::Downgrade => scoped
-            .as_ref()
-            .map(|(c, _)| c.as_str())
-            .or(step.downgrade.as_deref()),
+    let cmd = match &rebuilt {
+        Some((c, _)) => Some(c.as_str()),
+        None => match action {
+            Action::Install => step.install.as_deref(),
+            Action::Uninstall => step.uninstall.as_deref(),
+            Action::Upgrade => forced.as_deref().or(step.upgrade.as_deref()),
+            Action::Downgrade => step.downgrade.as_deref(),
+        },
     };
     let Some(cmd) = cmd else {
         return StepOutcome::default(); // no command for this route → skip
@@ -3037,6 +3139,17 @@ async fn do_step(
             json!({ "type": "step", "i": i, "status": running }).to_string(),
         ))
         .await;
+    // AFTER the status: the front resets the row's terminal on it, and would wipe these.
+    for note in take_notes(state, i).await {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let line = format!("\x1b[2m{note}\x1b[0m\r\n");
+        let _ = socket
+            .send(Message::Text(
+                json!({ "type": "out", "i": i, "data": STANDARD.encode(line.as_bytes()) })
+                    .to_string(),
+            ))
+            .await;
+    }
 
     // The bare command is passed to run_in_pty, which wraps it in the native shell
     // (POSIX: user shell in -ilc via pty_shell; Windows: powershell + PATH refresh).
@@ -4267,6 +4380,8 @@ mod tests {
             // re-write, on every Apply, durations this Apply never measured.
             timings: crate::timings::Timings::new(),
             timed: tokio::sync::Mutex::new(crate::timings::Timings::new()),
+            notes: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            found_scope: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -4694,25 +4809,169 @@ mod tests {
         );
     }
 
+    // ---- winget: a version change lands where the package must live ----------------------
+    //
+    // `winget_plan` is the decision, pure: what the probes saw goes in, the command and the
+    // row's line come out. None = the stored command stands.
+
+    use crate::managers::InstallScope;
+
+    fn winget_step(pin: Option<&str>, scope: Option<InstallScope>) -> Step {
+        let mgr = crate::managers::native_manager(Os::Windows).unwrap();
+        let id = "Nushell.Nushell";
+        let mut s = brew_step(id, pin);
+        s.route = Some("winget".into());
+        s.scope = scope;
+        s.install = Some(match pin {
+            Some(p) => mgr.install_pinned_in(id, p, scope),
+            None => mgr.install_in(id, scope),
+        });
+        s.uninstall = Some(mgr.uninstall(id));
+        s.upgrade = Some(match (pin, scope) {
+            (Some(p), _) => mgr.install_pinned_in(id, p, scope),
+            (None, Some(_)) => mgr.install_in(id, scope),
+            (None, None) => mgr.upgrade(id, false),
+        });
+        s.downgrade = pin.map(|p| mgr.downgrade_in(id, p, scope));
+        s
+    }
+
+    use crate::decision::Action;
+    use crate::managers::InstallScope::{Machine, User};
+
     #[test]
-    fn a_winget_downgrade_is_built_at_run_time_in_the_scope_it_found() {
-        // The stored chain cannot know where the package is: that is a fact of the machine,
-        // read just before acting. do_step must ask for the scoped chain on a Downgrade, and
-        // say in the row's terminal what it found — or that it found nothing.
+    fn a_declared_scope_upgrades_in_place_only_when_the_copy_is_already_there() {
+        // MEASURED (Windows VM, 2026-10-21): `winget install --scope user` over a machine-wide
+        // 0.113.1 installed 0.116.1 per-user BESIDE it — two nu. So the in-place install runs
+        // only when the copy already lives in the declared scope; otherwise the copy is removed
+        // first, like a downgrade, and the new version lands where it was declared.
+        let step = winget_step(None, Some(User));
+        let listed = Some(("Nushell", "0.113.1"));
+        assert_eq!(
+            super::winget_plan(Action::Upgrade, &step, listed, Some(User), None),
+            None
+        );
+        for found in [Some(Machine), None] {
+            let (cmd, note) =
+                super::winget_plan(Action::Upgrade, &step, listed, found, None).expect("rebuilt");
+            assert!(
+                cmd.starts_with("winget uninstall --id Nushell.Nushell"),
+                "{cmd}"
+            );
+            assert!(cmd.ends_with(step.upgrade.as_deref().unwrap()), "{cmd}");
+            assert!(note.contains("--scope user"), "{note}");
+        }
+        // No declared scope: `winget upgrade` keeps doing what it did.
+        let plain = winget_step(None, None);
+        assert_eq!(
+            super::winget_plan(Action::Upgrade, &plain, listed, Some(Machine), None),
+            None
+        );
+    }
+
+    #[test]
+    fn a_downgrade_reinstalls_where_declared_else_where_found() {
+        let listed = Some(("Nushell", "0.116.1"));
+        let declared = winget_step(Some("0.113.1"), Some(User));
+        let (cmd, _) =
+            super::winget_plan(Action::Downgrade, &declared, listed, Some(Machine), None).unwrap();
+        assert!(
+            cmd.ends_with("--scope user"),
+            "the catalogue wins over the copy: {cmd}"
+        );
+        let free = winget_step(Some("0.113.1"), None);
+        let (cmd, _) =
+            super::winget_plan(Action::Downgrade, &free, listed, Some(Machine), None).unwrap();
+        assert!(
+            cmd.starts_with("winget uninstall") && cmd.ends_with("--scope machine"),
+            "{cmd}"
+        );
+        let (cmd, note) = super::winget_plan(Action::Downgrade, &free, listed, None, None).unwrap();
+        assert!(!cmd.contains("--scope"), "{cmd}");
+        assert!(note.contains("could not be read"), "{note}");
+    }
+
+    #[test]
+    fn a_downgrade_on_a_package_already_gone_only_installs() {
+        // MEASURED: `winget uninstall` on an absent package exits -1978335212, which
+        // `benign_code` accepts — so the chain stopped there and the step read ok with
+        // nothing reinstalled (a 403 Retry of the reinstall half). Gone → install, nothing else.
+        let free = winget_step(Some("0.113.1"), None);
+        let (cmd, note) =
+            super::winget_plan(Action::Downgrade, &free, None, None, Some(Machine)).unwrap();
+        assert!(
+            cmd.starts_with("winget install") && !cmd.contains("uninstall"),
+            "{cmd}"
+        );
+        assert!(
+            cmd.ends_with("--scope machine"),
+            "the scope found before it went: {cmd}"
+        );
+        assert!(note.contains("not installed"), "{note}");
+    }
+
+    #[test]
+    fn an_install_after_a_failed_downgrade_keeps_the_scope_it_found() {
+        // A retry that finds the package gone turns into Install (`retry_action`); the scope
+        // the downgrade's probe found minutes earlier must survive it.
+        let free = winget_step(Some("0.113.1"), None);
+        let (cmd, _) =
+            super::winget_plan(Action::Install, &free, None, None, Some(Machine)).unwrap();
+        assert!(cmd.ends_with("--version 0.113.1 --source winget --accept-source-agreements --accept-package-agreements --scope machine"), "{cmd}");
+        assert_eq!(
+            super::winget_plan(Action::Install, &free, None, None, None),
+            None
+        );
+        // Declared: the stored install already carries it.
+        let declared = winget_step(Some("0.113.1"), Some(User));
+        assert_eq!(
+            super::winget_plan(Action::Install, &declared, None, None, Some(Machine)),
+            None
+        );
+        // Off winget nothing changes.
+        assert_eq!(
+            super::winget_plan(
+                Action::Downgrade,
+                &brew_step("nushell", Some("1")),
+                None,
+                None,
+                None
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_row_note_is_written_after_the_status_that_clears_its_terminal() {
+        // Review of beta.49: the front's setStatus resets the row's terminal on every RUNNING
+        // status, so a line sent before it was wiped as it was written — the `[downgrade]`
+        // note and the dependents pass's `[repair]` line alike. Notes are queued per row and
+        // do_step writes them right AFTER the status.
         let body = fn_body("do_step");
+        let at = |s: &str| {
+            body.find(s)
+                .unwrap_or_else(|| panic!("`{s}` missing from do_step"))
+        };
         assert!(
-            body.contains("winget_downgrade_in_place("),
-            "do_step runs the stored downgrade → a machine-wide copy comes back per-user"
+            at(r#""status": running"#) < at("take_notes("),
+            "a note before the status is wiped"
         );
-        // A scope the AUTHOR declared is the answer; the probe only stands in when none is.
-        let declared = fn_body("winget_downgrade_in_place");
-        let at = |s: &str| declared.find(s).unwrap_or_else(|| panic!("`{s}` missing"));
         assert!(
-            at("step.scope") < at("arp_probe_command("),
-            "the probe runs before the declaration is read"
+            body.contains("winget_in_place("),
+            "do_step runs the stored command as is"
         );
-        let helper = fn_body("winget_downgrade_in_place");
-        assert!(helper.contains("scope_from_arp(") && helper.contains("downgrade_in("));
+        let repair = fn_body("apply_diff");
+        let pass = repair
+            .find("dependents_to_recheck(")
+            .expect("the dependents pass moved");
+        assert!(
+            repair[pass..].contains("queue_note("),
+            "the [repair] line is sent, then wiped"
+        );
+        assert!(
+            !repair[pass..].contains(r#""type": "out""#),
+            "the [repair] line is sent directly"
+        );
     }
 
     #[test]

@@ -60,43 +60,90 @@ pub fn winget_installed_name(id: &str, list_output: &str) -> Option<String> {
     })
 }
 
-/// The PowerShell probe behind `scope_from_arp`: the user's profile, then every uninstall
-/// entry (64-bit, 32-bit, per-user) whose DisplayName starts with `name`, one per line.
+/// The PowerShell probe behind `scope_from_arp`. First the folders whose owner is KNOWN — the
+/// user's (profile, LOCALAPPDATA, APPDATA) and the machine's (Program Files, ProgramData,
+/// Windows) — then every uninstall entry (64-bit, 32-bit, per-user) whose DisplayName starts
+/// with `name`, one per line. `PROBE-FAILED` if anything threw: a half listing is no evidence.
+///
+/// UTF-8 out, because PowerShell 5.1 writes a redirected stdout in the OEM code page and a
+/// non-ASCII DisplayName would no longer match. Every character PowerShell reads as a single
+/// quote is doubled inside the literal, so a name cannot close it. No `&&`: `win_and_then`
+/// would split the probe.
 pub fn arp_probe_command(name: &str) -> String {
-    let quoted = name.replace('\'', "''");
+    let mut quoted = String::new();
+    for c in name.chars() {
+        quoted.push(c);
+        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
+            quoted.push(c);
+        }
+    }
     format!(
-        "$n = '{quoted}'; \"PROFILE`t$env:USERPROFILE\"; \
-         foreach ($p in 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall', \
+        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; $n = '{quoted}'; try {{ \
+         foreach ($r in \"user|$env:USERPROFILE\", \"user|$env:LOCALAPPDATA\", \
+         \"user|$env:APPDATA\", \"machine|$env:ProgramFiles\", \
+         \"machine|${{env:ProgramFiles(x86)}}\", \"machine|$env:ProgramData\", \
+         \"machine|$env:windir\") {{ $k, $p = $r -split '\\|', 2; \
+         if ($p) {{ \"ROOT`t$k`t$p\" }} }}; \
+         foreach ($u in 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall', \
          'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall', \
          'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall') {{ \
-         Get-ChildItem $p -ErrorAction SilentlyContinue | ForEach-Object {{ \
+         Get-ChildItem $u -ErrorAction SilentlyContinue | ForEach-Object {{ \
          $v = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue; \
-         if ($v.DisplayName -and $v.DisplayName.StartsWith($n)) {{ \
-         \"ARP`t$($v.DisplayName)`t$($v.DisplayVersion)`t$($v.InstallLocation)\" }} }} }}"
+         $d = [string]$v.DisplayName; \
+         if ($d -and $d.StartsWith($n)) {{ \
+         \"ARP`t$d`t$([string]$v.DisplayVersion)`t$([string]$v.InstallLocation)\" }} }} }} \
+         }} catch {{ 'PROBE-FAILED' }}"
     )
 }
 
 /// Which scope the installed copy of `name` at `version` lives in, read from the probe
 /// above. MEASURED on Windows 11 with Nushell's MSI: the hive does NOT tell — a per-user
 /// copy's entry sits under HKLM too, which is why winget calls both "machine" — but the
-/// InstallLocation does: under the user's profile → user, anywhere else → machine.
+/// InstallLocation does, when it sits under a folder whose owner is known. Anywhere else is
+/// unknown, never a guess: a wrong scope fails the reinstall AFTER the uninstall ran.
 ///
 /// Entries of that version are preferred; when none carries it (winget and the entry spell
-/// a version differently), every entry of the name is used. They must AGREE: no location,
-/// no entry, or two copies in two places → None, and the caller keeps winget's default.
+/// a version differently), every entry of the name is used. They must AGREE: an unknown
+/// folder, no entry, two copies in two places, or a failed probe → None, and the caller
+/// keeps winget's default.
 pub fn scope_from_arp(output: &str, name: &str, version: &str) -> Option<InstallScope> {
-    let norm = |p: &str| p.trim().trim_end_matches('\\').to_lowercase();
-    let mut profile = None;
+    // One spelling per path: no quotes (NSIS writes them), backslashes, no trailing one.
+    let norm = |p: &str| {
+        p.trim()
+            .trim_matches('"')
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_lowercase()
+    };
+    let mut roots: Vec<(InstallScope, String)> = Vec::new();
     let mut named: Vec<(&str, &str, &str)> = Vec::new(); // (name, version, location)
     for line in output.lines() {
-        let cols: Vec<&str> = line.trim_end_matches('\r').split('\t').collect();
+        let line = line.trim_end_matches('\r');
+        if line == "PROBE-FAILED" {
+            return None;
+        }
+        let cols: Vec<&str> = line.split('\t').collect();
         match cols.as_slice() {
-            ["PROFILE", p] => profile = Some(norm(p)),
+            ["ROOT", owner, p] => {
+                let root = norm(p);
+                if let (Some(sc), false) = (InstallScope::from_word(owner), root.is_empty()) {
+                    roots.push((sc, root));
+                }
+            }
             ["ARP", n, v, loc] if n.starts_with(name) => named.push((n, v, loc)),
             _ => {}
         }
     }
-    let profile = profile.filter(|p| !p.is_empty())?;
+    // The longest root a location sits under owns it, at a folder boundary: chris2's profile
+    // is not under chris's.
+    let owner = |loc: &str| -> Option<InstallScope> {
+        let loc = norm(loc);
+        roots
+            .iter()
+            .filter(|(_, r)| loc == *r || loc.starts_with(&format!("{r}\\")))
+            .max_by_key(|(_, r)| r.len())
+            .map(|(sc, _)| *sc)
+    };
     // The exact name first: a longer one that merely starts the same is another product.
     // Only when none is exact — winget truncated the cell — does the prefix stand in.
     let exact = named.iter().any(|(n, _, _)| *n == name);
@@ -111,18 +158,13 @@ pub fn scope_from_arp(output: &str, name: &str, version: &str) -> Option<Install
     } else {
         same
     };
+    // An entry with no location says nothing; one in a folder nobody owns makes it unknown.
     let mut scopes = chosen
         .iter()
         .filter(|(_, loc)| !loc.trim().is_empty())
-        .map(|(_, loc)| {
-            if norm(loc).starts_with(&profile) {
-                InstallScope::User
-            } else {
-                InstallScope::Machine
-            }
-        });
-    let first = scopes.next()?;
-    scopes.all(|s| s == first).then_some(first)
+        .map(|(_, loc)| owner(loc));
+    let first = scopes.next()??;
+    scopes.all(|s| s == Some(first)).then_some(first)
 }
 
 pub struct SystemManager {
@@ -166,9 +208,6 @@ impl SystemManager {
     /// versioned formula `id@version`, which exists only if the tap ships it — so it is
     /// CHECKED first: without that, a missing formula failed AFTER the uninstall and left
     /// the package removed. winget pins with a flag on the same id, so its chain is plain.
-    pub fn downgrade(&self, id: &str, version: &str) -> String {
-        self.downgrade_in(id, version, None)
-    }
     /// The same chain, reinstalling in a known scope. Only winget has one to give: the
     /// uninstall removes every copy (`--all-versions`), and a pinned install with no
     /// `--scope` lands in winget's default, which is not where a machine-wide copy was —
@@ -727,7 +766,7 @@ mod tests {
         // does not, the uninstall had already run: the package was GONE. The check comes first,
         // so a missing formula fails the step with the package still in place.
         let brew = native_manager(Os::Darwin).unwrap();
-        let cmd = brew.downgrade("nushell", "0.113.1");
+        let cmd = brew.downgrade_in("nushell", "0.113.1", None);
         let check = cmd
             .find("brew info --formula nushell@0.113.1")
             .expect("the formula is checked");
@@ -739,7 +778,7 @@ mod tests {
         // winget pins with a flag on the same id; its chain is the plain one.
         let winget = native_manager(Os::Windows).unwrap();
         assert!(winget
-            .downgrade("Git.Git", "2.50.1")
+            .downgrade_in("Git.Git", "2.50.1", None)
             .starts_with("winget uninstall"));
     }
 
@@ -752,7 +791,7 @@ mod tests {
     // `winget list --scope machine` listed BOTH copies, `--scope user` neither — and both
     // uninstall entries sit under HKLM. What separates them is the entry's InstallLocation.
 
-    const ARP: &str = "PROFILE\tC:\\Users\\chris\n\
+    const ARP: &str = "ROOT\tuser\tC:\\Users\\chris\nROOT\tmachine\tC:\\Program Files\n\
         ARP\tNushell\t0.116.1\tC:\\Program Files\\nu\n\
         ARP\tNushell\t0.113.1\tC:\\Users\\chris\\AppData\\Local\\Programs\\nu\n\
         ARP\tNushell Extras\t9.9\t\n";
@@ -784,13 +823,13 @@ mod tests {
         let both = format!("{ARP}ARP\tNushell\t0.116.1\tC:\\Users\\chris\\nu\n");
         assert_eq!(scope_from_arp(&both, "Nushell", "0.116.1"), None);
         // An unknown version falls back to every entry of the name, when they agree.
-        let one = "PROFILE\tC:\\Users\\chris\nARP\tGit\t2.51.0\tC:\\Program Files\\Git\n";
+        let one = "ROOT\tuser\tC:\\Users\\chris\nROOT\tmachine\tC:\\Program Files\nARP\tGit\t2.51.0\tC:\\Program Files\\Git\n";
         assert_eq!(
             scope_from_arp(one, "Git", "2.51.0.windows.1"),
             Some(InstallScope::Machine)
         );
         // A longer name that merely STARTS like this one is another product, never a copy.
-        let other = "PROFILE\tC:\\Users\\chris\n\
+        let other = "ROOT\tuser\tC:\\Users\\chris\nROOT\tmachine\tC:\\Program Files\n\
             ARP\tGit\t2.51.0\tC:\\Program Files\\Git\n\
             ARP\tGit Extensions\t5.0\tC:\\Users\\chris\\GitExt\n";
         assert_eq!(
@@ -802,6 +841,67 @@ mod tests {
             scope_from_arp(other, "Git Ext", "5.0"),
             Some(InstallScope::User)
         );
+    }
+
+    #[test]
+    fn a_scope_is_read_only_from_a_folder_whose_owner_is_known() {
+        // Review of beta.49: "outside the profile → machine" was a GUESS, and a wrong guess
+        // makes the reinstall fail after the uninstall has run. Now a location must sit under
+        // a known root — the user's (profile, LOCALAPPDATA, APPDATA) or the machine's
+        // (Program Files, ProgramData, Windows) — or the scope is unknown.
+        let roots = "ROOT\tuser\tC:\\Users\\chris\n\
+            ROOT\tuser\tE:\\Redirected\\chris\\AppData\\Local\n\
+            ROOT\tmachine\tC:\\Program Files\n\
+            ROOT\tmachine\tC:\\ProgramData\n";
+        let one = |loc: &str| format!("{roots}ARP\tTool\t1.0\t{loc}\n");
+        let at = |loc: &str| scope_from_arp(&one(loc), "Tool", "1.0");
+        assert_eq!(
+            at("D:\\Tools\\tool"),
+            None,
+            "nobody's root: unknown, never machine"
+        );
+        assert_eq!(
+            at("E:\\Redirected\\chris\\AppData\\Local\\Tool"),
+            Some(InstallScope::User)
+        );
+        assert_eq!(at("C:\\ProgramData\\Tool"), Some(InstallScope::Machine));
+        // A folder boundary: chris2's profile is not under chris's.
+        assert_eq!(at("C:\\Users\\chris2\\Tool"), None);
+        assert_eq!(
+            at("C:\\Users\\chris"),
+            Some(InstallScope::User),
+            "the root itself"
+        );
+        // Forward slashes, quotes (NSIS writes them) and a trailing separator are one path.
+        assert_eq!(
+            at("\"C:/Program Files/Tool/\""),
+            Some(InstallScope::Machine)
+        );
+        // A probe that failed half-way is not evidence.
+        assert_eq!(
+            scope_from_arp(
+                &format!("{}PROBE-FAILED\n", one("C:\\Program Files\\T")),
+                "Tool",
+                "1.0"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn the_scope_probe_reads_any_name_and_answers_in_utf8() {
+        let cmd = arp_probe_command("Bob\u{2019}s & Co's");
+        // Every character PowerShell takes for a single quote is doubled inside the literal.
+        assert!(cmd.contains("'Bob\u{2019}\u{2019}s & Co''s'"), "{cmd}");
+        assert!(
+            cmd.starts_with("[Console]::OutputEncoding = [Text.Encoding]::UTF8;"),
+            "{cmd}"
+        );
+        assert!(
+            cmd.contains("[string]$v.DisplayName"),
+            "a non-string value must not throw"
+        );
+        assert!(!cmd.contains("&&"), "win_and_then would split the probe");
     }
 
     #[test]
@@ -863,7 +963,7 @@ mod tests {
         );
         assert_eq!(
             winget.downgrade_in("X.Y", "1.0", None),
-            winget.downgrade("X.Y", "1.0")
+            winget.downgrade_in("X.Y", "1.0", None)
         );
         // The probe quotes the name for PowerShell: a quote inside it is doubled.
         assert!(arp_probe_command("Bob's Tool").contains("'Bob''s Tool'"));
