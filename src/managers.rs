@@ -20,6 +20,103 @@ pub enum IdField {
     Brew,
 }
 
+/// Where a winget package is installed: for every user (`--scope machine`) or for one
+/// (`--scope user`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InstallScope {
+    User,
+    Machine,
+}
+
+impl InstallScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InstallScope::User => "user",
+            InstallScope::Machine => "machine",
+        }
+    }
+}
+
+/// The name winget shows for an installed id: the cells before the id on its line of
+/// `winget list`. It is the uninstall entry's DisplayName — which is what the scope probe
+/// matches on. A cell winget truncated (`…`) is kept as the prefix it certainly is.
+pub fn winget_installed_name(id: &str, list_output: &str) -> Option<String> {
+    let clean = strip_ansi(list_output);
+    let lc = id.to_lowercase();
+    clean.lines().find_map(|line| {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        let at = cols.iter().position(|c| c.to_lowercase() == lc)?;
+        let name = cols[..at].join(" ");
+        let name = name.trim_end_matches('…').trim().to_string();
+        (!name.is_empty()).then_some(name)
+    })
+}
+
+/// The PowerShell probe behind `scope_from_arp`: the user's profile, then every uninstall
+/// entry (64-bit, 32-bit, per-user) whose DisplayName starts with `name`, one per line.
+pub fn arp_probe_command(name: &str) -> String {
+    let quoted = name.replace('\'', "''");
+    format!(
+        "$n = '{quoted}'; \"PROFILE`t$env:USERPROFILE\"; \
+         foreach ($p in 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall', \
+         'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall', \
+         'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall') {{ \
+         Get-ChildItem $p -ErrorAction SilentlyContinue | ForEach-Object {{ \
+         $v = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue; \
+         if ($v.DisplayName -and $v.DisplayName.StartsWith($n)) {{ \
+         \"ARP`t$($v.DisplayName)`t$($v.DisplayVersion)`t$($v.InstallLocation)\" }} }} }}"
+    )
+}
+
+/// Which scope the installed copy of `name` at `version` lives in, read from the probe
+/// above. MEASURED on Windows 11 with Nushell's MSI: the hive does NOT tell — a per-user
+/// copy's entry sits under HKLM too, which is why winget calls both "machine" — but the
+/// InstallLocation does: under the user's profile → user, anywhere else → machine.
+///
+/// Entries of that version are preferred; when none carries it (winget and the entry spell
+/// a version differently), every entry of the name is used. They must AGREE: no location,
+/// no entry, or two copies in two places → None, and the caller keeps winget's default.
+pub fn scope_from_arp(output: &str, name: &str, version: &str) -> Option<InstallScope> {
+    let norm = |p: &str| p.trim().trim_end_matches('\\').to_lowercase();
+    let mut profile = None;
+    let mut named: Vec<(&str, &str, &str)> = Vec::new(); // (name, version, location)
+    for line in output.lines() {
+        let cols: Vec<&str> = line.trim_end_matches('\r').split('\t').collect();
+        match cols.as_slice() {
+            ["PROFILE", p] => profile = Some(norm(p)),
+            ["ARP", n, v, loc] if n.starts_with(name) => named.push((n, v, loc)),
+            _ => {}
+        }
+    }
+    let profile = profile.filter(|p| !p.is_empty())?;
+    // The exact name first: a longer one that merely starts the same is another product.
+    // Only when none is exact — winget truncated the cell — does the prefix stand in.
+    let exact = named.iter().any(|(n, _, _)| *n == name);
+    let entries: Vec<(&str, &str)> = named
+        .iter()
+        .filter(|(n, _, _)| !exact || *n == name)
+        .map(|(_, v, loc)| (*v, *loc))
+        .collect();
+    let same: Vec<&(&str, &str)> = entries.iter().filter(|(v, _)| *v == version).collect();
+    let chosen: Vec<&(&str, &str)> = if same.is_empty() {
+        entries.iter().collect()
+    } else {
+        same
+    };
+    let mut scopes = chosen
+        .iter()
+        .filter(|(_, loc)| !loc.trim().is_empty())
+        .map(|(_, loc)| {
+            if norm(loc).starts_with(&profile) {
+                InstallScope::User
+            } else {
+                InstallScope::Machine
+            }
+        });
+    let first = scopes.next()?;
+    scopes.all(|s| s == first).then_some(first)
+}
+
 pub struct SystemManager {
     pub route: &'static str,
     pub os: &'static [Os],
@@ -44,11 +141,24 @@ impl SystemManager {
     /// CHECKED first: without that, a missing formula failed AFTER the uninstall and left
     /// the package removed. winget pins with a flag on the same id, so its chain is plain.
     pub fn downgrade(&self, id: &str, version: &str) -> String {
-        let chain = format!(
-            "{} && {}",
-            self.uninstall(id),
-            self.install_pinned(id, version)
-        );
+        self.downgrade_in(id, version, None)
+    }
+    /// The same chain, reinstalling in a known scope. Only winget has one to give: the
+    /// uninstall removes every copy (`--all-versions`), and a pinned install with no
+    /// `--scope` lands in winget's default, which is not where a machine-wide copy was —
+    /// see `scope_from_arp`. brew has no scope, so it ignores it.
+    pub fn downgrade_in(&self, id: &str, version: &str, scope: Option<InstallScope>) -> String {
+        let install = match (self.route, scope) {
+            ("winget", Some(sc)) => {
+                format!(
+                    "{} --scope {}",
+                    self.install_pinned(id, version),
+                    sc.as_str()
+                )
+            }
+            _ => self.install_pinned(id, version),
+        };
+        let chain = format!("{} && {install}", self.uninstall(id));
         match self.route {
             "winget" => chain,
             _ => format!("brew info --formula {id}@{version} >/dev/null && {chain}"),
@@ -244,7 +354,7 @@ fn cell(line: &str, a: usize, b: Option<usize>) -> String {
 // versions on Windows, pin between them → wrong action direction), returns the
 // MAXIMUM by `compare_versions`, because the newest is what PATH resolves and what
 // a pin must be compared against. `winget list` prints one line per version.
-fn parse_winget_version(id: &str, output: &str) -> String {
+pub fn parse_winget_version(id: &str, output: &str) -> String {
     let clean = strip_ansi(output);
     let lc = id.to_lowercase();
     let mut versions: Vec<String> = Vec::new();
@@ -614,6 +724,111 @@ mod tests {
         assert!(winget
             .downgrade("Git.Git", "2.50.1")
             .starts_with("winget uninstall"));
+    }
+
+    // ---- a winget downgrade reinstalls where the package WAS ---------------------------
+    //
+    // MEASURED in the Windows VM (2026-10-21, Nushell's MSI): with no `--scope`, the pinned
+    // install after the uninstall landed PER-USER (AppData\Local\Programs) although the
+    // copy it replaced was machine-wide (Program Files); the next upgrade then installed a
+    // second, machine-wide copy beside it. winget cannot say which scope a package is in —
+    // `winget list --scope machine` listed BOTH copies, `--scope user` neither — and both
+    // uninstall entries sit under HKLM. What separates them is the entry's InstallLocation.
+
+    const ARP: &str = "PROFILE\tC:\\Users\\chris\n\
+        ARP\tNushell\t0.116.1\tC:\\Program Files\\nu\n\
+        ARP\tNushell\t0.113.1\tC:\\Users\\chris\\AppData\\Local\\Programs\\nu\n\
+        ARP\tNushell Extras\t9.9\t\n";
+
+    #[test]
+    fn a_downgrade_reinstalls_in_the_scope_of_the_copy_it_replaces() {
+        assert_eq!(
+            scope_from_arp(ARP, "Nushell", "0.116.1"),
+            Some(InstallScope::Machine)
+        );
+        assert_eq!(
+            scope_from_arp(ARP, "Nushell", "0.113.1"),
+            Some(InstallScope::User)
+        );
+        // The profile is compared without case: Windows paths are case-insensitive.
+        let lower = ARP.replace("C:\\Users\\chris\\AppData", "c:\\users\\CHRIS\\appdata");
+        assert_eq!(
+            scope_from_arp(&lower, "Nushell", "0.113.1"),
+            Some(InstallScope::User)
+        );
+    }
+
+    #[test]
+    fn a_scope_nobody_recorded_is_not_guessed() {
+        // No location, no matching entry, or two copies of one version in two places: None,
+        // and the chain stays the plain one — winget's own default, as before.
+        assert_eq!(scope_from_arp(ARP, "Nushell Extras", "9.9"), None);
+        assert_eq!(scope_from_arp(ARP, "Git", "2.50.1"), None);
+        let both = format!("{ARP}ARP\tNushell\t0.116.1\tC:\\Users\\chris\\nu\n");
+        assert_eq!(scope_from_arp(&both, "Nushell", "0.116.1"), None);
+        // An unknown version falls back to every entry of the name, when they agree.
+        let one = "PROFILE\tC:\\Users\\chris\nARP\tGit\t2.51.0\tC:\\Program Files\\Git\n";
+        assert_eq!(
+            scope_from_arp(one, "Git", "2.51.0.windows.1"),
+            Some(InstallScope::Machine)
+        );
+        // A longer name that merely STARTS like this one is another product, never a copy.
+        let other = "PROFILE\tC:\\Users\\chris\n\
+            ARP\tGit\t2.51.0\tC:\\Program Files\\Git\n\
+            ARP\tGit Extensions\t5.0\tC:\\Users\\chris\\GitExt\n";
+        assert_eq!(
+            scope_from_arp(other, "Git", "9"),
+            Some(InstallScope::Machine)
+        );
+        // …unless winget truncated the name, and the prefix is all there is to match.
+        assert_eq!(
+            scope_from_arp(other, "Git Ext", "5.0"),
+            Some(InstallScope::User)
+        );
+    }
+
+    #[test]
+    fn the_installed_name_is_what_winget_list_prints_before_the_id() {
+        let out = "Name                Id               Version  Source\n\
+                   --------------------------------------------------\n\
+                   Nushell             Nushell.Nushell  0.116.1  winget\n\
+                   Microsoft Visual Studio Code  Microsoft.VisualStudioCode  1.105.0  winget\n\
+                   Very Long Product…  Vendor.Long      1.0      winget\n";
+        assert_eq!(
+            winget_installed_name("Nushell.Nushell", out).as_deref(),
+            Some("Nushell")
+        );
+        assert_eq!(
+            winget_installed_name("Microsoft.VisualStudioCode", out).as_deref(),
+            Some("Microsoft Visual Studio Code")
+        );
+        // A truncated cell keeps only what is certain: a prefix.
+        assert_eq!(
+            winget_installed_name("Vendor.Long", out).as_deref(),
+            Some("Very Long Product")
+        );
+        assert_eq!(winget_installed_name("Absent.Id", out), None);
+    }
+
+    #[test]
+    fn a_scoped_downgrade_passes_the_scope_to_the_reinstall_only() {
+        let winget = native_manager(Os::Windows).unwrap();
+        let cmd = winget.downgrade_in("Nushell.Nushell", "0.113.1", Some(InstallScope::Machine));
+        let (uninstall, install) = cmd.split_once(" && ").expect("a chain of two");
+        assert!(
+            !uninstall.contains("--scope"),
+            "the uninstall removes every copy: {cmd}"
+        );
+        assert!(
+            install.contains("--version 0.113.1") && install.ends_with(" --scope machine"),
+            "{cmd}"
+        );
+        assert_eq!(
+            winget.downgrade_in("X.Y", "1.0", None),
+            winget.downgrade("X.Y", "1.0")
+        );
+        // The probe quotes the name for PowerShell: a quote inside it is doubled.
+        assert!(arp_probe_command("Bob's Tool").contains("'Bob''s Tool'"));
     }
 
     #[test]

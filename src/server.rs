@@ -1778,6 +1778,63 @@ async fn retry_attempt(socket: &mut WebSocket, state: &AppState, i: usize, actio
     clear_sudo_pw(state).await; // the retry finished: clear the cached password
 }
 
+/// A winget downgrade's chain, rebuilt in the scope of the copy it replaces, with a line for
+/// the row's terminal saying what was found. None off winget: brew has no scope, and its
+/// stored chain is already the whole answer.
+///
+/// MEASURED in the Windows VM (2026-10-21): without `--scope`, the reinstall after the
+/// uninstall went PER-USER although the copy it replaced was machine-wide, and the next
+/// upgrade added a second, machine-wide copy beside it — two `nu` on one machine. winget
+/// cannot say which scope a package is in (see `managers::scope_from_arp`), so the uninstall
+/// entry's InstallLocation is read instead. Unknown → the plain chain, and the line says so.
+async fn winget_downgrade_in_place(
+    step: &crate::bundles::Step,
+    os: Os,
+) -> Option<(String, String)> {
+    use crate::managers::{
+        arp_probe_command, native_manager, parse_winget_version, scope_from_arp,
+        winget_installed_name,
+    };
+    if step.route.as_deref() != Some("winget") {
+        return None;
+    }
+    let mgr = native_manager(os).filter(|m| m.route == "winget")?;
+    let id = step.system_id.clone()?;
+    let pin = step.pin.clone()?;
+    tokio::task::spawn_blocking(move || {
+        let probe = |cmd: &str| {
+            crate::detect::run_probe_detailed(&crate::platform::shell_probe(os, cmd)).output
+        };
+        let list = probe(&mgr.presence_command(&id));
+        let Some(name) = winget_installed_name(&id, &list) else {
+            return (
+                mgr.downgrade(&id, &pin),
+                format!("{id} is not in winget's list; reinstalling in winget's default scope"),
+            );
+        };
+        let installed = parse_winget_version(&id, &list);
+        let scope = scope_from_arp(&probe(&arp_probe_command(&name)), &name, &installed);
+        let note = match scope {
+            Some(sc) => format!(
+                "{name} {installed} is installed {}; {pin} is reinstalled there (--scope {})",
+                if sc == crate::managers::InstallScope::User {
+                    "for this user"
+                } else {
+                    "for every user"
+                },
+                sc.as_str()
+            ),
+            None => format!(
+                "where {name} {installed} is installed could not be read; \
+                 reinstalling in winget's default scope"
+            ),
+        };
+        (mgr.downgrade_in(&id, &pin, scope), note)
+    })
+    .await
+    .ok()
+}
+
 /// Decide whether an outdated row is worth re-probing. A row is outdated AND an upgrade
 /// is reachable when:
 /// - The pin is `latest` (or absent): `action_for` will return `Upgrade`.
@@ -2929,11 +2986,31 @@ async fn do_step(
     } else {
         None
     };
+    // A winget downgrade is rebuilt HERE, in the scope the installed copy is in — a fact of
+    // the machine, read just before acting, that the chain stored at load cannot hold.
+    let scoped = if action == Action::Downgrade {
+        winget_downgrade_in_place(step, os).await
+    } else {
+        None
+    };
+    if let Some((_, note)) = &scoped {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let line = format!("\x1b[2m[downgrade] {note}\x1b[0m\r\n");
+        let _ = socket
+            .send(Message::Text(
+                json!({ "type": "out", "i": i, "data": STANDARD.encode(line.as_bytes()) })
+                    .to_string(),
+            ))
+            .await;
+    }
     let cmd = match action {
         Action::Install => step.install.as_deref(),
         Action::Uninstall => step.uninstall.as_deref(),
         Action::Upgrade => forced.as_deref().or(step.upgrade.as_deref()),
-        Action::Downgrade => step.downgrade.as_deref(),
+        Action::Downgrade => scoped
+            .as_ref()
+            .map(|(c, _)| c.as_str())
+            .or(step.downgrade.as_deref()),
     };
     let Some(cmd) = cmd else {
         return StepOutcome::default(); // no command for this route → skip
@@ -4603,6 +4680,20 @@ mod tests {
             "the row gate re-implements the requirement rule instead of calling it → two \
              behaviours for one question, which is the defect `scope_refuses` exists for"
         );
+    }
+
+    #[test]
+    fn a_winget_downgrade_is_built_at_run_time_in_the_scope_it_found() {
+        // The stored chain cannot know where the package is: that is a fact of the machine,
+        // read just before acting. do_step must ask for the scoped chain on a Downgrade, and
+        // say in the row's terminal what it found — or that it found nothing.
+        let body = fn_body("do_step");
+        assert!(
+            body.contains("winget_downgrade_in_place("),
+            "do_step runs the stored downgrade → a machine-wide copy comes back per-user"
+        );
+        let helper = fn_body("winget_downgrade_in_place");
+        assert!(helper.contains("scope_from_arp(") && helper.contains("downgrade_in("));
     }
 
     #[test]
