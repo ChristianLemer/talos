@@ -3139,17 +3139,6 @@ async fn do_step(
             json!({ "type": "step", "i": i, "status": running }).to_string(),
         ))
         .await;
-    // AFTER the status: the front resets the row's terminal on it, and would wipe these.
-    for note in take_notes(state, i).await {
-        use base64::{engine::general_purpose::STANDARD, Engine};
-        let line = format!("\x1b[2m{note}\x1b[0m\r\n");
-        let _ = socket
-            .send(Message::Text(
-                json!({ "type": "out", "i": i, "data": STANDARD.encode(line.as_bytes()) })
-                    .to_string(),
-            ))
-            .await;
-    }
 
     // The bare command is passed to run_in_pty, which wraps it in the native shell
     // (POSIX: user shell in -ilc via pty_shell; Windows: powershell + PATH refresh).
@@ -3162,6 +3151,19 @@ async fn do_step(
     } = run_in_pty(socket, state, i as u32, cmd).await;
     let ok = code == 0 || benign_code(code);
 
+    // The queued notes, NOW: before the command they were wiped twice over — by the front's
+    // reset on the running status, and by ConPTY clearing the screen as the command starts.
+    // Written here they read as the step's summary, above its exit line.
+    for note in take_notes(state, i).await {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let line = format!("\r\n\x1b[2m{note}\x1b[0m");
+        let _ = socket
+            .send(Message::Text(
+                json!({ "type": "out", "i": i, "data": STANDARD.encode(line.as_bytes()) })
+                    .to_string(),
+            ))
+            .await;
+    }
     // Diagnostic line in the row's terminal.
     let line = format!(
         "\r\n\x1b[2m[{}] exit {code} → {}\x1b[0m\r\n",
@@ -4942,11 +4944,13 @@ mod tests {
     }
 
     #[test]
-    fn a_row_note_is_written_after_the_status_that_clears_its_terminal() {
-        // Review of beta.49: the front's setStatus resets the row's terminal on every RUNNING
-        // status, so a line sent before it was wiped as it was written — the `[downgrade]`
-        // note and the dependents pass's `[repair]` line alike. Notes are queued per row and
-        // do_step writes them right AFTER the status.
+    fn a_row_note_is_written_once_the_command_can_no_longer_clear_it() {
+        // Review of beta.49: a line sent before the command was wiped as it was written — the
+        // `[downgrade]` note and the dependents pass's `[repair]` line alike. Twice over: the
+        // front resets the row's terminal on the RUNNING status, and on Windows ConPTY clears
+        // the screen as the command starts (MEASURED in the VM: the note sent after the status
+        // was gone, the terminal began at winget's first line). So notes are queued per row
+        // and do_step writes them when the command has ENDED, above its exit line.
         let body = fn_body("do_step");
         let at = |s: &str| {
             body.find(s)
@@ -4955,6 +4959,10 @@ mod tests {
         assert!(
             at(r#""status": running"#) < at("take_notes("),
             "a note before the status is wiped"
+        );
+        assert!(
+            at("run_in_pty(") < at("take_notes("),
+            "a note before the command is cleared by ConPTY"
         );
         assert!(
             body.contains("winget_in_place("),
