@@ -23,6 +23,7 @@ regex = "1"
 serde_yaml = "0.9"
 rust-embed = "8"
 chrono = "0.4"
+sysinfo = { version = "0.39.6", default-features = false, features = ["system", "disk"] }
 
 [[bin]]
 name = "pty-smoke"

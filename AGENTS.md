@@ -87,10 +87,10 @@ publish.
 Run all four before claiming anything works. These are exactly what CI enforces:
 
 ```bash
-cargo test --all-targets                      # 386 + 8 tests (2026-10-21)
+cargo test --all-targets                      # 398 + 8 tests (2026-10-22)
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings     # any lint fails the build
-node --test "test/*.test.mjs"                 # 171 tests
+node --test "test/*.test.mjs"                 # 179 tests
 ```
 
 A fifth, for content rather than code: `cargo run -- --check catalog bundles` reads
@@ -145,8 +145,8 @@ releases that carried them (beta.1–19) were retired on 2026-09-06.
 
 ## Architecture
 
-- **`src/`** — 25 Rust modules. `server.rs` (axum + WS), `catalog.rs` / `bundles.rs` (read YAML
-  from disk), `detect.rs` / `outdated.rs` (real machine state), `pty.rs` (portable-pty),
+- **`src/`** — 26 Rust modules. `server.rs` (axum + WS), `catalog.rs` / `bundles.rs` (read YAML
+  from disk), `detect.rs` / `outdated.rs` (real machine state), `machine.rs` (the machine profile and scan timings the journal records), `pty.rs` (portable-pty),
   `decision.rs`, `plan_facts.rs`, `behaviour.rs`, `platform.rs`.
 - **`public/`** — the front, plain ES modules, no framework, no bundler, no CDN. `decision.js`
   is **shared** with the server's logic: one rule, two callers. `model.js` is DOM-free and

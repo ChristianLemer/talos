@@ -8,6 +8,10 @@
 //! logs/<host>/<user>.jsonl — so a team can see who installed what. No
 //! consent → the shared copy is never written; the local journal is kept.
 //!
+//! The same journal also carries what the machine is and how fast it answered
+//! (`machine.rs`: one `machine` line per launch, one `scan` line per scan), under
+//! the same rule — so the consent covers them too, and the Log tab shows them.
+//!
 //! Same discipline as detect.rs / outdated.rs: PARSING is pure (tested), the IO
 //! is a thin shell that never panics (a journal that cannot write must not
 //! sink an install).
@@ -163,8 +167,15 @@ pub fn read_history(s: &ConsentStore) -> Vec<HistEntry> {
 /// next to the exe. Both best-effort: a journal that cannot write must
 /// never sink an install.
 pub fn append_history(s: &ConsentStore, entry: &HistEntry) {
+    append_record(s, entry);
+}
+
+/// Journals any record — the `machine` and `scan` lines of `machine.rs` — under the SAME
+/// rule as an install: local always, shared only with the consent. One journal, one rule;
+/// the install reader (`parse_history`) skips them because they name no package.
+pub fn append_record<T: Serialize>(s: &ConsentStore, record: &T) {
     use std::io::Write;
-    let Ok(mut line) = serde_json::to_string(entry) else {
+    let Ok(mut line) = serde_json::to_string(record) else {
         return;
     };
     line.push('\n');
@@ -300,6 +311,27 @@ mod tests {
         write_consent(&s, true);
         append_history(&s, &e);
         assert_eq!(read_history(&s).len(), 2);
+        assert!(shared.exists(), "with consent, shared copy written");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_machine_record_follows_the_install_rule_and_the_install_reader_skips_it() {
+        let dir = std::env::temp_dir().join("talos-test-consent-record");
+        let _ = std::fs::remove_dir_all(&dir);
+        let s = store(&dir);
+        let record = serde_json::json!({ "kind": "machine", "at": "t", "cores": 8 });
+        append_record(&s, &record);
+        let shared = shared_log_path(&s.exe_dir, &s.host, &s.user);
+        assert!(!shared.exists(), "without consent, no shared copy");
+        let local = std::fs::read_to_string(local_hist_path(&s)).unwrap();
+        assert!(local.contains("\"kind\":\"machine\""), "{local}");
+        assert!(
+            read_history(&s).is_empty(),
+            "a machine line is not an install"
+        );
+        write_consent(&s, true);
+        append_record(&s, &record);
         assert!(shared.exists(), "with consent, shared copy written");
         let _ = std::fs::remove_dir_all(&dir);
     }

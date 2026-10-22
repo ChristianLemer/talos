@@ -659,6 +659,16 @@
       body.tab-arbitration #arb-head { display:flex; align-items:center;
         justify-content:space-between; gap:8px; }
       #arb-head .arb-note { font-size:11px; color:var(--dim); }
+      /* "This machine": what the journal received about this machine, shown as-is — the
+         answer to "what does sharing send?". Filled by renderMachine (app.js). */
+      #machine-card { padding:4px 0 14px; border-bottom:1px solid var(--line); }
+      #machine-card .mc-share { font-size:12px; color:var(--dim); margin:2px 0 8px; }
+      #machine-card .mc-grid { display:grid; grid-template-columns:max-content 1fr; gap:3px 14px;
+        font-size:12px; }
+      #machine-card .mc-label { color:var(--dim); }
+      #machine-card .mc-value { font-family:"JetBrains Mono",monospace; overflow-wrap:anywhere; }
+      #machine-card .mc-value.warn { color:var(--warn, #d9a54a); }
+      #machine-card .mc-scan { font-size:12px; color:var(--dim); margin-top:8px; }
       /* Settings rows + history */
       #settings { padding:0 0 4px; }
       .set-row { display:flex; align-items:center; gap:14px; padding:12px 0; border-bottom:1px solid var(--line); }
@@ -1249,6 +1259,12 @@
     </div>
 
     <div id="view-log" class="view">
+      <div id="machine-card">
+        <div class="set-title">This machine</div>
+        <div class="mc-share" id="mc-share"></div>
+        <div class="mc-grid" id="mc-grid"></div>
+        <div class="mc-scan" id="mc-scan"></div>
+      </div>
       <div id="settings">
         <div class="set-row">
           <div><div class="set-title">Theme</div>
@@ -1267,7 +1283,7 @@
         </div>
         <div class="set-row">
           <div><div class="set-title">Share setup data for support<span class="rec-badge">Recommended</span></div>
-            <div class="set-desc">When on, the install history is saved next to the tool (visible to your team if the disk is shared). When off, it stays private to this machine. <b>Sharing is strongly recommended</b> so your team can help you stay up to date.</div></div>
+            <div class="set-desc">When on, the install history, this machine's profile (shown above) and each scan's timings are saved next to the tool (visible to your team if the disk is shared). When off, it stays private to this machine. <b>Sharing is strongly recommended</b> so your team can help you stay up to date.</div></div>
           <label class="switch"><input type="checkbox" id="consent-toggle"><span class="slider"></span></label>
         </div>
         <!-- macOS ONLY. Hidden by default and revealed by renderAppmgmt when the
@@ -1287,7 +1303,7 @@
         </div>
         <div class="set-row">
           <div><div class="set-title">Delete collected data</div>
-            <div class="set-desc">Remove the recorded install history.</div></div>
+            <div class="set-desc">Remove the recorded history from this machine: installs, machine profiles and scan timings.</div></div>
           <button id="clear-log" class="dangerbtn">Delete</button>
         </div>
       </div>

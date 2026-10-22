@@ -17,6 +17,7 @@ mod deps;
 mod detect;
 mod distribution;
 mod forbidden;
+mod machine;
 mod managers;
 mod outdated;
 mod plan_facts;

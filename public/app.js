@@ -6,6 +6,7 @@ import {
 } from "./decision.js";
 import * as M from "./model.js";
 import { estimate, formatEstimate } from "./estimate.js";
+import { machineRows, scanSummary, shareLine } from "./machine.js";
 const model = M.createModel();
 
 const stepsEl = document.getElementById("steps");
@@ -2097,6 +2098,30 @@ function showBuild(build, distribution) {
   }
 }
 
+// The "This machine" card: the records the journal received, as text (see machine.js).
+function renderMachine(machine, scan, consent, sharedTo) {
+  document.getElementById("mc-share").textContent = shareLine(consent, sharedTo);
+  const grid = document.getElementById("mc-grid");
+  grid.replaceChildren();
+  const rows = machineRows(machine);
+  if (!rows.length) {
+    const wait = document.createElement("div");
+    wait.className = "mc-label";
+    wait.textContent = "Collecting… (after the first scan)";
+    grid.append(wait);
+  }
+  for (const r of rows) {
+    const label = document.createElement("div");
+    label.className = "mc-label";
+    label.textContent = r.label;
+    const value = document.createElement("div");
+    value.className = r.warn ? "mc-value warn" : "mc-value";
+    value.textContent = r.value;
+    grid.append(label, value);
+  }
+  document.getElementById("mc-scan").textContent = scanSummary(scan);
+}
+
 function renderLog(consent, history) {
   document.getElementById("consent-toggle").checked =
     !!(consent && consent.share);
@@ -2155,6 +2180,7 @@ ws.onmessage = (ev) => {
       }
       break;
     case "log":
+      renderMachine(msg.machine, msg.scan, msg.consent, msg.sharedTo);
       renderLog(msg.consent, msg.history);
       break;
     case "rescan-progress":

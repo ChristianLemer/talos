@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use crate::bundles::{load_from_catalog, Plan};
 use crate::consent::{
-    append_history, clear_history, read_consent, read_history, write_consent, ConsentStore,
-    HistEntry,
+    append_history, append_record, clear_history, read_consent, read_history, shared_log_path,
+    write_consent, ConsentStore, HistEntry,
 };
 // ⚠️ The two scans call `detect_present_detailed_with_vscode` by its full path rather than
 // importing it: the name is long enough that an import would read as an alias, and the full path
@@ -274,6 +274,15 @@ struct AppState {
     /// reinstalls it there; never written to disk.
     found_scope:
         tokio::sync::Mutex<std::collections::HashMap<String, crate::managers::InstallScope>>,
+    /// This launch's machine profile, None while it is being collected. Observed once per
+    /// launch, after the first scan (see `machine::collect`), and shown at the top of the
+    /// Log tab — the very values the journal received, never a description of them.
+    machine: std::sync::Mutex<Option<crate::machine::Profile>>,
+    /// Set by the first scan, so the profile is collected once per launch and a Refresh
+    /// does not collect it again.
+    machine_started: std::sync::atomic::AtomicBool,
+    /// The last scan's timings, as journalled — for the Log tab's one-line summary.
+    last_scan: std::sync::Mutex<Option<crate::machine::ScanRecord>>,
 }
 
 /// Records one observed presence in `last_seen` (grows the vector if the plan is
@@ -519,6 +528,9 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         timed: tokio::sync::Mutex::new(crate::timings::Timings::new()),
         notes: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         found_scope: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        machine: std::sync::Mutex::new(None),
+        machine_started: std::sync::atomic::AtomicBool::new(false),
+        last_scan: std::sync::Mutex::new(None),
     });
 
     let state_for_root = state.clone();
@@ -1456,7 +1468,7 @@ async fn diff_step(socket: &mut WebSocket, state: &AppState, i: usize) {
 ///
 /// The batched machine-wide outdated stays ONE command for the whole machine
 /// ("fewer processes, not more threads") — it runs first, serially, then the probes.
-async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
+async fn scan_and_emit(socket: &mut WebSocket, state: &Arc<AppState>) {
     let os = state.os;
     // Snapshot, for the same reason as `handle_socket`: one scan, one catalogue.
     let steps = state.plan.read().await.steps.clone();
@@ -1468,6 +1480,14 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
             "the scan task did not finish".into(),
         )));
     println!("[scan] outdated (batched) in {:?}", started.elapsed());
+    // The same timings the console lines print, kept for the journal: a Windows release has
+    // no console, so without this record every one of them is lost on the fleet.
+    let mut record = crate::machine::ScanRecord {
+        kind: "scan".into(),
+        outdated_ms: started.elapsed().as_millis() as u64,
+        packages: steps.len(),
+        ..Default::default()
+    };
 
     // ⚠️ An unreadable scan is NOT "nothing is outdated". Saying so out loud is
     // the difference between a user who knows the check did not happen and one
@@ -1486,6 +1506,9 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
         Err(reason) => {
             *state.outdated_seen.lock().await = None;
             eprintln!("[scan] outdated UNAVAILABLE: {}", reason.message());
+            record
+                .unavailable
+                .push(format!("outdated: {}", reason.message()));
             let _ = socket
                 .send(Message::Text(
                     json!({
@@ -1506,13 +1529,19 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
     let bulk = tokio::task::spawn_blocking(move || crate::detect::fetch_bulk_presence(os))
         .await
         .unwrap_or(None);
+    record.presence_ms = bulk_started.elapsed().as_millis() as u64;
     match &bulk {
         Some(t) => println!(
             "[scan] presence (batched) {} installed in {:?}",
             t.len(),
             bulk_started.elapsed()
         ),
-        None => eprintln!("[scan] presence listing UNAVAILABLE — probing per package"),
+        None => {
+            eprintln!("[scan] presence listing UNAVAILABLE — probing per package");
+            record
+                .unavailable
+                .push("presence listing: probing per package".into());
+        }
     }
     // Shared read-only across the per-package tasks: cloning the table per package
     // would undo exactly the saving this is here for.
@@ -1533,6 +1562,7 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
     let vs = tokio::task::spawn_blocking(move || crate::vscode::snapshot(os, &home))
         .await
         .ok();
+    record.vscode_ms = vscode_started.elapsed().as_millis() as u64;
     match &vs {
         Some(s) => println!(
             "[scan] vscode host={} manifest={} in {:?}",
@@ -1564,6 +1594,10 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
         .await
         .unwrap_or_default();
         // Timing per package: this is the evidence for "is serial bearable?".
+        record.probes.push(crate::machine::ProbeTime {
+            name: step.name.clone(),
+            ms: probe_started.elapsed().as_millis() as u64,
+        });
         println!(
             "[scan] {}/{} {} in {:?}",
             i + 1,
@@ -1595,6 +1629,40 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &AppState) {
     let _ = socket
         .send(Message::Text(json!({ "type": "state-done" }).to_string()))
         .await;
+    record.total_ms = started.elapsed().as_millis() as u64;
+    record.at = chrono::Utc::now().to_rfc3339();
+    append_record(&state.consent, &record);
+    *state.last_scan.lock().unwrap_or_else(|e| e.into_inner()) = Some(record);
+    start_machine_profile(state, steps);
+}
+
+/// Collects this launch's machine profile, ONCE, in the background, and journals it.
+///
+/// Started at the end of the first scan and not at boot: the profile spawns two shells,
+/// and the scan is serial on purpose — they must not compete with its probes, nor make
+/// them look slower than they are. Nothing waits on it; the Log tab reads "collecting"
+/// until it lands.
+fn start_machine_profile(state: &Arc<AppState>, steps: &[crate::bundles::Step]) {
+    use std::sync::atomic::Ordering;
+    if state.machine_started.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let routes: Vec<String> = steps.iter().filter_map(|s| s.route.clone()).collect();
+    let state = Arc::clone(state);
+    tokio::task::spawn_blocking(move || {
+        let routes: Vec<&str> = routes.iter().map(String::as_str).collect();
+        let profile = crate::machine::collect(state.os, &state.consent.exe_dir, &routes);
+        println!(
+            "[machine] {} cores, {} MB free of {} MB, one shell {} ms, collected in {} ms",
+            profile.cores,
+            profile.ram_available_mb,
+            profile.ram_total_mb,
+            profile.shell_ms,
+            profile.collect_ms
+        );
+        append_record(&state.consent, &profile);
+        *state.machine.lock().unwrap_or_else(|e| e.into_inner()) = Some(profile);
+    });
 }
 
 /// `log` message for the Log tab: current consent + local history.
@@ -1603,6 +1671,16 @@ fn log_msg(state: &AppState) -> String {
         "type": "log",
         "consent": read_consent(&state.consent),
         "history": read_history(&state.consent),
+        // What the journal received about this machine, this launch — shown as-is at the top
+        // of the tab, so what is shared is never a description that could drift from it.
+        "machine": state.machine.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        "scan": state.last_scan.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        // Where a consented copy goes, said with the same `~` the profile uses.
+        "sharedTo": crate::machine::tilde(
+            &shared_log_path(&state.consent.exe_dir, &state.consent.host, &state.consent.user)
+                .to_string_lossy(),
+            &crate::detect::user_home().to_string_lossy(),
+        ),
     })
     .to_string()
 }
@@ -4395,6 +4473,9 @@ mod tests {
             timed: tokio::sync::Mutex::new(crate::timings::Timings::new()),
             notes: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             found_scope: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            machine: std::sync::Mutex::new(None),
+            machine_started: std::sync::atomic::AtomicBool::new(false),
+            last_scan: std::sync::Mutex::new(None),
         }
     }
 
@@ -4418,6 +4499,33 @@ mod tests {
         let m = super::plan_message(&state, &[]);
         assert_eq!(m["distribution"]["label"], "Ops 3", "{m}");
         assert_eq!(m["distribution"]["name"], "Ops", "{m}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Log tab is told what the journal received about this machine, verbatim, and
+    /// where a consented copy goes — `null` while the profile is still being collected.
+    #[test]
+    fn the_log_message_carries_the_machine_profile_and_the_last_scan() {
+        let dir = share("talos-test-log-machine");
+        let state = state_with_share(&dir);
+        let m: serde_json::Value = serde_json::from_str(&super::log_msg(&state)).unwrap();
+        assert!(m["machine"].is_null(), "{m}");
+        assert!(m["scan"].is_null(), "{m}");
+        let to = m["sharedTo"].as_str().unwrap();
+        assert!(to.ends_with("test-user.jsonl"), "{to}");
+        *state.machine.lock().unwrap() = Some(crate::machine::Profile {
+            kind: "machine".into(),
+            cores: 8,
+            ..Default::default()
+        });
+        *state.last_scan.lock().unwrap() = Some(crate::machine::ScanRecord {
+            kind: "scan".into(),
+            total_ms: 4200,
+            ..Default::default()
+        });
+        let m: serde_json::Value = serde_json::from_str(&super::log_msg(&state)).unwrap();
+        assert_eq!(m["machine"]["cores"], 8, "{m}");
+        assert_eq!(m["scan"]["total_ms"], 4200, "{m}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

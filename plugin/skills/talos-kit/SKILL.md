@@ -1,6 +1,6 @@
 ---
 name: talos-kit
-description: Compose and distribute a Talos kit — the released launchers plus your `catalog/` and `bundles/`, in one folder a team launches from a shared drive. Covers `.talos-version` (the pin), `get-talos.sh` and `get-talos.ps1` (compose from any OS, and what they verify), `--verify` on a synced replica, a kit for one machine, the OneDrive realities (a locked exe, a half-synced .app, self-healing), and the Doctor tab — why a rescue candidate must declare `doctor:` and how `clean:` is measured. Use when shipping content to a team, bumping the Talos version, diagnosing a kit that opens inert or runs stale code, or deciding whether a package belongs in the Doctor.
+description: Compose and distribute a Talos kit — the released launchers plus your `catalog/` and `bundles/`, in one folder a team launches from a shared drive. Covers `.talos-version` (the pin), `get-talos.sh` and `get-talos.ps1` (compose from any OS, and what they verify), `--verify` on a synced replica, a kit for one machine, the OneDrive realities (a locked exe, a half-synced .app, self-healing), the machine log (what a slow machine or a missing winget tells you, and what sharing sends), and the Doctor tab — why a rescue candidate must declare `doctor:` and how `clean:` is measured. Use when shipping content to a team, bumping the Talos version, diagnosing a kit that opens inert or runs stale code, reading why a machine is slow or never finds winget, or deciding whether a package belongs in the Doctor.
 ---
 
 # The Talos kit
@@ -212,6 +212,38 @@ same copy. The exe is **never copied per machine**.
   folder of files, and a half-synced app must never be launched. `--verify` is how you
   find out before the user does.
 - The binaries are **unsigned** for now. Signing and notarisation are a separate step.
+
+---
+
+## The machine log — what a slow or broken machine tells you
+
+Each machine keeps a journal in its own data dir (`%LOCALAPPDATA%\Talos\history.jsonl`).
+With the user's **share consent**, every line is also appended to
+`logs/<host>/<user>.jsonl` beside the exe — that is the file to read when a machine is
+slow or never finds a tool. Three kinds of line, one JSON object each:
+
+| line | when | what it carries |
+|---|---|---|
+| install (has `package`) | each step | name, version, action, `ok`, `secs` |
+| `"kind": "machine"` | once per launch, after the first scan | OS, CPU and logical cores, RAM total/free, free space on the system and kit disks, where the kit sits (`local`, `network`, `onedrive`, `synced`), **`shell_ms`** — one empty shell through the probe wrapper — and where each manager the plan uses resolves; on Windows also the winget alias state, the antivirus products the OS declares, Defender real-time, and AC or battery |
+| `"kind": "scan"` | each scan | total, the three batched calls, every package probe in **ms**, and why a batched call gave no answer |
+
+What to read first:
+
+- **`shell_ms`** in the seconds is the usual corporate story: an antivirus or EDR scanning
+  every process start. Talos spawns hundreds of short processes; every probe pays it.
+- **winget "not found"**: its path does not vary between machines — it is a per-user alias,
+  `%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe`, registered by App Installer at the
+  user's first logon. `winget.alias: false` means it was never registered for this user (a
+  fresh profile, an image without the Store apps, LTSC or Server); `on_path: false` means it
+  exists but the probes cannot see it.
+- **A `scan` line's `unavailable`** quotes the reason the release's missing console used to
+  swallow.
+
+What is NOT collected: no serial number, no MAC address, no user name beyond the one the
+file's own path carries; the home folder is written `~` in every path. The **Log tab shows
+the latest machine profile at its top**, as the values themselves — what the user sees there
+is what the share receives.
 
 ---
 
