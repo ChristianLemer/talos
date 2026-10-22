@@ -42,6 +42,7 @@ import {
   scopeReason,
   setDecision,
   setExternal,
+  setHold,
   setInstalledVersion,
   setOutdated,
   setPresence,
@@ -497,6 +498,44 @@ test("unmoved: a change that exited ok and moved nothing is held while the same 
   setOutdated(v, 0, true, "v1.0.102");
   setUnmoved(v, 0, { found: "1.0.96", target: "1.0.102", reason: "it moved nothing" });
   assert.equal(isActionable(v, 0), false, "the same version, the same target, spelled twice");
+});
+
+test("setHold: a row the server held at Apply is held until the next scan, with its words", () => {
+  // The server asks brew at Apply; brew cannot serve the pin, so the row is left and the
+  // server says why. Without remembering it, the Apply button would offer the same change
+  // after every Apply, and every Apply would hold it again.
+  const m = seedPinned({ canDowngrade: true }); // pin 1.8
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "1.5"); // below the pin → an upgrade
+  assert.equal(isActionable(m, 0), true);
+  setHold(m, 0, "brew offers 1.7, not 1.8");
+  assert.equal(holdReason(m, 0), "brew offers 1.7, not 1.8");
+  assert.equal(isActionable(m, 0), false, "held: the Apply leaves it");
+  assert.deepEqual(heldRows(m), [0]);
+  assert.equal(versionSummary(m, 0).muted, true, "the pin is shown, not pushed");
+  setInstalledVersion(m, 0, "1.8");
+  assert.equal(holdReason(m, 0), null, "at the pin: nothing to explain any more");
+});
+
+test("setHold: an ABSENT row held at install is not counted as work", () => {
+  const m = seedPinned();
+  setStatusData(m, 0, "waiting"); // absent → an install
+  assert.equal(actionOf(m, 0), "install");
+  setHold(m, 0, "brew offers 1.7, not 1.8");
+  assert.equal(isActionable(m, 0), false);
+  assert.deepEqual(applyPlan(m), []);
+  assert.equal(holdReason(m, 0), "brew offers 1.7, not 1.8");
+});
+
+test("loadPlan: a fresh plan forgets the holds, so the next Apply asks again", () => {
+  const m = seedPinned();
+  setStatusData(m, 0, "waiting");
+  setHold(m, 0, "brew offers 1.7, not 1.8");
+  loadPlan(m, [{ i: 0, name: "jq", bundle: "Base", posture: "opt-out", canUninstall: true, pin: "1.8" }], []);
+  setDecision(m, 0, "in");
+  setStatusData(m, 0, "waiting");
+  assert.equal(actionOf(m, 0), "install", "still work to do…");
+  assert.equal(holdReason(m, 0), null, "…and no longer held");
 });
 
 test("versionSummary: absent → empty (nothing installed to show)", () => {

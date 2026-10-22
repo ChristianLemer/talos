@@ -380,6 +380,10 @@ struct AppState {
     /// Apply holds the row while the same version is installed and the same target in view;
     /// a change of either lifts it. Never written: a restart tries once more.
     unmoved: tokio::sync::Mutex<std::collections::HashMap<String, Unmoved>>,
+    /// What brew offers for a pinned row, read when the Apply builds its plan and taken by the
+    /// row's step, so one Apply asks brew once. A step that finds nothing here (a retry, a
+    /// repair) asks brew itself.
+    brew_pins: tokio::sync::Mutex<std::collections::HashMap<String, crate::managers::BrewPin>>,
 }
 
 /// Records one observed presence in `last_seen` (grows the vector if the plan is
@@ -631,6 +635,7 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         machine_shared: std::sync::atomic::AtomicBool::new(false),
         last_scan: std::sync::Mutex::new(None),
         unmoved: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        brew_pins: tokio::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
     let state_for_root = state.clone();
@@ -2212,6 +2217,92 @@ fn winget_plan(
     }
 }
 
+/// A brew version change against an exact pin, decided from what brew offers — PURE: the
+/// verdict comes from `managers::brew_pin_check`, run just before acting.
+///
+/// - `Ok(Some((command, line)))`: the pin IS brew's current version, so plain brew does it; the
+///   stored command looks for `id@pin`, which then exists nowhere (Nushell 0.116.1, 2026-10-22).
+/// - `Ok(None)`: the stored command stands — a versioned formula exists, brew could not be
+///   read, the pin is not exact, the route is not brew, or the action is a removal.
+/// - `Err(reason)`: brew cannot serve the pin. Nothing runs, and the row says what brew offers:
+///   a command certain to fail would fail again on every Apply.
+fn brew_plan(
+    action: crate::decision::Action,
+    step: &crate::bundles::Step,
+    verdict: Option<&crate::managers::BrewPin>,
+) -> Result<Option<(String, String)>, String> {
+    use crate::decision::Action;
+    use crate::managers::BrewPin;
+    if step.route.as_deref() != Some("brew") || action == Action::Uninstall {
+        return Ok(None);
+    }
+    let Some(crate::bundles::PinKind::Exact(pin)) =
+        crate::bundles::classify_pin(step.pin.as_deref())
+    else {
+        return Ok(None);
+    };
+    let (Some(id), Some(mgr)) = (
+        step.system_id.as_deref(),
+        crate::managers::managers()
+            .into_iter()
+            .find(|m| m.route == "brew"),
+    ) else {
+        return Ok(None);
+    };
+    match verdict {
+        Some(BrewPin::Current) => {
+            let cmd = match action {
+                Action::Upgrade => mgr.upgrade(id, false),
+                Action::Downgrade => format!("{} && {}", mgr.uninstall(id), mgr.install(id)),
+                _ => mgr.install(id),
+            };
+            Ok(Some((
+                cmd,
+                format!("{pin} is brew's current {id}: plain brew, no versioned formula"),
+            )))
+        }
+        Some(BrewPin::Unreachable { offered }) => Err(format!("brew offers {offered}, not {pin}")),
+        Some(BrewPin::Versioned) | None => Ok(None),
+    }
+}
+
+/// Asks brew what it offers for a row's exact pin, only when `brew_plan` needs the answer: a
+/// brew route, an exact pin, an action that installs. One `brew info`, two when the pin is not
+/// brew's current version. Never in the scan: an Apply pays it, for its pinned brew rows only.
+async fn ask_brew(
+    action: crate::decision::Action,
+    step: &crate::bundles::Step,
+    os: Os,
+) -> Option<crate::managers::BrewPin> {
+    if step.route.as_deref() != Some("brew") || action == crate::decision::Action::Uninstall {
+        return None;
+    }
+    let Some(crate::bundles::PinKind::Exact(pin)) =
+        crate::bundles::classify_pin(step.pin.as_deref())
+    else {
+        return None;
+    };
+    let id = step.system_id.clone()?;
+    tokio::task::spawn_blocking(move || {
+        crate::managers::brew_pin_check(&id, &pin, &|cmd| {
+            let r = crate::detect::run_probe_detailed(&crate::platform::shell_probe(os, cmd));
+            (r.ok, r.output)
+        })
+    })
+    .await
+    .ok()?
+}
+
+/// Tells the front that the Apply leaves row `i` and why. The front keeps it as the row's hold
+/// until the next scan, so the Apply button stops offering a change brew cannot make.
+async fn send_held(socket: &mut WebSocket, i: usize, why: &str) {
+    let _ = socket
+        .send(Message::Text(
+            json!({ "type": "held", "i": i, "reason": why }).to_string(),
+        ))
+        .await;
+}
+
 /// The probes behind `winget_plan`, run just before acting: where the installed copy is is a
 /// fact of the machine, which the command stored at load cannot hold. Off winget, or when no
 /// decision needs them, nothing runs. The scope found is remembered for the row.
@@ -2687,6 +2778,8 @@ async fn apply_diff(
 
     // Action per package: desire (on→present, off→absent, neither→auto=None).
     let mut visual_plan: Vec<(usize, Action)> = Vec::new();
+    // What brew offered belongs to this Apply: an answer left by a stopped one is not reused.
+    state.brew_pins.lock().await.clear();
     let sel = read_selection(&state.data_dir);
     for (i, step) in steps.iter().enumerate() {
         // Out of scope → never an action. TWO sources, deliberately, because they
@@ -2730,20 +2823,31 @@ async fn apply_diff(
             update_each_apply: step.update_each_apply,
         };
         match batch_action(action_for(desired, &facts), step.downgrade.is_some()) {
-            // A change that already ran toward this target in this session and moved nothing
-            // is not run again: the row says why, and a new target lifts the hold.
-            Ok(Some(a @ (Action::Upgrade | Action::Downgrade))) => {
-                let announced = od.map(|o| o.available.as_str());
-                let installed = presences[i].version.as_deref();
-                match unmoved_in_view(state, step, a, installed, announced).await {
-                    Some(u) => {
+            Ok(Some(a)) => {
+                // A change that already ran toward this target in this session and moved
+                // nothing is not run again: the row says why, and a new target lifts the hold.
+                if matches!(a, Action::Upgrade | Action::Downgrade) {
+                    let announced = od.map(|o| o.available.as_str());
+                    let installed = presences[i].version.as_deref();
+                    if let Some(u) = unmoved_in_view(state, step, a, installed, announced).await {
                         println!("[apply] {} held: {}", step.name, u.reason);
                         emit_unmoved(socket, i, &u).await;
+                        continue;
                     }
-                    None => visual_plan.push((i, a)),
                 }
+                // A brew pin is checked against what brew offers NOW: held when brew cannot
+                // serve it, rebuilt by the step when it is brew's current version.
+                let verdict = ask_brew(a, step, os).await;
+                if let Err(why) = brew_plan(a, step, verdict.as_ref()) {
+                    println!("[apply] {} held: {why}", step.name);
+                    send_held(socket, i, &why).await;
+                    continue;
+                }
+                if let Some(v) = verdict {
+                    state.brew_pins.lock().await.insert(step.id.clone(), v);
+                }
+                visual_plan.push((i, a));
             }
-            Ok(Some(a)) => visual_plan.push((i, a)),
             Ok(None) => {}
             // The front already shows this row's reason (it reads `canDowngrade`), so the
             // trace here is the log line — the row is not acted on, and it says why.
@@ -3721,7 +3825,8 @@ fn ahead_of_manager(found: &str, target: &str, cmd: &str) -> Unmoved {
 /// attempt from another for a hold (`held_unmoved`). Both of them, whatever the action: the scan
 /// looks a hold up without knowing which one recorded it, and a downgrade hold keyed on its own
 /// command alone was never found again. The forms rebuilt at run time (a forced cask, a winget
-/// scope) follow from these and from the machine, so they need no key of their own.
+/// scope, a brew pin served as plain brew) follow from these and from the machine, so they
+/// need no key of their own.
 fn change_command(step: &crate::bundles::Step) -> String {
     format!(
         "{}\n{}",
@@ -3810,7 +3915,27 @@ async fn do_step(
     };
     // A winget version change is rebuilt HERE, for where the package must live — a fact of
     // the machine, read just before acting, that the command stored at load cannot hold.
-    let rebuilt = winget_in_place(state, action, step, os).await;
+    let rebuilt = match winget_in_place(state, action, step, os).await {
+        Some(r) => Some(r),
+        // A brew pin, the same way: plain brew when the pin is brew's current version, and
+        // nothing at all when brew cannot serve it. The plan's answer is taken when there is
+        // one; a retry or a repair asks brew itself.
+        None => {
+            let planned = state.brew_pins.lock().await.remove(&step.id);
+            let verdict = match planned {
+                Some(v) => Some(v),
+                None => ask_brew(action, step, os).await,
+            };
+            match brew_plan(action, step, verdict.as_ref()) {
+                Ok(r) => r,
+                Err(why) => {
+                    println!("[{}] {} held: {why}", action.as_str(), step.name);
+                    send_held(socket, i, &why).await;
+                    return StepOutcome::default();
+                }
+            }
+        }
+    };
     if let Some((_, note)) = &rebuilt {
         queue_note(state, i, format!("[{}] {note}", action.as_str())).await;
     }
@@ -4927,6 +5052,80 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_brew_pin_at_brews_current_version_runs_plain_brew() {
+        use crate::decision::Action::*;
+        use crate::managers::BrewPin;
+        let s = brew_step("nushell", Some("0.116.1"));
+        let cur = Some(&BrewPin::Current);
+        let cmd = |a| super::brew_plan(a, &s, cur).unwrap().map(|(c, _)| c);
+        assert_eq!(cmd(Install).as_deref(), Some("brew install --yes nushell"));
+        assert_eq!(cmd(Upgrade).as_deref(), Some("brew upgrade --yes nushell"));
+        assert_eq!(
+            cmd(Downgrade).as_deref(),
+            Some("brew uninstall nushell && brew install --yes nushell")
+        );
+        let (_, note) = super::brew_plan(Upgrade, &s, cur).unwrap().unwrap();
+        assert!(note.contains("0.116.1"), "the row says why: {note}");
+        assert_eq!(super::brew_plan(Uninstall, &s, cur), Ok(None));
+    }
+
+    #[test]
+    fn a_brew_pin_brew_cannot_serve_is_held_with_what_brew_offers() {
+        use crate::decision::Action::*;
+        use crate::managers::BrewPin;
+        let s = brew_step("node", Some("26.8.1"));
+        let v = BrewPin::Unreachable {
+            offered: "26.12.1".into(),
+        };
+        for a in [Install, Upgrade, Downgrade] {
+            assert_eq!(
+                super::brew_plan(a, &s, Some(&v)),
+                Err("brew offers 26.12.1, not 26.8.1".to_string()),
+                "{a:?}"
+            );
+        }
+        // Holding is about not acting: removing the package stays possible.
+        assert_eq!(super::brew_plan(Uninstall, &s, Some(&v)), Ok(None));
+    }
+
+    #[test]
+    fn a_brew_pin_keeps_its_stored_command_when_a_versioned_formula_exists_or_brew_is_unread() {
+        use crate::decision::Action::*;
+        use crate::managers::BrewPin;
+        let s = brew_step("node", Some("24"));
+        assert_eq!(
+            super::brew_plan(Install, &s, Some(&BrewPin::Versioned)),
+            Ok(None)
+        );
+        assert_eq!(super::brew_plan(Install, &s, None), Ok(None));
+        // Not an exact pin, or not brew: nothing to decide.
+        let latest = brew_step("node", Some("latest"));
+        assert_eq!(
+            super::brew_plan(Upgrade, &latest, Some(&BrewPin::Current)),
+            Ok(None)
+        );
+        // `version: self`: the tool updates itself, and brew must never replace its `update:`.
+        let own = brew_step("claude-code", Some("self"));
+        let away = BrewPin::Unreachable {
+            offered: "2.0".into(),
+        };
+        for a in [Install, Upgrade] {
+            assert_eq!(super::brew_plan(a, &own, Some(&BrewPin::Current)), Ok(None));
+            assert_eq!(
+                super::brew_plan(a, &own, Some(&away)),
+                Ok(None),
+                "a self row is never held by brew's offer"
+            );
+        }
+        let mut winget = brew_step("OpenJS.NodeJS", Some("26.8.1"));
+        winget.route = Some("winget".into());
+        assert_eq!(
+            super::brew_plan(Install, &winget, Some(&BrewPin::Current)),
+            Ok(None)
+        );
+    }
+
     fn seen(present: bool, version: &str) -> crate::detect::Presence {
         crate::detect::Presence {
             present: Some(present),
@@ -5847,6 +6046,7 @@ mod tests {
             machine_shared: std::sync::atomic::AtomicBool::new(false),
             last_scan: std::sync::Mutex::new(None),
             unmoved: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            brew_pins: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 

@@ -110,6 +110,20 @@ test("the held reason is the same words on the row and in the server log", () =>
   assert.ok(model.includes(`"${rs[1]}"`), "model.js holdReason drifted from the server's words");
 });
 
+test("a row the server holds at Apply keeps the hold and shows it, even with nothing installed", () => {
+  // `held` (server::send_held): brew cannot serve the pin. The row must remember it, or the
+  // Apply button offers the same change forever; and an ABSENT row has no version to grey, so
+  // paintVersion must show the pin itself as held.
+  const at = appjs.indexOf('case "held"');
+  assert.notEqual(at, -1, "app.js does not handle the server's held message");
+  const body = appjs.slice(at, appjs.indexOf("break;", at));
+  assert.match(body, /M\.setHold\(model, msg\.i, msg\.reason\)/);
+  assert.match(body, /paintVersion\(msg\.i\)/);
+  assert.match(body, /refreshLiveness\(\)/);
+  const pv = appjs.slice(appjs.indexOf("function paintVersion("), appjs.indexOf("\n}\n", appjs.indexOf("function paintVersion(")));
+  assert.match(pv, /if \(!v\.from\) \{[^}]*why/, "an absent held row shows why");
+});
+
 test("the Apply button says how long, from what these rows took here", () => {
   // The estimate used to sit beside the ladder's rungs; the ladder left and took the only
   // display with it. It belongs on the one button that runs the plan.

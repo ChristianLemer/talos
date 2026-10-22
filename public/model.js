@@ -420,8 +420,9 @@ export function setUnmoved(model, i, { found, target, reason, ahead } = {}) {
 // still choose to test it. See talos-version-pin.
 export function versionSummary(model, i) {
   const v = summary(model, i);
-  // A change already run toward this target, which moved nothing: shown, not pushed.
-  return v.to !== null && unmovedHold(model, i) ? { ...v, muted: true } : v;
+  // A change the Apply leaves (moved nothing last time, or brew cannot serve the pin): shown,
+  // not pushed.
+  return v.to !== null && holdReason(model, i) !== null ? { ...v, muted: true } : v;
 }
 function summary(model, i) {
   const none = { from: "", to: null, pinned: null, muted: false, held: false };
@@ -493,10 +494,9 @@ function unpinned(p, inst) {
 // lighting for a change the Apply won't make. See talos-version-pin.
 const AUTO_ACTS = ["install", "uninstall", "upgrade", "downgrade"];
 export function isActionable(model, i) {
-  const a = actionOf(model, i);
-  if (a === "downgrade" && !model.pkgs.get(i)?.canDowngrade) return false;
-  if (unmovedHold(model, i)) return false;
-  return AUTO_ACTS.includes(a);
+  // One predicate for every hold (`holdReason`), so the preview and the row's words agree.
+  if (holdReason(model, i) !== null) return false;
+  return AUTO_ACTS.includes(actionOf(model, i));
 }
 // What the Apply button counts, by what each row ends up as. A downgrade is apart: it is an
 // uninstall first, and the spec wants that said before the click.
@@ -515,15 +515,27 @@ export function planCounts(model) {
 export function planSeconds(model) {
   return applyPlan(model).map((i) => model.pkgs.get(i)?.secs ?? 0);
 }
-// WHY the Apply leaves a row it would otherwise act on, or null. Two cases: a change that
-// already ran and moved nothing (`unmovedHold`), and a pinned row above its pin whose route
-// cannot go down. The words are the server's `NO_DOWNGRADE_ROUTE`,
-// word for word, so the row and the log say the same thing.
+// WHY the Apply leaves a row it would otherwise act on, or null. Three cases: a change that
+// already ran and moved nothing (`unmovedHold`); a brew pin brew cannot serve, which the server
+// says at Apply (`held`); and a pinned row above its pin whose route cannot go down, in the
+// server's `NO_DOWNGRADE_ROUTE` words, word for word, so the row and the log say the same thing.
+//
+// The brew hold is kept on the row until the next plan rebuilds the model, and it explains only
+// a change the Apply would still make — once the row reaches its pin, there is nothing to hold.
+const HELD_ACTIONS = ["install", "upgrade", "downgrade"];
 export function holdReason(model, i) {
   const unmoved = unmovedHold(model, i);
   if (unmoved) return unmoved;
-  if (actionOf(model, i) !== "downgrade") return null;
-  return model.pkgs.get(i)?.canDowngrade ? null : "above its pin — this route cannot go down to it";
+  const a = actionOf(model, i);
+  const p = model.pkgs.get(i);
+  if (p?.hold && HELD_ACTIONS.includes(a)) return p.hold;
+  if (a !== "downgrade") return null;
+  return p?.canDowngrade ? null : "above its pin — this route cannot go down to it";
+}
+// The server held this row at Apply, with these words (`server::send_held`).
+export function setHold(model, i, reason) {
+  const p = model.pkgs.get(i);
+  if (p) p.hold = reason || "";
 }
 // The one word a held row shows beside its reason: `unchanged` (it ran and moved nothing),
 // `ahead` (the tool is past what its manager offers), `current` (at it, with a manager record

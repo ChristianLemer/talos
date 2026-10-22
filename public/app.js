@@ -579,7 +579,12 @@ function paintVersion(i) {
     return;
   }
   if (!v.from) {
-    r.delta.innerHTML = ""; // absent / no version to show
+    // Absent: no version to show — unless the Apply held its install, and then the pin it
+    // could not reach is the thing to show, greyed, with why.
+    const p = model.pkgs.get(i);
+    r.delta.innerHTML = why && p?.pin
+      ? `<span class="v-muted" title="${attr(why)}">${pin(p.pin)}</span> <span class="v-held">held</span>`
+      : "";
     return;
   }
   if (v.to === null) {
@@ -2400,6 +2405,11 @@ ws.onmessage = (ev) => {
       refreshLiveness(); // the Apply no longer counts this row while the target is the same
       break;
     }
+    case "held": // the Apply left this row: brew cannot serve its pin (server::send_held)
+      M.setHold(model, msg.i, msg.reason);
+      paintVersion(msg.i);
+      refreshLiveness();
+      break;
     case "step":
       setStatus(msg.i, msg.status);
       // A step that settled ok clears any lingering firewall recovery UI (the

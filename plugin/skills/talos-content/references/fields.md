@@ -288,11 +288,28 @@ uninstalled and reinstalled at the pin. The version belongs to the author — wh
 downgrade leaves the row as it is and says so on it (`held`).
 
 **Per-route reality:** winget / cargo / bun pin natively (`--version` / `@version`).
-**brew has no version flag** — a pin resolves to the versioned formula `id@version`
-(e.g. `nushell@0.113.1`), which exists *only* if the tap ships it. If it doesn't, a
-pinned install fails at run time, and a downgrade fails **before** it uninstalls anything
-(the formula is checked first), so the row stays as it was. While you sit *at* the pin,
-nothing runs, so an unavailable versioned formula is harmless until you actually drift.
+**brew has no version flag**: it installs its *current* version of a formula, or a
+versioned formula `id@version` when a tap ships one. So when a brew pin has to move, the
+Apply first asks brew (`brew info`, for pinned brew rows only, never in the scan):
+
+| brew offers | What the Apply does |
+|---|---|
+| the pin is its current version, at the pin's precision | plain `brew install` / `brew upgrade` |
+| a versioned formula `id@version` (e.g. `node@24` for `version: "24"`) | installs that formula |
+| neither | **nothing** — the row is `held` and says *brew offers X, not Y* |
+
+brew's revision suffix is not a version: `0.116.1_1` (a rebuild) **is** the pin `0.116.1`.
+Only an exact pin asks brew: a `self` row is never upgraded by brew, whatever brew offers.
+A plain brew upgrade is judged like any other change: exit 0 with the pin still not
+installed reads *unchanged*, and the Apply leaves the row until the version or the pin moves.
+A held row is not a failure and is not retried on every Apply; the next Refresh asks brew
+again. While you sit *at* the pin, nothing runs and brew is not asked, so a newer brew
+release is harmless until you actually drift. An exact pin that brew cannot serve also
+holds an **absent** package — it is not installed at another version — so a package
+pinned for winget's cadence and `brew:` on the side stays off the Mac until brew reaches
+the pin. ⚠️ A versioned formula is another name to brew: with `node@24` installed,
+`brew list --versions node` answers *not installed*. Declare a `detect:` (`node --version`),
+which finds the binary whatever formula put it there.
 
 ⚠️ **A downgrade can still end with the package removed**: its uninstall succeeded and the
 reinstall then failed — a 403 on a corporate network, a winget source that no longer

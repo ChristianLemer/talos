@@ -191,6 +191,75 @@ pub fn scope_from_arp(output: &str, name: &str, version: &str) -> Option<Install
     scopes.all(|s| s == Some(first)).then_some(first)
 }
 
+/// What brew can do for an exact pin, read just before acting. brew has no version flag: it
+/// installs its CURRENT version of a formula, or a versioned formula `id@version` when a tap
+/// ships one. Until 2026-10-22 the pin always became `id@version`, so a pin that WAS brew's
+/// current version failed too (Nushell 0.116.1: no `nushell@0.116.1` exists anywhere).
+#[derive(Debug, Clone, PartialEq)]
+pub enum BrewPin {
+    /// brew's current version is the pin, at the pin's precision: plain `brew install/upgrade`.
+    Current,
+    /// A versioned formula `id@pin` exists (`node@24`): the stored command stands.
+    Versioned,
+    /// Neither. Nothing is run; the row says what brew offers instead.
+    Unreachable { offered: String },
+}
+
+/// One formula, as JSON. `--formula` on purpose: a cask answers as unknown, and a cask's pin
+/// keeps the stored command, as before.
+pub fn brew_info_command(name: &str) -> String {
+    format!("brew info --json=v2 --formula {name}")
+}
+
+/// The first formula's `versions.stable` in `brew info --json=v2`, parsed with serde. The
+/// probe's output is stdout + stderr merged, and a login shell may print first, so the JSON is
+/// read from its first `{` and stops at the end of that one value.
+pub fn parse_brew_stable(output: &str) -> Option<String> {
+    let start = output.find('{')?;
+    let json = serde_json::Deserializer::from_str(&output[start..])
+        .into_iter::<serde_json::Value>()
+        .next()?
+        .ok()?;
+    let stable = json
+        .get("formulae")?
+        .get(0)?
+        .get("versions")?
+        .get("stable")?;
+    stable
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Can brew honour the pin, and how. `probe` runs one command and returns (ok, output).
+/// `None` = could not tell: the stored command is left alone. A second probe runs only when
+/// the pin is not brew's current version — the only case where `id@pin` matters.
+///
+/// brew's revision suffix (`0.116.1_1`, a rebuild of the same version) is cut before the
+/// comparison, as Git for Windows' `.windows.N` is by `compare_to_pin`'s precision.
+pub fn brew_pin_check(
+    id: &str,
+    pin: &str,
+    probe: &dyn Fn(&str) -> (bool, String),
+) -> Option<BrewPin> {
+    let (_, out) = probe(&brew_info_command(id));
+    let stable = parse_brew_stable(&out)?;
+    let version = stable.split('_').next().unwrap_or(&stable);
+    if crate::decision::compare_to_pin(version, pin) == 0 {
+        return Some(BrewPin::Current);
+    }
+    let (ok, out) = probe(&brew_info_command(&format!("{id}@{pin}")));
+    if ok && parse_brew_stable(&out).is_some() {
+        return Some(BrewPin::Versioned);
+    }
+    // MEASURED: a name brew does not know exits 1 with exactly this line. Anything else is a
+    // failure to answer, not an answer.
+    out.contains("No available formula")
+        .then(|| BrewPin::Unreachable {
+            offered: version.to_string(),
+        })
+}
+
 pub struct SystemManager {
     pub route: &'static str,
     pub os: &'static [Os],
@@ -703,6 +772,120 @@ fn parse_brew_outdated(output: &str) -> HashMap<String, Outdated> {
 
 #[cfg(test)]
 mod tests {
+
+    // `brew info --json=v2 --formula nushell`, cut to the fields read. MEASURED 2026-10-22 on
+    // Linuxbrew 4.6.20 (API data of the day): `stable` carries no revision, `revision` is apart,
+    // and an installed keg is spelled `0.116.1_1`.
+    const BREW_INFO_NUSHELL: &str = r#"{"formulae":[{"name":"nushell","versions":{"stable":"0.116.1","head":"HEAD","bottle":true},"revision":1,"installed":[{"version":"0.116.1_1"}]}],"casks":[]}"#;
+
+    #[test]
+    fn brew_info_yields_the_stable_version_even_with_noise_around_it() {
+        assert_eq!(
+            parse_brew_stable(BREW_INFO_NUSHELL).as_deref(),
+            Some("0.116.1")
+        );
+        // The probe merges stderr after stdout, and a login shell may print before it.
+        let noisy = format!("Last login: today\n{BREW_INFO_NUSHELL}\nWarning: something\n");
+        assert_eq!(parse_brew_stable(&noisy).as_deref(), Some("0.116.1"));
+        assert_eq!(parse_brew_stable(""), None);
+        assert_eq!(
+            parse_brew_stable(r#"{"formulae":[],"casks":[{"token":"firefox"}]}"#),
+            None,
+            "a cask is not a formula: no stable version to read"
+        );
+    }
+
+    /// A fake brew: `known` maps a formula name to its stable version; anything else answers
+    /// as brew does for a name it has never heard of (MEASURED: exit 1, empty stdout).
+    fn fake_brew(
+        known: &'static [(&'static str, &'static str)],
+    ) -> impl Fn(&str) -> (bool, String) {
+        move |cmd: &str| {
+            let name = cmd.rsplit(' ').next().unwrap_or("");
+            match known.iter().find(|(n, _)| *n == name) {
+                Some((n, v)) => (
+                    true,
+                    format!(
+                        r#"{{"formulae":[{{"name":"{n}","versions":{{"stable":"{v}"}}}}],"casks":[]}}"#
+                    ),
+                ),
+                None => (
+                    false,
+                    format!("Error: No available formula with the name \"{name}\"."),
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn a_pin_that_is_brews_current_version_needs_no_versioned_formula() {
+        // The case reported on 2026-10-22: pin 0.116.1, brew at 0.116.1 (revision 1), and the
+        // engine looked for `nushell@0.116.1`, which no tap ships.
+        let brew = fake_brew(&[("nushell", "0.116.1")]);
+        assert_eq!(
+            brew_pin_check("nushell", "0.116.1", &brew),
+            Some(BrewPin::Current)
+        );
+        // At the pin's precision, like `compare_to_pin`.
+        assert_eq!(
+            brew_pin_check("nushell", "0.116", &brew),
+            Some(BrewPin::Current)
+        );
+        // A revision is not a version: `_1` never makes brew "above" the pin.
+        let revised = fake_brew(&[("nushell", "0.116.1_1")]);
+        assert_eq!(
+            brew_pin_check("nushell", "0.116.1", &revised),
+            Some(BrewPin::Current)
+        );
+    }
+
+    #[test]
+    fn a_versioned_formula_is_used_when_it_really_exists() {
+        let brew = fake_brew(&[("node", "26.12.1"), ("node@24", "24.22.1")]);
+        assert_eq!(
+            brew_pin_check("node", "24", &brew),
+            Some(BrewPin::Versioned)
+        );
+    }
+
+    #[test]
+    fn a_pin_brew_cannot_serve_says_what_brew_offers() {
+        let brew = fake_brew(&[("node", "26.12.1")]);
+        assert_eq!(
+            brew_pin_check("node", "26.8.1", &brew),
+            Some(BrewPin::Unreachable {
+                offered: "26.12.1".into()
+            })
+        );
+    }
+
+    #[test]
+    fn an_unreadable_brew_is_unknown_never_unreachable() {
+        // Unknown leaves the stored command alone: holding a row on a guess would be the
+        // mirror of failing it on one.
+        let broken = |_: &str| (false, "brew: command not found".to_string());
+        assert_eq!(brew_pin_check("nushell", "0.116.1", &broken), None);
+        // brew read the formula, but the versioned probe failed for another reason.
+        let half = |cmd: &str| {
+            if cmd.ends_with("@0.113.1") {
+                (
+                    false,
+                    "Error: Failed to download https://formulae.brew.sh/…".to_string(),
+                )
+            } else {
+                fake_brew(&[("nushell", "0.116.1")])(cmd)
+            }
+        };
+        assert_eq!(brew_pin_check("nushell", "0.113.1", &half), None);
+    }
+
+    #[test]
+    fn the_brew_info_probe_names_one_formula() {
+        assert_eq!(
+            brew_info_command("nushell@0.116.1"),
+            "brew info --json=v2 --formula nushell@0.116.1"
+        );
+    }
     use super::*;
     use crate::decision::{action_for, Action, Desired, MachineFacts};
 
