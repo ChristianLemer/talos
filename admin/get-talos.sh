@@ -69,9 +69,10 @@
 # ⚠️ The newest tag is read from the releases list, not from GitHub's "latest": that
 # link skips pre-releases, and every Talos release is a pre-release until v0.1.0.
 #
-# ⚠️ A running exe and a shared drive: Windows locks `Talos.exe` while it runs, so the
-# sync cannot replace it on a machine where Talos is open — it retries, and the new exe
-# lands at the next sync after Talos is closed. On a Mac, mark the kit folder "Always keep
+# ⚠️ A running exe and a shared drive: Windows locks an exe while it runs, so the kit's
+# `Talos.exe` copies itself to the machine's local data folder, starts that copy and exits —
+# the sync can replace it even where Talos is open. An older build ran from the share and
+# held it for the whole session; where a policy refuses the local copy, it still does. On a Mac, mark the kit folder "Always keep
 # on this device" so a half-synced app is never launched — and `--verify` is how you know.
 set -eu
 

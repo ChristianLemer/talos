@@ -1,6 +1,6 @@
 ---
 name: talos-kit
-description: Compose and distribute a Talos kit — the released launchers plus your `catalog/` and `bundles/`, in one folder a team launches from a shared drive. Covers `.talos-version` (the pin), `get-talos.sh` and `get-talos.ps1` (compose from any OS, and what they verify), `--verify` on a synced replica, a kit for one machine, the OneDrive realities (a locked exe, a half-synced .app, self-healing), the machine log (what a slow machine or a missing winget tells you, and what sharing sends), and the Doctor tab — why a rescue candidate must declare `doctor:` and how `clean:` is measured. Use when shipping content to a team, bumping the Talos version, diagnosing a kit that opens inert or runs stale code, reading why a machine is slow or never finds winget, or deciding whether a package belongs in the Doctor.
+description: Compose and distribute a Talos kit — the released launchers plus your `catalog/` and `bundles/`, in one folder a team launches from a shared drive. Covers `.talos-version` (the pin), `get-talos.sh` and `get-talos.ps1` (compose from any OS, and what they verify), `--verify` on a synced replica, a kit for one machine, the OneDrive realities (a locked exe, a half-synced .app, a second launch that does not replace the first), the machine log (what a slow machine or a missing winget tells you, and what sharing sends), and the Doctor tab — why a rescue candidate must declare `doctor:` and how `clean:` is measured. Use when shipping content to a team, bumping the Talos version, diagnosing a kit that opens inert or runs stale code, reading why a machine is slow or never finds winget, or deciding whether a package belongs in the Doctor.
 ---
 
 # The Talos kit
@@ -204,15 +204,19 @@ same copy. The content is **never copied per machine**: `catalog/`, `bundles/`,
 
 - **It extracts nothing beside itself** — that folder is shared. The native bits it needs
   go to each machine's own `%LOCALAPPDATA%\Talos` on first run, idempotently.
-- **It self-heals**: each launch kills any stale instance holding its port, so everyone
-  runs the latest code on the share without manual cleanup.
+- ⚠️ **A second launch does not replace a Talos already open.** The first one keeps its
+  port and serves the new window, so "I relaunched and still see the old version" means
+  Talos was never closed on that machine. Close it, then open it again.
 - **On Windows the share's `Talos.exe` only launches a local copy of itself.** A running
   exe is locked, and OneDrive answers a replaced locked exe with `Talos (1).exe` and
   deletions. So a release build copies itself, once per version, to
   `%LOCALAPPDATA%\Talos\engine\Talos-<tag>-<hash>.exe` (named after its own sha256, so a
   half-copied file never runs), starts that copy pointed back at the kit (`--kit`), and
   exits. The share's exe is open for a second, not a session: a publication lands even
-  where Talos is open. The two newest local copies are kept.
+  where Talos is open. The copy just launched and the newest other one are kept.
+- **Pin the share's `Talos.exe`, or a shortcut to it — not the running window.** The window
+  belongs to the local copy: pinned, it still finds the kit it last came from, but a later
+  version removes that copy and the pin goes dead.
 - If the local copy cannot start (a policy refusing executables under `AppData\Local`),
   Talos runs from the share as it always did. `engine\last-launch.txt` says which way the
   last launch went; `TALOS_IN_PLACE=1` forces running from the share.

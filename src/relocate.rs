@@ -10,14 +10,16 @@
 //! length of a launch, not of a session. ONE binary, no second launcher and no `engine/`
 //! folder: the kit layout every script draws stays exactly what it was.
 //!
-//! The local copy is named after its own bytes — `Talos-<tag>-<sha256[..12]>.exe` — so the
-//! name IS the integrity check and no manifest is consulted: the core never learns which file
-//! an integrator publishes beside the kit. A copy goes through `.partial` + rename, so a file
-//! that exists under its final name is whole.
+//! The local copy is named after its own bytes — `Talos-<tag>-<sha256[..12]>.exe` — and an
+//! existing one is re-hashed before it runs, so no manifest is consulted: the core never learns
+//! which file an integrator publishes beside the kit. A copy goes through a per-launch
+//! `.partial` + rename.
 //!
 //! Every failure — the copy, the rename, the spawn (a policy refusing executables under
-//! `AppData\Local` is refused by CreateProcess, synchronously) — falls back to running IN
-//! PLACE, which is what every build did before. Never worse than before.
+//! `AppData\Local` is refused by CreateProcess, synchronously), an engine that exits within
+//! two seconds — falls back to running IN PLACE, which is what every build did before. What
+//! it cannot see is an engine that dies LATER than that; `last-launch.txt` then says
+//! "relocated" and the person relaunches.
 //!
 //! The pure parts (the decision, the name, the arguments) are tested anywhere; the IO is
 //! small and tested against temp folders. The spawn itself is measured on Windows.
@@ -85,6 +87,11 @@ pub fn relocation(
     if exe.parent() == Some(engine_dir) {
         return Err("already the local engine");
     }
+    // Neither LOCALAPPDATA nor USERPROFILE: the folder is relative, and under an Explorer
+    // launch the cwd is the share — the copy would land there and sync to everyone.
+    if !engine_dir.is_absolute() {
+        return Err("no local data folder: the environment names none");
+    }
     Ok(())
 }
 
@@ -113,32 +120,55 @@ pub fn sha256_hex(path: &Path) -> std::io::Result<String> {
     Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// Put a copy of `exe` in `engine_dir` under its content name and return its path. Already
-/// there → nothing is copied. Otherwise `.partial`, re-hash the copy, rename: a file under the
-/// final name is always whole. A copy whose hash differs from the source (the share's file
-/// replaced mid-copy) is refused, not launched.
+/// Put a copy of `exe` in `engine_dir` under its content name and return its path.
+///
+/// A file already under that name is RE-HASHED before it is trusted (one local read): the
+/// name says what the bytes should be, and only the hash says they are. Otherwise the copy
+/// goes to `<name>.<pid>.partial` — one per launch, so two double-clicks never write the same
+/// file — is re-hashed, and renamed. A copy whose hash differs from the source (the share's
+/// file replaced mid-copy) is refused, not launched. If the rename loses to another launch
+/// that got there first, its file is as good as ours: same name, same hash.
 pub fn install(exe: &Path, engine_dir: &Path, tag: &str) -> std::io::Result<PathBuf> {
     let digest = sha256_hex(exe)?;
     let target = engine_dir.join(local_name(tag, &digest));
-    if target.is_file() {
+    let whole = |p: &Path| p.is_file() && sha256_hex(p).is_ok_and(|h| h == digest);
+    if whole(&target) {
         return Ok(target);
     }
     std::fs::create_dir_all(engine_dir)?;
-    let partial = target.with_extension("exe.partial");
-    std::fs::copy(exe, &partial)?;
-    if sha256_hex(&partial)? != digest {
-        let _ = std::fs::remove_file(&partial);
-        return Err(std::io::Error::other(
-            "the copy does not match the source: the exe changed while it was copied",
-        ));
+    let partial = target.with_extension(format!("exe.{}.partial", std::process::id()));
+    let copied = std::fs::copy(exe, &partial).and_then(|_| sha256_hex(&partial));
+    match copied {
+        Ok(h) if h == digest => {}
+        Ok(_) => {
+            let _ = std::fs::remove_file(&partial);
+            return Err(std::io::Error::other(
+                "the copy does not match the source: the exe changed while it was copied",
+            ));
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&partial);
+            return Err(e);
+        }
     }
-    std::fs::rename(&partial, &target)?;
+    if let Err(e) = std::fs::rename(&partial, &target) {
+        let _ = std::fs::remove_file(&partial);
+        if whole(&target) {
+            return Ok(target);
+        }
+        return Err(e);
+    }
     Ok(target)
 }
 
-/// Keep `current` and the newest other engine; remove older engines and any `.partial` left
-/// by an interrupted copy. Best-effort: an engine still running on this machine refuses to be
-/// deleted, and it goes at a later launch. Touches `Talos-*` files only.
+/// Keep `current` and the newest other engine (by modification time, which a Windows copy
+/// carries over from the source: the newest BUILD, not the latest use); remove older engines.
+/// Best-effort: an engine still running on this machine refuses to be deleted, and it goes at
+/// a later launch. Touches `Talos-*.exe` files only.
+///
+/// ⚠️ `.partial` files are NOT pruned: one may belong to a launch copying at this very moment,
+/// and every failure path in `install` removes its own. Only a launch killed mid-copy leaves
+/// one behind, and that is litter, not harm.
 pub fn prune(engine_dir: &Path, current: &Path) {
     let Ok(entries) = std::fs::read_dir(engine_dir) else {
         return;
@@ -150,9 +180,7 @@ pub fn prune(engine_dir: &Path, current: &Path) {
         if !name.starts_with("Talos-") || path == current {
             continue;
         }
-        if name.ends_with(".partial") {
-            let _ = std::fs::remove_file(&path);
-        } else if name.ends_with(".exe") {
+        if name.ends_with(".exe") {
             let mtime = e
                 .metadata()
                 .and_then(|m| m.modified())
@@ -166,6 +194,29 @@ pub fn prune(engine_dir: &Path, current: &Path) {
     }
 }
 
+/// Where the last relocation came from. A local engine started WITHOUT `--kit` — pinned to the
+/// taskbar from its running window, or double-clicked in AppData — reads it back, instead of
+/// resolving content beside itself, where there is none.
+fn last_kit_path(engine_dir: &Path) -> PathBuf {
+    engine_dir.join("last-kit.txt")
+}
+
+/// Record the kit a relocation was made from. Best-effort.
+pub fn remember_kit(engine_dir: &Path, kit: &Path) {
+    let _ = std::fs::create_dir_all(engine_dir);
+    let _ = std::fs::write(
+        last_kit_path(engine_dir),
+        kit.as_os_str().to_string_lossy().as_bytes(),
+    );
+}
+
+/// The kit last relocated from, if it is still a folder.
+pub fn remembered_kit(engine_dir: &Path) -> Option<PathBuf> {
+    let raw = std::fs::read_to_string(last_kit_path(engine_dir)).ok()?;
+    let kit = PathBuf::from(raw.trim_end());
+    kit.is_dir().then_some(kit)
+}
+
 /// Copy, prune, spawn the local engine with `--kit <kit>` and the original arguments.
 /// `Ok(local)` = handed over, this process should exit; `Err(why)` = run in place.
 /// `spawn` is injected so the sequence is tested without starting anything.
@@ -175,30 +226,41 @@ pub fn hand_over(
     tag: &str,
     kit: &Path,
     rest: &[String],
-    spawn: impl FnOnce(&Path, &[String]) -> std::io::Result<()>,
+    spawn: impl FnOnce(&Path, &[std::ffi::OsString]) -> std::io::Result<()>,
 ) -> Result<PathBuf, String> {
     let local = install(exe, engine_dir, tag).map_err(|e| format!("copy failed: {e}"))?;
     prune(engine_dir, &local);
-    let mut args = vec![KIT_FLAG.to_string(), kit.display().to_string()];
-    args.extend(rest.iter().cloned());
+    let mut args: Vec<std::ffi::OsString> = vec![KIT_FLAG.into(), kit.as_os_str().to_owned()];
+    args.extend(rest.iter().map(std::ffi::OsString::from));
     spawn(&local, &args).map_err(|e| format!("{} refused to start: {e}", local.display()))?;
+    remember_kit(engine_dir, kit);
     Ok(local)
 }
 
-/// `main`'s entry: relocate if this launch should, and say whether this process must now
-/// exit. The outcome lands in `<engine dir>/last-launch.txt` as well as on stdout, because a
-/// release build on Windows has no console — that file is how a launch on a locked-down
-/// machine says which way it went.
-pub fn launch(os: Os, args: &LaunchArgs) -> bool {
+/// What `main` does after `launch`.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Launched {
+    /// A local engine was started: this process exits.
+    HandedOver,
+    /// Run here. `Some(kit)` = a local engine started by hand, pointed back at the kit it was
+    /// last relocated from.
+    Here(Option<PathBuf>),
+}
+
+/// `main`'s entry: relocate if this launch should. The outcome of an attempt lands in
+/// `<engine dir>/last-launch.txt` as well as on stdout, because a release build on Windows has
+/// no console — that file is how a launch on a locked-down machine says which way it went.
+pub fn launch(os: Os, args: &LaunchArgs) -> Launched {
     let engine_dir = crate::platform::local_data_dir(os).join("engine");
     let Ok(exe) = std::env::current_exe() else {
-        return false;
+        return Launched::Here(None);
     };
     let in_place_env = std::env::var_os(IN_PLACE_ENV).is_some();
     let release = !cfg!(debug_assertions);
     if let Err(why) = relocation(os, release, args, in_place_env, &exe, &engine_dir) {
         println!("[launch] in place: {why}");
-        return false;
+        let by_hand = args.kit.is_none() && exe.parent() == Some(engine_dir.as_path());
+        return Launched::Here(by_hand.then(|| remembered_kit(&engine_dir)).flatten());
     }
     // From here on a relocation was ATTEMPTED, and only that is worth the file: the engine
     // it starts comes back through here with `--kit` and must not overwrite the outcome.
@@ -222,14 +284,27 @@ pub fn launch(os: Os, args: &LaunchArgs) -> bool {
         engine_dir.join("last-launch.txt"),
         format!("{stamp} {line}\n"),
     );
-    outcome.is_ok()
+    match outcome {
+        Ok(_) => Launched::HandedOver,
+        Err(_) => Launched::Here(None),
+    }
 }
 
-/// Start the local engine and do not wait for it. DETACHED + new process group on Windows,
-/// so the engine outlives this process and owns no console.
-fn spawn_detached(local: &Path, args: &[String]) -> std::io::Result<()> {
+/// Start the local engine, DETACHED + new process group on Windows so it outlives this
+/// process and owns no console, in its own folder so it holds no directory handle on the share
+/// (the kit comes from `--kit`; the cwd is only `content_dirs_in`'s last fallback).
+///
+/// Then watch it for `ALIVE_CHECK`: an engine that exits at once — a security product killing a
+/// new unsigned exe after it started, a crash only the local copy hits — is a failure, and the
+/// launch runs in place instead of leaving nothing on screen. The share's exe is held that much
+/// longer; the engine is starting in parallel, so the person waits for nothing.
+fn spawn_detached(local: &Path, args: &[std::ffi::OsString]) -> std::io::Result<()> {
+    const ALIVE_CHECK: std::time::Duration = std::time::Duration::from_secs(2);
     let mut cmd = std::process::Command::new(local);
     cmd.args(args);
+    if let Some(dir) = local.parent() {
+        cmd.current_dir(dir);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -237,7 +312,17 @@ fn spawn_detached(local: &Path, args: &[String]) -> std::io::Result<()> {
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
-    cmd.spawn().map(|_| ())
+    let mut child = cmd.spawn()?;
+    let deadline = std::time::Instant::now() + ALIVE_CHECK;
+    while std::time::Instant::now() < deadline {
+        if let Some(status) = child.try_wait()? {
+            return Err(std::io::Error::other(format!(
+                "it exited at once ({status})"
+            )));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -253,6 +338,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    fn abs_engine() -> PathBuf {
+        std::env::temp_dir().join("Talos").join("engine")
     }
 
     fn plain(rest: &[&str]) -> LaunchArgs {
@@ -291,7 +380,7 @@ mod tests {
             &plain(&[]),
             false,
             Path::new(r"S:\Kit\Talos.exe"),
-            Path::new(r"C:\Local\Talos\engine"),
+            &abs_engine(),
         );
         assert_eq!(r, Ok(()));
     }
@@ -299,7 +388,7 @@ mod tests {
     #[test]
     fn every_other_case_runs_in_place_and_says_why() {
         let exe = Path::new(r"S:\Kit\Talos.exe");
-        let eng = Path::new(r"C:\Local\Talos\engine");
+        let eng = &abs_engine();
         let w = Os::Windows;
         assert!(relocation(Os::Darwin, true, &plain(&[]), false, exe, eng).is_err());
         assert!(relocation(Os::Linux, true, &plain(&[]), false, exe, eng).is_err());
@@ -313,6 +402,56 @@ mod tests {
         assert!(relocation(w, true, &started, false, exe, eng).is_err());
         let local = eng.join("Talos-v1-abc.exe");
         assert!(relocation(w, true, &plain(&[]), false, &local, eng).is_err());
+        // No LOCALAPPDATA nor USERPROFILE → a RELATIVE engine dir, which under an Explorer
+        // launch is the share itself: the copy would land there and sync to everyone.
+        let relative = Path::new(r"AppData\Local\Talos\engine");
+        assert!(relocation(w, true, &plain(&[]), false, exe, relative).is_err());
+    }
+
+    #[test]
+    fn a_corrupted_local_engine_is_copied_again() {
+        let d = tmp("corrupt");
+        let exe = d.join("Talos.exe");
+        std::fs::write(&exe, b"engine bytes").unwrap();
+        let eng = d.join("engine");
+        let local = install(&exe, &eng, "v1").unwrap();
+        std::fs::write(&local, b"tampered").unwrap();
+        let again = install(&exe, &eng, "v1").unwrap();
+        assert_eq!(again, local);
+        assert_eq!(std::fs::read(&again).unwrap(), b"engine bytes");
+    }
+
+    #[test]
+    fn another_launch_copying_at_the_same_moment_is_left_alone() {
+        let d = tmp("concurrent");
+        let exe = d.join("Talos.exe");
+        std::fs::write(&exe, b"engine bytes").unwrap();
+        let eng = d.join("engine");
+        std::fs::create_dir_all(&eng).unwrap();
+        let digest = sha256_hex(&exe).unwrap();
+        let theirs = eng.join(format!("{}.1.partial", local_name("v1", &digest)));
+        std::fs::write(&theirs, b"half").unwrap();
+        let local = install(&exe, &eng, "v1").unwrap();
+        assert_eq!(std::fs::read(&local).unwrap(), b"engine bytes");
+        assert_eq!(
+            std::fs::read(&theirs).unwrap(),
+            b"half",
+            "not ours to touch"
+        );
+    }
+
+    #[test]
+    fn the_kit_is_remembered_for_a_local_engine_started_by_hand() {
+        let d = tmp("remember");
+        let eng = d.join("engine");
+        let kit = d.join("share");
+        std::fs::create_dir_all(&kit).unwrap();
+        assert_eq!(remembered_kit(&eng), None);
+        remember_kit(&eng, &kit);
+        assert_eq!(remembered_kit(&eng), Some(kit.clone()));
+        // A kit that has gone away is not adopted.
+        std::fs::remove_dir_all(&kit).unwrap();
+        assert_eq!(remembered_kit(&eng), None);
     }
 
     #[test]
@@ -391,14 +530,17 @@ mod tests {
         let older = mk("Talos-b-2.exe", 2);
         let newer = mk("Talos-c-3.exe", 3);
         let current = mk("Talos-d-0.exe", 0); // just launched, but an old mtime: kept anyway
-        let stale = mk("Talos-e-9.exe.partial", 9);
+        let inflight = mk("Talos-e-9.exe.42.partial", 9);
         let other = mk("last-launch.txt", 0);
         prune(&d, &current);
         assert!(current.exists());
         assert!(newer.exists());
         assert!(!older.exists());
         assert!(!oldest.exists());
-        assert!(!stale.exists(), "an interrupted copy is litter");
+        assert!(
+            inflight.exists(),
+            "a copy may be in flight in another launch"
+        );
         assert!(other.exists(), "prune touches engines only");
     }
 
@@ -418,10 +560,11 @@ mod tests {
         let (p, a) = seen.unwrap();
         assert_eq!(p, local);
         assert!(local.starts_with(&eng));
-        assert_eq!(
-            a,
-            vec!["--kit".to_string(), kit.display().to_string(), "--x".into()]
-        );
+        let want: Vec<std::ffi::OsString> =
+            vec!["--kit".into(), kit.clone().into_os_string(), "--x".into()];
+        assert_eq!(a, want);
+        std::fs::create_dir_all(&kit).unwrap();
+        assert_eq!(remembered_kit(&eng), Some(kit));
     }
 
     #[test]

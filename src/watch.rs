@@ -73,13 +73,15 @@ $changed=$true
 while($changed){ $changed=$false; foreach($p in $all){ if($tree.Contains([uint32]$p.ParentProcessId) -and -not $tree.Contains([uint32]$p.ProcessId)){ $tree.Add([uint32]$p.ProcessId)|Out-Null; $changed=$true } } }
 $self=$PID
 # msedgewebview2.exe = Tauri's OWN webview, a child of talos.exe so IN the tree
-# -> must be excluded, else the watcher detects OUR OWN window.
-$skip='msedge.exe','chrome.exe','msedgewebview2.exe','Talos.exe'
+# -> must be excluded, else the watcher detects OUR OWN window. Our own process is
+# skipped by PID below, not by name: a relocated engine is Talos-<tag>-<hash>.exe.
+$skip='msedge.exe','chrome.exe','msedgewebview2.exe'
 $result=@{found=$false}
 $cb={ param($h,$p)
   if(-not [W]::IsWindowVisible($h)){ return $true }
   $pid2=0; [W]::GetWindowThreadProcessId($h,[ref]$pid2)|Out-Null
   if($pid2 -eq $self){ return $true }
+  if($pid2 -eq $root){ return $true }
   if(-not $tree.Contains([uint32]$pid2)){ return $true }
   if($skip -contains $name[[uint32]$pid2]){ return $true }
   $len=[W]::GetWindowTextLength($h); if($len -le 0){ return $true }
@@ -118,6 +120,16 @@ pub fn powershell_spawner(pid: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Talos's own window is skipped by PID, never by name: a relocated engine runs as
+    /// `Talos-<tag>-<hash>.exe` (relocate.rs), which no fixed name matches, and treating our
+    /// own window as an installer's would flash it and claim "waiting for a window" on every
+    /// Apply step.
+    #[test]
+    fn the_root_window_is_skipped_by_pid_not_by_name() {
+        assert!(SCAN_SCRIPT.contains("if($pid2 -eq $root){ return $true }"));
+        assert!(!SCAN_SCRIPT.contains("'Talos.exe'"));
+    }
 
     #[test]
     fn parse_found() {
