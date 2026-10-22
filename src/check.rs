@@ -151,10 +151,19 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
                 cp.pkg.name
             ));
         }
-        if let Some(PinKind::Invalid(word)) = classify_pin(cp.pkg.version.as_deref()) {
+        let pin = classify_pin(cp.pkg.version.as_deref());
+        if let Some(PinKind::Invalid(word)) = &pin {
             r.errors.push(format!(
-                "{label}: version \"{word}\" is not a version, not `latest`, not `pending` \
-                 — the runtime ignores it, which is not what you meant"
+                "{label}: version \"{word}\" is not a version, not `latest`, `pending` nor \
+                 `self` — the runtime ignores it, which is not what you meant"
+            ));
+        }
+        // `update:` is the tool's own update command, and it replaces the manager's upgrade
+        // only for a package that updates itself. Anywhere else it would run never.
+        if cp.pkg.update.is_some() && pin != Some(PinKind::SelfUpdating) {
+            r.errors.push(format!(
+                "{label}: `update:` runs only with `version: \"self\"` — here the manager \
+                 upgrades the package and the command never runs"
             ));
         }
         // `scope:` says where winget puts the package. A word that is not one is no scope at
@@ -602,6 +611,33 @@ mod tests {
             text.contains("catalog/b.yaml: a `'` in a copilot-plugin field"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn update_is_named_when_it_would_never_run() {
+        let d = tmp("update");
+        write(
+            &d,
+            "catalog/a.yaml",
+            "name: A\nwinget: A.A\nupdate: a update\n",
+        );
+        write(
+            &d,
+            "catalog/b.yaml",
+            "name: B\nwinget: B.B\nversion: \"self\"\nupdate: b update\n",
+        );
+        write(
+            &d,
+            "catalog/c.yaml",
+            "name: C\nwinget: C.C\nversion: self\n",
+        );
+        let text = run(&d.join("catalog"), &d.join("bundles")).render();
+        assert!(
+            text.contains("catalog/a.yaml: `update:` runs only"),
+            "{text}"
+        );
+        assert!(!text.contains("catalog/b.yaml"), "{text}");
+        assert!(!text.contains("catalog/c.yaml"), "{text}");
     }
 
     #[test]

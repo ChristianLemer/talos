@@ -213,9 +213,10 @@ packages:
 
 ## The three traps that cost the most
 
-**`version:` has three forms, and the words are not decoration.** `"0.113.1"` converges
+**`version:` has four forms, and the words are not decoration.** `"0.113.1"` converges
 exactly, `"latest"` is a *decision* to take the newest, `"pending"` is a HOLD — the row
-still shows the update, greyed, and Apply skips it. Omitted means
+still shows the update, greyed, and Apply skips it — and `"self"` leaves an application that
+updates itself to its own mechanism (or to its own `update:` command). Omitted means
 nobody wrote anything, which behaves as `latest`. Anything else is **refused at load**:
 a word has no leading digits, so the comparison would read `0.0.0`, decide the machine is
 *above* the pin, and **downgrade** it on the next Apply — an uninstall + reinstall.

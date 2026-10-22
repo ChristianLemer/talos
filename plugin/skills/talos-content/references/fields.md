@@ -338,14 +338,18 @@ where it was found. An undeclared upgrade stays a plain `winget upgrade`.
 machine-only, and `--scope user` fails on them. A wrong word, or `scope:` on a package with
 no `winget:` id, is a `--check` error.
 
-### `version:` takes three forms, and the two words are not decoration
+### `version:` takes four forms, and the three words are not decoration
 
 | written | meaning | what Apply does |
 |---|---|---|
 | `version: "0.113.1"` | **exactly that one** | converges to it (upgrade / downgrade / satisfied) |
 | `version: "latest"` | **I decided: the newest** | upgrades when the manager reports it outdated |
 | `version: "pending"` | **nobody has decided yet** | **nothing** — the row is held out of the batch |
+| `version: "self"` | **it updates itself** | installs it when absent; never upgrades it through the manager (see below) |
 | *(omitted)* | nobody wrote anything | same as `latest` |
+
+Whatever the word, a package that is **absent** and wanted is installed: there is no held
+version of a thing that is not there.
 
 ⭐ **`latest` is not redundant with omitting the field.** It is the difference between an
 intention and an absence of decision — and in a catalogue meant to be copied from, a
@@ -357,6 +361,47 @@ update it — the decision is an edit to the pin, not a click. Use it when a pac
 install that somebody should decide, and nobody has yet. Replace it with `latest` or an
 exact version once the decision is made — then
 `grep -c 'version: "pending"' catalog/*.yaml` is the work still left.
+
+### `version: "self"` and `update:` — an application that updates itself
+
+Some applications rewrite themselves (VS Code, Electron apps such as Orca, CLIs with a
+`<tool> update`). Upgrading them through the manager breaks in two measured ways: winget
+"succeeds" without changing anything (VS Code, every Apply), or refuses to touch a copy the
+tool rewrote (a portable package). `self` says the decision is made — leave it to the
+application — so the row is **not** arbitration and shows one number with `updates itself`.
+
+```yaml
+  - name: Copilot CLI
+    winget: GitHub.Copilot
+    brew: copilot-cli
+    detect: copilot --version
+    version: "self"
+    update: copilot update      # optional: the tool's own update command
+```
+
+- **Absent** → installed by the manager, as usual.
+- **Present, no `update:`** → nothing. The application keeps itself current, when it decides to.
+- **Present, with `update:`** → the Apply runs that command, and nothing else, when the version
+  `detect:` reads is **behind** what the manager announces. The manager's own receipt does not
+  count: the tool rewrote itself behind it. So the trigger is the manager's catalogue, read on
+  every scan, never a network call of Talos's own; a package with no `winget:`/`brew:` id is
+  never announced behind, and its `update:` never runs.
+- `update:` goes through the network on the tool's own terms: a failure is a line on the row,
+  never an Apply paused on a 403. It must be non-interactive, like every command.
+- `update:` without `version: "self"` would never run; `--check` says so.
+
+Brew casks declaring `auto_updates true` are **not** read as `self`: Talos scans brew with
+`--greedy-auto-updates` on purpose, so such a cask is upgraded unless its file says `self`.
+
+### A version change is a success when the version moved
+
+After an upgrade or a downgrade that exited 0, Talos reads the version again. Toward an exact
+pin, the step succeeded when the pin is read (at its own precision); otherwise when the version
+changed. If not, the row says so (`unchanged`, and a line such as *winget reported success, but
+1.141.2 is still installed, not 1.142.0*), the journal records `ok: false` with `found` and
+`target`, and the Apply does not run that change again while the same target is in view — a
+newer announcement, or an edited pin, lifts it. The memory is the running Talos's: a restart
+tries once more. A version that cannot be read gives no verdict.
 
 ⚠️ **Anything else is REFUSED at load**, named in the log, and the package behaves as if
 nothing was declared. That guard is not politeness: a word has no leading digits, so the

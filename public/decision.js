@@ -137,7 +137,7 @@ export function forbiddenMessage(gesture, paused) {
 //                                   Apply since 2026-10-10, when the per-row button left)
 export function actionFor(
   desired,
-  { present, outdated, canUninstall, pin, installedVersion },
+  { present, outdated, canUninstall, pin, installedVersion, available, canSelfUpdate },
 ) {
   if (desired === "present" && !present) return "install";
   if (desired === "present" && present) {
@@ -154,6 +154,16 @@ export function actionFor(
       // `pending`: nobody has arbitrated this version. Do nothing, and ignore `outdated` —
       // the gap is still SHOWN (greyed, see versionSummary), so this is a hold, not a blindfold.
       if (p === "pending") return null;
+      // `self`: the application updates itself. The manager never upgrades it; its own
+      // `update:` runs when the version the tool REPORTS is behind what the manager announces
+      // (the receipt is stale by construction). Without `update:`, nothing.
+      if (p === "self") {
+        const inst = installedVersion || "";
+        // A leading `v` is a spelling, not a segment: winget writes `v1.0.102`.
+        const bare = (v) => String(v).replace(/^[vV]/, "");
+        const behind = !inst || !available || compareVersions(bare(inst), bare(available)) < 0;
+        return canSelfUpdate && outdated && behind ? "upgrade" : null;
+      }
       // `latest`: the author decided to take the newest. Falls through to the `outdated` check
       // below, so exactly one place decides "newest ⇒ upgrade".
       if (p !== "latest") {

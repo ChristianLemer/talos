@@ -1,0 +1,11 @@
+# FORM: `version: "self"` — the tool updates itself. The manager installs it when absent; once
+# present, the Apply runs the tool's own `update:` when the version it reports is behind what
+# the manager announces, and never the manager's upgrade.
+name: Self Updating
+description: A tool that rewrites itself, so the manager must not
+winget: Vendor.SelfUpdating
+brew: self-updating
+detect: self-updating --version
+version: "self"
+update: self-updating update
+category: [foundation]

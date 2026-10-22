@@ -113,6 +113,11 @@ fn cancel_targets(txt: &str, running: u32) -> bool {
         && v.get("i").and_then(|n| n.as_u64()) == Some(running as u64)
 }
 
+/// Does this row declare `version: self` — the application updates itself?
+fn is_self_updating(step: &crate::bundles::Step) -> bool {
+    crate::bundles::classify_pin(step.pin.as_deref()) == Some(crate::bundles::PinKind::SelfUpdating)
+}
+
 fn is_outdated_now(od: Option<&crate::managers::Outdated>) -> bool {
     // Approach B: presence in the scan IS the outdated signal, for casks and
     // formulae alike. The scan uses `--greedy-auto-updates`, so a self-updating
@@ -138,8 +143,14 @@ fn forced_cask_upgrade_cmd(
     use crate::bundles::{classify_pin, PinKind};
     use crate::managers::{native_manager, IdField};
     // An EXACT pin owns the direction (install-pinned command), so return None.
-    // Keywords (pending, latest) do not own a direction, so fall through.
-    if !is_cask || matches!(classify_pin(step.pin.as_deref()), Some(PinKind::Exact(_))) {
+    // Keywords (pending, latest) do not own a direction, so fall through. `self` does not
+    // either, but its upgrade is the tool's own `update:`, which brew must never replace.
+    if !is_cask
+        || matches!(
+            classify_pin(step.pin.as_deref()),
+            Some(PinKind::Exact(_)) | Some(PinKind::SelfUpdating)
+        )
+    {
         return None;
     }
     let mgr = native_manager(os)?;
@@ -165,6 +176,29 @@ async fn emit_outdated_if(
             ))
             .await;
     }
+}
+
+/// Tell the front a row's last version change moved nothing, so it holds the row (and says
+/// why) while `target` is in view — the same rule the Apply applies (`held_unmoved`).
+async fn emit_unmoved(socket: &mut WebSocket, i: usize, target: &str, reason: &str) {
+    let _ = socket
+        .send(Message::Text(
+            json!({ "type": "unmoved", "i": i, "target": target, "reason": reason }).to_string(),
+        ))
+        .await;
+}
+
+/// The row's held change, when the session remembers one for the target now in view.
+async fn unmoved_in_view(
+    state: &AppState,
+    step: &crate::bundles::Step,
+    announced: Option<&str>,
+) -> Option<(String, String)> {
+    let target = step_target(step.pin.as_deref(), announced);
+    let memory = state.unmoved.lock().await;
+    held_unmoved(&memory, &step.id, target.as_deref())
+        .then(|| memory.get(&step.id).cloned())
+        .flatten()
 }
 
 /// The server's shared state: the Plan read from disk (pure data, no pty/network),
@@ -288,6 +322,10 @@ struct AppState {
     machine_shared: std::sync::atomic::AtomicBool,
     /// The last scan's timings, as journalled — for the Machine tab's one-line summary.
     last_scan: std::sync::Mutex<Option<crate::machine::ScanRecord>>,
+    /// The version changes that exited ok and moved nothing, by package id: the target they
+    /// ran toward and the row's sentence (`unmoved_reason`). The Apply holds the row while that
+    /// same target is in view; another one lifts it. Never written: a restart tries once more.
+    unmoved: tokio::sync::Mutex<std::collections::HashMap<String, (String, String)>>,
 }
 
 /// Records one observed presence in `last_seen` (grows the vector if the plan is
@@ -538,6 +576,7 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         machine_running: std::sync::atomic::AtomicBool::new(false),
         machine_shared: std::sync::atomic::AtomicBool::new(false),
         last_scan: std::sync::Mutex::new(None),
+        unmoved: tokio::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
     let state_for_root = state.clone();
@@ -1066,6 +1105,9 @@ fn step_json(
         // Can the Apply take this row DOWN to its pin? Only when the route builds a downgrade
         // (an uninstall + a pinned reinstall); otherwise the row shows why it stays above.
         "canDowngrade": s.downgrade.is_some(),
+        // `version: self` with its own `update:`: the Apply runs that command when the tool is
+        // behind what the manager announces. The front's twin of `action_for` reads it.
+        "selfUpdate": is_self_updating(s) && s.upgrade.is_some(),
         "pin": s.pin, "categories": s.categories,
         "requires": s.requires, // package names this one needs (B5 transitive pull, §8)
         "uac": f.uac, "forbidden": f.forbidden, "slow": crate::plan_facts::is_slow(&f),
@@ -1636,6 +1678,10 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &Arc<AppState>) {
         if p.present == Some(true) {
             let od = outdated_for(step.system_id.as_deref(), &scan);
             emit_outdated_if(socket, i, od).await;
+            let announced = od.map(|o| o.available.as_str());
+            if let Some((target, why)) = unmoved_in_view(state, step, announced).await {
+                emit_unmoved(socket, i, &target, &why).await;
+            }
         }
         // Remember the verdict: the Apply re-scan is SCOPED to the diff, and the rows
         // it skips read their presence from here (see `last_seen`).
@@ -1919,7 +1965,8 @@ async fn retry_attempt(socket: &mut WebSocket, state: &AppState, i: usize, actio
     // via a fresh outdated scan (blocking → spawn_blocking, like the other sites),
     // ONLY for Upgrade (don't scan on an install/uninstall retry). This makes the
     // retry use the SAME forced-cask path as the batch Apply.
-    let is_cask = if act == Action::Upgrade {
+    // A `self` row's upgrade is the tool's own command, never brew's: not a cask upgrade.
+    let is_cask = if act == Action::Upgrade && !is_self_updating(step) {
         let os = state.os;
         // An unreadable scan cannot tell cask from formula. Defaulting to false
         // is the safe direction here: the cask path adds --force, and forcing on
@@ -1944,7 +1991,8 @@ async fn retry_attempt(socket: &mut WebSocket, state: &AppState, i: usize, actio
             .await;
         return;
     }
-    do_step(socket, state, i, act, step, is_cask).await;
+    // A retry has no `before` the Apply decided from, so it gives no verdict on the version.
+    do_step(socket, state, i, act, step, is_cask, Aim::default()).await;
     // A retry is an Apply of ONE step, and what it observed is just as real. So the
     // flush belongs on THIS ending as much as on the batch one.
     //
@@ -1957,6 +2005,18 @@ async fn retry_attempt(socket: &mut WebSocket, state: &AppState, i: usize, actio
     // the accumulator is already empty and there is nothing to flush.
     flush_behaviour(state).await;
     clear_sudo_pw(state).await; // the retry finished: clear the cached password
+}
+
+/// Writes a dimmed line into row `i`'s terminal, now — for a line about a command that has
+/// ended, which nothing will clear any more.
+async fn say(socket: &mut WebSocket, i: usize, line: &str) {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let line = format!("\x1b[2m{line}\x1b[0m\r\n");
+    let _ = socket
+        .send(Message::Text(
+            json!({ "type": "out", "i": i, "data": STANDARD.encode(line.as_bytes()) }).to_string(),
+        ))
+        .await;
 }
 
 /// Queues a line for row `i`'s terminal; do_step writes it after the running status.
@@ -2036,6 +2096,10 @@ fn winget_plan(
             Some((mgr.downgrade_in(id, pin, declared.or(found)), note))
         }
         Action::Upgrade => {
+            // `self`: the upgrade is the tool's own command, never a winget reinstall.
+            if is_self_updating(step) {
+                return None;
+            }
             let sc = declared?;
             let (name, installed) = listed?;
             if found == Some(sc) {
@@ -2161,6 +2225,9 @@ fn should_seed_outdated_row(pin: Option<&str>, outdated: bool) -> bool {
             crate::bundles::PinKind::Pending => false,
             // `latest` behaves as declaring nothing → outdated DOES mean upgrade.
             crate::bundles::PinKind::Latest => true,
+            // `self` with `update:` → the tool's own command may run; the caller passes
+            // `outdated` false for a row with no upgrade command (`self` without `update:`).
+            crate::bundles::PinKind::SelfUpdating => true,
             // Exact pin → `action_for` ignores `outdated`, seeds via `is_pinned_row` instead.
             // Returning `true` here is harmless (the row seeds anyway), but the outdated path
             // is irrelevant for exact pins.
@@ -2388,7 +2455,10 @@ async fn apply_diff(
     // true has silently inherited the keyword pins.
     let is_outdated_row = |i: usize| -> bool {
         steps.get(i).is_some_and(|s| {
-            let outdated = is_outdated_now(outdated_for(s.system_id.as_deref(), &scan));
+            // A row with no upgrade command cannot be upgraded however far behind it is: a
+            // `self` row without `update:` (VS Code, Orca) is left to the application.
+            let outdated =
+                is_outdated_now(outdated_for(s.system_id.as_deref(), &scan)) && s.upgrade.is_some();
             should_seed_outdated_row(s.pin.as_deref(), outdated)
         })
     };
@@ -2592,8 +2662,22 @@ async fn apply_diff(
             can_uninstall: step.uninstall.is_some(),
             pin: step.pin.as_deref(),
             installed_version: presences[i].version.as_deref().unwrap_or(""),
+            available: od.map(|o| o.available.as_str()).unwrap_or(""),
+            can_self_update: is_self_updating(step) && step.upgrade.is_some(),
         };
         match batch_action(action_for(desired, &facts), step.downgrade.is_some()) {
+            // A change that already ran toward this target in this session and moved nothing
+            // is not run again: the row says why, and a new target lifts the hold.
+            Ok(Some(a @ (Action::Upgrade | Action::Downgrade))) => {
+                let announced = od.map(|o| o.available.as_str());
+                match unmoved_in_view(state, step, announced).await {
+                    Some((target, why)) => {
+                        println!("[apply] {} held: {why}", step.name);
+                        emit_unmoved(socket, i, &target, &why).await;
+                    }
+                    None => visual_plan.push((i, a)),
+                }
+            }
             Ok(Some(a)) => visual_plan.push((i, a)),
             Ok(None) => {}
             // The front already shows this row's reason (it reads `canDowngrade`), so the
@@ -2629,9 +2713,12 @@ async fn apply_diff(
     'plan: for (pos, (i, action)) in plan.iter().enumerate() {
         // is_cask from the scan we already have → do_step re-issues the forced
         // --cask --force command for cask upgrades (single resolution point).
-        let is_cask = outdated_for(steps[*i].system_id.as_deref(), &scan)
-            .map(|o| o.is_cask)
-            .unwrap_or(false);
+        // A `self` row's upgrade is the tool's own command, never brew's: no cask upgrade, so
+        // neither the forced command nor the App Management gate applies to it.
+        let is_cask = !is_self_updating(&steps[*i])
+            && outdated_for(steps[*i].system_id.as_deref(), &scan)
+                .map(|o| o.is_cask)
+                .unwrap_or(false);
         if cask_upgrade_blocked(*action, is_cask, state.appmgmt) {
             let _ = socket
                 .send(Message::Text(
@@ -2640,8 +2727,14 @@ async fn apply_diff(
                 .await;
             continue;
         }
+        let announced =
+            outdated_for(steps[*i].system_id.as_deref(), &scan).map(|o| o.available.clone());
+        let aim = Aim {
+            before: Some(&presences[*i]),
+            announced: announced.as_deref(),
+        };
         let (outcome, stop_all) =
-            step_with_forbidden_pause(socket, state, *i, *action, &steps[*i], is_cask).await;
+            step_with_forbidden_pause(socket, state, *i, *action, &steps[*i], is_cask, aim).await;
         if stop_all {
             break; // "stop everything" → abandon the rest of the plan
         }
@@ -2714,9 +2807,16 @@ async fn apply_diff(
                 queue_note(state, d, why).await;
             }
             // A repair does not re-check ITS dependents: one extra pass, never a cascade.
-            let (_, stop_all) =
-                step_with_forbidden_pause(socket, state, d, Action::Install, &steps[d], false)
-                    .await;
+            let (_, stop_all) = step_with_forbidden_pause(
+                socket,
+                state,
+                d,
+                Action::Install,
+                &steps[d],
+                false,
+                Aim::default(),
+            )
+            .await;
             if stop_all {
                 break 'plan;
             }
@@ -3179,11 +3279,12 @@ async fn step_with_forbidden_pause(
     action: crate::decision::Action,
     step: &crate::bundles::Step,
     is_cask: bool,
+    aim: Aim<'_>,
 ) -> (StepOutcome, bool) {
     let mut attempt: u32 = 0;
     loop {
         attempt += 1;
-        let outcome = do_step(socket, state, i, action, step, is_cask).await;
+        let outcome = do_step(socket, state, i, action, step, is_cask, aim).await;
         if !outcome.blocked {
             return (outcome, false);
         }
@@ -3235,6 +3336,80 @@ fn shown_version(p: &crate::detect::Presence) -> String {
     }
 }
 
+/// What a version change was run to reach, when it can be named: an exact pin owns it,
+/// otherwise the version the manager announced.
+fn step_target(pin: Option<&str>, announced: Option<&str>) -> Option<String> {
+    use crate::bundles::{classify_pin, PinKind};
+    if let Some(PinKind::Exact(p)) = classify_pin(pin) {
+        return Some(p);
+    }
+    announced
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(str::to_string)
+}
+
+/// Why a version change that EXITED OK did not do what it was run for, or None.
+///
+/// ⭐ An exit code says the command is content, not that the machine changed. MEASURED twice:
+/// winget's VS Code 1.142.0 manifest installs 1.141.2 and exits 0 (the integrator, Windows,
+/// 2026-10-22), and `winget install --version 0.113.1 --force --uninstall-previous` printed
+/// "Successfully installed" with `nu` still 0.116.1 (Windows VM, 2026-10-20). So the version
+/// read AFTER the step is the verdict: toward a pin, it must be the pin (at the pin's own
+/// precision); otherwise it must have moved. A version that cannot be read, before or after,
+/// gives no verdict — never a guess.
+fn unmoved_reason(
+    action: crate::decision::Action,
+    pin: Option<&str>,
+    before: Option<&crate::detect::Presence>,
+    after: &crate::detect::Presence,
+    target: Option<&str>,
+    by: &str,
+) -> Option<String> {
+    use crate::bundles::{classify_pin, PinKind};
+    use crate::decision::Action;
+    if !matches!(action, Action::Upgrade | Action::Downgrade) || after.present != Some(true) {
+        return None;
+    }
+    let read = |p: &crate::detect::Presence| p.version.as_deref().unwrap_or("").trim().to_string();
+    let now = read(after);
+    if now.is_empty() || now == "?" {
+        return None;
+    }
+    if let Some(PinKind::Exact(p)) = classify_pin(pin) {
+        return (crate::decision::compare_to_pin(&now, &p) != 0)
+            .then(|| format!("{by} reported success, but {now} is installed, not {p}"));
+    }
+    let was = read(before?);
+    if was != now {
+        return None;
+    }
+    Some(match target {
+        Some(t) => format!("{by} reported success, but {now} is still installed, not {t}"),
+        None => format!("{by} reported success, but {now} is still installed"),
+    })
+}
+
+/// Has this package's change already been run, in this session, toward this same target and
+/// left the version where it was? Then the Apply holds it until something new is announced.
+fn held_unmoved(
+    memory: &std::collections::HashMap<String, (String, String)>,
+    id: &str,
+    target: Option<&str>,
+) -> bool {
+    target.is_some_and(|t| memory.get(id).is_some_and(|(seen, _)| seen == t))
+}
+
+/// What a step was run from and toward, for the verdict on the version it leaves
+/// (`unmoved_reason`). Default = no verdict: a retry or a repair install.
+#[derive(Default, Clone, Copy)]
+struct Aim<'a> {
+    /// The presence the Apply decided from.
+    before: Option<&'a crate::detect::Presence>,
+    /// The version the manager announced for this package, if any.
+    announced: Option<&'a str>,
+}
+
 /// The outcome of one step. `ok` = it succeeded (kept for callers that will want it;
 /// the front already learns it from the `step` event). `blocked` = it failed BECAUSE
 /// the corporate firewall answered 403 — the distinction the Apply loop needs: a plain
@@ -3259,6 +3434,7 @@ async fn do_step(
     action: crate::decision::Action,
     step: &crate::bundles::Step,
     is_cask: bool,
+    aim: Aim<'_>,
 ) -> StepOutcome {
     use crate::decision::Action;
     // Timed from the top so the measurement covers everything the step really does:
@@ -3357,7 +3533,20 @@ async fn do_step(
             .await;
     }
 
-    let blocked = !ok && forbidden;
+    // The tool's own `update:` reaches the network on its own terms, behind a corporate
+    // firewall as anywhere: its failure is a line on the row, never an Apply paused on a 403.
+    let own_update = action == Action::Upgrade && is_self_updating(step);
+    if own_update && !ok && !cancelled {
+        say(
+            socket,
+            i,
+            "[update] the tool's own update failed; Talos changed nothing else, and the next \
+             Apply tries again. It needs the network — behind a corporate firewall, the usual \
+             cause.",
+        )
+        .await;
+    }
+    let blocked = !ok && forbidden && !own_update;
     let status = if cancelled {
         // The user's own decision outranks every other reading of this exit code. A
         // killed process exits non-zero, which would otherwise print `fail` and send
@@ -3439,6 +3628,55 @@ async fn do_step(
     } else {
         (String::new(), None)
     };
+    // ⭐ The verdict on the version, read just above: an exit 0 that moved nothing is not a
+    // success (`unmoved_reason`). Said on the row, journalled as a failure, and remembered so
+    // the Apply does not run it again toward the same target.
+    let target = step_target(step.pin.as_deref(), aim.announced);
+    let by = if own_update {
+        format!("`{cmd}`")
+    } else {
+        step.route.clone().unwrap_or_else(|| "the command".into())
+    };
+    let unmoved = after.as_ref().and_then(|p| {
+        unmoved_reason(
+            action,
+            step.pin.as_deref(),
+            aim.before,
+            p,
+            target.as_deref(),
+            &by,
+        )
+    });
+    if let Some(why) = &unmoved {
+        let t = target.clone().unwrap_or_default();
+        let until = if matches!(
+            crate::bundles::classify_pin(step.pin.as_deref()),
+            Some(crate::bundles::PinKind::Exact(_))
+        ) {
+            "Until the pin changes, the Apply leaves this row".to_string()
+        } else if t.is_empty() {
+            "The Apply may try it again".to_string()
+        } else {
+            format!("Until a version other than {t} is announced, the Apply leaves this row")
+        };
+        say(
+            socket,
+            i,
+            &format!(
+                "[{}] {why} — not a success. {until} (a restart of Talos tries once more).",
+                action.as_str()
+            ),
+        )
+        .await;
+        emit_unmoved(socket, i, &t, why).await;
+        state
+            .unmoved
+            .lock()
+            .await
+            .insert(step.id.clone(), (t, why.clone()));
+    } else if ok {
+        state.unmoved.lock().await.remove(&step.id);
+    }
     // What this step OBSERVED, for the shared behaviour file. Accumulated in memory
     // only; the write happens once, when the Apply ends.
     //
@@ -3512,8 +3750,21 @@ async fn do_step(
             package: step.name.clone(),
             version,
             action: action.as_str().to_string(),
-            ok,
+            ok: ok && unmoved.is_none(),
             secs: started.elapsed().as_secs(),
+            // What it was found at and run toward — for a version change only, so a reader of
+            // the journal can tell "failed" from "succeeded without changing anything".
+            found: match action {
+                Action::Upgrade | Action::Downgrade => aim
+                    .before
+                    .and_then(|p| p.version.clone())
+                    .unwrap_or_default(),
+                _ => String::new(),
+            },
+            target: match action {
+                Action::Upgrade | Action::Downgrade => target.unwrap_or_default(),
+                _ => String::new(),
+            },
         },
     );
     StepOutcome { ok, blocked, after }
@@ -3536,6 +3787,151 @@ mod tests {
             version: Some(version.into()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_change_that_exits_ok_and_moves_nothing_is_not_a_success() {
+        use crate::decision::Action;
+        let before = observed(Some(true), "1.141.2");
+        // MEASURED by the integrator (Windows, 2026-10-22): winget-pkgs' VS Code 1.142.0
+        // manifest downloads the 1.141.2 installer; winget exits 0, three Applies in a row.
+        let why = unmoved_reason(
+            Action::Upgrade,
+            None,
+            Some(&before),
+            &observed(Some(true), "1.141.2"),
+            Some("1.142.0"),
+            "winget",
+        )
+        .expect("an upgrade that left the version where it was");
+        assert!(why.contains("winget"), "{why}");
+        assert!(why.contains("1.141.2") && why.contains("1.142.0"), "{why}");
+        // It moved: a success, even short of what was announced (a newer manifest may land).
+        assert_eq!(
+            unmoved_reason(
+                Action::Upgrade,
+                None,
+                Some(&before),
+                &observed(Some(true), "1.141.9"),
+                Some("1.142.0"),
+                "winget",
+            ),
+            None
+        );
+        // Nothing to compare: no verdict, never a guess.
+        for (b, a) in [("", "1.0"), ("1.0", ""), ("?", "")] {
+            assert_eq!(
+                unmoved_reason(
+                    Action::Upgrade,
+                    None,
+                    Some(&observed(Some(true), b)),
+                    &observed(Some(true), a),
+                    None,
+                    "winget",
+                ),
+                None,
+                "{b} → {a}"
+            );
+        }
+        assert_eq!(
+            unmoved_reason(
+                Action::Upgrade,
+                None,
+                None,
+                &observed(Some(true), "1.0"),
+                None,
+                "winget"
+            ),
+            None,
+            "no before (a retry) → no verdict"
+        );
+        // An install or an uninstall is judged by presence, elsewhere.
+        for act in [Action::Install, Action::Uninstall] {
+            assert_eq!(
+                unmoved_reason(act, None, Some(&before), &before, None, "winget"),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn a_version_change_toward_a_pin_succeeds_only_at_the_pin() {
+        use crate::decision::Action;
+        // The 2026-10-20 request, measured in the VM: `winget install --version 0.113.1
+        // --force --uninstall-previous` printed "Successfully installed", exit 0, and `nu`
+        // still answered 0.116.1. A step toward a pin is a success when the pin is READ.
+        let above = observed(Some(true), "0.116.1");
+        for act in [Action::Downgrade, Action::Upgrade] {
+            let why = unmoved_reason(
+                act,
+                Some("0.113.1"),
+                Some(&above),
+                &observed(Some(true), "0.116.1"),
+                Some("0.113.1"),
+                "winget",
+            )
+            .expect("off the pin after the step");
+            assert!(why.contains("0.116.1") && why.contains("0.113.1"), "{why}");
+            assert_eq!(
+                unmoved_reason(
+                    act,
+                    Some("0.113.1"),
+                    Some(&above),
+                    &observed(Some(true), "0.113.1"),
+                    Some("0.113.1"),
+                    "winget",
+                ),
+                None
+            );
+        }
+        // At the pin's own precision, as everywhere else.
+        assert_eq!(
+            unmoved_reason(
+                Action::Upgrade,
+                Some("2.50.1"),
+                Some(&observed(Some(true), "2.49.0")),
+                &observed(Some(true), "2.50.1.windows.1"),
+                Some("2.50.1"),
+                "winget",
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_change_that_moved_nothing_is_not_run_again_for_the_same_target() {
+        let mut memory = std::collections::HashMap::new();
+        memory.insert(
+            "visual-studio-code".to_string(),
+            (
+                "1.142.0".to_string(),
+                "winget reported success…".to_string(),
+            ),
+        );
+        assert!(held_unmoved(&memory, "visual-studio-code", Some("1.142.0")));
+        // A new announcement — the manifest changed — is worth one more try.
+        assert!(!held_unmoved(
+            &memory,
+            "visual-studio-code",
+            Some("1.142.1")
+        ));
+        assert!(!held_unmoved(&memory, "visual-studio-code", None));
+        assert!(!held_unmoved(&memory, "git", Some("1.142.0")));
+        // The target: an exact pin owns it; otherwise what the manager announced.
+        assert_eq!(
+            step_target(Some("0.113.1"), Some("0.116.1")).as_deref(),
+            Some("0.113.1")
+        );
+        assert_eq!(
+            step_target(Some("latest"), Some("1.1")).as_deref(),
+            Some("1.1")
+        );
+        assert_eq!(
+            step_target(Some("self"), Some("1.1")).as_deref(),
+            Some("1.1")
+        );
+        assert_eq!(step_target(None, None), None);
+        assert_eq!(step_target(None, Some(" ")), None);
     }
 
     #[test]
@@ -3701,6 +4097,25 @@ mod tests {
         s.downgrade = Some("brew uninstall nushell && brew install nushell@0.113.1".into());
         let row = super::step_json(&s, 0, &[], &no_timings, Os::Darwin);
         assert_eq!(row["canDowngrade"], true);
+    }
+
+    #[test]
+    fn a_row_says_on_the_wire_whether_it_runs_its_own_update() {
+        // The front's twin of `action_for` reads `canSelfUpdate` from here.
+        let no_timings = crate::timings::Timings::new();
+        let mut s = brew_step("copilot-cli", Some("self"));
+        s.upgrade = None;
+        let row = super::step_json(&s, 0, &[], &no_timings, Os::Darwin);
+        assert_eq!(row["selfUpdate"], false, "`self` without `update:`");
+        s.upgrade = Some("copilot update".into());
+        let row = super::step_json(&s, 0, &[], &no_timings, Os::Darwin);
+        assert_eq!(row["selfUpdate"], true);
+        let plain = brew_step("git", None);
+        let row = super::step_json(&plain, 0, &[], &no_timings, Os::Darwin);
+        assert_eq!(
+            row["selfUpdate"], false,
+            "a manager upgrade is not the tool's own"
+        );
     }
 
     #[test]
@@ -4560,6 +4975,7 @@ mod tests {
             machine_running: std::sync::atomic::AtomicBool::new(false),
             machine_shared: std::sync::atomic::AtomicBool::new(false),
             last_scan: std::sync::Mutex::new(None),
+            unmoved: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -5135,6 +5551,28 @@ mod tests {
             super::winget_plan(Action::Upgrade, &plain, listed, Some(Machine), None),
             None
         );
+    }
+
+    #[test]
+    fn a_self_updating_row_runs_its_own_update_and_nothing_the_manager_rebuilds() {
+        // Two sites rebuild a row's upgrade just before acting: the forced cask command, and
+        // a winget upgrade moved to its declared scope. Either would replace `copilot update`
+        // with the very manager upgrade `self` exists to keep away from the tool's copy.
+        let mut cask = brew_step("visual-studio-code", Some("self"));
+        cask.upgrade = Some("code --update".into());
+        assert_eq!(forced_cask_upgrade_cmd(&cask, Os::Darwin, true), None);
+
+        let mut step = winget_step(None, Some(User));
+        step.pin = Some("self".into());
+        step.upgrade = Some("copilot update".into());
+        let listed = Some(("GitHub Copilot", "1.0.5"));
+        for found in [Some(Machine), Some(User), None] {
+            assert_eq!(
+                super::winget_plan(Action::Upgrade, &step, listed, found, None),
+                None,
+                "found {found:?}"
+            );
+        }
     }
 
     #[test]

@@ -67,6 +67,12 @@ export function loadPlan(model, steps, profiles = []) {
       // Can the Apply take this row DOWN to its pin? Sent by the server (`step_json`): only a
       // route that builds a downgrade (an uninstall + a pinned reinstall) can. False when absent.
       canDowngrade: !!s.canDowngrade,
+      // `version: self` with its own `update:` command: the Apply runs that command when the
+      // tool is behind what the manager announces (`step_json`). False for every other row.
+      selfUpdate: !!s.selfUpdate,
+      // The last version change that exited ok and moved nothing — { target, reason } from the
+      // server's `unmoved` message — or null. Held while that target is in view.
+      unmoved: null,
       isConfig: !!s.isConfig,
       // Derived on the SERVER from the route (`bundles::is_extension_route`), never declared
       // in YAML — carried here for the 🧩 glyph on the row.
@@ -333,7 +339,41 @@ export function actionOf(model, i) {
     canUninstall: p.canUninstall,
     pin: p.pin,
     installedVersion: p.installedVersion,
+    available: p.available,
+    canSelfUpdate: p.selfUpdate,
   });
+}
+// Does this row declare `version: self` — the application updates itself?
+export function isSelfUpdating(model, i) {
+  return String(model.pkgs.get(i)?.pin || "").toLowerCase() === "self";
+}
+// The version a change of this row would run toward: an exact pin owns it, otherwise what the
+// manager announced. Twin of the server's `step_target`.
+function targetOf(p) {
+  const pin = String(p.pin || "");
+  if (/^\d/.test(pin.trim())) return pin.trim();
+  return p.available || "";
+}
+// The reason this row's change is held because it already ran toward the same target and
+// moved nothing, or null. Twin of the server's `held_unmoved`.
+function unmovedHold(model, i) {
+  const p = model.pkgs.get(i);
+  if (!p?.unmoved?.target) return null;
+  const a = actionOf(model, i);
+  if (a !== "upgrade" && a !== "downgrade") return null;
+  return targetOf(p) === p.unmoved.target ? p.unmoved.reason : null;
+}
+// A version change that exited ok and moved nothing (the server's `unmoved` message). Off an
+// exact pin, the announcement it ran toward is shown again, greyed: the row says what it did
+// not reach.
+export function setUnmoved(model, i, target, reason) {
+  const p = model.pkgs.get(i);
+  if (!p) return;
+  p.unmoved = { target: target || "", reason: reason || "" };
+  if (target && targetOf({ pin: p.pin, available: "" }) === "") {
+    p.outdated = true;
+    p.available = target;
+  }
 }
 // The row's version display — the SINGLE source of truth for what numbers show,
 // so nothing can double up (the old bug: statusLabel showed the installed version
@@ -358,6 +398,11 @@ export function actionOf(model, i) {
 // migration target (we don't push past your pin) — it's shown greyed so you can
 // still choose to test it. See talos-version-pin.
 export function versionSummary(model, i) {
+  const v = summary(model, i);
+  // A change already run toward this target, which moved nothing: shown, not pushed.
+  return v.to !== null && unmovedHold(model, i) ? { ...v, muted: true } : v;
+}
+function summary(model, i) {
   const none = { from: "", to: null, pinned: null, muted: false, held: false };
   const p = model.pkgs.get(i);
   if (!p) return none;
@@ -366,6 +411,14 @@ export function versionSummary(model, i) {
   if (p.pin) {
     const held = String(p.pin).toLowerCase() === "pending";
     const chasing = String(p.pin).toLowerCase() === "latest";
+    // `self`: one number — the application keeps itself current — unless the row has its own
+    // `update:` and the Apply will run it (`actionOf` decides, with the server's rule).
+    if (String(p.pin).toLowerCase() === "self") {
+      if (actionOf(model, i) === "upgrade") {
+        return { from: inst, to: p.available, pinned: null, muted: false, held: false };
+      }
+      return { from: inst, to: null, pinned: null, muted: false, held: false };
+    }
     // ⭐ `pending` and `latest` are POLICY, not versions — comparing them would read them as
     // 0.0.0 (measured) and claim the machine is "above the pin".
     if (held) {
@@ -415,6 +468,7 @@ const AUTO_ACTS = ["install", "uninstall", "upgrade", "downgrade"];
 export function isActionable(model, i) {
   const a = actionOf(model, i);
   if (a === "downgrade" && !model.pkgs.get(i)?.canDowngrade) return false;
+  if (unmovedHold(model, i)) return false;
   return AUTO_ACTS.includes(a);
 }
 // What the Apply button counts, by what each row ends up as. A downgrade is apart: it is an
@@ -438,6 +492,8 @@ export function planSeconds(model) {
 // above its pin whose route cannot go down. The words are the server's `NO_DOWNGRADE_ROUTE`,
 // word for word, so the row and the log say the same thing.
 export function holdReason(model, i) {
+  const unmoved = unmovedHold(model, i);
+  if (unmoved) return unmoved;
   if (actionOf(model, i) !== "downgrade") return null;
   return model.pkgs.get(i)?.canDowngrade ? null : "above its pin — this route cannot go down to it";
 }
@@ -570,6 +626,9 @@ export function setStatusData(model, i, status) {
   const p = model.pkgs.get(i);
   if (!p) return;
   p.status = status;
+  // The row runs again: what it did not reach last time is no longer the news. If it moves
+  // nothing again, the server says so again.
+  if (["installing", "upgrading", "reinstalling", "uninstalling"].includes(status)) p.unmoved = null;
   if (status === "ok") {
     p.present = true;
     p.outdated = false;

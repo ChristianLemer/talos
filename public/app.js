@@ -557,12 +557,16 @@ function paintVersion(i) {
   // A pin the route cannot go down to is HELD the same way, with its own word: the Apply leaves
   // the row, so the row says why (every gesture leaves a trace).
   const why = M.holdReason(model, i);
+  // A change that already ran toward this target and moved nothing says `unchanged`; its
+  // reason names a catalogue command, so it is escaped into the attribute.
+  const word = why && model.pkgs.get(i)?.unmoved?.reason === why ? "unchanged" : "held";
+  const attr = (t) => String(t).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
   const muted = (t, held) =>
     held
       ? `<span class="v-muted" title="arbitration pending — seen, not pushed">${t}</span>` +
         ` <span class="v-held">arbitration</span>`
       : why
-      ? `<span class="v-muted" title="${why}">${t}</span> <span class="v-held">held</span>`
+      ? `<span class="v-muted" title="${attr(why)}">${t}</span> <span class="v-held">${word}</span>`
       : `<span class="v-muted" title="available — not pushed past your pin">${t}</span>`;
   const pin = (t) => `📌${t}`;
 
@@ -578,8 +582,12 @@ function paintVersion(i) {
     return;
   }
   if (v.to === null) {
-    // One number — the current state, blue. 📌 when it IS the pin (at rest).
-    r.delta.innerHTML = cur(v.pinned === "from" ? pin(v.from) : v.from);
+    // One number — the current state, blue. 📌 when it IS the pin (at rest). A `self` row says
+    // who keeps it current: the application, not Talos — so no newer number is compared.
+    const own = M.isSelfUpdating(model, i)
+      ? ` <span class="v-held" title="the application keeps itself current; Talos installs it when it is missing">updates itself</span>`
+      : "";
+    r.delta.innerHTML = cur(v.pinned === "from" ? pin(v.from) : v.from) + own;
     return;
   }
   // Two numbers: current(blue) → target. Muted (upgrade past a pin, or a pin the route
@@ -2343,6 +2351,15 @@ ws.onmessage = (ev) => {
       M.setOutdated(model, msg.i, true, msg.available);
       paintVersion(msg.i);
       refreshLiveness(); // now this row's Apply is useful
+      break;
+    }
+    case "unmoved": { // a version change exited ok and moved nothing (server: unmoved_reason)
+      if (!rows[msg.i]) break;
+      M.setUnmoved(model, msg.i, msg.target, msg.reason);
+      paintVersion(msg.i);
+      // The reason is written in the row's terminal: show it, like a failure.
+      rows[msg.i].details.open = true;
+      refreshLiveness(); // the Apply no longer counts this row while the target is the same
       break;
     }
     case "step":

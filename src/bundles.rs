@@ -95,6 +95,7 @@ impl RawPkg {
         "version-regex",
         "version",
         "scope",
+        "update",
         "requires",
         "category",
         "uac",
@@ -166,6 +167,10 @@ pub struct RawPkg {
     /// install and downgrade reinstall passes it, so a copy found elsewhere is put back.
     #[serde(default)]
     pub scope: Option<String>,
+    /// With `version: self` only: the tool's OWN update command, which the Apply runs as the
+    /// row's upgrade instead of the manager's. Ignored without `self` (`--check` says so).
+    #[serde(default)]
+    pub update: Option<String>,
     #[serde(default)]
     pub requires: Vec<String>,
     #[serde(default)]
@@ -376,7 +381,7 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
     // consumers, opposite needs.
     let ver = match classify_pin(pkg.version.as_deref()) {
         Some(PinKind::Exact(v)) => v,
-        // Latest / Pending / Invalid → build the PLAIN command, exactly as an undeclared
+        // Latest / Pending / SelfUpdating / Invalid → build the PLAIN command, exactly as an undeclared
         // version does.
         _ => String::new(),
     };
@@ -846,8 +851,8 @@ pub fn load_from_catalog(
             // was declared. Naming the package AND the word is what makes this actionable: a
             // log line saying "invalid version" without either is a riddle.
             log(&format!(
-                "catalog: {} declares version \"{word}\" — not a version, not `latest`, not \
-                 `pending`; ignored. A word reads as 0.0.0 and would offer a DOWNGRADE.",
+                "catalog: {} declares version \"{word}\" — not a version, not `latest`, `pending` \
+                 nor `self`; ignored. A word reads as 0.0.0 and would offer a DOWNGRADE.",
                 cp.id
             ));
         }
@@ -859,7 +864,13 @@ pub fn load_from_catalog(
             description: p.description.clone().unwrap_or_default(),
             install: sub(cmd.install),
             uninstall: sub(cmd.uninstall),
-            upgrade: sub(cmd.upgrade),
+            // `self`: the manager installs, the tool updates itself — by its own `update:`
+            // command, or by nothing Talos runs. The manager's upgrade is never the row's.
+            upgrade: if declared == Some(PinKind::SelfUpdating) && !is_extension {
+                sub(p.update.clone())
+            } else {
+                sub(cmd.upgrade)
+            },
             downgrade: sub(cmd.downgrade),
             route: cmd.route,
             system_id,
@@ -903,6 +914,7 @@ pub fn load_from_catalog(
                     // Normalised to lowercase, so the rule compares against one spelling.
                     Some(PinKind::Latest) => Some("latest".to_string()),
                     Some(PinKind::Pending) => Some("pending".to_string()),
+                    Some(PinKind::SelfUpdating) => Some("self".to_string()),
                     Some(PinKind::Invalid(_)) | None => None,
                 }
             },
@@ -1007,6 +1019,10 @@ pub enum PinKind {
     Latest,
     /// "Nobody has decided yet." Held out of the batch; the gap stays visible.
     Pending,
+    /// "It updates itself." Installed by the manager when absent; once present, the manager
+    /// never upgrades it — the package's own `update:` command does, or nothing does. Not a
+    /// pending decision: the decision is made, so the row is not arbitration.
+    SelfUpdating,
     /// ⚠️ Anything else, carrying the word so the caller can name it in a log line. NEVER
     /// interpreted as a version: MEASURED, `compare_versions("2.50.1", "current") == 1`
     /// because a word has no leading digits and reads as 0.0.0 — so `action_for` would return
@@ -1031,6 +1047,9 @@ pub fn classify_pin(declared: Option<&str>) -> Option<PinKind> {
     }
     if raw.eq_ignore_ascii_case("pending") {
         return Some(PinKind::Pending);
+    }
+    if raw.eq_ignore_ascii_case("self") {
+        return Some(PinKind::SelfUpdating);
     }
     if raw.starts_with(|c: char| c.is_ascii_digit()) {
         return Some(PinKind::Exact(raw.to_string()));
@@ -1511,6 +1530,9 @@ mod tests {
             }
             if let Some(s) = &p.scope {
                 y.push_str(&format!("scope: {s}\n"));
+            }
+            if let Some(u) = &p.update {
+                y.push_str(&format!("update: {u}\n"));
             }
             std::fs::write(dir.join(format!("{stem}.yaml")), y).expect("write fixture");
         }
@@ -2556,6 +2578,67 @@ slow: true
     }
 
     #[test]
+    fn self_is_a_third_word_and_it_never_reaches_a_command() {
+        // `self`: the application updates itself. Like the two other words, it is POLICY, so
+        // the command builder must not see it — `brew install copilot-cli@self` is a command
+        // built to fail, exactly as `@pending` was.
+        assert_eq!(classify_pin(Some("self")), Some(PinKind::SelfUpdating));
+        assert_eq!(classify_pin(Some("Self")), Some(PinKind::SelfUpdating));
+        let mut p = pkg("Copilot CLI");
+        p.winget = Some("GitHub.Copilot".into());
+        p.brew = Some("copilot-cli".into());
+        p.version = Some("self".into());
+        for os in [Os::Darwin, Os::Windows] {
+            let c = commands_for(&p, os);
+            for cmd in [&c.install, &c.upgrade, &c.uninstall].into_iter().flatten() {
+                assert!(!cmd.contains("self"), "a keyword reached a command: {cmd}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_self_updating_package_upgrades_by_its_own_command_or_not_at_all() {
+        // The manager INSTALLS; the tool updates itself. With `update:`, the Apply's upgrade of
+        // the row is that command and nothing else — winget and brew never touch a copy the
+        // tool has rewritten. Without it, there is no upgrade command at all: the row is left
+        // to the application's own mechanism.
+        let mut p = pkg("Copilot CLI");
+        p.winget = Some("GitHub.Copilot".into());
+        p.version = Some("self".into());
+        p.update = Some("copilot update".into());
+        let steps = steps_from_pkgs(&[("copilot-cli", p.clone())], Os::Windows);
+        assert_eq!(steps[0].pin.as_deref(), Some("self"));
+        assert_eq!(steps[0].upgrade.as_deref(), Some("copilot update"));
+        assert!(
+            steps[0]
+                .install
+                .as_deref()
+                .unwrap()
+                .starts_with("winget install"),
+            "absent, the manager installs it as usual"
+        );
+        assert_eq!(steps[0].downgrade, None);
+
+        p.update = None;
+        let steps = steps_from_pkgs(&[("copilot-cli", p)], Os::Windows);
+        assert_eq!(
+            steps[0].upgrade, None,
+            "no update: → the app's own mechanism"
+        );
+    }
+
+    #[test]
+    fn update_is_ignored_without_self() {
+        // `update:` on a package Talos upgrades through its manager would put two upgrade
+        // paths on one row. The manager's stays; `--check` names the key that does nothing.
+        let mut p = pkg("Node.js");
+        p.winget = Some("OpenJS.NodeJS".into());
+        p.update = Some("node-updater".into());
+        let steps = steps_from_pkgs(&[("node", p)], Os::Windows);
+        assert!(steps[0].upgrade.as_deref().unwrap().contains("winget"));
+    }
+
+    #[test]
     fn an_extension_still_carries_no_pin_even_when_it_declares_a_keyword() {
         // The rule from the vscode-extension work stands: an extension route has no `upgrade:`
         // command, so a pin of ANY kind would make action_for return Upgrade with nothing to run
@@ -2666,7 +2749,7 @@ slow: true
     }
 
     #[test]
-    fn every_shipped_version_is_one_of_the_three_legal_forms() {
+    fn every_shipped_version_is_one_of_the_legal_forms() {
         // The guard that makes a typo in a content edit fail a TEST rather than reach a
         // machine. A lint of what ships, on both trees.
         for (tree, catalog, _) in content_trees() {
@@ -2676,7 +2759,8 @@ slow: true
                     None
                     | Some(PinKind::Exact(_))
                     | Some(PinKind::Latest)
-                    | Some(PinKind::Pending) => {}
+                    | Some(PinKind::Pending)
+                    | Some(PinKind::SelfUpdating) => {}
                     Some(PinKind::Invalid(w)) => {
                         panic!(
                             "{tree} {}: version \"{w}\" is not a legal form",

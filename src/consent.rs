@@ -50,6 +50,13 @@ pub struct HistEntry {
     /// reads; it is here for consistency with the fields above it.
     #[serde(default)]
     pub secs: u64,
+    /// For a version change: the version it was found at, and the one it was run toward.
+    /// With `ok: false` and `version == found`, the line reads "exited 0, changed nothing".
+    /// Omitted when empty, so every other line keeps its shape.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub found: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target: String,
 }
 
 /// The consent state.
@@ -93,6 +100,16 @@ pub fn parse_history(raw: &str) -> Vec<HistEntry> {
                 .to_string(),
             ok: v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false),
             secs: v.get("secs").and_then(|x| x.as_u64()).unwrap_or(0),
+            found: v
+                .get("found")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
+            target: v
+                .get("target")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
         });
     }
     out
@@ -373,6 +390,33 @@ mod tests {
     }
 
     #[test]
+    fn a_version_change_says_what_it_found_and_aimed_at_and_other_lines_keep_their_shape() {
+        let mut e = HistEntry {
+            at: "t".into(),
+            package: "Visual Studio Code".into(),
+            version: "1.141.2".into(),
+            action: "upgrade".into(),
+            ok: false,
+            secs: 65,
+            found: "1.141.2".into(),
+            target: "1.142.0".into(),
+        };
+        let line = serde_json::to_string(&e).unwrap();
+        assert!(
+            line.contains(r#""found":"1.141.2","target":"1.142.0""#),
+            "{line}"
+        );
+        assert_eq!(parse_history(&line), vec![e.clone()]);
+        e.found.clear();
+        e.target.clear();
+        let line = serde_json::to_string(&e).unwrap();
+        assert!(
+            !line.contains("found") && !line.contains("target"),
+            "{line}"
+        );
+    }
+
+    #[test]
     fn consent_roundtrip_marks_decided() {
         let dir = std::env::temp_dir().join("talos-test-consent-rt");
         let _ = std::fs::remove_dir_all(&dir);
@@ -401,6 +445,8 @@ mod tests {
             action: "install".into(),
             ok: true,
             secs: 0,
+            found: String::new(),
+            target: String::new(),
         };
         // No consent yet → local written, shared ABSENT.
         append_history(&s, &e);
@@ -520,6 +566,8 @@ mod tests {
             action: "install".into(),
             ok: true,
             secs: 0,
+            found: String::new(),
+            target: String::new(),
         };
         append_history(&s, &e);
         let shared = shared_log_path(&s.exe_dir, &s.host, &s.user);
@@ -539,6 +587,8 @@ mod tests {
             action: "install".into(),
             ok: true,
             secs: 242,
+            found: String::new(),
+            target: String::new(),
         };
         let line = serde_json::to_string(&e).unwrap();
         let back = parse_history(&format!("{line}\n"));

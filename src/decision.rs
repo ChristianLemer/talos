@@ -83,6 +83,10 @@ pub struct MachineFacts<'a> {
     pub can_uninstall: bool,
     pub pin: Option<&'a str>,
     pub installed_version: &'a str,
+    /// What the manager announces as the newest version, "" when it announces nothing.
+    pub available: &'a str,
+    /// The package declares `version: self` AND its own `update:` command.
+    pub can_self_update: bool,
 }
 
 /// The action an Apply would take — or None. The rule the server EXECUTES and
@@ -112,6 +116,21 @@ pub fn action_for(desired: Desired, f: &MachineFacts) -> Option<Action> {
             // HOLD, not a blindfold. To take the update, the author edits the pin.
             if pin.eq_ignore_ascii_case("pending") {
                 return None;
+            }
+            // `self` = the application updates itself. The manager never upgrades it; the
+            // package's own `update:` command does, when the version the tool REPORTS is behind
+            // what the manager announces — its receipt is stale by construction, since the
+            // tool rewrote itself behind it. Without `update:`, nothing: not a decision left
+            // pending, a decision to leave it to the application.
+            if pin.eq_ignore_ascii_case("self") {
+                // A leading `v` is a spelling, not a segment: winget writes `v1.0.102`.
+                fn bare(v: &str) -> &str {
+                    v.strip_prefix(['v', 'V']).unwrap_or(v)
+                }
+                let behind = f.installed_version.is_empty()
+                    || f.available.is_empty()
+                    || compare_versions(bare(f.installed_version), bare(f.available)) < 0;
+                return (f.can_self_update && f.outdated && behind).then_some(Action::Upgrade);
             }
             // `latest` = the author DECIDED to take the newest. Same effect as declaring
             // nothing, and not redundant with it: a catalogue meant to be copied from must be
@@ -154,6 +173,8 @@ mod tests {
             can_uninstall: false,
             pin: None,
             installed_version: "",
+            available: "",
+            can_self_update: false,
         };
         assert_eq!(action_for(Desired::Present, &f), Some(Action::Install));
     }
@@ -166,6 +187,8 @@ mod tests {
             can_uninstall: false,
             pin: None,
             installed_version: "1.0",
+            available: "",
+            can_self_update: false,
         };
         assert_eq!(action_for(Desired::Present, &f), Some(Action::Upgrade));
     }
@@ -195,6 +218,8 @@ mod tests {
             can_uninstall: true,
             pin: Some("2.50.1"),
             installed_version: "2.50.1.windows.1",
+            available: "",
+            can_self_update: false,
         };
         assert_eq!(
             action_for(Desired::Present, &f),
@@ -211,6 +236,8 @@ mod tests {
             can_uninstall: false,
             pin: Some("2.0"),
             installed_version: "1.0",
+            available: "",
+            can_self_update: false,
         };
         assert_eq!(action_for(Desired::Present, &below), Some(Action::Upgrade));
         let above = MachineFacts {
@@ -219,6 +246,8 @@ mod tests {
             can_uninstall: false,
             pin: Some("2.0"),
             installed_version: "3.0",
+            available: "",
+            can_self_update: false,
         };
         assert_eq!(
             action_for(Desired::Present, &above),
@@ -230,6 +259,8 @@ mod tests {
             can_uninstall: false,
             pin: Some("2.0"),
             installed_version: "2.0",
+            available: "",
+            can_self_update: false,
         };
         assert_eq!(action_for(Desired::Present, &at), None);
     }
@@ -242,6 +273,8 @@ mod tests {
             can_uninstall: true,
             pin: None,
             installed_version: "",
+            available: "",
+            can_self_update: false,
         };
         assert_eq!(
             action_for(Desired::Absent, &removable),
@@ -253,6 +286,8 @@ mod tests {
             can_uninstall: false,
             pin: None,
             installed_version: "",
+            available: "",
+            can_self_update: false,
         };
         assert_eq!(action_for(Desired::Absent, &not), None);
     }
@@ -361,6 +396,8 @@ mod tests {
                 can_uninstall: true,
                 pin: *pin,
                 installed_version: installed,
+                available: "",
+                can_self_update: false,
             };
             assert_eq!(action_for(Desired::Present, &f), *expected, "{what}");
         }
@@ -391,8 +428,144 @@ mod tests {
             can_uninstall: true,
             pin: Some("pending"),
             installed_version: "2.50.1",
+            available: "",
+            can_self_update: false,
         };
         assert_eq!(action_for(Desired::Present, &f), None, "never a downgrade");
+    }
+
+    #[test]
+    fn self_resolves_as_a_table() {
+        // `self` — the application updates itself. The same rows live in
+        // test/decision.test.mjs: one rule, two callers.
+        //
+        // Columns: what, present, outdated, installed, available, can_self_update → action.
+        type Row = (
+            &'static str,
+            bool,
+            bool,
+            &'static str,
+            &'static str,
+            bool,
+            Option<Action>,
+        );
+        let cases: &[Row] = &[
+            // Absent → the manager installs it, as for every other word: a repair.
+            ("absent", false, false, "", "", false, Some(Action::Install)),
+            (
+                "absent, with update:",
+                false,
+                false,
+                "",
+                "",
+                true,
+                Some(Action::Install),
+            ),
+            // No `update:` → left to the application's own mechanism, newer or not. This is
+            // what stops winget re-running VS Code's upgrade on every Apply.
+            (
+                "present, newer announced",
+                true,
+                true,
+                "1.0",
+                "1.1",
+                false,
+                None,
+            ),
+            ("present, current", true, false, "1.0", "", false, None),
+            // `update:` → run when the version the tool REPORTS is behind what the manager
+            // announces. The manager's own receipt does not count: the tool rewrote itself
+            // behind its back, so only `detect:` knows what is there.
+            (
+                "update:, behind",
+                true,
+                true,
+                "1.0",
+                "1.1",
+                true,
+                Some(Action::Upgrade),
+            ),
+            (
+                "update:, the receipt lags, the tool is current",
+                true,
+                true,
+                "1.1",
+                "1.1",
+                true,
+                None,
+            ),
+            (
+                "update:, the tool is ahead",
+                true,
+                true,
+                "1.2",
+                "1.1",
+                true,
+                None,
+            ),
+            (
+                "update:, nothing announced",
+                true,
+                false,
+                "1.0",
+                "",
+                true,
+                None,
+            ),
+            // A version the probe could not read cannot be compared: the announcement decides.
+            (
+                "update:, version unread",
+                true,
+                true,
+                "",
+                "1.1",
+                true,
+                Some(Action::Upgrade),
+            ),
+            // MEASURED (Windows VM, 2026-10-22): winget lists Copilot CLI as `v1.0.96` →
+            // `v1.0.102`. A leading `v` read as a number is 0: the tool would never be behind.
+            (
+                "update:, a v-prefixed announcement",
+                true,
+                true,
+                "1.0.96",
+                "v1.0.102",
+                true,
+                Some(Action::Upgrade),
+            ),
+            (
+                "update:, v-prefixed and current",
+                true,
+                true,
+                "1.0.102",
+                "v1.0.102",
+                true,
+                None,
+            ),
+        ];
+        for (what, present, outdated, installed, available, can, expected) in cases {
+            let f = MachineFacts {
+                present: *present,
+                outdated: *outdated,
+                can_uninstall: true,
+                pin: Some("self"),
+                installed_version: installed,
+                available,
+                can_self_update: *can,
+            };
+            assert_eq!(action_for(Desired::Present, &f), *expected, "{what}");
+        }
+        // Wanted absent: the word says nothing about whether it should be there.
+        let f = MachineFacts {
+            present: true,
+            outdated: false,
+            can_uninstall: true,
+            pin: Some("Self"),
+            installed_version: "1.0",
+            available: "",
+            can_self_update: true,
+        };
+        assert_eq!(action_for(Desired::Absent, &f), Some(Action::Uninstall));
     }
 
     #[test]
@@ -405,6 +578,8 @@ mod tests {
             can_uninstall: true,
             pin: Some("pending"),
             installed_version: "1.0",
+            available: "",
+            can_self_update: false,
         };
         assert_eq!(action_for(Desired::Absent, &f), Some(Action::Uninstall));
     }
@@ -431,6 +606,8 @@ mod tests {
                             can_uninstall: true,
                             pin,
                             installed_version: installed,
+                            available: "",
+                            can_self_update: false,
                         };
                         assert_eq!(
                             action_for(desired, &facts(Some("latest"))),

@@ -1360,6 +1360,8 @@ Nushell                                                      Nushell.Nushell    
             // Before the fix, this would have been 0.111.x (the first line),
             // producing Action::Upgrade. After: 0.114.0 → Downgrade.
             installed_version: "0.114.0",
+            available: "",
+            can_self_update: false,
         };
         assert_eq!(
             action_for(Desired::Present, &f),

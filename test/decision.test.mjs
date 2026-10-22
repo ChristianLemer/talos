@@ -225,6 +225,39 @@ test("actionFor: the two keywords resolve as a table — the SAME rows as decisi
   }
 });
 
+test("actionFor: `self` resolves as a table — the SAME rows as decision.rs", () => {
+  // The twin of `self_resolves_as_a_table`: the application updates itself. The manager
+  // installs it when absent and never upgrades it; its own `update:` runs when the version it
+  // REPORTS is behind what the manager announces.
+  const rows = [
+    ["absent", false, false, "", "", false, "install"],
+    ["absent, with update:", false, false, "", "", true, "install"],
+    ["present, newer announced", true, true, "1.0", "1.1", false, null],
+    ["present, current", true, false, "1.0", "", false, null],
+    ["update:, behind", true, true, "1.0", "1.1", true, "upgrade"],
+    ["update:, the receipt lags, the tool is current", true, true, "1.1", "1.1", true, null],
+    ["update:, the tool is ahead", true, true, "1.2", "1.1", true, null],
+    ["update:, nothing announced", true, false, "1.0", "", true, null],
+    ["update:, version unread", true, true, "", "1.1", true, "upgrade"],
+    ["update:, a v-prefixed announcement", true, true, "1.0.96", "v1.0.102", true, "upgrade"],
+    ["update:, v-prefixed and current", true, true, "1.0.102", "v1.0.102", true, null],
+  ];
+  for (const [what, present, outdated, installedVersion, available, canSelfUpdate, expected] of rows) {
+    assert.equal(
+      actionFor("present", {
+        present, outdated, canUninstall: true, pin: "self", installedVersion, available, canSelfUpdate,
+      }),
+      expected,
+      what,
+    );
+  }
+  assert.equal(
+    actionFor("absent", { present: true, outdated: false, canUninstall: true, pin: "Self", installedVersion: "1.0" }),
+    "uninstall",
+    "the word says nothing about whether it should be there",
+  );
+});
+
 test("actionFor: a keyword is never compared as a version", () => {
   // The same measurement the Rust twin records: `compareVersions("2.50.1", "pending")` is 1,
   // so a naive implementation returns "downgrade" — the destructive path.

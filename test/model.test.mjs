@@ -47,6 +47,8 @@ import {
   setPresence,
   setScope,
   setStatusData,
+  setUnmoved,
+  isSelfUpdating,
   toggleOf,
   unmanagedIndices,
   versionSummary,
@@ -387,6 +389,54 @@ test("heldRows: the rows the Apply leaves at a gap it cannot close", () => {
   assert.deepEqual(heldRows(m), [0], "above the pin, no route down: held");
   m.pkgs.get(0).canDowngrade = true;
   assert.deepEqual(heldRows(m), [], "a route down: batched, not held");
+});
+
+test("self: one number, never arbitration, and the Apply leaves it unless it has its own update", () => {
+  const m = seedPinned({ pin: "self" });
+  setDecision(m, 0, "in");
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "1.141.2");
+  setOutdated(m, 0, true, "1.142.0");
+  assert.equal(isSelfUpdating(m, 0), true);
+  assert.equal(isPending(m, 0), false, "a decision made is not arbitration");
+  assert.equal(actionOf(m, 0), null);
+  assert.deepEqual(versionSummary(m, 0), { from: "1.141.2", to: null, pinned: null, muted: false, held: false });
+  // With `update:` (the server sends `selfUpdate`), a tool behind what is announced is a push.
+  m.pkgs.get(0).selfUpdate = true;
+  assert.equal(actionOf(m, 0), "upgrade");
+  assert.deepEqual(versionSummary(m, 0), { from: "1.141.2", to: "1.142.0", pinned: null, muted: false, held: false });
+  setInstalledVersion(m, 0, "1.142.0");
+  assert.equal(actionOf(m, 0), null, "the receipt lags; the tool is current");
+  assert.deepEqual(versionSummary(m, 0), { from: "1.142.0", to: null, pinned: null, muted: false, held: false });
+});
+
+test("unmoved: a change that exited ok and moved nothing is held while its target is in view", () => {
+  const m = seedPinned({ pin: null });
+  setDecision(m, 0, "in");
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "1.141.2");
+  setOutdated(m, 0, true, "1.142.0");
+  assert.equal(actionOf(m, 0), "upgrade");
+  assert.equal(isActionable(m, 0), true);
+  const why = "winget reported success, but 1.141.2 is still installed, not 1.142.0";
+  setStatusData(m, 0, "ok"); // the step's own status arrives first, and clears `outdated`
+  setUnmoved(m, 0, "1.142.0", why);
+  assert.equal(isActionable(m, 0), false, "not run again toward the same target");
+  assert.equal(holdReason(m, 0), why);
+  assert.deepEqual(heldRows(m), [0], "the empty state must not claim a match");
+  assert.deepEqual(versionSummary(m, 0), { from: "1.141.2", to: "1.142.0", pinned: null, muted: true, held: false });
+  // The manifest changed: a new target lifts the hold.
+  setOutdated(m, 0, true, "1.142.1");
+  assert.equal(isActionable(m, 0), true);
+  assert.equal(holdReason(m, 0), null);
+  // A pin: held while the pin is the same.
+  const p = seedPinned({ canDowngrade: true }); // pin 1.8
+  setDecision(p, 0, "in");
+  setStatusData(p, 0, "ok");
+  setInstalledVersion(p, 0, "2.0");
+  setUnmoved(p, 0, "1.8", "winget reported success, but 2.0 is installed, not 1.8");
+  assert.equal(isActionable(p, 0), false);
+  assert.match(holdReason(p, 0), /not 1\.8/);
 });
 
 test("versionSummary: absent → empty (nothing installed to show)", () => {
