@@ -27,7 +27,7 @@ pub fn parse_scan(stdout: &str) -> Scan {
 
 /// The PowerShell script. Enumerates the visible windows of the process tree rooted
 /// at {ROOT_PID},
-/// excludes msedge/chrome/msedgewebview2/Talos + itself, and on the 1st foreign
+/// excludes msedge/chrome/msedgewebview2, the root (Talos, by pid) and itself, and on the 1st foreign
 /// window: FlashWindowEx + ForceForeground. Emits a JSON line {found,title?,pushed}.
 pub const SCAN_SCRIPT: &str = r#"
 $ErrorActionPreference='SilentlyContinue'

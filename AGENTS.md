@@ -87,7 +87,7 @@ publish.
 Run all four before claiming anything works. These are exactly what CI enforces:
 
 ```bash
-cargo test --all-targets                      # 422 + 8 tests (2026-10-23)
+cargo test --all-targets                      # 445 + 8 tests (2026-10-24)
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings     # any lint fails the build
 node --test "test/*.test.mjs"                 # 196 tests

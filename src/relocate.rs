@@ -84,7 +84,7 @@ pub fn relocation(
     if args.kit.is_some() {
         return Err("already started with --kit");
     }
-    if exe.parent() == Some(engine_dir) {
+    if exe.parent().is_some_and(|p| same_path(p, engine_dir)) {
         return Err("already the local engine");
     }
     // Neither LOCALAPPDATA nor USERPROFILE: the folder is relative, and under an Explorer
@@ -93,6 +93,23 @@ pub fn relocation(
         return Err("no local data folder: the environment names none");
     }
     Ok(())
+}
+
+/// Two paths name the same folder, ignoring case — Windows paths are case-insensitive, and
+/// `current_exe` returns the spelling a shortcut or an 8.3 name launched with. Ignoring case
+/// on every OS is the safe side here: it can only make a launch run in place.
+fn same_path(a: &Path, b: &Path) -> bool {
+    let norm = |p: &Path| -> Vec<String> {
+        p.components()
+            .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+            .collect()
+    };
+    norm(a) == norm(b)
+}
+
+/// `a` is `dir` or inside it, ignoring case (see `same_path`).
+fn within(a: &Path, dir: &Path) -> bool {
+    a.ancestors().any(|p| same_path(p, dir))
 }
 
 /// `Talos-<tag>-<first 12 hex of the sha256>.exe`. Anything in the tag outside
@@ -137,7 +154,9 @@ pub fn install(exe: &Path, engine_dir: &Path, tag: &str) -> std::io::Result<Path
     }
     std::fs::create_dir_all(engine_dir)?;
     let partial = target.with_extension(format!("exe.{}.partial", std::process::id()));
-    let copied = std::fs::copy(exe, &partial).and_then(|_| sha256_hex(&partial));
+    let copied = std::fs::copy(exe, &partial)
+        .and_then(|_| writable(&partial))
+        .and_then(|_| sha256_hex(&partial));
     match copied {
         Ok(h) if h == digest => {}
         Ok(_) => {
@@ -151,14 +170,42 @@ pub fn install(exe: &Path, engine_dir: &Path, tag: &str) -> std::io::Result<Path
             return Err(e);
         }
     }
-    if let Err(e) = std::fs::rename(&partial, &target) {
-        let _ = std::fs::remove_file(&partial);
+    if std::fs::rename(&partial, &target).is_err() {
         if whole(&target) {
+            let _ = std::fs::remove_file(&partial);
             return Ok(target);
         }
-        return Err(e);
+        // The target can be neither verified nor replaced — on Windows, a running exe that an
+        // antivirus holds while it scans. A second name beats falling back to the share, which
+        // is the very thing this module exists to avoid. `prune` collects it like any engine.
+        let stem = target.file_stem().unwrap_or_default().to_string_lossy();
+        let alt = target.with_file_name(format!("{stem}-{}.exe", std::process::id()));
+        if let Err(e) = std::fs::rename(&partial, &alt) {
+            let _ = std::fs::remove_file(&partial);
+            return Err(e);
+        }
+        return Ok(alt);
     }
     Ok(target)
+}
+
+/// Clear a read-only attribute the copy carried over from the share (a view-only library may
+/// set one): a read-only engine could not be pruned or replaced later.
+fn writable(path: &Path) -> std::io::Result<()> {
+    let mut perm = std::fs::metadata(path)?.permissions();
+    if perm.readonly() {
+        // Owner write only: `set_readonly(false)` on Unix would make it world-writable.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            perm.set_mode(perm.mode() | 0o200);
+        }
+        #[cfg(not(unix))]
+        #[allow(clippy::permissions_set_readonly_false)]
+        perm.set_readonly(false);
+        std::fs::set_permissions(path, perm)?;
+    }
+    Ok(())
 }
 
 /// Keep `current` and the newest other engine (by modification time, which a Windows copy
@@ -168,7 +215,9 @@ pub fn install(exe: &Path, engine_dir: &Path, tag: &str) -> std::io::Result<Path
 ///
 /// ⚠️ `.partial` files are NOT pruned: one may belong to a launch copying at this very moment,
 /// and every failure path in `install` removes its own. Only a launch killed mid-copy leaves
-/// one behind, and that is litter, not harm.
+/// one behind, and that is litter, not harm. Two launches of DIFFERENT versions at the same
+/// moment can still prune each other's freshly verified engine before it starts: that launch's
+/// spawn fails and it runs in place — rare, and never unsafe.
 pub fn prune(engine_dir: &Path, current: &Path) {
     let Ok(entries) = std::fs::read_dir(engine_dir) else {
         return;
@@ -228,6 +277,12 @@ pub fn hand_over(
     rest: &[String],
     spawn: impl FnOnce(&Path, &[std::ffi::OsString]) -> std::io::Result<()>,
 ) -> Result<PathBuf, String> {
+    // A kit inside the engine folder is the engine pointing at itself (a path spelled so that
+    // `relocation` missed it): no content there, and remembering it would empty every later
+    // launch started by hand.
+    if within(kit, engine_dir) {
+        return Err(format!("the kit {} is the engine folder", kit.display()));
+    }
     let local = install(exe, engine_dir, tag).map_err(|e| format!("copy failed: {e}"))?;
     prune(engine_dir, &local);
     let mut args: Vec<std::ffi::OsString> = vec![KIT_FLAG.into(), kit.as_os_str().to_owned()];
@@ -315,7 +370,9 @@ fn spawn_detached(local: &Path, args: &[std::ffi::OsString]) -> std::io::Result<
     let mut child = cmd.spawn()?;
     let deadline = std::time::Instant::now() + ALIVE_CHECK;
     while std::time::Instant::now() < deadline {
-        if let Some(status) = child.try_wait()? {
+        // A `try_wait` that errors says nothing about the child, which may well be running:
+        // treat it as alive rather than open a second Talos in place.
+        if let Ok(Some(status)) = child.try_wait() {
             return Err(std::io::Error::other(format!(
                 "it exited at once ({status})"
             )));
@@ -406,6 +463,60 @@ mod tests {
         // launch is the share itself: the copy would land there and sync to everyone.
         let relative = Path::new(r"AppData\Local\Talos\engine");
         assert!(relocation(w, true, &plain(&[]), false, exe, relative).is_err());
+    }
+
+    #[test]
+    fn the_local_engine_is_recognised_whatever_the_case_of_its_path() {
+        // Windows paths are case-insensitive; `current_exe` returns the spelling it was
+        // launched with (a shortcut, an 8.3 name), `engine_dir` the one LOCALAPPDATA gives.
+        let eng = abs_engine();
+        let upper = PathBuf::from(eng.to_string_lossy().to_uppercase()).join("Talos-v1-abc.exe");
+        assert!(relocation(Os::Windows, true, &plain(&[]), false, &upper, &eng).is_err());
+    }
+
+    #[test]
+    fn a_kit_inside_the_engine_folder_is_refused_and_never_remembered() {
+        let d = tmp("selfkit");
+        let exe = d.join("Talos.exe");
+        std::fs::write(&exe, b"engine").unwrap();
+        let eng = d.join("engine");
+        let mut spawned = false;
+        let r = hand_over(&exe, &eng, "v1", &eng, &[], |_, _| {
+            spawned = true;
+            Ok(())
+        });
+        assert!(r.is_err());
+        assert!(!spawned);
+        assert_eq!(remembered_kit(&eng), None);
+    }
+
+    #[test]
+    fn a_target_that_cannot_be_replaced_gets_a_second_name() {
+        // A local engine that cannot be verified AND cannot be replaced — on Windows, a running
+        // exe an antivirus holds while it scans. A directory stands in for it here: no rename
+        // lands on it. The launch must still relocate, never fall back to holding the share.
+        let d = tmp("unreplaceable");
+        let exe = d.join("Talos.exe");
+        std::fs::write(&exe, b"engine bytes").unwrap();
+        let eng = d.join("engine");
+        let digest = sha256_hex(&exe).unwrap();
+        let blocked = eng.join(local_name("v1", &digest));
+        std::fs::create_dir_all(blocked.join("busy")).unwrap();
+        let local = install(&exe, &eng, "v1").unwrap();
+        assert_ne!(local, blocked);
+        assert_eq!(std::fs::read(&local).unwrap(), b"engine bytes");
+    }
+
+    #[test]
+    fn a_read_only_source_gives_a_writable_local_engine() {
+        let d = tmp("readonly");
+        let exe = d.join("Talos.exe");
+        std::fs::write(&exe, b"engine bytes").unwrap();
+        let mut perm = std::fs::metadata(&exe).unwrap().permissions();
+        perm.set_readonly(true);
+        std::fs::set_permissions(&exe, perm).unwrap();
+        let local = install(&exe, &d.join("engine"), "v1").unwrap();
+        assert!(!std::fs::metadata(&local).unwrap().permissions().readonly());
     }
 
     #[test]
