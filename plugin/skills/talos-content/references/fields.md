@@ -78,12 +78,15 @@ local data dir does not exist). What it does, exactly:
 
 - **It pulls its `needs:`**, as a click on the card does: `default: on` on Manuals
   opens with Manuals *and* Base checked.
-- **It is a proposal, not a lock.** The user can uncheck the card; the first gesture
-  saves the selection, and from then on the SAVED selection decides, on every launch —
+- **It is a proposal, not a lock.** The user can uncheck the card; the first gesture —
+  a click on a card, a setting, or Apply — saves the selection, and from then on the
+  SAVED selection decides, on every launch —
   an unchecked default card stays unchecked. A machine that already has a selection
   sees no change when you add `default: on` to a bundle.
 - **Reset returns to it.** Reset puts the default cards back, as on a first launch.
 - **Nothing is installed by it.** A checked card is intention; only Apply acts.
+- **Bundles are read at launch.** Refresh re-reads the catalogue, not `bundles/`: to see
+  an edited `default:` (or any bundle change), close Talos and open it again.
 - **Values: `on` or `off`** (`off` is the same as omitting the key). Write `on`, not
   `true` or `yes`: the runtime reads any other value as off, and `--check` refuses it.
 

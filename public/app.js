@@ -201,7 +201,12 @@ const ICON_OK =
 
 // --- persistence: only USER-MOVED toggles are saved (untouched = absence).
 // Saved by NAME (bundle::package) so it survives bundles being added/reordered.
+// ⚠️ Not before the plan is restored: until then the model holds no cards, and a setting
+// clicked in that window would save an EMPTY active set — selection.json would then exist,
+// and the engine would never seed the author's `default: on` cards again.
+let planRestored = false;
 function persistSelection() {
+  if (!planRestored) return;
   ws.send(JSON.stringify({
     type: "set-selection",
     selection: {
@@ -830,6 +835,10 @@ function applyAll() {
     if (M.desiredOf(model, i) === "present") on.push(i);
     else off.push(i);
   }
+  // An Apply is a gesture: save the selection it acts on. A first launch that only clicks
+  // Apply would otherwise stay "first" forever, and an author who later drops `default: on`
+  // would turn what this Apply installs into "wanted absent".
+  persistSelection();
   applyRunning = true;
   refreshLiveness(); // lock every Apply button during the run
   overall.textContent = "applying…";
@@ -2131,6 +2140,7 @@ ws.onmessage = (ev) => {
         msg.profileColumns,
       );
       applySavedSelection(msg.selection); // restore persisted decisions (yellow)
+      planRestored = true;
       if (msg.consent && !msg.consent.decided) consentEl.classList.add("show"); // first boot
       if (msg.build) showBuild(msg.build, msg.distribution); // stamp the UI: content name + exact source snapshot
       appmgmtStatus = msg.appmgmt || "na";
