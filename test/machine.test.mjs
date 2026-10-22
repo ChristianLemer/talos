@@ -21,7 +21,6 @@ const windows = {
   ram_total_mb: 16384,
   ram_available_mb: 6000,
   system_disk: { mount: "C:\\", free_mb: 51200, total_mb: 256000 },
-  kit_disk: { mount: "C:\\", free_mb: 51200, total_mb: 256000 },
   kit: { path: "~\\OneDrive - Corp\\Talos\\Windows", location: "onedrive" },
   shell_ms: 2400,
   tools: [
@@ -57,7 +56,6 @@ test("every collected fact becomes a row, and the suspicious ones are flagged", 
   assert.equal(by.CPU.value, "Intel Core i5 · 8 logical cores");
   assert.equal(by.Memory.value, "5.9 GB free of 16.0 GB");
   assert.ok(by.Kit.warn, "a OneDrive kit is flagged");
-  assert.equal(by["Kit disk"], undefined, "the kit disk is not repeated when it is the system disk");
   assert.ok(by["One shell"].warn, `${windows.shell_ms} ms ≥ ${SLOW_SHELL_MS} is flagged`);
   assert.equal(by.winget.value, "not found");
   assert.ok(by.winget.warn);
@@ -94,6 +92,19 @@ test("the scan line names its total, its slowest probe and what was unavailable"
   assert.match(line, /slowest: Docker \(12\.0 s\)/);
   assert.match(line, /program not found/);
   assert.equal(scanSummary(null), "");
+});
+
+test("a failed collection is one flagged row with its reason", () => {
+  const rows = machineRows({ kind: "machine", error: "the collection did not finish in 60 s" });
+  assert.deepEqual(rows, [
+    { label: "Profile", value: "the collection did not finish in 60 s", warn: true },
+  ]);
+});
+
+test("a scan that overlapped the collection says so", () => {
+  const base = { total_ms: 1000, packages: 1, probes: [] };
+  assert.doesNotMatch(scanSummary(base), /machine profile/);
+  assert.match(scanSummary({ ...base, profile_running: true }), /while the machine profile/);
 });
 
 test("the card sits at the top of the Log tab, above the settings", () => {

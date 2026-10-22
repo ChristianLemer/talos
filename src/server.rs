@@ -281,6 +281,8 @@ struct AppState {
     /// Set by the first scan, so the profile is collected once per launch and a Refresh
     /// does not collect it again.
     machine_started: std::sync::atomic::AtomicBool,
+    /// True while the profile is being collected — a scan that overlaps it says so.
+    machine_running: std::sync::atomic::AtomicBool,
     /// The last scan's timings, as journalled — for the Log tab's one-line summary.
     last_scan: std::sync::Mutex<Option<crate::machine::ScanRecord>>,
 }
@@ -530,6 +532,7 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         found_scope: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         machine: std::sync::Mutex::new(None),
         machine_started: std::sync::atomic::AtomicBool::new(false),
+        machine_running: std::sync::atomic::AtomicBool::new(false),
         last_scan: std::sync::Mutex::new(None),
     });
 
@@ -1487,6 +1490,9 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &Arc<AppState>) {
         kind: "scan".into(),
         outdated_ms: started.elapsed().as_millis() as u64,
         packages: steps.len(),
+        profile_running: state
+            .machine_running
+            .load(std::sync::atomic::Ordering::SeqCst),
         ..Default::default()
     };
 
@@ -1641,41 +1647,72 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &Arc<AppState>) {
         .await;
     record.total_ms = started.elapsed().as_millis() as u64;
     record.at = chrono::Utc::now().to_rfc3339();
+    record.profile_running |= state
+        .machine_running
+        .load(std::sync::atomic::Ordering::SeqCst);
     append_record(&state.consent, &record);
     *state.last_scan.lock().unwrap_or_else(|e| e.into_inner()) = Some(record);
     start_machine_profile(state, steps);
 }
+
+/// How long the profile may take before it is recorded as not finished. Measured: ~1.5 s
+/// on the Windows VM; a corporate machine's Defender and Security Center queries take
+/// seconds, not a minute.
+const MACHINE_PROFILE_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Collects this launch's machine profile, ONCE, in the background, and journals it.
 ///
 /// Started at the end of the first scan and not at boot: the profile spawns two shells,
 /// and the scan is serial on purpose — they must not compete with its probes, nor make
 /// them look slower than they are. Nothing waits on it; the Log tab reads "collecting"
-/// until it lands.
+/// until it lands. A Refresh clicked meanwhile does overlap it, and its scan line says so
+/// (`profile_running`).
+///
+/// A collection that panics or hangs (a stuck network volume, a WMI query that never
+/// answers) is recorded as a failed profile after `MACHINE_PROFILE_LIMIT`, so the card says
+/// what happened instead of "collecting" for the whole session. The stuck thread itself
+/// cannot be killed; its late result is dropped.
 fn start_machine_profile(state: &Arc<AppState>, steps: &[crate::bundles::Step]) {
     use std::sync::atomic::Ordering;
     if state.machine_started.swap(true, Ordering::SeqCst) {
         return;
     }
+    state.machine_running.store(true, Ordering::SeqCst);
     let routes: Vec<String> = steps.iter().filter_map(|s| s.route.clone()).collect();
     let state = Arc::clone(state);
-    tokio::task::spawn_blocking(move || {
-        let routes: Vec<&str> = routes.iter().map(String::as_str).collect();
-        let profile = crate::machine::collect(state.os, &state.consent.exe_dir, &routes);
+    tokio::spawn(async move {
+        let (os, kit) = (state.os, state.consent.exe_dir.clone());
+        let job = tokio::task::spawn_blocking(move || {
+            let routes: Vec<&str> = routes.iter().map(String::as_str).collect();
+            crate::machine::collect(os, &kit, &routes)
+        });
+        let profile = match tokio::time::timeout(MACHINE_PROFILE_LIMIT, job).await {
+            Ok(Ok(p)) => p,
+            Ok(Err(e)) => crate::machine::Profile::failed(&format!("the collection failed: {e}")),
+            Err(_) => crate::machine::Profile::failed(&format!(
+                "the collection did not finish in {} s",
+                MACHINE_PROFILE_LIMIT.as_secs()
+            )),
+        };
+        state.machine_running.store(false, Ordering::SeqCst);
         println!(
-            "[machine] {} cores, {} MB free of {} MB, one shell {} ms, collected in {} ms",
+            "[machine] {} cores, {} MB free of {} MB, one shell {} ms, collected in {} ms{}",
             profile.cores,
             profile.ram_available_mb,
             profile.ram_total_mb,
             profile.shell_ms,
-            profile.collect_ms
+            profile.collect_ms,
+            profile
+                .error
+                .as_deref()
+                .map(|e| format!(" — {e}"))
+                .unwrap_or_default()
         );
         append_record(&state.consent, &profile);
         *state.machine.lock().unwrap_or_else(|e| e.into_inner()) = Some(profile);
     });
 }
 
-/// `log` message for the Log tab: current consent + local history.
 /// Records the share choice. Turning sharing ON mid-session also copies this launch's
 /// machine profile to the shared log: it was journalled locally when collected, and the
 /// Log tab now says the share receives what it shows.
@@ -1694,6 +1731,7 @@ fn set_consent(state: &AppState, share: bool) {
     }
 }
 
+/// `log` message for the Log tab: consent, local history, and this launch's machine records.
 fn log_msg(state: &AppState) -> String {
     json!({
         "type": "log",
@@ -4503,6 +4541,7 @@ mod tests {
             found_scope: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             machine: std::sync::Mutex::new(None),
             machine_started: std::sync::atomic::AtomicBool::new(false),
+            machine_running: std::sync::atomic::AtomicBool::new(false),
             last_scan: std::sync::Mutex::new(None),
         }
     }

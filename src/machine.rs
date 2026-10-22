@@ -48,10 +48,10 @@ pub struct Profile {
     pub cores: usize,
     pub ram_total_mb: u64,
     pub ram_available_mb: u64,
+    /// Free space on the system disk — the one disk fact kept: installers and package
+    /// caches land there, wherever the kit sits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_disk: Option<DiskFree>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kit_disk: Option<DiskFree>,
     pub kit: Kit,
     /// One EMPTY command through `platform::shell_probe`, the wrapper every probe pays for.
     /// The cleanest number for "is something taxing process start here" — a corporate
@@ -74,6 +74,23 @@ pub struct Profile {
     pub power: Option<String>,
     /// What collecting all of this took, end to end.
     pub collect_ms: u64,
+    /// Set when the collection failed or did not finish — then every other field is empty,
+    /// and this line says so instead of the Log tab waiting forever.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl Profile {
+    /// The profile of a collection that failed: the stamp, the time and the reason.
+    pub fn failed(reason: &str) -> Self {
+        Profile {
+            kind: "machine".into(),
+            at: chrono::Utc::now().to_rfc3339(),
+            talos: format!("{} {}", crate::build_info::TAG, crate::build_info::SHA),
+            error: Some(reason.into()),
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -123,6 +140,10 @@ pub struct ScanRecord {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unavailable: Vec<String>,
     pub probes: Vec<ProbeTime>,
+    /// The machine profile was being collected during this scan, so its two shells ran
+    /// beside the probes and may have slowed them: read these timings with that in mind.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub profile_running: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -415,20 +436,17 @@ pub fn collect(os: Os, kit_dir: &Path, routes: &[&str]) -> Profile {
         _ => "/".into(),
     };
     let kit_path = kit_dir.to_string_lossy().into_owned();
-    let mut kit_disk = disk_for(&kit_path, &mounts);
+    let kit_mount = disk_for(&kit_path, &mounts);
     // Windows lists every local drive, so no match means a mapped network drive. POSIX
     // always matches `/`, so each OS asks its own question (see the two functions).
     let on_local_disk = match os {
-        Os::Windows => kit_disk.is_some(),
+        Os::Windows => kit_mount.is_some(),
         Os::Linux => !network_fs_linux(
             &kit_path,
             &std::fs::read_to_string("/proc/self/mounts").unwrap_or_default(),
         ),
-        Os::Darwin => !unlisted_mac_volume(&kit_path, kit_disk.map(|i| mounts[i].as_str())),
+        Os::Darwin => !unlisted_mac_volume(&kit_path, kit_mount.map(|i| mounts[i].as_str())),
     };
-    if !on_local_disk {
-        kit_disk = None; // the disk it matched is not the one it is on
-    }
 
     let shell_started = std::time::Instant::now();
     let empty = match os {
@@ -468,7 +486,6 @@ pub fn collect(os: Os, kit_dir: &Path, routes: &[&str]) -> Profile {
         ram_total_mb: sys.total_memory() / 1_048_576,
         ram_available_mb: sys.available_memory() / 1_048_576,
         system_disk: disk_for(&system_root, &mounts).map(free),
-        kit_disk: kit_disk.map(free),
         kit: Kit {
             path: tilde(&kit_path, &home),
             location: kit_location(&kit_path, on_local_disk).into(),
@@ -481,6 +498,7 @@ pub fn collect(os: Os, kit_dir: &Path, routes: &[&str]) -> Profile {
         realtime: report.realtime,
         power: report.power,
         collect_ms: ms(started.elapsed()),
+        error: None,
     }
 }
 

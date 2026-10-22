@@ -188,7 +188,71 @@ pub fn append_record<T: Serialize>(s: &ConsentStore, record: &T) {
     {
         let _ = f.write_all(line.as_bytes());
     }
+    compact_if_large(&local_hist_path(s));
     append_shared(s, &line);
+}
+
+/// Above this size a journal is compacted (see `compact_journal`).
+const COMPACT_ABOVE: u64 = 2 * 1024 * 1024;
+/// What a compaction keeps of the two records written without a user's gesture.
+const KEEP_MACHINES: usize = 100;
+const KEEP_SCANS: usize = 200;
+
+/// Shrinks a journal that grew past `COMPACT_ABOVE`: keeps EVERY install line (the trace
+/// `timings.rs` defers to, and what the Log tab lists) and every line it does not
+/// recognise, but only the last `KEEP_MACHINES` machine profiles and `KEEP_SCANS` scans.
+/// Those two are written on every launch and every scan — a scan line is 1–3 KB — so
+/// without this the journal grew forever, on the local disk and on the share alike.
+/// Order is preserved. Pure, so it is tested; `compact_if_large` is the IO.
+pub fn compact_journal(raw: &str) -> String {
+    let kind = |line: &str| {
+        serde_json::from_str::<serde_json::Value>(line)
+            .ok()
+            .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(String::from))
+    };
+    let kinds: Vec<Option<String>> = raw.lines().map(kind).collect();
+    let count = |k: &str| kinds.iter().filter(|x| x.as_deref() == Some(k)).count();
+    let (mut drop_machines, mut drop_scans) = (
+        count("machine").saturating_sub(KEEP_MACHINES),
+        count("scan").saturating_sub(KEEP_SCANS),
+    );
+    let mut out = String::with_capacity(raw.len());
+    for (line, k) in raw.lines().zip(&kinds) {
+        let drop = match k.as_deref() {
+            Some("machine") if drop_machines > 0 => {
+                drop_machines -= 1;
+                true
+            }
+            Some("scan") if drop_scans > 0 => {
+                drop_scans -= 1;
+                true
+            }
+            _ => false,
+        };
+        if !drop {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Best-effort, like every journal write: a compaction that fails leaves the file as it
+/// was. Written beside and renamed over, so a crash never leaves half a journal.
+fn compact_if_large(path: &Path) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    if meta.len() <= COMPACT_ABOVE {
+        return;
+    }
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let tmp = path.with_extension("jsonl.tmp");
+    if std::fs::write(&tmp, compact_journal(&raw)).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
 }
 
 /// Copies a record to the SHARED log only, when the consent allows it — for the machine
@@ -218,6 +282,7 @@ fn append_shared(s: &ConsentStore, line: &str) {
         {
             let _ = f.write_all(line.as_bytes());
         }
+        compact_if_large(&shared);
     }
 }
 
@@ -368,6 +433,57 @@ mod tests {
         assert!(
             !local_hist_path(&s).exists(),
             "the local journal is not written twice"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compaction_keeps_every_install_and_only_the_latest_profiles_and_scans() {
+        let mut raw = String::new();
+        raw.push_str("{\"package\":\"jq\",\"at\":\"first\"}\n");
+        for i in 0..(KEEP_SCANS + 5) {
+            raw.push_str(&format!("{{\"kind\":\"scan\",\"at\":\"s{i}\"}}\n"));
+        }
+        for i in 0..(KEEP_MACHINES + 3) {
+            raw.push_str(&format!("{{\"kind\":\"machine\",\"at\":\"m{i}\"}}\n"));
+        }
+        raw.push_str("not json, kept\n{\"package\":\"git\",\"at\":\"last\"}\n");
+        let out = compact_journal(&raw);
+        let installs = parse_history(&out);
+        assert_eq!(installs.len(), 2, "every install survives");
+        assert_eq!(out.matches("\"kind\":\"scan\"").count(), KEEP_SCANS);
+        assert_eq!(out.matches("\"kind\":\"machine\"").count(), KEEP_MACHINES);
+        assert!(!out.contains("\"s4\""), "the OLDEST scans go");
+        assert!(out.contains("\"s5\"") && out.contains(&format!("\"s{}\"", KEEP_SCANS + 4)));
+        assert!(out.contains("not json, kept"));
+        assert!(out.starts_with("{\"package\":\"jq\""), "order is kept");
+        // Under the limits, nothing changes.
+        let small = "{\"kind\":\"scan\"}\n{\"package\":\"jq\"}\n";
+        assert_eq!(compact_journal(small), small);
+    }
+
+    #[test]
+    fn a_journal_past_the_limit_is_compacted_on_the_next_write() {
+        let dir = std::env::temp_dir().join("talos-test-consent-compact");
+        let _ = std::fs::remove_dir_all(&dir);
+        let s = store(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pad = "x".repeat(3000);
+        let mut raw = String::new();
+        while (raw.len() as u64) <= COMPACT_ABOVE {
+            raw.push_str(&format!("{{\"kind\":\"scan\",\"pad\":\"{pad}\"}}\n"));
+        }
+        std::fs::write(local_hist_path(&s), &raw).unwrap();
+        append_record(&s, &serde_json::json!({ "kind": "scan", "at": "new" }));
+        let after = std::fs::read_to_string(local_hist_path(&s)).unwrap();
+        assert_eq!(
+            after.lines().count(),
+            KEEP_SCANS,
+            "compacted to the scans kept"
+        );
+        assert!(
+            after.lines().last().unwrap().contains("\"new\""),
+            "the newest survives"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

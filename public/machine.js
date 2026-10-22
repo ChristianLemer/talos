@@ -33,6 +33,8 @@ export function shareLine(consent, sharedTo) {
 // still being collected (it is observed after the first scan).
 export function machineRows(m) {
   if (!m) return [];
+  // A collection that failed or hung says so, rather than leaving "collecting" up forever.
+  if (m.error) return [{ label: "Profile", value: m.error, warn: true }];
   const rows = [];
   const row = (label, value, warn = false) => rows.push({ label, value, warn });
   row("System", [m.os, m.os_version, m.arch].filter(Boolean).join(" · "));
@@ -41,9 +43,6 @@ export function machineRows(m) {
   const disk = (d) => `${formatMb(d.free_mb)} free of ${formatMb(d.total_mb)} on ${d.mount}`;
   if (m.system_disk) row("System disk", disk(m.system_disk));
   if (m.kit) row("Kit", `${m.kit.path} (${m.kit.location})`, m.kit.location !== "local");
-  if (m.kit_disk && (!m.system_disk || m.kit_disk.mount !== m.system_disk.mount)) {
-    row("Kit disk", disk(m.kit_disk));
-  }
   row("One shell", formatMs(m.shell_ms), m.shell_ms >= SLOW_SHELL_MS);
   for (const t of m.tools || []) row(t.name, t.path || "not found", !t.path);
   if (m.winget) {
@@ -73,5 +72,6 @@ export function scanSummary(s) {
   const slowest = (s.probes || []).reduce((a, b) => (b.ms > (a ? a.ms : -1) ? b : a), null);
   if (slowest) line += ` · slowest: ${slowest.name} (${formatMs(slowest.ms)})`;
   for (const u of s.unavailable || []) line += ` · ${u}`;
+  if (s.profile_running) line += " · measured while the machine profile was being collected";
   return line;
 }
