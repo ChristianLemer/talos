@@ -199,8 +199,11 @@ pub fn tools_for(os: Os, routes: &[&str]) -> Vec<&'static str> {
 /// as on battery.
 ///
 /// POSIX: one `command -v` per tool, no loop, no `case`, no `$(…)` — the probe runs in the
-/// USER's login shell, and a fish or nu login shell rejects sh syntax whole, which emptied
-/// every fact at once. A found tool prints its path, then an empty line the parser skips.
+/// USER's login shell, and a fish login shell rejects sh syntax whole, which emptied every
+/// fact at once. Plain enough for the sh family and fish. NOT for nu: MEASURED, nu has no
+/// `command` — but with nu as `$SHELL` every probe of Talos fails the same way, so this
+/// line is the least of that machine's problems. A found tool prints its path, then an
+/// empty line the parser skips.
 /// On a Mac, `pmset`'s first line ("Now drawing from 'AC Power'") is read by `parse_tools`.
 pub fn tools_command(os: Os, tools: &[&str]) -> String {
     match os {
@@ -310,6 +313,15 @@ pub fn tilde(path: &str, home: &str) -> String {
     } else {
         path.to_string()
     }
+}
+
+/// `tilde` for free text: every occurrence of the home folder, wherever it appears in a
+/// message, written `~`. For a panic message, which may quote a path anywhere in it.
+pub fn tilde_all(text: &str, home: &str) -> String {
+    if home.is_empty() {
+        return text.to_string();
+    }
+    text.replace(home, "~")
 }
 
 /// Where the kit sits. A UNC path, or a drive letter that is no local disk (a mapped
@@ -578,6 +590,8 @@ mod tests {
         }
     }
 
+    // Unix only: CI runs this suite on windows-latest, which has no /bin/sh.
+    #[cfg(unix)]
     #[test]
     fn the_posix_command_runs_and_parses_under_sh() {
         // A real run, through /bin/sh, of exactly what the probe sends: a found tool, a
@@ -674,6 +688,15 @@ mod tests {
             "~\\AppData\\Local"
         );
         assert_eq!(tilde("/opt/x", ""), "/opt/x");
+    }
+
+    #[test]
+    fn a_message_quoting_the_home_folder_names_no_one() {
+        assert_eq!(
+            tilde_all("panicked at C:\\Users\\alice\\x: oops", "C:\\Users\\alice"),
+            "panicked at ~\\x: oops"
+        );
+        assert_eq!(tilde_all("no path", ""), "no path");
     }
 
     #[test]

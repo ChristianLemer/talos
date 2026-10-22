@@ -179,6 +179,7 @@ pub fn append_record<T: Serialize>(s: &ConsentStore, record: &T) {
         return;
     };
     line.push('\n');
+    let _held = journal_lock();
     // Local: always.
     let _ = std::fs::create_dir_all(&s.local_dir);
     if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -190,6 +191,18 @@ pub fn append_record<T: Serialize>(s: &ConsentStore, record: &T) {
     }
     compact_if_large(&local_hist_path(s));
     append_shared(s, &line);
+}
+
+/// ONE writer at a time, in this process. A compaction reads the journal, writes it beside
+/// and renames it over: an install line appended by another task in that window would land
+/// in the replaced file and vanish — breaking the one promise compaction makes, that every
+/// install is kept. The profile task, the scan and an Apply's steps all write. Held across
+/// the append AND the compaction. (Two Talos instances for one user stay unserialised; the
+/// port self-heal kills a stale one at launch.)
+static JOURNAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn journal_lock() -> std::sync::MutexGuard<'static, ()> {
+    JOURNAL.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Above this size a journal is compacted (see `compact_journal`).
@@ -250,8 +263,12 @@ fn compact_if_large(path: &Path) {
         return;
     };
     let tmp = path.with_extension("jsonl.tmp");
-    if std::fs::write(&tmp, compact_journal(&raw)).is_ok() {
-        let _ = std::fs::rename(&tmp, path);
+    let renamed =
+        std::fs::write(&tmp, compact_journal(&raw)).is_ok() && std::fs::rename(&tmp, path).is_ok();
+    if !renamed {
+        // A sync client or an antivirus holding the journal: try again on the next write,
+        // and leave no `.tmp` behind to be synced to the share meanwhile.
+        let _ = std::fs::remove_file(&tmp);
     }
 }
 
@@ -262,6 +279,7 @@ fn compact_if_large(path: &Path) {
 pub fn share_record<T: Serialize>(s: &ConsentStore, record: &T) {
     if let Ok(mut line) = serde_json::to_string(record) {
         line.push('\n');
+        let _held = journal_lock();
         append_shared(s, &line);
     }
 }
@@ -290,6 +308,7 @@ fn append_shared(s: &ConsentStore, line: &str) {
 /// others depend on — clearing one's own view must not clear what
 /// the team has already seen.
 pub fn clear_history(s: &ConsentStore) {
+    let _held = journal_lock();
     let _ = std::fs::remove_file(local_hist_path(s));
 }
 

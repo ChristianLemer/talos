@@ -218,15 +218,15 @@ same copy. The exe is **never copied per machine**.
 ## The machine log — what a slow or broken machine tells you
 
 Each machine keeps a journal in its own data dir (`%LOCALAPPDATA%\Talos\history.jsonl`).
-With the user's **share consent**, every line is also appended to
+With the user's **share consent**, every line written from then on is also appended to
 `logs/<host>/<user>.jsonl` beside the exe — that is the file to read when a machine is
 slow or never finds a tool. Three kinds of line, one JSON object each:
 
 | line | when | what it carries |
 |---|---|---|
 | install (has `package`) | each step | `package`, `version`, `action`, `ok`, `secs` |
-| `"kind": "machine"` | once per launch, after the first scan | OS, CPU and logical cores, RAM total/free, free space on the system disk, where the kit sits (`local`, `network`, `onedrive`, `synced`), **`shell_ms`** — one empty shell through the probe wrapper — and where each manager the plan uses resolves; on Windows also the winget alias state, the antivirus products the OS declares, Defender real-time, and AC or battery |
-| `"kind": "scan"` | each scan | total, the three batched calls, every package probe in **ms**, and why a batched call gave no answer |
+| `"kind": "machine"` | once per launch, after the first scan | OS, CPU and logical cores, RAM total/free, free space on the system disk, where the kit sits (`local`, `network`, `onedrive`, `synced`), **`shell_ms`** — one empty shell through the probe wrapper — and where each manager the plan uses resolves; on Windows also the winget alias state, the antivirus products the OS declares, Defender real-time, and AC or battery. A collection that failed or took over 60 s carries `error` instead, its other fields empty |
+| `"kind": "scan"` | each scan | total, the three batched calls, every package probe in **ms**, and why a batched call gave no answer; `profile_running: true` when the machine profile was being collected meanwhile — its timings are then not the machine's alone |
 
 What to read first:
 
@@ -239,13 +239,16 @@ What to read first:
   exists but the probes cannot see it.
 - **A `scan` line's `unavailable`** quotes the reason the release's missing console used to
   swallow.
+- **Past 2 MB a journal is compacted**, local and shared alike: every install line stays,
+  but only the last 100 machine lines and the last 200 scan lines.
 
 What is NOT collected: no serial number, no MAC address, no user name beyond the one the
 file's own path carries; the home folder is written `~` in every path. The **Log tab shows
 the latest machine profile at its top**, as the values themselves — what the user sees there
 is what the share receives. Only bookkeeping stays in the file alone: timestamps, the build
 stamp, the collection's own durations, the per-probe list. Turning sharing on mid-session
-sends this launch's profile to the share at once.
+sends this launch's profile to the share at once; earlier lines, the last scan's included,
+stay local.
 
 ---
 

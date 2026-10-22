@@ -283,6 +283,9 @@ struct AppState {
     machine_started: std::sync::atomic::AtomicBool,
     /// True while the profile is being collected — a scan that overlaps it says so.
     machine_running: std::sync::atomic::AtomicBool,
+    /// This launch's profile already reached the shared log — by its own write, or by a
+    /// consent turned on later. Keeps the share from receiving it twice.
+    machine_shared: std::sync::atomic::AtomicBool,
     /// The last scan's timings, as journalled — for the Log tab's one-line summary.
     last_scan: std::sync::Mutex<Option<crate::machine::ScanRecord>>,
 }
@@ -533,6 +536,7 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         machine: std::sync::Mutex::new(None),
         machine_started: std::sync::atomic::AtomicBool::new(false),
         machine_running: std::sync::atomic::AtomicBool::new(false),
+        machine_shared: std::sync::atomic::AtomicBool::new(false),
         last_scan: std::sync::Mutex::new(None),
     });
 
@@ -1688,7 +1692,11 @@ fn start_machine_profile(state: &Arc<AppState>, steps: &[crate::bundles::Step]) 
         });
         let profile = match tokio::time::timeout(MACHINE_PROFILE_LIMIT, job).await {
             Ok(Ok(p)) => p,
-            Ok(Err(e)) => crate::machine::Profile::failed(&format!("the collection failed: {e}")),
+            // `~` here too: a panic message may carry a path, and this line may be shared.
+            Ok(Err(e)) => crate::machine::Profile::failed(&crate::machine::tilde_all(
+                &format!("the collection failed: {e}"),
+                &crate::detect::user_home().to_string_lossy(),
+            )),
             Err(_) => crate::machine::Profile::failed(&format!(
                 "the collection did not finish in {} s",
                 MACHINE_PROFILE_LIMIT.as_secs()
@@ -1709,6 +1717,9 @@ fn start_machine_profile(state: &Arc<AppState>, steps: &[crate::bundles::Step]) 
                 .unwrap_or_default()
         );
         append_record(&state.consent, &profile);
+        if read_consent(&state.consent).share {
+            state.machine_shared.store(true, Ordering::SeqCst);
+        }
         *state.machine.lock().unwrap_or_else(|e| e.into_inner()) = Some(profile);
     });
 }
@@ -1717,6 +1728,7 @@ fn start_machine_profile(state: &Arc<AppState>, steps: &[crate::bundles::Step]) 
 /// machine profile to the shared log: it was journalled locally when collected, and the
 /// Log tab now says the share receives what it shows.
 fn set_consent(state: &AppState, share: bool) {
+    use std::sync::atomic::Ordering;
     let was = read_consent(&state.consent).share;
     write_consent(&state.consent, share);
     if share && !was {
@@ -1725,8 +1737,11 @@ fn set_consent(state: &AppState, share: bool) {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+        // Once per launch: on, off, on again must not send the same profile twice.
         if let Some(p) = profile {
-            share_record(&state.consent, &p);
+            if !state.machine_shared.swap(true, Ordering::SeqCst) {
+                share_record(&state.consent, &p);
+            }
         }
     }
 }
@@ -4542,6 +4557,7 @@ mod tests {
             machine: std::sync::Mutex::new(None),
             machine_started: std::sync::atomic::AtomicBool::new(false),
             machine_running: std::sync::atomic::AtomicBool::new(false),
+            machine_shared: std::sync::atomic::AtomicBool::new(false),
             last_scan: std::sync::Mutex::new(None),
         }
     }
@@ -4614,6 +4630,8 @@ mod tests {
         super::set_consent(&state, false);
         assert!(!shared.exists());
         super::set_consent(&state, true);
+        super::set_consent(&state, true);
+        super::set_consent(&state, false);
         super::set_consent(&state, true);
         let text = std::fs::read_to_string(&shared).unwrap();
         assert_eq!(text.lines().count(), 1, "{text}");
