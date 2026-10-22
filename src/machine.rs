@@ -182,14 +182,14 @@ pub fn tools_command(os: Os, tools: &[&str]) -> String {
                 .collect::<Vec<_>>()
                 .join(",");
             format!(
-                "$T=[char]9; \
-                 foreach ($t in @({list})) {{ $c = Get-Command $t -ErrorAction SilentlyContinue | Select-Object -First 1; $p = ''; if ($c) {{ $p = $c.Source; if (-not $p) {{ $p = [string]$c.Definition }} }}; Write-Output (('tool',$t,$p) -join $T) }}; \
+                "$tab=[char]9; \
+                 foreach ($t in @({list})) {{ $c = Get-Command $t -ErrorAction SilentlyContinue | Select-Object -First 1; $p = ''; if ($c) {{ $p = $c.Source; if (-not $p) {{ $p = [string]$c.Definition }} }}; Write-Output (('tool',$t,$p) -join $tab) }}; \
                  $wa = Join-Path $env:LOCALAPPDATA 'Microsoft\\WindowsApps'; \
-                 Write-Output (('alias',(Test-Path (Join-Path $wa 'winget.exe'))) -join $T); \
-                 Write-Output (('onpath',[bool](($env:Path -split ';') | Where-Object {{ $_.TrimEnd('\\') -eq $wa }})) -join $T); \
-                 try {{ Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction Stop | ForEach-Object {{ Write-Output (('av',$_.displayName) -join $T) }} }} catch {{}}; \
-                 try {{ Write-Output (('rt',(Get-MpComputerStatus -ErrorAction Stop).RealTimeProtectionEnabled) -join $T) }} catch {{}}; \
-                 try {{ $b = @(Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop); if ($b.Count -eq 0 -or $b[0].BatteryStatus -eq 2) {{ Write-Output (('power','ac') -join $T) }} else {{ Write-Output (('power','battery') -join $T) }} }} catch {{}}"
+                 Write-Output (('alias',(Test-Path (Join-Path $wa 'winget.exe'))) -join $tab); \
+                 Write-Output (('onpath',[bool](($env:Path -split ';') | Where-Object {{ $_.TrimEnd('\\') -eq $wa }})) -join $tab); \
+                 try {{ Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction Stop | ForEach-Object {{ Write-Output (('av',$_.displayName) -join $tab) }} }} catch {{}}; \
+                 try {{ Write-Output (('rt',(Get-MpComputerStatus -ErrorAction Stop).RealTimeProtectionEnabled) -join $tab) }} catch {{}}; \
+                 try {{ $b = @(Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop); if ($b.Count -eq 0 -or $b[0].BatteryStatus -eq 2) {{ Write-Output (('power','ac') -join $tab) }} else {{ Write-Output (('power','battery') -join $tab) }} }} catch {{}}"
             )
         }
         _ => {
@@ -442,6 +442,24 @@ mod tests {
         assert!(c.contains("@('winget','git')"), "{c}");
         for key in ["'alias'", "'onpath'", "'av'", "'rt'", "'power'"] {
             assert!(c.contains(key), "{key} missing: {c}");
+        }
+    }
+
+    #[test]
+    fn no_two_powershell_variables_differ_only_by_case() {
+        // PowerShell variable names ignore case. MEASURED in the Windows VM: the separator was
+        // `$T` and the loop variable `$t` — the same variable — so the loop overwrote the
+        // separator and every line came back glued (`toolgitgitgit…`), parsing to no tool at
+        // all. A spelling test cannot see that; this one can.
+        let c = tools_command(Os::Windows, &["winget"]);
+        let re = regex::Regex::new(r"\$([A-Za-z_]\w*)").unwrap();
+        let mut seen: std::collections::HashMap<String, String> = Default::default();
+        for m in re.captures_iter(&c) {
+            let name = m[1].to_string();
+            let prev = seen
+                .entry(name.to_ascii_lowercase())
+                .or_insert(name.clone());
+            assert_eq!(*prev, name, "two spellings of one PowerShell variable: {c}");
         }
     }
 
