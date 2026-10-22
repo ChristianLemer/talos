@@ -188,6 +188,22 @@ pub fn append_record<T: Serialize>(s: &ConsentStore, record: &T) {
     {
         let _ = f.write_all(line.as_bytes());
     }
+    append_shared(s, &line);
+}
+
+/// Copies a record to the SHARED log only, when the consent allows it — for the machine
+/// profile of a launch whose user turns sharing on mid-session: it was journalled locally
+/// at collection time, and the Log tab says the share receives it. Without this, the share
+/// would see no profile until the next launch while the card claimed otherwise.
+pub fn share_record<T: Serialize>(s: &ConsentStore, record: &T) {
+    if let Ok(mut line) = serde_json::to_string(record) {
+        line.push('\n');
+        append_shared(s, &line);
+    }
+}
+
+fn append_shared(s: &ConsentStore, line: &str) {
+    use std::io::Write;
     // Shared: only if consented (the shared folder may be offline →
     // the local copy stays kept no matter what).
     if read_consent(s).share {
@@ -333,6 +349,26 @@ mod tests {
         write_consent(&s, true);
         append_record(&s, &record);
         assert!(shared.exists(), "with consent, shared copy written");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sharing_a_record_writes_the_shared_log_only_and_only_with_consent() {
+        let dir = std::env::temp_dir().join("talos-test-consent-share-record");
+        let _ = std::fs::remove_dir_all(&dir);
+        let s = store(&dir);
+        let record = serde_json::json!({ "kind": "machine", "at": "t" });
+        let shared = shared_log_path(&s.exe_dir, &s.host, &s.user);
+        share_record(&s, &record);
+        assert!(!shared.exists(), "without consent, nothing is shared");
+        write_consent(&s, true);
+        share_record(&s, &record);
+        let text = std::fs::read_to_string(&shared).unwrap();
+        assert_eq!(text.lines().count(), 1, "{text}");
+        assert!(
+            !local_hist_path(&s).exists(),
+            "the local journal is not written twice"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

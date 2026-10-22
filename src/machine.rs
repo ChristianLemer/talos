@@ -172,7 +172,15 @@ pub fn tools_for(os: Os, routes: &[&str]) -> Vec<&'static str> {
 /// Windows: no double quote anywhere — the line travels as a `-Command` argument and every
 /// other probe keeps to single quotes too. Each optional fact sits in its own try, so a
 /// missing cmdlet (Defender absent, a server edition without Security Center) costs that
-/// fact and nothing else.
+/// fact and nothing else. ⚠️ Power: `Win32_Battery.BatteryStatus` 2 is "on AC" but 3
+/// (fully charged) and 6–9/11 (charging) are on AC too — only 1 (discharging) and 4/5
+/// (low/critical) say battery. Reading `2` as the only AC value logged a plugged-in laptop
+/// as on battery.
+///
+/// POSIX: one `command -v` per tool, no loop, no `case`, no `$(…)` — the probe runs in the
+/// USER's login shell, and a fish or nu login shell rejects sh syntax whole, which emptied
+/// every fact at once. A found tool prints its path, then an empty line the parser skips.
+/// On a Mac, `pmset`'s first line ("Now drawing from 'AC Power'") is read by `parse_tools`.
 pub fn tools_command(os: Os, tools: &[&str]) -> String {
     match os {
         Os::Windows => {
@@ -189,22 +197,20 @@ pub fn tools_command(os: Os, tools: &[&str]) -> String {
                  Write-Output (('onpath',[bool](($env:Path -split ';') | Where-Object {{ $_.TrimEnd('\\') -eq $wa }})) -join $tab); \
                  try {{ Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction Stop | ForEach-Object {{ Write-Output (('av',$_.displayName) -join $tab) }} }} catch {{}}; \
                  try {{ Write-Output (('rt',(Get-MpComputerStatus -ErrorAction Stop).RealTimeProtectionEnabled) -join $tab) }} catch {{}}; \
-                 try {{ $b = @(Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop); if ($b.Count -eq 0 -or $b[0].BatteryStatus -eq 2) {{ Write-Output (('power','ac') -join $tab) }} else {{ Write-Output (('power','battery') -join $tab) }} }} catch {{}}"
+                 try {{ $b = @(Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop); if ($b.Count -gt 0 -and @(1,4,5) -contains $b[0].BatteryStatus) {{ Write-Output (('power','battery') -join $tab) }} else {{ Write-Output (('power','ac') -join $tab) }} }} catch {{}}"
             )
         }
         _ => {
-            let list = tools.join(" ");
-            let mut s = format!(
-                "for t in {list}; do printf 'tool\\t%s\\t%s\\n' \"$t\" \"$(command -v \"$t\" 2>/dev/null)\"; done"
-            );
+            let mut parts: Vec<String> = tools
+                .iter()
+                .map(|t| {
+                    format!("printf 'tool\\t%s\\t' {t}; command -v {t} 2>/dev/null; printf '\\n'")
+                })
+                .collect();
             if os == Os::Darwin {
-                s.push_str(
-                    "; case \"$(pmset -g batt 2>/dev/null | head -n 1)\" in \
-                     *'AC Power'*) printf 'power\\tac\\n';; \
-                     *'Battery Power'*) printf 'power\\tbattery\\n';; esac",
-                );
+                parts.push("pmset -g batt 2>/dev/null | head -n 1".into());
             }
-            s
+            parts.join("; ")
         }
     }
 }
@@ -249,6 +255,13 @@ pub fn parse_tools(output: &str) -> ToolsReport {
             }
             (Some("rt"), Some(v), None) => r.realtime = ps_bool(v),
             (Some("power"), Some(v @ ("ac" | "battery")), None) => r.power = Some(v.into()),
+            (Some(l), None, None) if l.starts_with("Now drawing from") => {
+                if l.contains("'AC Power'") {
+                    r.power = Some("ac".into());
+                } else if l.contains("'Battery Power'") {
+                    r.power = Some("battery".into());
+                }
+            }
             _ => {}
         }
     }
@@ -302,22 +315,66 @@ pub fn kit_location(path: &str, on_local_disk: bool) -> &'static str {
     "local"
 }
 
-/// The mount a path lives on: the LONGEST mount point that prefixes it. Windows mounts
-/// (`C:\`) compare without case.
+/// Is `mount` the folder `path` lives under — a prefix that ends at a folder boundary, so
+/// `/mnt/data` does not claim `/mnt/data2`? Windows mounts (`C:\`) compare without case.
+fn under(path: &str, mount: &str) -> bool {
+    let windows = mount.contains('\\') || mount.as_bytes().get(1) == Some(&b':');
+    // `get`, never an index: a non-ASCII path may not split at the mount's byte length.
+    let (Some(head), Some(rest)) = (path.get(..mount.len()), path.get(mount.len()..)) else {
+        return false;
+    };
+    let prefixed = if windows {
+        head.eq_ignore_ascii_case(mount)
+    } else {
+        head == mount
+    };
+    prefixed && (mount.ends_with(['/', '\\']) || rest.is_empty() || rest.starts_with(['/', '\\']))
+}
+
+/// The mount a path lives on: the LONGEST mount point it lives under.
 pub fn disk_for(path: &str, mounts: &[String]) -> Option<usize> {
-    let lower = path.to_ascii_lowercase();
     mounts
         .iter()
         .enumerate()
-        .filter(|(_, m)| {
-            if m.contains('\\') || m.as_bytes().get(1) == Some(&b':') {
-                lower.starts_with(&m.to_ascii_lowercase())
-            } else {
-                path.starts_with(m.as_str())
-            }
-        })
+        .filter(|(_, m)| under(path, m))
         .max_by_key(|(_, m)| m.len())
         .map(|(i, _)| i)
+}
+
+/// Linux: is `path` on a network filesystem, per `/proc/self/mounts`? sysinfo lists only
+/// local disks, so on POSIX the kit always matches `/` there — the mount table is what can
+/// tell a NFS or SMB kit from a local one. Mount points escape a space as `\040`.
+pub fn network_fs_linux(path: &str, proc_mounts: &str) -> bool {
+    const NETWORK: [&str; 12] = [
+        "nfs",
+        "nfs4",
+        "cifs",
+        "smb3",
+        "smbfs",
+        "9p",
+        "afs",
+        "ceph",
+        "glusterfs",
+        "fuse.sshfs",
+        "fuse.rclone",
+        "davfs",
+    ];
+    proc_mounts
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            let (_, mnt, fstype) = (f.next()?, f.next()?, f.next()?);
+            Some((mnt.replace("\\040", " "), fstype))
+        })
+        .filter(|(mnt, _)| under(path, mnt))
+        .max_by_key(|(mnt, _)| mnt.len())
+        .is_some_and(|(_, fstype)| NETWORK.contains(&fstype))
+}
+
+/// macOS: a volume under `/Volumes/` that sysinfo does not list is not a local one (it
+/// lists local volumes only), even though the path matches `/`.
+pub fn unlisted_mac_volume(path: &str, best_mount: Option<&str>) -> bool {
+    path.starts_with("/Volumes/") && !best_mount.is_some_and(|m| m.starts_with("/Volumes/"))
 }
 
 fn ms(d: std::time::Duration) -> u64 {
@@ -358,7 +415,20 @@ pub fn collect(os: Os, kit_dir: &Path, routes: &[&str]) -> Profile {
         _ => "/".into(),
     };
     let kit_path = kit_dir.to_string_lossy().into_owned();
-    let kit_disk = disk_for(&kit_path, &mounts);
+    let mut kit_disk = disk_for(&kit_path, &mounts);
+    // Windows lists every local drive, so no match means a mapped network drive. POSIX
+    // always matches `/`, so each OS asks its own question (see the two functions).
+    let on_local_disk = match os {
+        Os::Windows => kit_disk.is_some(),
+        Os::Linux => !network_fs_linux(
+            &kit_path,
+            &std::fs::read_to_string("/proc/self/mounts").unwrap_or_default(),
+        ),
+        Os::Darwin => !unlisted_mac_volume(&kit_path, kit_disk.map(|i| mounts[i].as_str())),
+    };
+    if !on_local_disk {
+        kit_disk = None; // the disk it matched is not the one it is on
+    }
 
     let shell_started = std::time::Instant::now();
     let empty = match os {
@@ -401,7 +471,7 @@ pub fn collect(os: Os, kit_dir: &Path, routes: &[&str]) -> Profile {
         kit_disk: kit_disk.map(free),
         kit: Kit {
             path: tilde(&kit_path, &home),
-            location: kit_location(&kit_path, os != Os::Windows || kit_disk.is_some()).into(),
+            location: kit_location(&kit_path, on_local_disk).into(),
         },
         shell_ms,
         tools: report.tools,
@@ -475,9 +545,57 @@ mod tests {
     #[test]
     fn the_posix_command_asks_power_only_on_a_mac() {
         let mac = tools_command(Os::Darwin, &["brew", "git"]);
-        assert!(mac.starts_with("for t in brew git;"), "{mac}");
+        assert!(mac.contains("command -v brew"), "{mac}");
         assert!(mac.contains("pmset"), "{mac}");
         assert!(!tools_command(Os::Linux, &["git"]).contains("pmset"));
+    }
+
+    #[test]
+    fn the_posix_command_is_plain_enough_for_any_login_shell() {
+        // The probe runs in the USER's shell: a fish or nu login shell rejects sh syntax
+        // whole. No loop, no case, no command substitution.
+        let c = tools_command(Os::Darwin, &["brew", "git"]);
+        for sh_only in ["for ", " do ", "done", "case ", "esac", "$(", "`"] {
+            assert!(!c.contains(sh_only), "{sh_only:?} in {c}");
+        }
+    }
+
+    #[test]
+    fn the_posix_command_runs_and_parses_under_sh() {
+        // A real run, through /bin/sh, of exactly what the probe sends: a found tool, a
+        // missing one, and nothing glued between them.
+        let c = tools_command(Os::Linux, &["sh", "talos-no-such-tool"]);
+        let out = std::process::Command::new("/bin/sh")
+            .args(["-c", &c])
+            .output()
+            .unwrap();
+        let r = parse_tools(&String::from_utf8_lossy(&out.stdout));
+        assert_eq!(r.tools.len(), 2, "{r:?}");
+        assert!(
+            r.tools[0]
+                .path
+                .as_deref()
+                .is_some_and(|p| p.ends_with("/sh")),
+            "{r:?}"
+        );
+        assert_eq!(r.tools[1].path, None, "{r:?}");
+    }
+
+    #[test]
+    fn pmset_says_ac_or_battery() {
+        let ac = parse_tools("Now drawing from 'AC Power'\n");
+        assert_eq!(ac.power.as_deref(), Some("ac"));
+        let bat = parse_tools("Now drawing from 'Battery Power'\n");
+        assert_eq!(bat.power.as_deref(), Some("battery"));
+    }
+
+    #[test]
+    fn only_a_discharging_battery_status_reads_battery() {
+        // Win32_Battery.BatteryStatus: 1 discharging, 4/5 low/critical — everything else
+        // (2 AC, 3 full, 6–9 and 11 charging) is a laptop on its charger.
+        let c = tools_command(Os::Windows, &["winget"]);
+        assert!(c.contains("@(1,4,5) -contains $b[0].BatteryStatus"), "{c}");
+        assert!(!c.contains("BatteryStatus -eq 2"), "{c}");
     }
 
     #[test]
@@ -562,6 +680,35 @@ mod tests {
         assert_eq!(disk_for("/opt/kit", &m), Some(0));
         assert_eq!(disk_for("c:\\Tools", &m), Some(2));
         assert_eq!(disk_for("\\\\srv\\share", &m[2..]), None);
+        let n = vec!["/".to_string(), "/mnt/data".to_string()];
+        assert_eq!(
+            disk_for("/mnt/data2/kit", &n),
+            Some(0),
+            "a prefix is not a folder"
+        );
+        assert_eq!(disk_for("/mnt/data/kit", &n), Some(1));
+        assert_eq!(disk_for("/mnt/data", &n), Some(1));
+        assert_eq!(
+            disk_for("/é", &["/x".to_string()]),
+            None,
+            "no panic off a char boundary"
+        );
+    }
+
+    #[test]
+    fn a_kit_on_a_network_filesystem_is_named_on_linux_and_mac() {
+        let mounts = "/dev/nvme0n1p2 / btrfs rw 0 0\n\
+                      /dev/nvme0n1p2 /home btrfs rw 0 0\n\
+                      //srv/share /mnt/team\\040share cifs rw 0 0\n";
+        assert!(network_fs_linux("/mnt/team share/Talos/Linux", mounts));
+        assert!(!network_fs_linux("/home/a/Talos/Linux", mounts));
+        assert!(!network_fs_linux("/mnt/teamwork/Talos", mounts));
+        assert!(unlisted_mac_volume("/Volumes/Team/Talos/MacOS", Some("/")));
+        assert!(!unlisted_mac_volume(
+            "/Volumes/USB/Talos",
+            Some("/Volumes/USB")
+        ));
+        assert!(!unlisted_mac_volume("/Users/a/Talos", Some("/")));
     }
 
     /// A REAL collection on the machine running the tests: two shells and a disk listing,

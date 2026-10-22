@@ -2,7 +2,9 @@
 //
 // It renders the `machine` and `scan` records EXACTLY as the journal received them
 // (`machine.rs` on the engine side). The card is the answer to "what does sharing send?":
-// it shows the data itself, never a description of it, so the two cannot drift apart.
+// it shows the values themselves, never a description of them, so the two cannot drift
+// apart. Only bookkeeping stays in the file alone: the timestamp, the build stamp, the
+// collection's own durations and the per-probe list (summarised as the slowest probe).
 // Each value is plain text — app.js puts it in with textContent, because a path or an
 // antivirus name is machine data, not markup.
 
@@ -33,7 +35,7 @@ export function machineRows(m) {
   if (!m) return [];
   const rows = [];
   const row = (label, value, warn = false) => rows.push({ label, value, warn });
-  row("System", [m.os, m.arch].filter(Boolean).join(" · "));
+  row("System", [m.os, m.os_version, m.arch].filter(Boolean).join(" · "));
   row("CPU", `${m.cpu || "unknown"} · ${m.cores} logical cores`);
   row("Memory", `${formatMb(m.ram_available_mb)} free of ${formatMb(m.ram_total_mb)}`);
   const disk = (d) => `${formatMb(d.free_mb)} free of ${formatMb(d.total_mb)} on ${d.mount}`;

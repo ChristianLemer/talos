@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use crate::bundles::{load_from_catalog, Plan};
 use crate::consent::{
-    append_history, append_record, clear_history, read_consent, read_history, shared_log_path,
-    write_consent, ConsentStore, HistEntry,
+    append_history, append_record, clear_history, read_consent, read_history, share_record,
+    shared_log_path, write_consent, ConsentStore, HistEntry,
 };
 // ⚠️ The two scans call `detect_present_detailed_with_vscode` by its full path rather than
 // importing it: the name is long enough that an import would read as an alias, and the full path
@@ -1246,15 +1246,16 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     .unwrap_or_default();
                 write_selection(&state.data_dir, &sel);
             }
-            // set-consent: records the sharing choice (marks consent decided).
-            // No response — the UI already closed its dialog / flipped its toggle.
+            // set-consent: records the sharing choice (marks consent decided), then answers
+            // with the log, so the Log tab's share line follows the toggle beside it.
             "set-consent" => {
                 let share = parsed
                     .get("share")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                write_consent(&state.consent, share);
+                set_consent(&state, share);
                 println!("[consent] set: share={share}");
+                let _ = socket.send(Message::Text(log_msg(&state))).await;
             }
             // get-log: the Log tab requests the consent + the local history.
             "get-log" => {
@@ -1575,6 +1576,15 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &Arc<AppState>) {
         ),
         None => eprintln!("[scan] vscode snapshot UNAVAILABLE — extension rows read unknown"),
     }
+    match &vs {
+        None => record
+            .unavailable
+            .push("vscode snapshot: extension rows read unknown".into()),
+        Some(s) if s.installed.is_err() => record
+            .unavailable
+            .push("vscode manifest unreadable: extension rows read unknown".into()),
+        Some(_) => {}
+    }
     // Shared read-only across the per-package probes, same as `bulk`: the manifest holds ~30
     // entries and cloning it per row would undo the saving this is here for.
     let vs = std::sync::Arc::new(vs);
@@ -1666,6 +1676,24 @@ fn start_machine_profile(state: &Arc<AppState>, steps: &[crate::bundles::Step]) 
 }
 
 /// `log` message for the Log tab: current consent + local history.
+/// Records the share choice. Turning sharing ON mid-session also copies this launch's
+/// machine profile to the shared log: it was journalled locally when collected, and the
+/// Log tab now says the share receives what it shows.
+fn set_consent(state: &AppState, share: bool) {
+    let was = read_consent(&state.consent).share;
+    write_consent(&state.consent, share);
+    if share && !was {
+        let profile = state
+            .machine
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(p) = profile {
+            share_record(&state.consent, &p);
+        }
+    }
+}
+
 fn log_msg(state: &AppState) -> String {
     json!({
         "type": "log",
@@ -4526,6 +4554,31 @@ mod tests {
         let m: serde_json::Value = serde_json::from_str(&super::log_msg(&state)).unwrap();
         assert_eq!(m["machine"]["cores"], 8, "{m}");
         assert_eq!(m["scan"]["total_ms"], 4200, "{m}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Turning sharing on mid-session sends this launch's profile to the share once; turning
+    /// it on again, or off, sends nothing more.
+    #[test]
+    fn turning_sharing_on_copies_this_launchs_profile_to_the_share_once() {
+        let dir = share("talos-test-consent-profile");
+        let state = state_with_share(&dir);
+        *state.machine.lock().unwrap() = Some(crate::machine::Profile {
+            kind: "machine".into(),
+            ..Default::default()
+        });
+        let shared = crate::consent::shared_log_path(
+            &state.consent.exe_dir,
+            &state.consent.host,
+            &state.consent.user,
+        );
+        super::set_consent(&state, false);
+        assert!(!shared.exists());
+        super::set_consent(&state, true);
+        super::set_consent(&state, true);
+        let text = std::fs::read_to_string(&shared).unwrap();
+        assert_eq!(text.lines().count(), 1, "{text}");
+        assert!(text.contains("\"kind\":\"machine\""), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -224,7 +224,7 @@ slow or never finds a tool. Three kinds of line, one JSON object each:
 
 | line | when | what it carries |
 |---|---|---|
-| install (has `package`) | each step | name, version, action, `ok`, `secs` |
+| install (has `package`) | each step | `package`, `version`, `action`, `ok`, `secs` |
 | `"kind": "machine"` | once per launch, after the first scan | OS, CPU and logical cores, RAM total/free, free space on the system and kit disks, where the kit sits (`local`, `network`, `onedrive`, `synced`), **`shell_ms`** — one empty shell through the probe wrapper — and where each manager the plan uses resolves; on Windows also the winget alias state, the antivirus products the OS declares, Defender real-time, and AC or battery |
 | `"kind": "scan"` | each scan | total, the three batched calls, every package probe in **ms**, and why a batched call gave no answer |
 
@@ -243,7 +243,9 @@ What to read first:
 What is NOT collected: no serial number, no MAC address, no user name beyond the one the
 file's own path carries; the home folder is written `~` in every path. The **Log tab shows
 the latest machine profile at its top**, as the values themselves — what the user sees there
-is what the share receives.
+is what the share receives. Only bookkeeping stays in the file alone: timestamps, the build
+stamp, the collection's own durations, the per-probe list. Turning sharing on mid-session
+sends this launch's profile to the share at once.
 
 ---
 
