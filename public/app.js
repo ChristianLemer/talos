@@ -767,7 +767,9 @@ function refreshLiveness() {
     if (!hint.hidden) {
       const held = M.heldRows(model).length;
       hint.textContent = held
-        ? `Nothing to send — ${held} held at a pin this route cannot reach (see the row).`
+        // Two causes today — a pin the route cannot reach, a change that moved nothing —
+        // and the row names its own; this line only counts them.
+        ? `Nothing to send — ${held} held; the row says why.`
         : "Nothing to send — this machine already matches what you asked for.";
     }
   }

@@ -96,6 +96,10 @@ test("the empty state does not claim a match while a row is held", () => {
   const body = appjs.slice(at, appjs.indexOf("\n  }\n", at));
   assert.match(body, /M\.heldRows\(model\)/, "the empty state must ask which rows are held");
   assert.match(body, /held/, "and say so instead of 'already matches'");
+  // Found at the real click (Windows VM, 2026-10-22): a row held because its change moved
+  // nothing read "held at a pin this route cannot reach" — it had no pin. The line counts;
+  // the row names the cause.
+  assert.doesNotMatch(body, /at a pin/, "the empty state must not name one cause for all");
 });
 
 test("the held reason is the same words on the row and in the server log", () => {
