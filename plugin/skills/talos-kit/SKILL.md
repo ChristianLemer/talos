@@ -199,15 +199,23 @@ Run `--verify` on the machine that is behaving strangely, not on the one that co
 ## Living on a shared drive
 
 The kit is built to sit on a shared OneDrive and be launched by many machines from the
-same copy. The exe is **never copied per machine**.
+same copy. The content is **never copied per machine**: `catalog/`, `bundles/`,
+`behaviour/` and `logs/` are read and written on the share.
 
 - **It extracts nothing beside itself** — that folder is shared. The native bits it needs
   go to each machine's own `%LOCALAPPDATA%\Talos` on first run, idempotently.
 - **It self-heals**: each launch kills any stale instance holding its port, so everyone
   runs the latest code on the share without manual cleanup.
-- ⚠️ **Windows locks a running `Talos.exe`.** OneDrive cannot replace it on a machine
-  where Talos is open; it retries, and the new exe lands at the next sync after Talos is
-  closed *there*. "My colleague has the new version and I don't" is almost always this.
+- **On Windows the share's `Talos.exe` only launches a local copy of itself.** A running
+  exe is locked, and OneDrive answers a replaced locked exe with `Talos (1).exe` and
+  deletions. So a release build copies itself, once per version, to
+  `%LOCALAPPDATA%\Talos\engine\Talos-<tag>-<hash>.exe` (named after its own sha256, so a
+  half-copied file never runs), starts that copy pointed back at the kit (`--kit`), and
+  exits. The share's exe is open for a second, not a session: a publication lands even
+  where Talos is open. The two newest local copies are kept.
+- If the local copy cannot start (a policy refusing executables under `AppData\Local`),
+  Talos runs from the share as it always did. `engine\last-launch.txt` says which way the
+  last launch went; `TALOS_IN_PLACE=1` forces running from the share.
 - ⚠️ **On a Mac, mark the kit folder *Always keep on this device*.** The `.app` is a
   folder of files, and a half-synced app must never be launched. `--verify` is how you
   find out before the user does.

@@ -24,6 +24,7 @@ mod plan_facts;
 mod platform;
 mod profiles;
 mod pty;
+mod relocate;
 mod selection;
 mod server;
 mod timings;
@@ -37,7 +38,11 @@ fn main() {
     // the release exe is a GUI-subsystem program: its stdout reaches a REDIRECTED handle
     // (`Talos.exe --check > check.txt`) but not the bare console, so the exit code is the
     // contract there and the text is a bonus.
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    //
+    // `--kit <dir>` is taken out first: it is what a relocated engine is started with, and it
+    // stands for the folder beside the exe from here on (relocate.rs, platform::exe_sibling).
+    let launch = relocate::split_kit(&std::env::args().skip(1).collect::<Vec<_>>());
+    let args = launch.rest.clone();
     if args.first().map(String::as_str) == Some("--check") {
         let (catalog_dir, bundles_dir) = match (args.get(1), args.get(2)) {
             (Some(c), Some(b)) => (std::path::PathBuf::from(c), std::path::PathBuf::from(b)),
@@ -46,6 +51,14 @@ fn main() {
         let report = check::run(&catalog_dir, &bundles_dir);
         print!("{}", report.render());
         std::process::exit(if report.ok() { 0 } else { 1 });
+    }
+    // A release on Windows started from the share hands over to a local copy and leaves, so
+    // the share's exe is never held open for a whole session. Every other case runs here.
+    if relocate::launch(platform::current_os(), &launch) {
+        return;
+    }
+    if let Some(kit) = launch.kit {
+        platform::set_kit(kit);
     }
     // The HTTP+WS server runs in its own tokio runtime, in the background.
     // The Tauri window (webview) loads http://127.0.0.1:1420 → app.js connects to it

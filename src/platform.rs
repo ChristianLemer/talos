@@ -389,12 +389,33 @@ pub fn rescue_shell(os: Os) -> Option<(PathBuf, Vec<String>)> {
         .map(|(p, a)| (p, a.iter().map(|x| x.to_string()).collect()))
 }
 
+/// The `--kit` folder a relocated engine was started with (see relocate.rs). Set once, by
+/// `main`, before anything resolves a path.
+static KIT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Record `--kit`. Once per process; a second call is ignored.
+pub fn set_kit(dir: PathBuf) {
+    let _ = KIT.set(dir);
+}
+
+/// `exe_sibling`'s rule, pure: the kit when one was given, else the exe's sibling folder,
+/// else `.`.
+pub fn sibling_or_kit(kit: Option<&std::path::Path>, exe: Option<&std::path::Path>) -> PathBuf {
+    match (kit, exe) {
+        (Some(k), _) => k.to_path_buf(),
+        (None, Some(e)) => exe_sibling_dir(e),
+        (None, None) => PathBuf::from("."),
+    }
+}
+
 /// The folder next to the running exe — outside the `.app` on macOS. See `exe_sibling_dir`.
+/// A relocated engine answers with its `--kit` instead: the folder its launcher sat in on the
+/// share, so content, `behaviour/`, `logs/` and the title resolve exactly as if it ran there.
 pub fn exe_sibling() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .map(|p| exe_sibling_dir(&p))
-        .unwrap_or_else(|| PathBuf::from("."))
+    sibling_or_kit(
+        KIT.get().map(PathBuf::as_path),
+        std::env::current_exe().ok().as_deref(),
+    )
 }
 
 /// Where `catalog/` and `bundles/` are read from — ONE rule, two callers: the server at
@@ -723,6 +744,20 @@ mod tests {
             .any(|a| a.to_ascii_lowercase().contains("no") || a == "-f")
             || bin.ends_with("sh");
         assert!(profile_free, "{args:?}");
+    }
+
+    /// `--kit` stands for the exe's folder: a relocated engine resolves everything from the
+    /// share it was launched from, never from its local copy.
+    #[test]
+    fn the_kit_flag_stands_for_the_exe_folder() {
+        let exe = std::path::Path::new("/local/Talos/engine/Talos-v1-abc");
+        let kit = std::path::Path::new("/share/Kit/Windows");
+        assert_eq!(sibling_or_kit(Some(kit), Some(exe)), kit);
+        assert_eq!(
+            sibling_or_kit(None, Some(exe)),
+            std::path::Path::new("/local/Talos/engine")
+        );
+        assert_eq!(sibling_or_kit(None, None), std::path::Path::new("."));
     }
 
     /// Beside the exe when the folder is there; the cwd's otherwise — each of the two

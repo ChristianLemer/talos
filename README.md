@@ -163,17 +163,19 @@ not left behind. The `MANIFEST.sha256` it writes is one artefact three tools rea
 offline on a colleague's Mac with `get-talos.sh <kit> --verify`.
 
 Built to live on a **shared OneDrive**, launched by many machines from the same
-copy — the exe is never copied per machine:
+copy — the content is never copied per machine:
 
 - It does **not** extract anything beside itself (that folder is shared). The
   native bits it needs go to each machine's own `%LOCALAPPDATA%\Talos` on first
   run, idempotently.
 - It **self-heals**: each launch kills any stale instance holding its port, so
   everyone runs the latest code on the share without manual cleanup.
-- Windows locks a running `Talos.exe`, so a refreshed exe reaches a machine at the
-  next sync after Talos is closed there. On a Mac, mark the kit folder *Always keep
-  on this device*: the `.app` is a folder of files, and a half-synced app must never
-  be launched.
+- Windows locks a running exe, so the share's `Talos.exe` only launches a local copy
+  of itself (`%LOCALAPPDATA%\Talos\engine`, one per version, named after its sha256)
+  and exits: a refreshed exe lands even where Talos is open. Where a policy refuses to
+  run that copy, Talos runs from the share as before.
+- On a Mac, mark the kit folder *Always keep on this device*: the `.app` is a folder of
+  files, and a half-synced app must never be launched.
 
 Drop the kit on the share once; every machine runs it in place.
 

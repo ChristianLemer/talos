@@ -137,6 +137,14 @@ with NO arguments from an EMPTY working directory: the engine resolves the conte
 which proves the layout — run it from a content repo instead and the cwd fallback quietly
 validates THAT repo's catalog and a broken kit reports 0 errors.
 
+On Windows a release build started from anywhere but `%LOCALAPPDATA%\Talos\engine\` copies
+itself there (`Talos-<tag>-<sha256[..12]>.exe`), starts the copy with `--kit <the folder it
+sat in>` and exits (`src/relocate.rs`): a running exe is locked, and a locked exe on the share
+turned every publication into OneDrive conflicts. `--kit` stands for "beside the exe"
+everywhere (`platform::exe_sibling`), so the kit layout above is unchanged. Any failure runs in
+place, as before; `engine\last-launch.txt` records which way it went. Not relocated:
+`--check`, debug builds, macOS, Linux, `TALOS_IN_PLACE=1`.
+
 Every binary bakes a build stamp (tag · sha · timestamp) so you can tell which build is
 running; locally the tag is `git describe --tags --dirty`, so it also says whether the build
 carried uncommitted edits. The stamp is git-only since 2026-09-27 (the jj change id left
