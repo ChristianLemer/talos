@@ -2221,8 +2221,11 @@ ws.onmessage = (ev) => {
             : "unknown",
         );
         // Indeterminate WITH a reason (e.g. a missing prerequisite) → show why,
-        // in place of the bare "—", so the row isn't a silent mystery.
-        if (msg.present === null && msg.reason) {
+        // in place of the bare "—", so the row isn't a silent mystery. ABSENT with a
+        // reason too: a plugin switched off in its host, a nushell plugin that no
+        // longer loads — installed, yet absent, and "waiting" alone would read as
+        // never installed.
+        if (msg.present !== true && msg.reason) {
           rows[msg.i].statusLabel.textContent = msg.reason;
         }
         // Version numbers live in ONE place now (paintVersion → the delta slot),
