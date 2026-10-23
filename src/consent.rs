@@ -212,7 +212,7 @@ const KEEP_MACHINES: usize = 100;
 const KEEP_SCANS: usize = 200;
 
 /// Shrinks a journal that grew past `COMPACT_ABOVE`: keeps EVERY install line (the trace
-/// `timings.rs` defers to, and what the Log tab lists) and every line it does not
+/// `timings.rs` defers to, and what the History tab lists) and every line it does not
 /// recognise, but only the last `KEEP_MACHINES` machine profiles and `KEEP_SCANS` scans.
 /// Those two are written on every launch and every scan — a scan line is 1–3 KB — so
 /// without this the journal grew forever, on the local disk and on the share alike.

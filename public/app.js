@@ -1724,28 +1724,31 @@ for (const pill of document.querySelectorAll(".theme-pill")) {
 }
 applyTheme("");
 
-// --- tabs (Bundles / Catalog / Machine / Log / Doctor) ---
+// --- tabs (Bundles / Catalog / Machine / History / Settings / Doctor) ---
 // Bundles and Catalog share ONE DOM (#view-bundles holds #steps); they differ
 // only by body scope class (tab-bundles filters to .want rows, tab-catalog shows
-// all — see the CSS). Machine, Log and Doctor each swap to a view container of their own.
+// all — see the CSS). Machine, History (`log`), Settings and Doctor each swap to a view
+// container of their own.
 function setTab(v) {
   document.querySelectorAll(".tab").forEach((t) =>
     t.classList.toggle("active", t.dataset.view === v)
   );
   const isLog = v === "log";
   const isMachine = v === "machine";
+  const isSettings = v === "settings";
   const isDoctor = v === "doctor";
   document
     .getElementById("view-bundles")
-    .classList.toggle("active", !isLog && !isMachine && !isDoctor);
+    .classList.toggle("active", !isLog && !isMachine && !isSettings && !isDoctor);
   document.getElementById("view-log").classList.toggle("active", isLog);
   document.getElementById("view-machine").classList.toggle("active", isMachine);
+  document.getElementById("view-settings").classList.toggle("active", isSettings);
   document.getElementById("view-doctor").classList.toggle("active", isDoctor);
   document.body.classList.toggle("tab-bundles", v === "bundles");
   document.body.classList.toggle("tab-catalog", v === "catalog");
   document.body.classList.toggle("tab-arbitration", v === "arbitration");
-  // One message feeds both: the profile and the history travel together in `log`.
-  if (isLog || isMachine) ws.send(JSON.stringify({ type: "get-log" }));
+  // One message feeds all three: the profile, the history and the consent travel in `log`.
+  if (isLog || isMachine || isSettings) ws.send(JSON.stringify({ type: "get-log" }));
   if (isDoctor) doctorOpen();
 }
 
@@ -2086,7 +2089,7 @@ document.getElementById("sudo-cancel").onclick = () => {
 };
 
 // Stamp the UI with the exact source snapshot this exe was built from — in the
-// window title (always visible) and the Log & settings footer. This is the
+// window title (always visible) and the Settings footer. This is the
 // answer to "which binary is actually running?" that cost us a long detour.
 function showBuild(build, distribution) {
   // The content's name leads when it has one (`distribution.yaml` beside the catalog),
@@ -2136,9 +2139,10 @@ function renderMachine(machine, scan, consent, sharedTo) {
   document.getElementById("mc-scan").textContent = scanSummary(scan);
 }
 
-function renderLog(consent, history) {
+function renderLog(consent, history, sharedTo) {
   document.getElementById("consent-toggle").checked =
     !!(consent && consent.share);
+  document.getElementById("share-where").textContent = shareLine(consent, sharedTo);
   const h = document.getElementById("history");
   if (!history || !history.length) {
     h.innerHTML = '<div class="hist-empty">No install history yet.</div>';
@@ -2195,7 +2199,7 @@ ws.onmessage = (ev) => {
       break;
     case "log":
       renderMachine(msg.machine, msg.scan, msg.consent, msg.sharedTo);
-      renderLog(msg.consent, msg.history);
+      renderLog(msg.consent, msg.history, msg.sharedTo);
       break;
     case "rescan-progress":
       // The Apply's scoped re-scan, one message per re-probed row. Distinct from

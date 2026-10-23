@@ -109,13 +109,13 @@ test("a scan that overlapped the collection says so", () => {
 
 test("the card has a tab of its own: read-only facts, apart from the settings", () => {
   const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
-  assert.match(html, /<button class="tab" data-view="machine">Machine<\/button>/);
+  assert.match(html, /<button class="tab" data-view="machine">[\s\S]*?Machine<\/button>/);
   const card = html.indexOf('id="machine-card"');
   const view = html.indexOf('id="view-machine"');
   assert.notEqual(card, -1, "#machine-card must exist");
   assert.notEqual(view, -1, "#view-machine must exist");
   assert.ok(card > view, "inside the Machine view");
-  assert.ok(card < html.indexOf('id="view-log"'), "not inside the Log & settings view");
+  assert.ok(card < html.indexOf('id="view-log"'), "not inside the History view");
 });
 
 test("an open Machine tab waiting for the profile asks again, since nothing pushes it", () => {

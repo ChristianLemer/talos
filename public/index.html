@@ -579,10 +579,13 @@
       nav { display:flex; gap:4px; padding:0 12px; border-bottom:1px solid var(--line); }
       .tab { background:none; border:0; color:var(--dim); padding:9px 14px; cursor:pointer; font-size:13px;
              border-bottom:2px solid transparent; }
+      .tab { display:inline-flex; align-items:center; gap:6px; }
+      .ti { width:14px; height:14px; flex:none; fill:none; stroke:currentColor; stroke-width:2;
+            stroke-linecap:round; stroke-linejoin:round; }
       .tab:hover { color:var(--fg); }
       .tab.active { color:var(--fg); border-bottom-color:#3d59a1; }
       .view { display:none; } .view.active { display:block; }
-      #view-doctor, #view-log, #view-machine { padding:16px 22px 24px; }
+      #view-doctor, #view-log, #view-machine, #view-settings { padding:16px 22px 24px; }
       /* Apply focus mode: during an Apply the screen narrows to what's being
          worked on. Untouched + succeeded rows are hidden; the running one shows;
          failures stay visible+open. On done, everything reappears (failures
@@ -692,6 +695,7 @@
       .theme-pill.active { border-color:var(--ac); box-shadow:0 0 0 2px var(--ac); }
       .dangerbtn:hover { color:#f7768e; border-color:#f7768e; }
       #history { padding:8px 14px 16px; }
+      .set-where { font-size:12px; color:var(--dim); padding:0 0 12px; border-bottom:1px solid var(--line); }
       .hist-empty { color:var(--dim); font-size:13px; padding:12px 0; }
       .buildinfo { padding:14px; color:var(--dim); font-size:11px;
                    font-family:"JetBrains Mono",monospace; border-top:1px solid var(--line); }
@@ -1154,24 +1158,54 @@
            Apply, and in the frame that means "Talos itself". -->
       <button id="quit-all" class="quitbtn" title="Close Talos">Quit</button>
     </header>
-    <nav>
+    <!-- Tab icons: Lucide (https://lucide.dev) v0.460.0, the paths copied as they ship. Flat
+         line art with no colour of its own — `.ti` strokes in currentColor, so an icon is the
+         tab's own text colour, dim at rest, bright when active, in every theme.
+
+         ISC License
+
+         Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of
+         Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.
+
+         Permission to use, copy, modify, and/or distribute this software for any
+         purpose with or without fee is hereby granted, provided that the above
+         copyright notice and this permission notice appear in all copies.
+
+         THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+         WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+         MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+         ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+         WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+         ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+         OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. -->
+    <svg id="tab-icons" width="0" height="0" style="position:absolute" aria-hidden="true">
+      <symbol id="i-changes" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+      <symbol id="i-catalog" viewBox="0 0 24 24"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></symbol>
+      <symbol id="i-arbitration" viewBox="0 0 24 24"><path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="M7 21h10"/><path d="M12 3v18"/><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/></symbol>
+      <symbol id="i-machine" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></symbol>
+      <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="i-doctor" viewBox="0 0 24 24"><path d="M11 2v2"/><path d="M5 2v2"/><path d="M5 3H4a2 2 0 0 0-2 2v4a6 6 0 0 0 12 0V5a2 2 0 0 0-2-2h-1"/><path d="M8 15a6 6 0 0 0 12 0v-3"/><circle cx="20" cy="10" r="2"/></symbol>
+    </svg>
+    <nav class="tabs">
       <!-- "Changes", not "Bundles": this view's own CSS already called itself "the
            ACTION view". The bundle cards live here as a MEANS of composing changes —
            they are furniture, and furniture should not name the room. Not "Apply"
            (the button of that name lives inside), not "My setup" (already the name of
            the personal bundle). The internal id/class stay `bundles` — renaming them
            would touch ~40 selectors for no gain. -->
-      <button class="tab active" data-view="bundles">Changes</button>
-      <button class="tab" data-view="catalog">Catalog</button>
+      <button class="tab active" data-view="bundles"><svg class="ti" aria-hidden="true"><use href="#i-changes"/></svg>Changes</button>
+      <button class="tab" data-view="catalog"><svg class="ti" aria-hidden="true"><use href="#i-catalog"/></svg>Catalog</button>
       <!-- ⚠️ ADVANCED ONLY. The majority state must stay silent: an empty tab for 39
            colleagues in 40 is noise, and this is an administration surface. Same lesson the
            scope controls learned — C caught it twice. -->
-      <button class="tab tab-adv-only" data-view="arbitration">Arbitration</button>
-      <!-- Machine: what this machine IS, read-only. Apart from Log & settings, which holds
-           what the user CHANGES — one tab to read, one tab to set. -->
-      <button class="tab" data-view="machine">Machine</button>
-      <button class="tab" data-view="log">Log &amp; settings</button>
-      <button class="tab tab-doctor" data-view="doctor">Doctor</button>
+      <button class="tab tab-adv-only" data-view="arbitration"><svg class="ti" aria-hidden="true"><use href="#i-arbitration"/></svg>Arbitration</button>
+      <!-- Machine: what this machine IS; History: what Talos did on it; Settings: what the
+           user SETS. Two tabs to read, one to change. -->
+      <button class="tab" data-view="machine"><svg class="ti" aria-hidden="true"><use href="#i-machine"/></svg>Machine</button>
+      <button class="tab" data-view="log"><svg class="ti" aria-hidden="true"><use href="#i-history"/></svg>History</button>
+      <button class="tab" data-view="settings"><svg class="ti" aria-hidden="true"><use href="#i-settings"/></svg>Settings</button>
+      <button class="tab tab-doctor" data-view="doctor"><svg class="ti" aria-hidden="true"><use href="#i-doctor"/></svg>Doctor</button>
     </nav>
 
     <div id="view-bundles" class="view active">
@@ -1270,7 +1304,21 @@
       </div>
     </div>
 
+    <!-- History: what Talos DID on this machine, newest first, and the one gesture that acts
+         on that record. The id stays `log` — the server's message and its callers say log. -->
     <div id="view-log" class="view">
+      <div id="history-head">
+        <div class="set-row">
+          <div><div class="set-title">Delete collected data</div>
+            <div class="set-desc">Remove the recorded history from this machine: installs, machine profiles and scan timings.</div></div>
+          <button id="clear-log" class="dangerbtn">Delete</button>
+        </div>
+      </div>
+      <div id="history"></div>
+    </div>
+
+    <!-- Settings: what the user SETS. Read-only facts live in Machine and History. -->
+    <div id="view-settings" class="view">
       <div id="settings">
         <div class="set-row">
           <div><div class="set-title">Theme</div>
@@ -1292,6 +1340,8 @@
             <div class="set-desc">When on, the install history, this machine's profile (shown in the Machine tab) and each scan's timings are saved next to the tool (visible to your team if the disk is shared). When off, it stays private to this machine. <b>Sharing is strongly recommended</b> so your team can help you stay up to date.</div></div>
           <label class="switch"><input type="checkbox" id="consent-toggle"><span class="slider"></span></label>
         </div>
+        <!-- Where the shared copy goes, said beside the switch that sends it there. -->
+        <div class="set-where" id="share-where"></div>
         <!-- macOS ONLY. Hidden by default and revealed by renderAppmgmt when the
              permission actually applies: on Windows the whole row is meaningless
              (App Management is a macOS TCC service) and its "Open Settings" would
@@ -1307,13 +1357,7 @@
             <button id="appmgmt-open" class="dangerbtn">Open Settings</button>
           </div>
         </div>
-        <div class="set-row">
-          <div><div class="set-title">Delete collected data</div>
-            <div class="set-desc">Remove the recorded history from this machine: installs, machine profiles and scan timings.</div></div>
-          <button id="clear-log" class="dangerbtn">Delete</button>
-        </div>
       </div>
-      <div id="history"></div>
       <!-- Build stamp: the exact source snapshot this exe was compiled from.
            Filled by app.js from the plan's `build`. Kills the "which binary is
            running?" ambiguity — visible without hunting through log files. -->
