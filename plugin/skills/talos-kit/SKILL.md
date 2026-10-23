@@ -170,7 +170,7 @@ grep "not found"` says whether anything is missing before you wonder why nothing
 not a failure — it is what the content is for.** The engine knows exactly two system
 managers: `winget` (Windows) and `brew` (macOS *and* Linux). A package routed only through
 `winget` is out of scope on a Mac; one routed through `brew` needs Homebrew present, on
-Linux too. Everything else — `npm`, `cargo`, `bun`, `run`, `claude-plugin`, `skill`,
+Linux too. Everything else — `npm`, `cargo`, `bun`, `run`, `claude-plugin`, `copilot-plugin`, `skill`,
 `vscode-extension`, `nu-plugin` — depends only on its own tool being there. So a Linux box
 without Homebrew reads the socle mostly as "manager absent": correct, and disappointing if
 nobody said so first. Read the rows before concluding the kit is broken, and remember that

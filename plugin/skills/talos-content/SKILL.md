@@ -1,6 +1,6 @@
 ---
 name: talos-content
-description: Write and maintain Talos content — the `catalog/` and `bundles/` YAML that a Talos kit reads from disk. Carries the doctrine (detect don't remember, non-interactive commands, names not ids, capability not category, MEASURED means measured), a snippet per route (winget, brew, cargo, npm, bun, run, claude-plugin, skill, vscode-extension, nu-plugin), the config-atom pattern, and the loop that ends at zero errors. Use when adding, editing or reviewing a package or a bundle, when `Talos --check` reports something, when a row shows the wrong version or never turns green, when deciding how to pin a version, or when a package should appear in the Doctor tab.
+description: Write and maintain Talos content — the `catalog/` and `bundles/` YAML that a Talos kit reads from disk. Carries the doctrine (detect don't remember, non-interactive commands, names not ids, capability not category, MEASURED means measured), a snippet per route (winget, brew, cargo, npm, bun, run, claude-plugin, copilot-plugin, skill, vscode-extension, nu-plugin), the config-atom pattern, and the loop that ends at zero errors. Use when adding, editing or reviewing a package or a bundle, when `Talos --check` reports something, when a row shows the wrong version or never turns green, when deciding how to pin a version, or when a package should appear in the Doctor tab.
 ---
 
 # Talos content
@@ -148,6 +148,15 @@ requires: [Claude Code]
 ```
 
 ```yaml
+# copilot-plugin — the same plugins, into Copilot CLI. Marketplace form: no `detect:`,
+# the id is what Copilot lists. Direct form (`owner/repo:path`): `detect:` is REQUIRED.
+name: Chiron
+copilot-plugin: chiron@tekton-beta
+marketplace: ChristianLemer/tekton#beta
+requires: [Copilot CLI, Git]
+```
+
+```yaml
 # skill — a SKILL.md every agent on the machine reads, via `npx skills`.
 # `skillName:` pins the list-name when the display name differs.
 name: Writing guidelines
@@ -212,8 +221,8 @@ a word has no leading digits, so the comparison would read `0.0.0`, decide the m
 *above* the pin, and **downgrade** it on the next Apply — an uninstall + reinstall.
 **Quote the value.**
 
-**An extension route carries no pin at all.** `claude-plugin`, `skill` and
-`vscode-extension` build no upgrade command, so a `version:` on them — keyword included —
+**An extension route carries no pin at all.** `claude-plugin`, `copilot-plugin`, `skill`
+and `vscode-extension` build no upgrade command, so a `version:` on them — keyword included —
 produces an action with nothing to run.
 
 **A sidecar is not a package.** `catalog/` holds `.yaml` files *and* the `.nu` scripts a
@@ -225,7 +234,7 @@ config-atom calls. `--check` reads only the YAML. When you count packages, count
 
 | Symptom | Look at |
 |---|---|
-| the row never turns green | `detect:` — is exit 0 really "present"? For `claude-plugin` / `skill` it is a **list name**, not a binary |
+| the row never turns green | `detect:` — is exit 0 really "present"? For `claude-plugin` / `copilot-plugin` / `skill` it is a **list name**, not a binary |
 | the displayed version is wrong | `version-regex:` — override how the version is pulled from the output |
 | the row is greyed / indeterminate | an unmet `requires:` — the reason is shown on the row |
 | the step hangs forever | the command prompts (rule 2) |

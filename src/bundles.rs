@@ -83,6 +83,7 @@ impl RawPkg {
         "run",
         "runUninstall",
         "claude-plugin",
+        "copilot-plugin",
         "marketplace",
         "skill",
         "skillName",
@@ -126,6 +127,11 @@ pub struct RawPkg {
     pub run_uninstall: Option<String>,
     #[serde(default, rename = "claude-plugin")]
     pub claude_plugin: Option<String>,
+    /// A Copilot CLI plugin: `plugin@marketplace`, or a source Copilot installs DIRECTLY —
+    /// `owner/repo`, `owner/repo:path`, a git URL. Same plugin format as Claude Code's, another
+    /// host, hence another route rather than a flag on `claude-plugin`.
+    #[serde(default, rename = "copilot-plugin")]
+    pub copilot_plugin: Option<String>,
     #[serde(default)]
     pub marketplace: Option<String>,
     #[serde(default)]
@@ -352,7 +358,7 @@ pub struct Commands {
 }
 
 /// The NAMED ROUTE TABLE — port of commandsFor. Family 1 (system manager, arbitrated by
-/// OS) first, then cargo/npm/bun/run/claude-plugin/skill/vscode-extension.
+/// OS) first, then cargo/npm/bun/run/claude-plugin/copilot-plugin/skill/vscode-extension.
 fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
     // The version to INTERPOLATE INTO A COMMAND — empty unless the author declared an exact
     // one.
@@ -605,6 +611,62 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
             downgrade: None,
         };
     }
+    if let Some(src) = &pkg.copilot_plugin {
+        // The direct form (a repository, a sub-folder, a URL) has a `/`; `plugin@marketplace`
+        // never does. After a direct install Copilot knows the plugin by its NAME alone
+        // (marketplace ""), which is what `detect:` carries — `--check` requires it there.
+        let name = match (is_direct_copilot_source(src), pkg.detect.as_deref()) {
+            (false, _) => src.clone(),
+            (true, Some(d)) => d.trim().to_string(),
+            // `--check` refuses this; at runtime the last path segment is the best guess.
+            (true, None) => src
+                .rsplit(['/', ':'])
+                .next()
+                .unwrap_or(src)
+                .trim_end_matches(".git")
+                .to_string(),
+        };
+        // ⚠️ `;` after the `add`, NEVER `&&` — the one place this route departs from
+        // claude-plugin's chain. MEASURED (1.0.88 on Linux, 1.0.103 on Windows): a second
+        // `copilot plugin marketplace add` of the same source EXITS 1, "Marketplace … already
+        // registered", where claude's answers 0. Gated by `&&`, every re-Apply of a present
+        // plugin would fail. A real failure of the add (no network, a bad name) still
+        // surfaces: the install that follows answers "Marketplace … not found", exit 1.
+        //
+        // ⭐ The label says the red line is expected, because the row's terminal shows it on
+        // every re-Apply. Plain words, no parenthesis: see the claude-plugin diagnostic for
+        // what PowerShell does to an unquoted one.
+        let add = pkg
+            .marketplace
+            .as_deref()
+            .map(|m| {
+                format!(
+                    "echo '[talos] registering the marketplace, already registered is fine:'; \
+                     copilot plugin marketplace add \"{m}\"; "
+                )
+            })
+            .unwrap_or_default();
+        return Commands {
+            route: Some("copilot-plugin".into()),
+            // `install` THEN `update`, as for claude-plugin. MEASURED: neither prompts, on
+            // either form, in a pty with nobody at the keyboard; a re-install of a present
+            // plugin re-installs it (exit 0), and `update` on a current one answers "already
+            // at latest" (exit 0). The update is what moves a plugin whose marketplace
+            // catalogue Copilot had cached.
+            //
+            // ⭐ No HTTPS forcing here, unlike claude: Copilot clones `https://github.com/…`
+            // by itself (measured in its own error text), so the ssh agent is never asked.
+            install: Some(format!(
+                "{add}copilot plugin install {src} && copilot plugin update {name}"
+            )),
+            uninstall: Some(format!("copilot plugin uninstall {name}")),
+            // ⬜ No upgrade: nothing marks a plugin outdated (`scan_outdated` asks winget/brew
+            // only), so a wired `upgrade:` would be unreachable — the claude-plugin route's
+            // mistake, not repeated. A re-Apply runs install + update, which is the gesture.
+            upgrade: None,
+            downgrade: None,
+        };
+    }
     if let Some(src) = &pkg.skill {
         let name = pkg.skill_name.clone().unwrap_or_else(|| pkg.name.clone());
         // `npx`, not `bunx`. The skills CLI is third-party JS, and third-party JS is
@@ -808,6 +870,13 @@ pub fn load_from_catalog(
                 .detect
                 .clone()
                 .or_else(|| p.vscode_extension.clone())
+                // A marketplace plugin is listed under its full id. The direct form is not
+                // (its name comes from the plugin's own manifest), so it must declare one.
+                .or_else(|| {
+                    p.copilot_plugin
+                        .clone()
+                        .filter(|c| !is_direct_copilot_source(c))
+                })
                 .or_else(|| p.nu_plugin.clone()),
             check: sub(p.check.clone()),
             is_config,
@@ -853,6 +922,13 @@ pub fn load_from_catalog(
     Plan { steps }
 }
 
+/// Does a `copilot-plugin:` name a source Copilot installs DIRECTLY (`owner/repo`,
+/// `owner/repo:path`, a git URL) rather than `plugin@marketplace`? A plugin or marketplace name
+/// never holds a `/`; every direct source does.
+pub fn is_direct_copilot_source(src: &str) -> bool {
+    src.contains('/')
+}
+
 /// Is this route one that installs INTO a host rather than onto the machine?
 ///
 /// The single place the class is decided, so the glyph, the wire and the tests cannot drift
@@ -869,13 +945,16 @@ pub fn load_from_catalog(
 /// never `Program Files` — downloads from the gallery (measured 4.3 s fresh), and cannot
 /// elevate.
 ///
+/// ✅ `copilot-plugin` (2026-10-23) is the proof of the next line: the SAME plugin format as
+/// claude-plugin, another host (`~/.copilot`), so another route — one arm here.
+///
 /// ⬜ A `code-insiders` or Cursor host would be a DIFFERENT route (different binary, different
 /// profile folder, and Cursor does not even use the same gallery), and would join this list the
 /// same way.
 pub fn is_extension_route(route: Option<&str>) -> bool {
     matches!(
         route,
-        Some("claude-plugin") | Some("skill") | Some("vscode-extension")
+        Some("claude-plugin") | Some("copilot-plugin") | Some("skill") | Some("vscode-extension")
     )
 }
 
@@ -1290,6 +1369,8 @@ mod tests {
         let cat = crate::catalog::load_catalog(FIXTURE_CATALOG);
         for (id, expected) in [
             ("claude-plugin", true),
+            ("copilot-plugin", true),
+            ("copilot-plugin-direct", true),
             ("skill", true),
             ("vscode-ext", true),
             // Fetched from a release: 🧩, because it fetches.
@@ -1408,6 +1489,12 @@ mod tests {
             if let Some(c) = &p.claude_plugin {
                 y.push_str(&format!("claude-plugin: {c}\n"));
             }
+            if let Some(c) = &p.copilot_plugin {
+                y.push_str(&format!("copilot-plugin: {c}\n"));
+            }
+            if let Some(d) = &p.detect {
+                y.push_str(&format!("detect: {d}\n"));
+            }
             if let Some(v) = &p.version {
                 y.push_str(&format!("version: \"{v}\"\n"));
             }
@@ -1523,6 +1610,86 @@ mod tests {
         assert!(
             d.contains("&& claude plugin update x@y"),
             "still updates: {d}"
+        );
+    }
+
+    #[test]
+    fn a_copilot_plugin_from_a_marketplace_registers_then_installs_and_updates() {
+        // The Lydia kit's Chiron: a marketplace on a BRANCH (`#beta`), which Copilot registers
+        // under the name the branch's marketplace.json announces — `tekton-beta`.
+        let mut p = pkg("Chiron");
+        p.copilot_plugin = Some("chiron@tekton-beta".into());
+        p.marketplace = Some("ChristianLemer/tekton#beta".into());
+        for os in [Os::Windows, Os::Darwin, Os::Linux] {
+            let c = commands_for(&p, os);
+            assert_eq!(c.route.as_deref(), Some("copilot-plugin"), "{os:?}");
+            let install = c.install.as_deref().expect("an install command");
+            assert!(
+                install.contains("copilot plugin marketplace add \"ChristianLemer/tekton#beta\""),
+                "the marketplace is registered first: {install}"
+            );
+            // ⚠️ MEASURED (1.0.88): a second `marketplace add` of the same source EXITS 1,
+            // "Marketplace \"tekton\" already registered". Claude's `add && install` would
+            // therefore fail EVERY re-Apply of a present plugin. The add must not gate.
+            assert!(
+                !install.contains("tekton#beta\" &&"),
+                "an already-registered marketplace must not fail the install: {install}"
+            );
+            assert!(
+                install.contains(
+                    "copilot plugin install chiron@tekton-beta && copilot plugin update chiron@tekton-beta"
+                ),
+                "installed, then updated: {install}"
+            );
+            assert_shell_safe(install, "the copilot plugin install chain");
+            assert_eq!(
+                c.uninstall.as_deref(),
+                Some("copilot plugin uninstall chiron@tekton-beta")
+            );
+            // Unreachable, like every extension route's: nothing marks a plugin outdated.
+            assert_eq!(c.upgrade, None);
+            assert_eq!(c.downgrade, None);
+        }
+    }
+
+    #[test]
+    fn a_direct_copilot_plugin_is_updated_and_removed_by_its_name() {
+        // Markdown Converter exists only as a repository sub-folder. Copilot installs it with
+        // no marketplace, and from then on knows it by its NAME alone (measured: `update
+        // markdown-converter` and `uninstall markdown-converter` both exit 0) — which is
+        // what `detect:` carries.
+        let mut p = pkg("Markdown Converter");
+        p.copilot_plugin = Some("intellectronica/agent-skills:plugins/markdown-converter".into());
+        p.detect = Some("markdown-converter".into());
+        let c = commands_for(&p, Os::Windows);
+        assert_eq!(c.route.as_deref(), Some("copilot-plugin"));
+        let install = c.install.unwrap();
+        assert_eq!(
+            install,
+            "copilot plugin install intellectronica/agent-skills:plugins/markdown-converter \
+             && copilot plugin update markdown-converter"
+        );
+        assert_eq!(
+            c.uninstall.as_deref(),
+            Some("copilot plugin uninstall markdown-converter")
+        );
+    }
+
+    #[test]
+    fn a_copilot_plugin_detects_by_its_id_unless_told_otherwise() {
+        let mut m = pkg("market");
+        m.copilot_plugin = Some("chiron@tekton".into());
+        let mut d = pkg("direct");
+        d.copilot_plugin = Some("owner/repo:plugins/thing".into());
+        d.detect = Some("thing".into());
+        let steps = steps_from_pkgs(&[("market", m), ("direct", d)], Os::Linux);
+        let det = |id: &str| steps.iter().find(|s| s.id == id).unwrap().detect.clone();
+        // The marketplace form's id IS what Copilot lists it under.
+        assert_eq!(det("market").as_deref(), Some("chiron@tekton"));
+        assert_eq!(det("direct").as_deref(), Some("thing"));
+        assert!(
+            steps.iter().all(|s| s.is_extension),
+            "a plugin is an extension"
         );
     }
 

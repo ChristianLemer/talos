@@ -1,0 +1,9 @@
+# FORM: a Copilot CLI plugin installed straight from a repository sub-folder. No marketplace,
+# so `detect:` names it: the name in the plugin's own manifest.
+name: Copilot Direct Plugin
+description: A plugin for Copilot CLI, from a folder of a repository
+copilot-plugin: vendor/plugins:plugins/direct
+detect: direct
+category: [automation]
+requires:
+  - Npm Agent

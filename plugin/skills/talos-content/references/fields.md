@@ -108,6 +108,7 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
 | bun | `bun: pkg` | global install via `bun add -g`; declared by nothing today (npm wins if both) |
 | run | `run:` + optional `runUninstall:` | raw command escape hatch |
 | claude-plugin | `claude-plugin: plugin@marketplace` + optional `marketplace:` | Claude Code plugin |
+| copilot-plugin | `copilot-plugin: plugin@marketplace` + optional `marketplace:`, or a direct `owner/repo[:path]` + `detect:` | Copilot CLI plugin (same format as Claude's) |
 | skill | `skill: source` + optional `skillName:` | cross-agent SKILL.md via `npx skills` |
 | vscode-extension | `vscode-extension: publisher.name` | a VS Code extension |
 | nu-plugin | `nu-plugin: name` + optional `plugin-release: owner/repo@tag` | a nushell plugin |
@@ -117,10 +118,45 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
   Its output also yields the installed version (free, source-agnostic — the best signal).
 - `claude-plugin` / `skill`: `detect:` is the **name the tool lists the item under**
   (not a PATH binary) — Talos parses `claude plugin list` / `npx skills list`.
+- `copilot-plugin`: Talos reads Copilot's own record (`~/.copilot/config.json`, or
+  `$COPILOT_HOME/config.json`). The marketplace form **omits `detect:`**: the id is what
+  Copilot lists it under. The **direct** form (`owner/repo`, `owner/repo:path`, a git URL)
+  **must declare it**, as the name in the plugin's own manifest: Copilot records a direct
+  plugin with an empty marketplace, by that name alone. `--check` refuses a direct source
+  without it.
 - `vscode-extension`: **omit it.** The id you declared *is* the lookup name, so writing
   it twice is a second place to get it wrong. Talos reads the profile manifest
   (`~/.vscode/extensions/extensions.json`) — never `code --list-extensions`, whose output
   is polluted on Windows, and never the sub-directories, which **survive an uninstall**.
+
+### `copilot-plugin` — the same plugins, another host
+
+Copilot CLI reads the plugin and marketplace format Claude Code does, so a plugin written
+for one installs into the other. It is a route of its own, not a flag on `claude-plugin`:
+one key, one host, like `vscode-extension`.
+
+```yaml
+# Marketplace form: the id is `plugin@<name marketplace.json announces>`.
+name: Chiron
+copilot-plugin: chiron@tekton-beta
+marketplace: ChristianLemer/tekton#beta
+requires: [Copilot CLI, Git]
+```
+
+```yaml
+# Direct form: a repository or a folder of one. `detect:` is the plugin's own name.
+name: Markdown Converter
+copilot-plugin: intellectronica/agent-skills:plugins/markdown-converter
+detect: markdown-converter
+requires: [Copilot CLI, Git, uv]
+```
+
+- Install is `marketplace add` (if declared), then `install`, then `update` — measured
+  non-interactive on both forms, on Linux and Windows. A re-Apply prints *"already
+  registered"* from the `add`: expected, it does not fail the row.
+- **Git is a real prerequisite**: Copilot clones with the machine's `git`, over HTTPS.
+- Copilot warns that direct installs are deprecated in favour of `plugin@marketplace`.
+  They still work (1.0.103); prefer a marketplace when one exists.
 
 ### `vscode-extension` — the host answers first
 
@@ -325,7 +361,7 @@ version comparison reads it as `0.0.0`, concludes the machine is *above* the pin
 **downgrades** it on the next Apply — an uninstall + reinstall nobody asked for. A typo used
 to be enough.
 
-⚠️ **An extension route (`claude-plugin`, `skill`, `vscode-extension`) carries no pin at
+⚠️ **An extension route (`claude-plugin`, `copilot-plugin`, `skill`, `vscode-extension`) carries no pin at
 all**, keyword included. None of them builds an upgrade command, so a pin would produce an
 action with nothing to run — a row skipped in silence, which this engine refuses.
 
@@ -398,6 +434,12 @@ proof it landed where the engine reads it. At runtime a broken file is simply no
 - **`marketplace:`** — for `claude-plugin`, the source registered (`claude plugin
   marketplace add`) before install. Omit when the plugin comes from an already-known
   marketplace. A local path with spaces is fine — it's quoted at the call site.
+  For `copilot-plugin` too (`copilot plugin marketplace add`), with two measured
+  differences: a **branch** is written `owner/repo#ref`, and Copilot registers the
+  marketplace under the name the `marketplace.json` **on that branch** announces —
+  `ChristianLemer/tekton` is `tekton`, `ChristianLemer/tekton#beta` is `tekton-beta`. Read
+  the name there, never guess it from the repository. Never on a direct source: it
+  registers nothing, and `--check` says so.
 - **`doctor:`** — this package may be launched from the **Doctor** tab as a rescue
   session, by absolute path and no shell. A **capability**, never a category: the tab's
   dropdown lists every present package declaring it, in catalogue order, then the OS

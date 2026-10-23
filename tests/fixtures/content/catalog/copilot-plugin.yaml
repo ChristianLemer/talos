@@ -1,0 +1,9 @@
+# FORM: a Copilot CLI plugin from a declared marketplace, on a branch (`#ref`); detected by
+# its full id, which is the default — Copilot lists it as `plug@market-beta`.
+name: Copilot Plugin
+description: A plugin for Copilot CLI, from a marketplace it must register first
+copilot-plugin: plug@market-beta
+marketplace: vendor/market#beta
+category: [automation]
+requires:
+  - Npm Agent

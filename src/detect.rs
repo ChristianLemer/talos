@@ -117,21 +117,35 @@ pub fn user_home() -> std::path::PathBuf {
         .unwrap_or_default()
 }
 
-/// Detects a Claude plugin (route claude-plugin) or a skill (route skill) via
+/// Detects a Claude plugin (route claude-plugin), a Copilot CLI plugin (route copilot-plugin)
+/// or a skill (route skill) via
 /// native DISK READ. `detect:` carries the name to look for. Builds a diag that
 /// shows the evidence (file/dir consulted + verdict), like the command probes.
 fn detect_agent_content(step: &Step) -> Presence {
     use crate::agent_content::{
-        list_skills, parse_installed_plugins, plugin_version, plugins_json_path, skill_dirs,
-        skill_path,
+        copilot_config_path, list_skills, parse_copilot_plugins, parse_installed_plugins,
+        plugin_version, plugins_json_path, skill_dirs, skill_path,
     };
     let name = step.detect.as_deref().unwrap_or("").trim();
     let home = user_home();
 
-    if step.route.as_deref() == Some("claude-plugin") {
-        let path = plugins_json_path(&home);
+    let plugin_file = match step.route.as_deref() {
+        Some("claude-plugin") => Some((
+            plugins_json_path(&home),
+            parse_installed_plugins as fn(&str) -> Vec<crate::agent_content::Plugin>,
+        )),
+        // Copilot CLI's own record of what it installed — NOT `copilot plugin list --json`,
+        // which also lists the plugins Copilot BUILDS IN (measured on 1.0.103: `browser-use`,
+        // `"source": "builtin"`), and would cost a process per scan.
+        Some("copilot-plugin") => Some((
+            copilot_config_path(&home, std::env::var_os("COPILOT_HOME").as_deref()),
+            parse_copilot_plugins as fn(&str) -> Vec<crate::agent_content::Plugin>,
+        )),
+        _ => None,
+    };
+    if let Some((path, parse)) = plugin_file {
         let json = std::fs::read_to_string(&path).unwrap_or_default();
-        let plugins = parse_installed_plugins(&json);
+        let plugins = parse(&json);
         let found = plugin_version(name, &plugins);
         let present = found.is_some();
         let version = found.clone().unwrap_or_default();
@@ -535,10 +549,13 @@ pub fn detect_present_detailed_with_vscode(
             ..Default::default()
         };
     }
-    // 3. content-detected (claude-plugin/skill) → NATIVE disk read (no
+    // 3. content-detected (claude-plugin/copilot-plugin/skill) → NATIVE disk read (no
     //    shell-out: arch decision "everything parsed natively as JSON"). The step's
     //    `detect:` carries the name (plugin id "chiron@tekton"/"chiron", or skill name).
-    if matches!(step.route.as_deref(), Some("claude-plugin") | Some("skill")) {
+    if matches!(
+        step.route.as_deref(),
+        Some("claude-plugin") | Some("copilot-plugin") | Some("skill")
+    ) {
         return detect_agent_content(step);
     }
     // 3b. vscode-extension → the once-per-scan snapshot (host verdict + profile manifest).

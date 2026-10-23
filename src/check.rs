@@ -172,6 +172,25 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
                 ));
             }
         }
+        // A DIRECT Copilot source installs a plugin that Copilot then knows by the name in the
+        // plugin's own manifest — which the catalogue cannot derive, so the author says it.
+        // And it registers no marketplace, so a `marketplace:` beside it is a misunderstanding.
+        if let Some(src) = cp.pkg.copilot_plugin.as_deref() {
+            if crate::bundles::is_direct_copilot_source(src) {
+                if cp.pkg.detect.as_deref().is_none_or(|d| d.trim().is_empty()) {
+                    r.errors.push(format!(
+                        "{label}: a direct `copilot-plugin:` needs `detect:` — the name \
+                         `copilot plugin list` shows it under, which only its manifest knows"
+                    ));
+                }
+                if cp.pkg.marketplace.is_some() {
+                    r.errors.push(format!(
+                        "{label}: `marketplace:` is never registered for a direct \
+                         `copilot-plugin:` source — write `plugin@marketplace`, or drop it"
+                    ));
+                }
+            }
+        }
         // `doctor:` is a capability the engine acts on, so its two inputs are checked
         // here rather than discovered at launch: a binary to resolve (the first word of
         // `detect:`) and, if a clean env var is declared, a name that IS a variable name.
@@ -499,6 +518,45 @@ mod tests {
         );
         assert!(text.contains("catalog/b.yaml: scope"), "{text}");
         assert!(!text.contains("catalog/c.yaml"), "{text}");
+    }
+
+    #[test]
+    fn a_direct_copilot_plugin_names_itself_and_registers_nothing() {
+        let d = tmp("copilot");
+        // Direct, no `detect:` — Copilot lists it by the name in ITS manifest, unknowable here.
+        write(
+            &d,
+            "catalog/a.yaml",
+            "name: A\ncopilot-plugin: o/r:plugins/a\n",
+        );
+        // Direct, with a `marketplace:` that the direct form never registers.
+        write(
+            &d,
+            "catalog/b.yaml",
+            "name: B\ncopilot-plugin: o/r\ndetect: b\nmarketplace: o/m\n",
+        );
+        // The two well-formed shapes.
+        write(
+            &d,
+            "catalog/c.yaml",
+            "name: C\ncopilot-plugin: o/r:p/c\ndetect: c\n",
+        );
+        write(
+            &d,
+            "catalog/e.yaml",
+            "name: E\ncopilot-plugin: e@m\nmarketplace: o/m#beta\n",
+        );
+        let text = run(&d.join("catalog"), &d.join("bundles")).render();
+        assert!(
+            text.contains("catalog/a.yaml: a direct `copilot-plugin:` needs `detect:`"),
+            "{text}"
+        );
+        assert!(
+            text.contains("catalog/b.yaml: `marketplace:` is never registered"),
+            "{text}"
+        );
+        assert!(!text.contains("catalog/c.yaml"), "{text}");
+        assert!(!text.contains("catalog/e.yaml"), "{text}");
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! agent_content.rs — detection of the agent CONTENT present: Claude Code plugins
-//! (route `claude-plugin`) and standalone skills (route `skill`). Rust port of
+//! (route `claude-plugin`), Copilot CLI plugins (route `copilot-plugin`) and standalone
+//! skills (route `skill`). Rust port of
 //! NATIVE: disk reads + serde_json, NEVER a shell-out
 //! to `claude`/`npx` (archi decision: everything as natively-parsed JSON — see
 //! memory talos-parsing-native-json). PURE and defensive parsing (a corrupted file
@@ -93,6 +94,58 @@ pub fn skill_dirs(home: &Path) -> Vec<PathBuf> {
     ]
 }
 
+/// Parse Copilot CLI's `config.json` → its installed plugins, as `name@marketplace` ids.
+///
+/// ⭐ The file Copilot itself keeps its plugin state in (`installedPlugins`), read natively —
+/// the same answer `copilot plugin list --json` prints (MEASURED, 1.0.88: same four fields,
+/// same values), without starting a process per scan.
+///
+/// ⚠️ It is NOT plain JSON: Copilot writes a header of `//` comment lines before the object
+/// ("User settings belong in settings.json. / This file is managed automatically."). serde
+/// refuses those, so they are dropped first — only whole lines that START with `//`, which a
+/// pretty-printed JSON object never has.
+///
+/// ⭐ A plugin installed straight from a repository (`owner/repo:path`) has an EMPTY
+/// marketplace. Its id is then the bare name, which is what `plugin_version` matches a bare
+/// `detect:` against anyway.
+pub fn parse_copilot_plugins(text: &str) -> Vec<Plugin> {
+    let json: String = text
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else {
+        return Vec::new();
+    };
+    let Some(list) = v.get("installedPlugins").and_then(|p| p.as_array()) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|e| {
+            let name = e.get("name")?.as_str()?;
+            let market = e.get("marketplace").and_then(|m| m.as_str()).unwrap_or("");
+            let version = e.get("version").and_then(|x| x.as_str()).unwrap_or("");
+            Some(Plugin {
+                id: if market.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{name}@{market}")
+                },
+                version: version.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// Where Copilot CLI keeps its state: `COPILOT_HOME` when set, else `~/.copilot`. The variable
+/// is INJECTED so the rule is testable without touching the process environment.
+pub fn copilot_config_path(home: &Path, copilot_home: Option<&std::ffi::OsStr>) -> PathBuf {
+    match copilot_home.filter(|h| !h.is_empty()) {
+        Some(h) => PathBuf::from(h).join("config.json"),
+        None => home.join(".copilot").join("config.json"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,5 +214,68 @@ mod tests {
         let dirs = skill_dirs(home);
         assert!(dirs[0].ends_with(".claude/skills"));
         assert!(dirs[1].ends_with(".agents/skills"));
+    }
+
+    // MEASURED: the file Copilot CLI 1.0.88 wrote after one direct and one marketplace install,
+    // header comments included.
+    const COPILOT: &str = r#"// User settings belong in settings.json.
+// This file is managed automatically.
+{
+  "installedPlugins": [
+    {
+      "name": "markdown-converter",
+      "marketplace": "",
+      "version": "0.1.1768936949",
+      "enabled": true,
+      "source": { "source": "github", "repo": "intellectronica/agent-skills", "path": "plugins/markdown-converter" }
+    },
+    {
+      "name": "chiron",
+      "marketplace": "tekton",
+      "version": "0.0.9",
+      "enabled": true
+    }
+  ]
+}"#;
+
+    #[test]
+    fn copilot_plugins_are_read_past_the_comment_header() {
+        let ps = parse_copilot_plugins(COPILOT);
+        assert_eq!(ps.len(), 2, "the `//` header must not cost the whole file");
+        assert_eq!(plugin_version("chiron@tekton", &ps), Some("0.0.9".into()));
+        assert_eq!(plugin_version("chiron", &ps), Some("0.0.9".into()));
+        // A marketplace of the same plugin under ANOTHER name is not this one.
+        assert_eq!(plugin_version("chiron@tekton-beta", &ps), None);
+    }
+
+    #[test]
+    fn a_direct_copilot_plugin_is_found_by_its_bare_name() {
+        // Installed from `owner/repo:path`: the marketplace is empty, so the id is the name.
+        let ps = parse_copilot_plugins(COPILOT);
+        assert_eq!(
+            plugin_version("markdown-converter", &ps),
+            Some("0.1.1768936949".into())
+        );
+    }
+
+    #[test]
+    fn copilot_parse_is_defensive() {
+        assert!(parse_copilot_plugins("").is_empty());
+        assert!(parse_copilot_plugins("// only a header").is_empty());
+        assert!(parse_copilot_plugins(r#"{"installedPlugins": 3}"#).is_empty());
+        assert!(parse_copilot_plugins(r#"{"installedPlugins": [{"version": "1"}]}"#).is_empty());
+    }
+
+    #[test]
+    fn copilot_home_moves_the_whole_state() {
+        let home = Path::new("/Users/x");
+        assert!(copilot_config_path(home, None).ends_with(".copilot/config.json"));
+        assert_eq!(
+            copilot_config_path(home, Some(std::ffi::OsStr::new("/elsewhere"))),
+            PathBuf::from("/elsewhere/config.json")
+        );
+        // An EMPTY variable is no variable — not the filesystem root.
+        assert!(copilot_config_path(home, Some(std::ffi::OsStr::new("")))
+            .ends_with(".copilot/config.json"));
     }
 }

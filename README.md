@@ -32,7 +32,7 @@ when the kit puts the launchers in an OS folder. No build step:
 
 - **`catalog/`** — one YAML per **package**: what it is called, which route installs
   it (`winget`, `brew`, `cargo`, `npm`, `bun`, `run`, a Claude Code `claude-plugin`, a
-  `skill`, a `vscode-extension`, a `nu-plugin`), how to detect it, which version to
+  Copilot CLI `copilot-plugin`, a `skill`, a `vscode-extension`, a `nu-plugin`), how to detect it, which version to
   hold. The file stem is the package id; `name:` is what everything else refers to.
 - **`bundles/`** — one YAML per **selection**: a named card that pulls packages in by
   their `name`, and `needs:` other bundles (Base ← Manuals, Plus, Terminal is the

@@ -161,6 +161,7 @@ fn route_binary(route: &str) -> Option<&'static str> {
         "npm" => "npm",
         "bun" => "bun",
         "claude-plugin" => "claude",
+        "copilot-plugin" => "copilot",
         "skill" => "npx",
         "vscode-extension" => "code",
         "nu-plugin" => "nu",
@@ -522,9 +523,16 @@ mod tests {
     fn the_native_manager_and_git_come_first_then_each_route_once() {
         let t = tools_for(
             Os::Windows,
-            &["winget", "npm", "claude-plugin", "npm", "run"],
+            &[
+                "winget",
+                "npm",
+                "claude-plugin",
+                "npm",
+                "run",
+                "copilot-plugin",
+            ],
         );
-        assert_eq!(t, vec!["winget", "git", "npm", "claude"]);
+        assert_eq!(t, vec!["winget", "git", "npm", "claude", "copilot"]);
         let t = tools_for(
             Os::Darwin,
             &["brew", "vscode-extension", "skill", "nu-plugin"],
