@@ -10,7 +10,7 @@
 //!
 //! The same journal also carries what the machine is and how fast it answered
 //! (`machine.rs`: one `machine` line per launch, one `scan` line per scan), under
-//! the same rule — so the consent covers them too, and the Log tab shows them.
+//! the same rule — so the consent covers them too, and the Machine tab shows them.
 //!
 //! Same discipline as detect.rs / outdated.rs: PARSING is pure (tested), the IO
 //! is a thin shell that never panics (a journal that cannot write must not
@@ -274,7 +274,7 @@ fn compact_if_large(path: &Path) {
 
 /// Copies a record to the SHARED log only, when the consent allows it — for the machine
 /// profile of a launch whose user turns sharing on mid-session: it was journalled locally
-/// at collection time, and the Log tab says the share receives it. Without this, the share
+/// at collection time, and the Machine tab says the share receives it. Without this, the share
 /// would see no profile until the next launch while the card claimed otherwise.
 pub fn share_record<T: Serialize>(s: &ConsentStore, record: &T) {
     if let Ok(mut line) = serde_json::to_string(record) {

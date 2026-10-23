@@ -118,6 +118,15 @@ test("the card has a tab of its own: read-only facts, apart from the settings", 
   assert.ok(card < html.indexOf('id="view-log"'), "not inside the Log & settings view");
 });
 
+test("an open Machine tab waiting for the profile asks again, since nothing pushes it", () => {
+  const appjs = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
+  const body = appjs.slice(appjs.indexOf("function renderMachine"));
+  const fn = body.slice(0, body.indexOf("\n}\n"));
+  assert.match(fn, /view-machine/);
+  assert.match(fn, /setTimeout/);
+  assert.match(fn, /get-log/);
+});
+
 test("the Machine tab asks for the records when it opens, as the Log tab does", () => {
   const appjs = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
   const body = appjs.slice(appjs.indexOf("function setTab"));
@@ -144,16 +153,21 @@ test("policies are shown as stored, one row each; none set is said, not read is 
   // A fact, not a verdict: what a policy blocks is the content's to say.
   assert.ok(pol.every((r) => !r.warn));
   const none = machineRows({ ...base, policies: [] }).find((r) => r.label === "Policies");
-  assert.equal(none.value, "none set (AppInstaller, WindowsStore)");
+  assert.equal(none.value, "none set");
   assert.ok(!machineRows(base).some((r) => /^Polic/.test(r.label)));
 });
 
-test("a user PATH stored as REG_SZ is flagged with what it costs", () => {
+test("a user PATH stored as REG_SZ is flagged only when it names a %variable%", () => {
   const base = { os: "windows", cores: 1, ram_total_mb: 1, ram_available_mb: 1, shell_ms: 1 };
-  const sz = machineRows({ ...base, user_path_kind: "String" }).find((r) => r.label === "User PATH");
+  const pathRow = (m) => machineRows({ ...base, ...m }).find((r) => r.label === "User PATH");
+  const sz = pathRow({ user_path_kind: "String", user_path_vars: true });
   assert.equal(sz.warn, true);
-  assert.match(sz.value, /REG_SZ/);
-  assert.match(sz.value, /%USERPROFILE%/);
+  assert.match(sz.value, /^REG_SZ — /);
+  assert.match(sz.value, /never expanded/);
+  // REG_SZ of absolute paths only loses nothing: said, not flagged.
+  assert.deepEqual(pathRow({ user_path_kind: "String", user_path_vars: false }), {
+    label: "User PATH", value: "REG_SZ", warn: false,
+  });
   const ok = machineRows({ ...base, user_path_kind: "ExpandString" }).find((r) => r.label === "User PATH");
   assert.deepEqual(ok, { label: "User PATH", value: "REG_EXPAND_SZ", warn: false });
   assert.ok(!machineRows(base).some((r) => r.label === "User PATH"));

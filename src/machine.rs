@@ -72,14 +72,19 @@ pub struct Profile {
     /// `ac` | `battery` — Windows throttles a machine on battery saver.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub power: Option<String>,
-    /// Every value set under the policy keys that govern winget and the Store, as stored.
-    /// None: not read (not Windows, or the probe did not get that far); empty: none set.
+    /// Every value set under the policy keys that govern winget and the Store — the machine's
+    /// AppInstaller and WindowsStore keys, the user's WindowsStore key, and their subkeys
+    /// (`AppInstaller\\AllowedSources.…`) — as stored. None: not read, or not completely
+    /// (not Windows, an unreadable key, a probe cut short); empty: read in full, none set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policies: Option<Vec<Policy>>,
     /// The registry type of the user PATH: `ExpandString` (REG_EXPAND_SZ) or `String`
     /// (REG_SZ — then `%USERPROFILE%` in it is never expanded, and WindowsApps is lost).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_path_kind: Option<String>,
+    /// The user PATH, as stored, names a `%variable%`. Only then does REG_SZ lose anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_path_vars: Option<bool>,
     /// What collecting all of this took, end to end.
     pub collect_ms: u64,
     /// Set when the collection failed or did not finish — then every other field is empty,
@@ -238,8 +243,8 @@ pub fn tools_command(os: Os, tools: &[&str]) -> String {
                  try {{ Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction Stop | ForEach-Object {{ Write-Output (('av',$_.displayName) -join $tab) }} }} catch {{}}; \
                  try {{ Write-Output (('rt',(Get-MpComputerStatus -ErrorAction Stop).RealTimeProtectionEnabled) -join $tab) }} catch {{}}; \
                  try {{ $b = @(Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop); if ($b.Count -gt 0 -and @(1,4,5) -contains $b[0].BatteryStatus) {{ Write-Output (('power','battery') -join $tab) }} else {{ Write-Output (('power','ac') -join $tab) }} }} catch {{}}; \
-                 try {{ foreach ($k in @('HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\AppInstaller','HKLM:\\SOFTWARE\\Policies\\Microsoft\\WindowsStore')) {{ $i = Get-Item $k -ErrorAction SilentlyContinue; if ($i) {{ foreach ($n in $i.GetValueNames()) {{ Write-Output (('policy',((Split-Path $k -Leaf)+'.'+$n),[string]$i.GetValue($n)) -join $tab) }} }} }}; Write-Output (('policyscan','done') -join $tab) }} catch {{}}; \
-                 try {{ Write-Output (('pathkind',(Get-Item 'HKCU:\\Environment' -ErrorAction Stop).GetValueKind('Path')) -join $tab) }} catch {{}}"
+                 try {{ $pol = @(); foreach ($r in @(@('HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\AppInstaller','AppInstaller'),@('HKLM:\\SOFTWARE\\Policies\\Microsoft\\WindowsStore','WindowsStore'),@('HKCU:\\SOFTWARE\\Policies\\Microsoft\\WindowsStore','user WindowsStore'))) {{ if (Test-Path $r[0]) {{ $root = Get-Item $r[0] -ErrorAction Stop; foreach ($i in @($root) + @(Get-ChildItem $r[0] -Recurse -ErrorAction Stop)) {{ $rel = $r[1] + $i.Name.Substring($root.Name.Length); foreach ($n in $i.GetValueNames()) {{ if ($n) {{ $pol += (('policy',($rel+'.'+$n),[string]$i.GetValue($n)) -join $tab) }} }} }} }} }}; $pol; Write-Output (('policyscan','done') -join $tab) }} catch {{}}; \
+                 try {{ $ue = Get-Item 'HKCU:\\Environment' -ErrorAction Stop; Write-Output (('pathkind',$ue.GetValueKind('Path')) -join $tab); Write-Output (('pathvars',($ue.GetValue('Path',$null,'DoNotExpandEnvironmentNames') -like '*%*')) -join $tab) }} catch {{}}"
             )
         }
         _ => {
@@ -268,6 +273,7 @@ pub struct ToolsReport {
     pub power: Option<String>,
     pub policies: Option<Vec<Policy>>,
     pub user_path_kind: Option<String>,
+    pub user_path_vars: Option<bool>,
 }
 
 fn ps_bool(s: &str) -> Option<bool> {
@@ -281,6 +287,8 @@ fn ps_bool(s: &str) -> Option<bool> {
 pub fn parse_tools(output: &str) -> ToolsReport {
     let mut r = ToolsReport::default();
     let (mut alias, mut on_path) = (None, None);
+    // Policy lines count only once the scan says it finished: a read cut short is no list.
+    let mut policies = Vec::new();
     for line in output.lines() {
         let line = line.trim_end_matches('\r');
         let mut f = line.splitn(3, '\t');
@@ -300,17 +308,16 @@ pub fn parse_tools(output: &str) -> ToolsReport {
             (Some("rt"), Some(v), None) => r.realtime = ps_bool(v),
             (Some("power"), Some(v @ ("ac" | "battery")), None) => r.power = Some(v.into()),
             (Some("policy"), Some(name), Some(value)) if !name.is_empty() => {
-                r.policies.get_or_insert_with(Vec::new).push(Policy {
+                policies.push(Policy {
                     name: name.to_string(),
                     value: value.trim().to_string(),
                 })
             }
-            (Some("policyscan"), Some("done"), None) => {
-                r.policies.get_or_insert_with(Vec::new);
-            }
+            (Some("policyscan"), Some("done"), None) => r.policies = Some(Vec::new()),
             (Some("pathkind"), Some(v), None) if !v.trim().is_empty() => {
                 r.user_path_kind = Some(v.trim().to_string())
             }
+            (Some("pathvars"), Some(v), None) => r.user_path_vars = ps_bool(v),
             (Some(l), None, None) if l.starts_with("Now drawing from") => {
                 if l.contains("'AC Power'") {
                     r.power = Some("ac".into());
@@ -323,6 +330,9 @@ pub fn parse_tools(output: &str) -> ToolsReport {
     }
     if let (Some(alias), Some(on_path)) = (alias, on_path) {
         r.winget = Some(WingetAlias { alias, on_path });
+    }
+    if let Some(p) = r.policies.as_mut() {
+        *p = policies;
     }
     r
 }
@@ -543,6 +553,7 @@ pub fn collect(os: Os, kit_dir: &Path, routes: &[&str]) -> Profile {
         power: report.power,
         policies: report.policies,
         user_path_kind: report.user_path_kind,
+        user_path_vars: report.user_path_vars,
         collect_ms: ms(started.elapsed()),
         error: None,
     }
@@ -721,7 +732,21 @@ mod tests {
             "{c}"
         );
         assert!(c.contains("GetValueKind('Path')"), "{c}");
-        for key in ["'policy'", "'policyscan'", "'pathkind'"] {
+        assert!(
+            c.contains("HKCU:\\SOFTWARE\\Policies\\Microsoft\\WindowsStore"),
+            "{c}"
+        );
+        assert!(
+            c.contains("Get-ChildItem $r[0] -Recurse -ErrorAction Stop"),
+            "{c}"
+        );
+        assert!(c.contains("DoNotExpandEnvironmentNames"), "{c}");
+        // An unreadable key must throw past `done`, never read as "none set".
+        assert!(
+            !c.contains("Get-Item $k -ErrorAction SilentlyContinue"),
+            "{c}"
+        );
+        for key in ["'policy'", "'policyscan'", "'pathkind'", "'pathvars'"] {
             assert!(c.contains(key), "{key} missing: {c}");
         }
     }
@@ -732,7 +757,8 @@ mod tests {
             "policy\tAppInstaller.EnableDefaultSource\t0\r\n\
              policy\tWindowsStore.RequirePrivateStoreOnly\t1\r\n\
              policyscan\tdone\r\n\
-             pathkind\tString\r\n",
+             pathkind\tString\r\n\
+             pathvars\tTrue\r\n",
         );
         assert_eq!(
             r.policies,
@@ -748,6 +774,12 @@ mod tests {
             ])
         );
         assert_eq!(r.user_path_kind.as_deref(), Some("String"));
+        assert_eq!(r.user_path_vars, Some(true));
+        // Lines without `done`: the scan threw part-way — a partial list is no list.
+        assert_eq!(
+            parse_tools("policy\tAppInstaller.EnableDefaultSource\t0\n").policies,
+            None
+        );
         // The scan ran and found nothing: an empty list, which the card says as "none set".
         assert_eq!(parse_tools("policyscan\tdone\n").policies, Some(vec![]));
         // The scan never answered (a POSIX machine, a probe cut short): no claim at all.

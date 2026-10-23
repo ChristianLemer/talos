@@ -1254,7 +1254,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 write_selection(&state.data_dir, &sel);
             }
             // set-consent: records the sharing choice (marks consent decided), then answers
-            // with the log, so the Log tab's share line follows the toggle beside it.
+            // with the log, so the Machine tab's share line follows the toggle.
             "set-consent" => {
                 let share = parsed
                     .get("share")

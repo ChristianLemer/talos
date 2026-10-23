@@ -225,7 +225,7 @@ slow or never finds a tool. Three kinds of line, one JSON object each:
 | line | when | what it carries |
 |---|---|---|
 | install (has `package`) | each step | `package`, `version`, `action`, `ok`, `secs` |
-| `"kind": "machine"` | once per launch, after the first scan | OS, CPU and logical cores, RAM total/free, free space on the system disk, where the kit sits (`local`, `network`, `onedrive`, `synced`), **`shell_ms`** — one empty shell through the probe wrapper — and where each manager the plan uses resolves; on Windows also the winget alias state, the antivirus products the OS declares, Defender real-time, and AC or battery. A collection that failed or took over 60 s carries `error` instead, its other fields empty |
+| `"kind": "machine"` | once per launch, after the first scan | OS, CPU and logical cores, RAM total/free, free space on the system disk, where the kit sits (`local`, `network`, `onedrive`, `synced`), **`shell_ms`** — one empty shell through the probe wrapper — and where each manager the plan uses resolves; on Windows also the winget alias state, the antivirus products the OS declares, Defender real-time, AC or battery, **`policies`** — every value under the AppInstaller and WindowsStore policy keys (machine and user) and their subkeys, as stored — and **`user_path_kind`** / **`user_path_vars`**, the registry type of the user PATH and whether it names a `%variable%`. A collection that failed or took over 60 s carries `error` instead, its other fields empty |
 | `"kind": "scan"` | each scan | total, the three batched calls, every package probe in **ms**, and why a batched call gave no answer; `profile_running: true` when the machine profile was being collected meanwhile — its timings are then not the machine's alone |
 
 What to read first:
@@ -236,15 +236,21 @@ What to read first:
   `%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe`, registered by App Installer at the
   user's first logon. `winget.alias: false` means it was never registered for this user (a
   fresh profile, an image without the Store apps, LTSC or Server); `on_path: false` means it
-  exists but the probes cannot see it.
+  exists but the probes cannot see it. **`user_path_kind: "String"` with `user_path_vars:
+  true`** is the usual reason for the second: the user PATH is stored as REG_SZ, so its
+  `%USERPROFILE%\AppData\Local\Microsoft\WindowsApps` is never expanded.
+- **`policies`**: measured, `AppInstaller.EnableDefaultSource = 0` removes the `winget`
+  source every Talos route pins (all winget rows fail), `AppInstaller.EnableAppInstaller =
+  0` disables winget whole; `WindowsStore.RequirePrivateStoreOnly = 1` blocks nothing
+  Talos does. `null` means not read, `[]` read in full with none set.
 - **A `scan` line's `unavailable`** quotes the reason the release's missing console used to
   swallow.
 - **Past 2 MB a journal is compacted**, local and shared alike: every install line stays,
   but only the last 100 machine lines and the last 200 scan lines.
 
 What is NOT collected: no serial number, no MAC address, no user name beyond the one the
-file's own path carries; the home folder is written `~` in every path. The **Log tab shows
-the latest machine profile at its top**, as the values themselves — what the user sees there
+file's own path carries; the home folder is written `~` in every path. The **Machine tab shows
+the latest machine profile**, as the values themselves — what the user sees there
 is what the share receives. Only bookkeeping stays in the file alone: timestamps, the build
 stamp, the collection's own durations, the per-probe list. Turning sharing on mid-session
 sends this launch's profile to the share at once; earlier lines, the last scan's included,

@@ -2102,6 +2102,7 @@ function showBuild(build, distribution) {
 }
 
 // The "This machine" card: the records the journal received, as text (see machine.js).
+let machineRetry = null;
 function renderMachine(machine, scan, consent, sharedTo) {
   document.getElementById("mc-share").textContent = shareLine(consent, sharedTo);
   const grid = document.getElementById("mc-grid");
@@ -2112,6 +2113,16 @@ function renderMachine(machine, scan, consent, sharedTo) {
     wait.className = "mc-label";
     wait.textContent = "Collecting… (after the first scan)";
     grid.append(wait);
+    // The engine stores the profile when it lands but pushes nothing; the card is now
+    // a whole tab, so an open tab asks again until the answer is there.
+    if (!machineRetry && document.getElementById("view-machine").classList.contains("active")) {
+      machineRetry = setTimeout(() => {
+        machineRetry = null;
+        if (document.getElementById("view-machine").classList.contains("active")) {
+          ws.send(JSON.stringify({ type: "get-log" }));
+        }
+      }, 2000);
+    }
   }
   for (const r of rows) {
     const label = document.createElement("div");
