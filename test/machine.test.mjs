@@ -107,12 +107,56 @@ test("a scan that overlapped the collection says so", () => {
   assert.match(scanSummary({ ...base, profile_running: true }), /while the machine profile/);
 });
 
-test("the card sits at the top of the Log tab, above the settings", () => {
+test("the card has a tab of its own: read-only facts, apart from the settings", () => {
   const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+  assert.match(html, /<button class="tab" data-view="machine">Machine<\/button>/);
   const card = html.indexOf('id="machine-card"');
+  const view = html.indexOf('id="view-machine"');
   assert.notEqual(card, -1, "#machine-card must exist");
-  assert.ok(card > html.indexOf('id="view-log"'), "inside the Log view");
-  assert.ok(card < html.indexOf('id="settings"'), "above the settings");
+  assert.notEqual(view, -1, "#view-machine must exist");
+  assert.ok(card > view, "inside the Machine view");
+  assert.ok(card < html.indexOf('id="view-log"'), "not inside the Log & settings view");
+});
+
+test("the Machine tab asks for the records when it opens, as the Log tab does", () => {
+  const appjs = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
+  const body = appjs.slice(appjs.indexOf("function setTab"));
+  const fn = body.slice(0, body.indexOf("\n}\n"));
+  assert.match(fn, /view-machine/);
+  assert.match(fn, /isMachine/);
+  assert.match(fn, /get-log/);
+});
+
+test("policies are shown as stored, one row each; none set is said, not read is silent", () => {
+  const base = { os: "windows", cores: 1, ram_total_mb: 1, ram_available_mb: 1, shell_ms: 1 };
+  const rows = machineRows({
+    ...base,
+    policies: [
+      { name: "AppInstaller.EnableDefaultSource", value: "0" },
+      { name: "WindowsStore.RequirePrivateStoreOnly", value: "1" },
+    ],
+  });
+  const pol = rows.filter((r) => r.label === "Policy");
+  assert.deepEqual(pol.map((r) => r.value), [
+    "AppInstaller.EnableDefaultSource = 0",
+    "WindowsStore.RequirePrivateStoreOnly = 1",
+  ]);
+  // A fact, not a verdict: what a policy blocks is the content's to say.
+  assert.ok(pol.every((r) => !r.warn));
+  const none = machineRows({ ...base, policies: [] }).find((r) => r.label === "Policies");
+  assert.equal(none.value, "none set (AppInstaller, WindowsStore)");
+  assert.ok(!machineRows(base).some((r) => /^Polic/.test(r.label)));
+});
+
+test("a user PATH stored as REG_SZ is flagged with what it costs", () => {
+  const base = { os: "windows", cores: 1, ram_total_mb: 1, ram_available_mb: 1, shell_ms: 1 };
+  const sz = machineRows({ ...base, user_path_kind: "String" }).find((r) => r.label === "User PATH");
+  assert.equal(sz.warn, true);
+  assert.match(sz.value, /REG_SZ/);
+  assert.match(sz.value, /%USERPROFILE%/);
+  const ok = machineRows({ ...base, user_path_kind: "ExpandString" }).find((r) => r.label === "User PATH");
+  assert.deepEqual(ok, { label: "User PATH", value: "REG_EXPAND_SZ", warn: false });
+  assert.ok(!machineRows(base).some((r) => r.label === "User PATH"));
 });
 
 test("machine data reaches the page as text, never as markup", () => {

@@ -1724,25 +1724,28 @@ for (const pill of document.querySelectorAll(".theme-pill")) {
 }
 applyTheme("");
 
-// --- tabs (Bundles / Catalog / Log) ---
+// --- tabs (Bundles / Catalog / Machine / Log / Doctor) ---
 // Bundles and Catalog share ONE DOM (#view-bundles holds #steps); they differ
 // only by body scope class (tab-bundles filters to .want rows, tab-catalog shows
-// all — see the CSS). Only the Log tab swaps to a different view container.
+// all — see the CSS). Machine, Log and Doctor each swap to a view container of their own.
 function setTab(v) {
   document.querySelectorAll(".tab").forEach((t) =>
     t.classList.toggle("active", t.dataset.view === v)
   );
   const isLog = v === "log";
+  const isMachine = v === "machine";
   const isDoctor = v === "doctor";
   document
     .getElementById("view-bundles")
-    .classList.toggle("active", !isLog && !isDoctor);
+    .classList.toggle("active", !isLog && !isMachine && !isDoctor);
   document.getElementById("view-log").classList.toggle("active", isLog);
+  document.getElementById("view-machine").classList.toggle("active", isMachine);
   document.getElementById("view-doctor").classList.toggle("active", isDoctor);
   document.body.classList.toggle("tab-bundles", v === "bundles");
   document.body.classList.toggle("tab-catalog", v === "catalog");
   document.body.classList.toggle("tab-arbitration", v === "arbitration");
-  if (isLog) ws.send(JSON.stringify({ type: "get-log" }));
+  // One message feeds both: the profile and the history travel together in `log`.
+  if (isLog || isMachine) ws.send(JSON.stringify({ type: "get-log" }));
   if (isDoctor) doctorOpen();
 }
 

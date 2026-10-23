@@ -72,10 +72,18 @@ pub struct Profile {
     /// `ac` | `battery` — Windows throttles a machine on battery saver.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub power: Option<String>,
+    /// Every value set under the policy keys that govern winget and the Store, as stored.
+    /// None: not read (not Windows, or the probe did not get that far); empty: none set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policies: Option<Vec<Policy>>,
+    /// The registry type of the user PATH: `ExpandString` (REG_EXPAND_SZ) or `String`
+    /// (REG_SZ — then `%USERPROFILE%` in it is never expanded, and WindowsApps is lost).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_path_kind: Option<String>,
     /// What collecting all of this took, end to end.
     pub collect_ms: u64,
     /// Set when the collection failed or did not finish — then every other field is empty,
-    /// and this line says so instead of the Log tab waiting forever.
+    /// and this line says so instead of the Machine tab waiting forever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -123,6 +131,13 @@ pub struct WingetAlias {
     pub alias: bool,
     /// Its folder is on the PATH the probes see.
     pub on_path: bool,
+}
+
+/// One policy value, named `<key leaf>.<value name>` — `AppInstaller.EnableDefaultSource`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Policy {
+    pub name: String,
+    pub value: String,
 }
 
 /// One `scan` journal line.
@@ -222,7 +237,9 @@ pub fn tools_command(os: Os, tools: &[&str]) -> String {
                  Write-Output (('onpath',[bool](($env:Path -split ';') | Where-Object {{ $_.TrimEnd('\\') -eq $wa }})) -join $tab); \
                  try {{ Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction Stop | ForEach-Object {{ Write-Output (('av',$_.displayName) -join $tab) }} }} catch {{}}; \
                  try {{ Write-Output (('rt',(Get-MpComputerStatus -ErrorAction Stop).RealTimeProtectionEnabled) -join $tab) }} catch {{}}; \
-                 try {{ $b = @(Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop); if ($b.Count -gt 0 -and @(1,4,5) -contains $b[0].BatteryStatus) {{ Write-Output (('power','battery') -join $tab) }} else {{ Write-Output (('power','ac') -join $tab) }} }} catch {{}}"
+                 try {{ $b = @(Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop); if ($b.Count -gt 0 -and @(1,4,5) -contains $b[0].BatteryStatus) {{ Write-Output (('power','battery') -join $tab) }} else {{ Write-Output (('power','ac') -join $tab) }} }} catch {{}}; \
+                 try {{ foreach ($k in @('HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\AppInstaller','HKLM:\\SOFTWARE\\Policies\\Microsoft\\WindowsStore')) {{ $i = Get-Item $k -ErrorAction SilentlyContinue; if ($i) {{ foreach ($n in $i.GetValueNames()) {{ Write-Output (('policy',((Split-Path $k -Leaf)+'.'+$n),[string]$i.GetValue($n)) -join $tab) }} }} }}; Write-Output (('policyscan','done') -join $tab) }} catch {{}}; \
+                 try {{ Write-Output (('pathkind',(Get-Item 'HKCU:\\Environment' -ErrorAction Stop).GetValueKind('Path')) -join $tab) }} catch {{}}"
             )
         }
         _ => {
@@ -249,6 +266,8 @@ pub struct ToolsReport {
     pub antivirus: Vec<String>,
     pub realtime: Option<bool>,
     pub power: Option<String>,
+    pub policies: Option<Vec<Policy>>,
+    pub user_path_kind: Option<String>,
 }
 
 fn ps_bool(s: &str) -> Option<bool> {
@@ -280,6 +299,18 @@ pub fn parse_tools(output: &str) -> ToolsReport {
             }
             (Some("rt"), Some(v), None) => r.realtime = ps_bool(v),
             (Some("power"), Some(v @ ("ac" | "battery")), None) => r.power = Some(v.into()),
+            (Some("policy"), Some(name), Some(value)) if !name.is_empty() => {
+                r.policies.get_or_insert_with(Vec::new).push(Policy {
+                    name: name.to_string(),
+                    value: value.trim().to_string(),
+                })
+            }
+            (Some("policyscan"), Some("done"), None) => {
+                r.policies.get_or_insert_with(Vec::new);
+            }
+            (Some("pathkind"), Some(v), None) if !v.trim().is_empty() => {
+                r.user_path_kind = Some(v.trim().to_string())
+            }
             (Some(l), None, None) if l.starts_with("Now drawing from") => {
                 if l.contains("'AC Power'") {
                     r.power = Some("ac".into());
@@ -510,6 +541,8 @@ pub fn collect(os: Os, kit_dir: &Path, routes: &[&str]) -> Profile {
         antivirus: report.antivirus,
         realtime: report.realtime,
         power: report.power,
+        policies: report.policies,
+        user_path_kind: report.user_path_kind,
         collect_ms: ms(started.elapsed()),
         error: None,
     }
@@ -672,6 +705,70 @@ mod tests {
         assert_eq!(r.antivirus, vec!["Windows Defender", "Some EDR"]);
         assert_eq!(r.realtime, Some(true));
         assert_eq!(r.power.as_deref(), Some("battery"));
+    }
+
+    #[test]
+    fn the_windows_command_reads_the_policies_that_govern_winget_and_the_user_path_kind() {
+        // Facts, not verdicts: every value under the two policy keys, as stored, plus the
+        // registry TYPE of the user PATH. What any of it blocks is the content's to say.
+        let c = tools_command(Os::Windows, &["winget"]);
+        assert!(
+            c.contains("HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\AppInstaller"),
+            "{c}"
+        );
+        assert!(
+            c.contains("HKLM:\\SOFTWARE\\Policies\\Microsoft\\WindowsStore"),
+            "{c}"
+        );
+        assert!(c.contains("GetValueKind('Path')"), "{c}");
+        for key in ["'policy'", "'policyscan'", "'pathkind'"] {
+            assert!(c.contains(key), "{key} missing: {c}");
+        }
+    }
+
+    #[test]
+    fn policies_are_read_as_stored_and_none_set_differs_from_not_read() {
+        let r = parse_tools(
+            "policy\tAppInstaller.EnableDefaultSource\t0\r\n\
+             policy\tWindowsStore.RequirePrivateStoreOnly\t1\r\n\
+             policyscan\tdone\r\n\
+             pathkind\tString\r\n",
+        );
+        assert_eq!(
+            r.policies,
+            Some(vec![
+                Policy {
+                    name: "AppInstaller.EnableDefaultSource".into(),
+                    value: "0".into()
+                },
+                Policy {
+                    name: "WindowsStore.RequirePrivateStoreOnly".into(),
+                    value: "1".into()
+                },
+            ])
+        );
+        assert_eq!(r.user_path_kind.as_deref(), Some("String"));
+        // The scan ran and found nothing: an empty list, which the card says as "none set".
+        assert_eq!(parse_tools("policyscan\tdone\n").policies, Some(vec![]));
+        // The scan never answered (a POSIX machine, a probe cut short): no claim at all.
+        assert_eq!(parse_tools("").policies, None);
+        assert_eq!(parse_tools("").user_path_kind, None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_windows_command_runs_and_reports_the_path_kind() {
+        // A real run on the CI's windows-latest: the user PATH exists there, so its kind
+        // must come back, and the policy scan must finish (none set is still an answer).
+        let c = tools_command(Os::Windows, &["git"]);
+        let p = crate::platform::shell_probe(Os::Windows, &c);
+        let out = std::process::Command::new(&p.cmd)
+            .args(&p.args)
+            .output()
+            .unwrap();
+        let r = parse_tools(&String::from_utf8_lossy(&out.stdout));
+        assert!(r.policies.is_some(), "{r:?}");
+        assert!(r.user_path_kind.is_some(), "{r:?}");
     }
 
     #[test]

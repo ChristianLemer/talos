@@ -1,4 +1,4 @@
-// machine.js — the "This machine" card of the Log tab, PURE: no DOM, no server, no globals.
+// machine.js — the "This machine" card of the Machine tab, PURE: no DOM, no server, no globals.
 //
 // It renders the `machine` and `scan` records EXACTLY as the journal received them
 // (`machine.rs` on the engine side). The card is the answer to "what does sharing send?":
@@ -61,6 +61,25 @@ export function machineRows(m) {
     row("Antivirus", parts.join(" · "));
   }
   if (m.power) row("Power", m.power === "ac" ? "on AC" : "on battery", m.power !== "ac");
+  // The REGISTRY TYPE of the user PATH, not its text: stored as REG_SZ, `%USERPROFILE%` in
+  // it is never expanded, so WindowsApps — and winget with it — is lost to every program.
+  if (m.user_path_kind) {
+    const sz = m.user_path_kind === "String";
+    row(
+      "User PATH",
+      sz
+        ? "REG_SZ — %USERPROFILE% and the like are never expanded"
+        : m.user_path_kind === "ExpandString" ? "REG_EXPAND_SZ" : m.user_path_kind,
+      sz,
+    );
+  }
+  // Policies as stored, never judged: the engine cannot know what a value blocks (measured,
+  // RequirePrivateStoreOnly blocks nothing Talos does, EnableDefaultSource=0 blocks every
+  // winget row). Saying which is the content's job. Absent = not read: say nothing.
+  if (m.policies) {
+    if (!m.policies.length) row("Policies", "none set (AppInstaller, WindowsStore)");
+    for (const p of m.policies) row("Policy", `${p.name} = ${p.value}`);
+  }
   return rows;
 }
 

@@ -582,7 +582,7 @@
       .tab:hover { color:var(--fg); }
       .tab.active { color:var(--fg); border-bottom-color:#3d59a1; }
       .view { display:none; } .view.active { display:block; }
-      #view-doctor, #view-log { padding:16px 22px 24px; }
+      #view-doctor, #view-log, #view-machine { padding:16px 22px 24px; }
       /* Apply focus mode: during an Apply the screen narrows to what's being
          worked on. Untouched + succeeded rows are hidden; the running one shows;
          failures stay visible+open. On done, everything reappears (failures
@@ -1167,6 +1167,9 @@
            colleagues in 40 is noise, and this is an administration surface. Same lesson the
            scope controls learned — C caught it twice. -->
       <button class="tab tab-adv-only" data-view="arbitration">Arbitration</button>
+      <!-- Machine: what this machine IS, read-only. Apart from Log & settings, which holds
+           what the user CHANGES — one tab to read, one tab to set. -->
+      <button class="tab" data-view="machine">Machine</button>
       <button class="tab" data-view="log">Log &amp; settings</button>
       <button class="tab tab-doctor" data-view="doctor">Doctor</button>
     </nav>
@@ -1258,13 +1261,16 @@
       <div id="doctor-frame"><div id="doctor-host"></div></div>
     </div>
 
-    <div id="view-log" class="view">
+    <div id="view-machine" class="view">
       <div id="machine-card">
         <div class="set-title">This machine</div>
         <div class="mc-share" id="mc-share"></div>
         <div class="mc-grid" id="mc-grid"></div>
         <div class="mc-scan" id="mc-scan"></div>
       </div>
+    </div>
+
+    <div id="view-log" class="view">
       <div id="settings">
         <div class="set-row">
           <div><div class="set-title">Theme</div>
@@ -1283,7 +1289,7 @@
         </div>
         <div class="set-row">
           <div><div class="set-title">Share setup data for support<span class="rec-badge">Recommended</span></div>
-            <div class="set-desc">When on, the install history, this machine's profile (shown above) and each scan's timings are saved next to the tool (visible to your team if the disk is shared). When off, it stays private to this machine. <b>Sharing is strongly recommended</b> so your team can help you stay up to date.</div></div>
+            <div class="set-desc">When on, the install history, this machine's profile (shown in the Machine tab) and each scan's timings are saved next to the tool (visible to your team if the disk is shared). When off, it stays private to this machine. <b>Sharing is strongly recommended</b> so your team can help you stay up to date.</div></div>
           <label class="switch"><input type="checkbox" id="consent-toggle"><span class="slider"></span></label>
         </div>
         <!-- macOS ONLY. Hidden by default and revealed by renderAppmgmt when the

@@ -276,7 +276,7 @@ struct AppState {
         tokio::sync::Mutex<std::collections::HashMap<String, crate::managers::InstallScope>>,
     /// This launch's machine profile, None while it is being collected. Observed once per
     /// launch, after the first scan (see `machine::collect`), and shown at the top of the
-    /// Log tab — the very values the journal received, never a description of them.
+    /// Machine tab — the very values the journal received, never a description of them.
     machine: std::sync::Mutex<Option<crate::machine::Profile>>,
     /// Set by the first scan, so the profile is collected once per launch and a Refresh
     /// does not collect it again.
@@ -286,7 +286,7 @@ struct AppState {
     /// This launch's profile already reached the shared log — by its own write, or by a
     /// consent turned on later. Keeps the share from receiving it twice.
     machine_shared: std::sync::atomic::AtomicBool,
-    /// The last scan's timings, as journalled — for the Log tab's one-line summary.
+    /// The last scan's timings, as journalled — for the Machine tab's one-line summary.
     last_scan: std::sync::Mutex<Option<crate::machine::ScanRecord>>,
 }
 
@@ -1264,7 +1264,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 println!("[consent] set: share={share}");
                 let _ = socket.send(Message::Text(log_msg(&state))).await;
             }
-            // get-log: the Log tab requests the consent + the local history.
+            // get-log: the Log and Machine tabs request the consent, the local history and the profile.
             "get-log" => {
                 let _ = socket.send(Message::Text(log_msg(&state))).await;
             }
@@ -1668,7 +1668,7 @@ const MACHINE_PROFILE_LIMIT: std::time::Duration = std::time::Duration::from_sec
 ///
 /// Started at the end of the first scan and not at boot: the profile spawns two shells,
 /// and the scan is serial on purpose — they must not compete with its probes, nor make
-/// them look slower than they are. Nothing waits on it; the Log tab reads "collecting"
+/// them look slower than they are. Nothing waits on it; the Machine tab reads "collecting"
 /// until it lands. A Refresh clicked meanwhile does overlap it, and its scan line says so
 /// (`profile_running`).
 ///
@@ -1726,7 +1726,7 @@ fn start_machine_profile(state: &Arc<AppState>, steps: &[crate::bundles::Step]) 
 
 /// Records the share choice. Turning sharing ON mid-session also copies this launch's
 /// machine profile to the shared log: it was journalled locally when collected, and the
-/// Log tab now says the share receives what it shows.
+/// Machine tab now says the share receives what it shows.
 fn set_consent(state: &AppState, share: bool) {
     use std::sync::atomic::Ordering;
     let was = read_consent(&state.consent).share;
@@ -1746,14 +1746,14 @@ fn set_consent(state: &AppState, share: bool) {
     }
 }
 
-/// `log` message for the Log tab: consent, local history, and this launch's machine records.
+/// `log` message for the Log and Machine tabs: consent, local history, and this launch's machine records.
 fn log_msg(state: &AppState) -> String {
     json!({
         "type": "log",
         "consent": read_consent(&state.consent),
         "history": read_history(&state.consent),
-        // What the journal received about this machine, this launch — shown as-is at the top
-        // of the tab, so what is shared is never a description that could drift from it.
+        // What the journal received about this machine, this launch — shown as-is in the
+        // Machine tab, so what is shared is never a description that could drift from it.
         "machine": state.machine.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         "scan": state.last_scan.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         // Where a consented copy goes, said with the same `~` the profile uses.
@@ -4585,7 +4585,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The Log tab is told what the journal received about this machine, verbatim, and
+    /// The Machine tab is told what the journal received about this machine, verbatim, and
     /// where a consented copy goes — `null` while the profile is still being collected.
     #[test]
     fn the_log_message_carries_the_machine_profile_and_the_last_scan() {
