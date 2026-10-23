@@ -119,9 +119,10 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
 - `claude-plugin` / `skill`: `detect:` is the **name the tool lists the item under**
   (not a PATH binary) — Talos parses `claude plugin list` / `npx skills list`.
 - `copilot-plugin`: Talos reads Copilot's own record (`~/.copilot/config.json`, or
-  `$COPILOT_HOME/config.json`). The marketplace form **omits `detect:`**: the id is what
-  Copilot lists it under. The **direct** form (`owner/repo`, `owner/repo:path`, a git URL)
-  **must declare it**, as the name in the plugin's own manifest: Copilot records a direct
+  `$COPILOT_HOME/config.json`). A plugin switched off in Copilot reads **absent**, with
+  the reason on the row: Apply's install turns it back on. The marketplace form **omits
+  `detect:`**: the id is what Copilot lists it under. The **direct** form (`owner/repo`,
+  `owner/repo:path`, a git URL, a local folder) **must declare it**, as the name in the plugin's own manifest: Copilot records a direct
   plugin with an empty marketplace, by that name alone. `--check` refuses a direct source
   without it.
 - `vscode-extension`: **omit it.** The id you declared *is* the lookup name, so writing
@@ -155,6 +156,8 @@ requires: [Copilot CLI, Git, uv]
   non-interactive on both forms, on Linux and Windows. A re-Apply prints *"already
   registered"* from the `add`: expected, it does not fail the row.
 - **Git is a real prerequisite**: Copilot clones with the machine's `git`, over HTTPS.
+- Every value is passed in single quotes, so a local folder may hold a space; a `'` in
+  `copilot-plugin:`, `marketplace:` or `detect:` is refused by `--check`.
 - Copilot warns that direct installs are deprecated in favour of `plugin@marketplace`.
   They still work (1.0.103); prefer a marketplace when one exists.
 

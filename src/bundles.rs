@@ -620,7 +620,7 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
             (true, Some(d)) => d.trim().to_string(),
             // `--check` refuses this; at runtime the last path segment is the best guess.
             (true, None) => src
-                .rsplit(['/', ':'])
+                .rsplit(['/', '\\', ':'])
                 .next()
                 .unwrap_or(src)
                 .trim_end_matches(".git")
@@ -642,7 +642,7 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
             .map(|m| {
                 format!(
                     "echo '[talos] registering the marketplace, already registered is fine:'; \
-                     copilot plugin marketplace add \"{m}\"; "
+                     copilot plugin marketplace add '{m}'; "
                 )
             })
             .unwrap_or_default();
@@ -656,10 +656,13 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
             //
             // ⭐ No HTTPS forcing here, unlike claude: Copilot clones `https://github.com/…`
             // by itself (measured in its own error text), so the ssh agent is never asked.
+            // ⭐ Every value in SINGLE quotes: literal in PowerShell and in sh alike, so a local
+            // folder with a space stays one argument and a `$` is expanded by neither. A `'` in
+            // the value would end the quoting — `--check` refuses one.
             install: Some(format!(
-                "{add}copilot plugin install {src} && copilot plugin update {name}"
+                "{add}copilot plugin install '{src}' && copilot plugin update '{name}'"
             )),
-            uninstall: Some(format!("copilot plugin uninstall {name}")),
+            uninstall: Some(format!("copilot plugin uninstall '{name}'")),
             // ⬜ No upgrade: nothing marks a plugin outdated (`scan_outdated` asks winget/brew
             // only), so a wired `upgrade:` would be unreachable — the claude-plugin route's
             // mistake, not repeated. A re-Apply runs install + update, which is the gesture.
@@ -923,10 +926,12 @@ pub fn load_from_catalog(
 }
 
 /// Does a `copilot-plugin:` name a source Copilot installs DIRECTLY (`owner/repo`,
-/// `owner/repo:path`, a git URL) rather than `plugin@marketplace`? A plugin or marketplace name
-/// never holds a `/`; every direct source does.
+/// `owner/repo:path`, a git URL, a local folder) rather than `plugin@marketplace`? A plugin or
+/// marketplace name never holds a path separator; every direct source does — `\` included,
+/// because a Windows folder (`C:\plugins\x`, `.\x`) may hold no `/` at all. Measured: Copilot
+/// installs a local folder, relative or absolute, and records it like any direct install.
 pub fn is_direct_copilot_source(src: &str) -> bool {
-    src.contains('/')
+    src.contains('/') || src.contains('\\')
 }
 
 /// Is this route one that installs INTO a host rather than onto the machine?
@@ -969,6 +974,12 @@ pub fn is_extension_route(route: Option<&str>) -> bool {
 /// ⚠️ Do NOT "simplify" this by adding `nu-plugin` to `is_extension_route`. Every bundled
 /// plugin would move to 🧩, and its row would promise a download that never happens — a
 /// glyph that promises more than the gesture engages is as much a lie as one that promises less.
+/// The route this package takes on `os` — the route table's answer, for a caller outside this
+/// module that must not guess it (`--check` asks whether copilot-plugin is the one used).
+pub fn route_for(pkg: &RawPkg, os: Os) -> Option<String> {
+    commands_for(pkg, os).route
+}
+
 pub fn is_extension_route_for(pkg: &RawPkg, os: Os) -> bool {
     let route = commands_for(pkg, os).route;
     if route.as_deref() == Some("nu-plugin") {
@@ -1625,26 +1636,26 @@ mod tests {
             assert_eq!(c.route.as_deref(), Some("copilot-plugin"), "{os:?}");
             let install = c.install.as_deref().expect("an install command");
             assert!(
-                install.contains("copilot plugin marketplace add \"ChristianLemer/tekton#beta\""),
+                install.contains("copilot plugin marketplace add 'ChristianLemer/tekton#beta'"),
                 "the marketplace is registered first: {install}"
             );
             // ⚠️ MEASURED (1.0.88): a second `marketplace add` of the same source EXITS 1,
             // "Marketplace \"tekton\" already registered". Claude's `add && install` would
             // therefore fail EVERY re-Apply of a present plugin. The add must not gate.
             assert!(
-                !install.contains("tekton#beta\" &&"),
+                !install.contains("tekton#beta' &&"),
                 "an already-registered marketplace must not fail the install: {install}"
             );
             assert!(
                 install.contains(
-                    "copilot plugin install chiron@tekton-beta && copilot plugin update chiron@tekton-beta"
+                    "copilot plugin install 'chiron@tekton-beta' && copilot plugin update 'chiron@tekton-beta'"
                 ),
                 "installed, then updated: {install}"
             );
             assert_shell_safe(install, "the copilot plugin install chain");
             assert_eq!(
                 c.uninstall.as_deref(),
-                Some("copilot plugin uninstall chiron@tekton-beta")
+                Some("copilot plugin uninstall 'chiron@tekton-beta'")
             );
             // Unreachable, like every extension route's: nothing marks a plugin outdated.
             assert_eq!(c.upgrade, None);
@@ -1666,13 +1677,45 @@ mod tests {
         let install = c.install.unwrap();
         assert_eq!(
             install,
-            "copilot plugin install intellectronica/agent-skills:plugins/markdown-converter \
-             && copilot plugin update markdown-converter"
+            "copilot plugin install 'intellectronica/agent-skills:plugins/markdown-converter' \
+             && copilot plugin update 'markdown-converter'"
         );
         assert_eq!(
             c.uninstall.as_deref(),
-            Some("copilot plugin uninstall markdown-converter")
+            Some("copilot plugin uninstall 'markdown-converter'")
         );
+    }
+
+    #[test]
+    fn a_local_copilot_plugin_is_a_direct_source_and_one_argument() {
+        // MEASURED (1.0.88): Copilot installs a local folder, relative or absolute, a space in
+        // the path included, and records it like any direct install: marketplace "", by name.
+        for src in [
+            "C:\\plugins\\x",
+            ".\\x",
+            "./x",
+            "~/plugins/x",
+            "/opt/plugins/x",
+            "owner/repo",
+            "https://example.com/p.git",
+        ] {
+            assert!(is_direct_copilot_source(src), "{src} is a direct source");
+        }
+        for src in ["chiron@tekton", "chiron@tekton-beta"] {
+            assert!(!is_direct_copilot_source(src), "{src} is a marketplace id");
+        }
+        // ⭐ Single quotes: literal in PowerShell AND in sh, so a space stays inside one
+        // argument and a `$` is never expanded by either shell.
+        let mut p = pkg("Local");
+        p.copilot_plugin = Some("C:\\My Plugins\\$x".into());
+        p.detect = Some("x".into());
+        for os in [Os::Windows, Os::Linux] {
+            let install = commands_for(&p, os).install.unwrap();
+            assert!(
+                install.starts_with("copilot plugin install 'C:\\My Plugins\\$x' && "),
+                "{install}"
+            );
+        }
     }
 
     #[test]

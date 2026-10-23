@@ -124,7 +124,7 @@ pub fn user_home() -> std::path::PathBuf {
 fn detect_agent_content(step: &Step) -> Presence {
     use crate::agent_content::{
         copilot_config_path, list_skills, parse_copilot_plugins, parse_installed_plugins,
-        plugin_version, plugins_json_path, skill_dirs, skill_path,
+        plugin_state, plugins_json_path, skill_dirs, skill_path, PluginState,
     };
     let name = step.detect.as_deref().unwrap_or("").trim();
     let home = user_home();
@@ -146,16 +146,22 @@ fn detect_agent_content(step: &Step) -> Presence {
     if let Some((path, parse)) = plugin_file {
         let json = std::fs::read_to_string(&path).unwrap_or_default();
         let plugins = parse(&json);
-        let found = plugin_version(name, &plugins);
-        let present = found.is_some();
-        let version = found.clone().unwrap_or_default();
         // Evidence: the file read + the line found (or "not found").
-        let evidence = match &found {
-            Some(v) => format!("{name}  version {v}"),
-            None => format!("{name}: not found"),
+        let (present, version, evidence, reason) = match plugin_state(name, &plugins) {
+            PluginState::Enabled(v) => (true, v.clone(), format!("{name}  version {v}"), None),
+            // ⭐ Installed but switched off reads ABSENT, and says why: the row must not look
+            // like a plugin that vanished. Apply's install turns it back on (measured).
+            PluginState::Disabled(v) => (
+                false,
+                v.clone(),
+                format!("{name}  version {v}  disabled"),
+                Some("installed, but disabled — Apply turns it back on".to_string()),
+            ),
+            PluginState::Absent => (false, String::new(), format!("{name}: not found"), None),
         };
         return Presence {
             present: Some(present),
+            reason,
             version: Some(version),
             diag: Some(ProbeResult {
                 ok: present,

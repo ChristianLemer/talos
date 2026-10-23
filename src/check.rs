@@ -175,7 +175,28 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
         // A DIRECT Copilot source installs a plugin that Copilot then knows by the name in the
         // plugin's own manifest — which the catalogue cannot derive, so the author says it.
         // And it registers no marketplace, so a `marketplace:` beside it is a misunderstanding.
-        if let Some(src) = cp.pkg.copilot_plugin.as_deref() {
+        // Only where copilot-plugin IS the route: a package that also declares an earlier one
+        // (claude-plugin, a manager) never runs this line, on any OS.
+        let copilot_routed = [
+            crate::platform::Os::Windows,
+            crate::platform::Os::Darwin,
+            crate::platform::Os::Linux,
+        ]
+        .into_iter()
+        .any(|os| crate::bundles::route_for(&cp.pkg, os).as_deref() == Some("copilot-plugin"));
+        if let Some(src) = cp.pkg.copilot_plugin.as_deref().filter(|_| copilot_routed) {
+            // The route single-quotes every value; a `'` inside one ends the quoting early.
+            let fields = [
+                Some(src),
+                cp.pkg.marketplace.as_deref(),
+                cp.pkg.detect.as_deref(),
+            ];
+            if fields.iter().flatten().any(|v| v.contains('\'')) {
+                r.errors.push(format!(
+                    "{label}: a `'` in a copilot-plugin field — the route quotes every value \
+                     with single quotes, and this one would end the quoting"
+                ));
+            }
             if crate::bundles::is_direct_copilot_source(src) {
                 if cp.pkg.detect.as_deref().is_none_or(|d| d.trim().is_empty()) {
                     r.errors.push(format!(
@@ -557,6 +578,30 @@ mod tests {
         );
         assert!(!text.contains("catalog/c.yaml"), "{text}");
         assert!(!text.contains("catalog/e.yaml"), "{text}");
+    }
+
+    #[test]
+    fn a_copilot_rule_holds_only_where_copilot_is_the_route() {
+        let d = tmp("copilot-route");
+        // claude-plugin comes first in the route table: the copilot line is never used, so
+        // its missing `detect:` is no finding.
+        write(
+            &d,
+            "catalog/a.yaml",
+            "name: A\nclaude-plugin: a@m\ncopilot-plugin: o/r:p/a\n",
+        );
+        // A single quote would end the quoting the route relies on.
+        write(
+            &d,
+            "catalog/b.yaml",
+            "name: B\ncopilot-plugin: \"o/it's\"\ndetect: b\n",
+        );
+        let text = run(&d.join("catalog"), &d.join("bundles")).render();
+        assert!(!text.contains("catalog/a.yaml"), "{text}");
+        assert!(
+            text.contains("catalog/b.yaml: a `'` in a copilot-plugin field"),
+            "{text}"
+        );
     }
 
     #[test]

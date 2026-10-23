@@ -15,6 +15,9 @@ use std::path::{Path, PathBuf};
 pub struct Plugin {
     pub id: String,      // e.g. "chiron@tekton"
     pub version: String, // e.g. "0.0.2" ("" if unknown)
+    /// False only when the host SAYS so (Copilot's `"enabled": false`). Claude keeps that
+    /// state elsewhere, so its plugins read enabled — the behaviour before this field.
+    pub enabled: bool,
 }
 
 /// Parse ~/.claude/plugins/installed_plugins.json → list of plugins. The format:
@@ -40,19 +43,34 @@ pub fn parse_installed_plugins(json: &str) -> Vec<Plugin> {
         out.push(Plugin {
             id: id.clone(),
             version,
+            enabled: true,
         });
     }
     out
 }
 
-/// Is a plugin present? `detect` can be the full id "plugin@marketplace"
-/// or just the "plugin" part before @ (what a bundle often declares). Returns
-/// the found version (Some), or None if absent. Port of pluginPresent (+ version).
-pub fn plugin_version(detect: &str, plugins: &[Plugin]) -> Option<String> {
-    plugins
+/// What a plugin row reads: absent, installed and working, or installed but switched off.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PluginState {
+    Absent,
+    Enabled(String),
+    /// ⭐ Installed, and the host will not load it. Read as ABSENT by detection: MEASURED on
+    /// Copilot 1.0.88, `install` of a disabled plugin turns it back on, so the Apply that
+    /// follows is the repair. Its version is kept for the row's evidence.
+    Disabled(String),
+}
+
+/// Is a plugin present, and is it switched on? `detect` can be the full id
+/// "plugin@marketplace" or just the "plugin" part before @ (what a bundle often declares).
+pub fn plugin_state(detect: &str, plugins: &[Plugin]) -> PluginState {
+    match plugins
         .iter()
         .find(|p| p.id == detect || p.id.split('@').next() == Some(detect))
-        .map(|p| p.version.clone())
+    {
+        None => PluginState::Absent,
+        Some(p) if p.enabled => PluginState::Enabled(p.version.clone()),
+        Some(p) => PluginState::Disabled(p.version.clone()),
+    }
 }
 
 /// The names of installed skills: each subfolder of the skill directories is
@@ -125,7 +143,10 @@ pub fn parse_copilot_plugins(text: &str) -> Vec<Plugin> {
             let name = e.get("name")?.as_str()?;
             let market = e.get("marketplace").and_then(|m| m.as_str()).unwrap_or("");
             let version = e.get("version").and_then(|x| x.as_str()).unwrap_or("");
+            // Absent key = enabled: only an explicit `false` takes a plugin out.
+            let enabled = e.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true);
             Some(Plugin {
+                enabled,
                 id: if market.is_empty() {
                     name.to_string()
                 } else {
@@ -149,6 +170,14 @@ pub fn copilot_config_path(home: &Path, copilot_home: Option<&std::ffi::OsStr>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The version found, enabled or not — what most of these tests ask.
+    fn plugin_version(detect: &str, plugins: &[Plugin]) -> Option<String> {
+        match plugin_state(detect, plugins) {
+            PluginState::Absent => None,
+            PluginState::Enabled(v) | PluginState::Disabled(v) => Some(v),
+        }
+    }
 
     const SAMPLE: &str = r#"{
         "version": 2,
@@ -255,6 +284,33 @@ mod tests {
         assert_eq!(
             plugin_version("markdown-converter", &ps),
             Some("0.1.1768936949".into())
+        );
+    }
+
+    #[test]
+    fn a_disabled_copilot_plugin_is_installed_but_not_working() {
+        // MEASURED (1.0.88): `copilot plugin disable chiron@tekton` sets `"enabled": false`, and
+        // a later `install` sets it back to true. So a disabled plugin must read ABSENT — the
+        // next Apply's install is exactly what puts it back to work.
+        let text = COPILOT.replace(
+            "\"marketplace\": \"tekton\",\n      \"version\": \"0.0.9\",\n      \"enabled\": true",
+            "\"marketplace\": \"tekton\",\n      \"version\": \"0.0.9\",\n      \"enabled\": false",
+        );
+        let ps = parse_copilot_plugins(&text);
+        assert_eq!(
+            plugin_state("chiron", &ps),
+            PluginState::Disabled("0.0.9".into())
+        );
+        assert_eq!(
+            plugin_state("markdown-converter", &ps),
+            PluginState::Enabled("0.1.1768936949".into())
+        );
+        assert_eq!(plugin_state("absent", &ps), PluginState::Absent);
+        // No `enabled` key at all is the old shape: present, as before.
+        let claude = parse_installed_plugins(SAMPLE);
+        assert_eq!(
+            plugin_state("chiron", &claude),
+            PluginState::Enabled("0.0.2".into())
         );
     }
 
