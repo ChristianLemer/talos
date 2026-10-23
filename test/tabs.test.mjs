@@ -24,7 +24,7 @@ function fnBody(name) {
 
 test("the tabs, in order, each with its label", () => {
   const tabs = [...nav.matchAll(/<button class="tab[^"]*" data-view="(\w+)">([\s\S]*?)<\/button>/g)]
-    .map((m) => [m[1], m[2].replace(/<svg[\s\S]*?<\/svg>/, "").trim()]);
+    .map((m) => [m[1], m[2].replace(/<svg[\s\S]*?<\/svg>/, "").replace(/<\/?span[^>]*>/g, "").trim()]);
   assert.deepEqual(tabs, [
     ["bundles", "Changes"],
     ["catalog", "Catalog"],
@@ -40,10 +40,17 @@ test("every tab carries an icon drawn from the one sprite", () => {
   const buttons = [...nav.matchAll(/<button class="tab[\s\S]*?<\/button>/g)].map((m) => m[0]);
   assert.equal(buttons.length, 7);
   for (const b of buttons) {
-    const use = b.match(/<svg class="ti" aria-hidden="true"><use href="#(i-[\w-]+)"\/><\/svg>/);
+    const use = b.match(/<svg class="ti" aria-hidden="true"><use href="#(i-[\w-]+)"\/><\/svg><span class="tab-label">/);
     assert.ok(use, `no icon in ${b}`);
     assert.match(html, new RegExp(`<symbol id="${use[1]}" viewBox="0 0 24 24">`), use[1]);
   }
+});
+
+test("code that renames a tab writes its label, never the button that holds the icon", () => {
+  // Measured by the review: refreshArbitration set the button's textContent on every
+  // repaint and wiped the Arbitration icon, with every static-HTML test green.
+  assert.doesNotMatch(appjs, /\btab\.(textContent|innerHTML|innerText)\s*=/);
+  assert.match(fnBody("refreshArbitration"), /\.tab-label/);
 });
 
 test("the icons are flat: no colour of their own, they take the tab's", () => {
@@ -83,5 +90,6 @@ test("the share destination is said under the share switch too", () => {
 test("setTab swaps to the Settings view and asks for the records it shows", () => {
   const fn = fnBody("setTab");
   assert.match(fn, /view-settings/);
-  assert.match(fn, /isSettings/);
+  // Settings shows the consent and where the share goes: both come in `log`.
+  assert.match(fn, /if \([^)]*\bisSettings\b[^)]*\) ws\.send\(JSON\.stringify\(\{ type: "get-log" \}\)\)/);
 });

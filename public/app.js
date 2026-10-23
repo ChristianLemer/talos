@@ -802,8 +802,9 @@ function refreshArbitration() {
     r.details.classList.toggle("is-pending", held);
     if (held) n += 1;
   }
-  const tab = document.querySelector('.tab[data-view="arbitration"]');
-  if (tab) tab.textContent = n ? `Arbitration (${n})` : "Arbitration";
+  // The LABEL, never the button: the button also holds the tab's icon.
+  const label = document.querySelector('.tab[data-view="arbitration"] .tab-label');
+  if (label) label.textContent = n ? `Arbitration (${n})` : "Arbitration";
 }
 
 // The re-scan veil covers the WHOLE window (position:fixed, top-level), so the

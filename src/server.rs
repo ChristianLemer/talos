@@ -1264,7 +1264,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 println!("[consent] set: share={share}");
                 let _ = socket.send(Message::Text(log_msg(&state))).await;
             }
-            // get-log: the Log and Machine tabs request the consent, the local history and the profile.
+            // get-log: the History, Settings and Machine tabs request the consent, the local history
+            // and the profile.
             "get-log" => {
                 let _ = socket.send(Message::Text(log_msg(&state))).await;
             }
@@ -1746,7 +1747,7 @@ fn set_consent(state: &AppState, share: bool) {
     }
 }
 
-/// `log` message for the Log and Machine tabs: consent, local history, and this launch's machine records.
+/// `log` message for the History, Settings and Machine tabs: consent, local history, and this launch's machine records.
 fn log_msg(state: &AppState) -> String {
     json!({
         "type": "log",

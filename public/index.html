@@ -578,8 +578,7 @@
       /* Tabs + views */
       nav { display:flex; gap:4px; padding:0 12px; border-bottom:1px solid var(--line); }
       .tab { background:none; border:0; color:var(--dim); padding:9px 14px; cursor:pointer; font-size:13px;
-             border-bottom:2px solid transparent; }
-      .tab { display:inline-flex; align-items:center; gap:6px; }
+             border-bottom:2px solid transparent; display:inline-flex; align-items:center; gap:6px; }
       .ti { width:14px; height:14px; flex:none; fill:none; stroke:currentColor; stroke-width:2;
             stroke-linecap:round; stroke-linejoin:round; }
       .tab:hover { color:var(--fg); }
@@ -695,6 +694,8 @@
       .theme-pill.active { border-color:var(--ac); box-shadow:0 0 0 2px var(--ac); }
       .dangerbtn:hover { color:#f7768e; border-color:#f7768e; }
       #history { padding:8px 14px 16px; }
+      /* Under the share switch, as part of its row: the row gives up its divider to it. */
+      .set-row.has-where { border-bottom:0; padding-bottom:4px; }
       .set-where { font-size:12px; color:var(--dim); padding:0 0 12px; border-bottom:1px solid var(--line); }
       .hist-empty { color:var(--dim); font-size:13px; padding:12px 0; }
       .buildinfo { padding:14px; color:var(--dim); font-size:11px;
@@ -1194,18 +1195,18 @@
            (the button of that name lives inside), not "My setup" (already the name of
            the personal bundle). The internal id/class stay `bundles` — renaming them
            would touch ~40 selectors for no gain. -->
-      <button class="tab active" data-view="bundles"><svg class="ti" aria-hidden="true"><use href="#i-changes"/></svg>Changes</button>
-      <button class="tab" data-view="catalog"><svg class="ti" aria-hidden="true"><use href="#i-catalog"/></svg>Catalog</button>
+      <button class="tab active" data-view="bundles"><svg class="ti" aria-hidden="true"><use href="#i-changes"/></svg><span class="tab-label">Changes</span></button>
+      <button class="tab" data-view="catalog"><svg class="ti" aria-hidden="true"><use href="#i-catalog"/></svg><span class="tab-label">Catalog</span></button>
       <!-- ⚠️ ADVANCED ONLY. The majority state must stay silent: an empty tab for 39
            colleagues in 40 is noise, and this is an administration surface. Same lesson the
            scope controls learned — C caught it twice. -->
-      <button class="tab tab-adv-only" data-view="arbitration"><svg class="ti" aria-hidden="true"><use href="#i-arbitration"/></svg>Arbitration</button>
+      <button class="tab tab-adv-only" data-view="arbitration"><svg class="ti" aria-hidden="true"><use href="#i-arbitration"/></svg><span class="tab-label">Arbitration</span></button>
       <!-- Machine: what this machine IS; History: what Talos did on it; Settings: what the
            user SETS. Two tabs to read, one to change. -->
-      <button class="tab" data-view="machine"><svg class="ti" aria-hidden="true"><use href="#i-machine"/></svg>Machine</button>
-      <button class="tab" data-view="log"><svg class="ti" aria-hidden="true"><use href="#i-history"/></svg>History</button>
-      <button class="tab" data-view="settings"><svg class="ti" aria-hidden="true"><use href="#i-settings"/></svg>Settings</button>
-      <button class="tab tab-doctor" data-view="doctor"><svg class="ti" aria-hidden="true"><use href="#i-doctor"/></svg>Doctor</button>
+      <button class="tab" data-view="machine"><svg class="ti" aria-hidden="true"><use href="#i-machine"/></svg><span class="tab-label">Machine</span></button>
+      <button class="tab" data-view="log"><svg class="ti" aria-hidden="true"><use href="#i-history"/></svg><span class="tab-label">History</span></button>
+      <button class="tab" data-view="settings"><svg class="ti" aria-hidden="true"><use href="#i-settings"/></svg><span class="tab-label">Settings</span></button>
+      <button class="tab tab-doctor" data-view="doctor"><svg class="ti" aria-hidden="true"><use href="#i-doctor"/></svg><span class="tab-label">Doctor</span></button>
     </nav>
 
     <div id="view-bundles" class="view active">
@@ -1307,12 +1308,10 @@
     <!-- History: what Talos DID on this machine, newest first, and the one gesture that acts
          on that record. The id stays `log` — the server's message and its callers say log. -->
     <div id="view-log" class="view">
-      <div id="history-head">
-        <div class="set-row">
-          <div><div class="set-title">Delete collected data</div>
-            <div class="set-desc">Remove the recorded history from this machine: installs, machine profiles and scan timings.</div></div>
-          <button id="clear-log" class="dangerbtn">Delete</button>
-        </div>
+      <div class="set-row">
+        <div><div class="set-title">Delete collected data</div>
+          <div class="set-desc">Remove the recorded history from this machine: installs, machine profiles and scan timings.</div></div>
+        <button id="clear-log" class="dangerbtn">Delete</button>
       </div>
       <div id="history"></div>
     </div>
@@ -1335,7 +1334,7 @@
             <div class="set-desc">Per-package control with in/out toggles, author postures, and per-bundle Apply. Off by default — the panel stays simple: one on/off switch per bundle.</div></div>
           <label class="switch"><input type="checkbox" id="advanced-toggle"><span class="slider"></span></label>
         </div>
-        <div class="set-row">
+        <div class="set-row has-where">
           <div><div class="set-title">Share setup data for support<span class="rec-badge">Recommended</span></div>
             <div class="set-desc">When on, the install history, this machine's profile (shown in the Machine tab) and each scan's timings are saved next to the tool (visible to your team if the disk is shared). When off, it stays private to this machine. <b>Sharing is strongly recommended</b> so your team can help you stay up to date.</div></div>
           <label class="switch"><input type="checkbox" id="consent-toggle"><span class="slider"></span></label>

@@ -1,4 +1,4 @@
-// The "This machine" card of the Log tab. Pure — no DOM, no server.
+// The "This machine" card of the Machine tab. Pure — no DOM, no server.
 // Run: node --test test/machine.test.mjs   (from talos/)
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -109,7 +109,7 @@ test("a scan that overlapped the collection says so", () => {
 
 test("the card has a tab of its own: read-only facts, apart from the settings", () => {
   const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
-  assert.match(html, /<button class="tab" data-view="machine">[\s\S]*?Machine<\/button>/);
+  assert.match(html, /<button class="tab" data-view="machine">[\s\S]*?>Machine<\/span><\/button>/);
   const card = html.indexOf('id="machine-card"');
   const view = html.indexOf('id="view-machine"');
   assert.notEqual(card, -1, "#machine-card must exist");
@@ -127,7 +127,7 @@ test("an open Machine tab waiting for the profile asks again, since nothing push
   assert.match(fn, /get-log/);
 });
 
-test("the Machine tab asks for the records when it opens, as the Log tab does", () => {
+test("the Machine tab asks for the records when it opens, as History and Settings do", () => {
   const appjs = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
   const body = appjs.slice(appjs.indexOf("function setTab"));
   const fn = body.slice(0, body.indexOf("\n}\n"));
