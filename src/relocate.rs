@@ -99,21 +99,32 @@ pub fn relocation(
     Ok(())
 }
 
-/// Two paths name the same folder, ignoring case — Windows paths are case-insensitive, and
-/// `current_exe` returns the spelling a shortcut or an 8.3 name launched with. Ignoring case
-/// on every OS is the safe side here: it can only make a launch run in place.
+/// Two paths name the same folder. Each is canonicalized first when it exists — on Windows that
+/// resolves an 8.3 name and a `\\?\` prefix, on Unix a symlink; only the filesystem knows two
+/// spellings are one folder. Then case is ignored, for a path that does not exist yet and for
+/// what canonicalization leaves (`current_exe` returns the spelling a shortcut launched with).
+/// Ignoring case on every OS is the safe side here: it can only make a launch run in place.
 fn same_path(a: &Path, b: &Path) -> bool {
+    same_text(&canonical(a), &canonical(b))
+}
+
+/// `a` is `dir` or inside it (see `same_path`).
+fn within(a: &Path, dir: &Path) -> bool {
+    let dir = canonical(dir);
+    canonical(a).ancestors().any(|p| same_text(p, &dir))
+}
+
+fn canonical(p: &Path) -> PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
+fn same_text(a: &Path, b: &Path) -> bool {
     let norm = |p: &Path| -> Vec<String> {
         p.components()
             .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
             .collect()
     };
     norm(a) == norm(b)
-}
-
-/// `a` is `dir` or inside it, ignoring case (see `same_path`).
-fn within(a: &Path, dir: &Path) -> bool {
-    a.ancestors().any(|p| same_path(p, dir))
 }
 
 /// `Talos-<tag>-<first 12 hex of the sha256>.exe`. Anything in the tag outside
@@ -509,6 +520,27 @@ mod tests {
             rest: vec![],
         };
         assert!(!started_by_hand(&relocated, &upper, &eng));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_engine_folder_is_recognised_under_another_spelling() {
+        // On Windows an 8.3 name or a `\\?\` prefix spells the same folder differently; a
+        // symlink is the same trap on Unix. Only the filesystem can say they are one folder.
+        let d = tmp("spelling");
+        let eng = d.join("engine");
+        std::fs::create_dir_all(&eng).unwrap();
+        let alias = d.join("alias");
+        std::os::unix::fs::symlink(&eng, &alias).unwrap();
+        let exe = alias.join("Talos-v1-abc.exe");
+        std::fs::write(&exe, b"engine").unwrap();
+        assert!(relocation(Os::Windows, true, &plain(&[]), false, &exe, &eng).is_err());
+        assert!(started_by_hand(&plain(&[]), &exe, &eng));
+        let r = hand_over(&exe, &eng, "v1", &alias, &[], |_, _| Ok(()));
+        assert!(
+            r.is_err(),
+            "the kit is the engine folder under another name"
+        );
     }
 
     #[test]
