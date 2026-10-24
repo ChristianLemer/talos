@@ -216,8 +216,9 @@ same copy. The content is **never copied per machine**: `catalog/`, `bundles/`,
   where Talos is open. The copy just launched and the newest other one are kept.
 - **Pin the share's `Talos.exe`, or a shortcut to it — not the running window.** The window
   belongs to the local copy: pinned, it opens the kit this machine last launched from —
-  another one, if the machine has two — and once two newer versions have run, that copy is
-  gone and the pin leads nowhere.
+  another one, if the machine has two. If that kit's `Talos.exe` has changed since, the copy
+  starts it and steps aside, so the new version opens; but once two newer versions have run,
+  that copy is gone and the pin leads nowhere.
 - If the local copy cannot start (a policy refusing executables under `AppData\Local`),
   Talos runs from the share as it always did. `engine\last-launch.txt` says which way the
   last launch went; `TALOS_IN_PLACE=1` forces running from the share.

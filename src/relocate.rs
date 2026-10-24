@@ -260,27 +260,59 @@ pub fn prune(engine_dir: &Path, current: &Path) {
     }
 }
 
-/// Where the last relocation came from. A local engine started WITHOUT `--kit` — pinned to the
-/// taskbar from its running window, or double-clicked in AppData — reads it back, instead of
-/// resolving content beside itself, where there is none.
+/// Where the last relocation came from: the kit, then the exe that relocated. A local engine
+/// started WITHOUT `--kit` — pinned to the taskbar from its running window, or double-clicked in
+/// AppData — reads the kit back instead of resolving content beside itself, where there is
+/// none, and hands back to that exe when a publication has replaced it (`hand_back`).
 fn last_kit_path(engine_dir: &Path) -> PathBuf {
     engine_dir.join("last-kit.txt")
 }
 
-/// Record the kit a relocation was made from. Best-effort.
-pub fn remember_kit(engine_dir: &Path, kit: &Path) {
+/// Record the kit a relocation was made from, and the exe that made it — two lines. Best-effort.
+pub fn remember_kit(engine_dir: &Path, kit: &Path, launcher: &Path) {
     let _ = std::fs::create_dir_all(engine_dir);
-    let _ = std::fs::write(
-        last_kit_path(engine_dir),
-        kit.as_os_str().to_string_lossy().as_bytes(),
-    );
+    let text = format!("{}\n{}\n", kit.display(), launcher.display());
+    let _ = std::fs::write(last_kit_path(engine_dir), text);
+}
+
+/// Line `n` of `last-kit.txt`, if there is one.
+fn remembered_line(engine_dir: &Path, n: usize) -> Option<PathBuf> {
+    let raw = std::fs::read_to_string(last_kit_path(engine_dir)).ok()?;
+    let line = raw.lines().nth(n)?.trim_end();
+    (!line.is_empty()).then(|| PathBuf::from(line))
 }
 
 /// The kit last relocated from, if it is still a folder.
 pub fn remembered_kit(engine_dir: &Path) -> Option<PathBuf> {
-    let raw = std::fs::read_to_string(last_kit_path(engine_dir)).ok()?;
-    let kit = PathBuf::from(raw.trim_end());
-    kit.is_dir().then_some(kit)
+    remembered_line(engine_dir, 0).filter(|k| k.is_dir())
+}
+
+/// The exe the last relocation came from, if it is still a file. A file written before the
+/// launcher was recorded has one line: no launcher.
+pub fn remembered_launcher(engine_dir: &Path) -> Option<PathBuf> {
+    remembered_line(engine_dir, 1).filter(|l| l.is_file())
+}
+
+/// A local engine started by hand: if the kit's exe is no longer this engine — a publication
+/// replaced it since — start that exe instead (it relocates itself, the new version opens) and
+/// return it; this process exits. `Ok(None)` = no launcher known, or the same bytes: run here.
+/// `Err(why)` = the hand-back failed: run here anyway, an old version beats no window.
+pub fn hand_back(
+    exe: &Path,
+    engine_dir: &Path,
+    rest: &[String],
+    spawn: impl FnOnce(&Path, &[std::ffi::OsString]) -> std::io::Result<()>,
+) -> Result<Option<PathBuf>, String> {
+    let Some(launcher) = remembered_launcher(engine_dir) else {
+        return Ok(None);
+    };
+    let hash = |p: &Path| sha256_hex(p).map_err(|e| format!("cannot read {}: {e}", p.display()));
+    if hash(&launcher)? == hash(exe)? {
+        return Ok(None);
+    }
+    let args: Vec<std::ffi::OsString> = rest.iter().map(std::ffi::OsString::from).collect();
+    spawn(&launcher, &args).map_err(|e| format!("{} refused to start: {e}", launcher.display()))?;
+    Ok(Some(launcher))
 }
 
 /// A hand-over that happened: the engine started, and why it is not a fresh copy, if it is not.
@@ -325,7 +357,7 @@ pub fn hand_over(
     let mut args: Vec<std::ffi::OsString> = vec![KIT_FLAG.into(), kit.as_os_str().to_owned()];
     args.extend(rest.iter().map(std::ffi::OsString::from));
     spawn(&local, &args).map_err(|e| format!("{} refused to start: {e}", local.display()))?;
-    remember_kit(engine_dir, kit);
+    remember_kit(engine_dir, kit, exe);
     Ok(HandedOver { local, note })
 }
 
@@ -397,8 +429,25 @@ pub fn launch(os: Os, args: &LaunchArgs) -> Launched {
     let release = !cfg!(debug_assertions);
     if let Err(why) = relocation(os, release, args, in_place_env, &exe, &engine_dir) {
         println!("[launch] in place: {why}");
-        let by_hand = started_by_hand(args, &exe, &engine_dir);
-        return Launched::Here(by_hand.then(|| remembered_kit(&engine_dir)).flatten());
+        if !started_by_hand(args, &exe, &engine_dir) {
+            return Launched::Here(None);
+        }
+        let (line, launched) = match hand_back(&exe, &engine_dir, &args.rest, spawn_launcher) {
+            Ok(None) => return Launched::Here(remembered_kit(&engine_dir)),
+            Ok(Some(launcher)) => (
+                format!(
+                    "by hand: the kit's exe changed, started {}",
+                    launcher.display()
+                ),
+                Launched::HandedOver,
+            ),
+            Err(why) => (
+                format!("by hand: running {} ({why})", exe.display()),
+                Launched::Here(remembered_kit(&engine_dir)),
+            ),
+        };
+        record(&engine_dir, &line);
+        return launched;
     }
     // From here on a relocation was ATTEMPTED, and only that is worth the file: the engine
     // it starts comes back through here with `--kit` and must not overwrite the outcome.
@@ -421,17 +470,22 @@ pub fn launch(os: Os, args: &LaunchArgs) -> Launched {
         }
         Err(why) => format!("in place: {} ({why})", exe.display()),
     };
+    record(&engine_dir, &line);
+    match outcome {
+        Ok(_) => Launched::HandedOver,
+        Err(_) => Launched::Here(None),
+    }
+}
+
+/// The outcome of a launch, on stdout and in `<engine dir>/last-launch.txt`.
+fn record(engine_dir: &Path, line: &str) {
     println!("[launch] {line}");
-    let _ = std::fs::create_dir_all(&engine_dir);
+    let _ = std::fs::create_dir_all(engine_dir);
     let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
     let _ = std::fs::write(
         engine_dir.join("last-launch.txt"),
         format!("{stamp} {line}\n"),
     );
-    match outcome {
-        Ok(_) => Launched::HandedOver,
-        Err(_) => Launched::Here(None),
-    }
 }
 
 /// Windows' ERROR_ACCESS_DENIED: what CreateProcess answers when the caller's job forbids
@@ -458,20 +512,43 @@ fn with_breakaway<T>(mut start: impl FnMut(bool) -> std::io::Result<T>) -> std::
 /// longer; the engine is starting in parallel, so the person waits for nothing.
 fn spawn_detached(local: &Path, args: &[std::ffi::OsString]) -> std::io::Result<()> {
     const ALIVE_CHECK: std::time::Duration = std::time::Duration::from_secs(2);
-    let mut cmd = std::process::Command::new(local);
+    let mut child = detached_child(local, args)?;
+    let deadline = std::time::Instant::now() + ALIVE_CHECK;
+    while std::time::Instant::now() < deadline {
+        // A `try_wait` that errors says nothing about the child, which may well be running:
+        // treat it as alive rather than open a second Talos in place.
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(std::io::Error::other(format!(
+                "it exited at once ({status})"
+            )));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Ok(())
+}
+
+/// Start the kit's exe for a hand-back. No alive check: that exe relocates itself and EXITS
+/// after its own, so an early exit is its normal course, not a failure.
+fn spawn_launcher(launcher: &Path, args: &[std::ffi::OsString]) -> std::io::Result<()> {
+    detached_child(launcher, args).map(drop)
+}
+
+/// `exe` started detached, with no standard handle, in its own folder.
+fn detached_child(exe: &Path, args: &[std::ffi::OsString]) -> std::io::Result<std::process::Child> {
+    let mut cmd = std::process::Command::new(exe);
     cmd.args(args);
     // No inherited handle: `Talos.exe > \\share\log.txt` would keep the share open for the
     // session, a piped caller would wait for it. A release build has no console to write to.
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    if let Some(dir) = local.parent() {
+    if let Some(dir) = exe.parent() {
         cmd.current_dir(dir);
     }
     // Out of the caller's job when it allows it: a launcher started from a kill-on-close job
     // (an IDE terminal, a deployment agent) would otherwise take the engine down when it exits,
     // AFTER the alive check — "relocated" in the log, nothing on screen.
-    let mut child = with_breakaway(|breakaway| {
+    with_breakaway(|breakaway| {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -488,19 +565,7 @@ fn spawn_detached(local: &Path, args: &[std::ffi::OsString]) -> std::io::Result<
         #[cfg(not(windows))]
         let _ = breakaway;
         cmd.spawn()
-    })?;
-    let deadline = std::time::Instant::now() + ALIVE_CHECK;
-    while std::time::Instant::now() < deadline {
-        // A `try_wait` that errors says nothing about the child, which may well be running:
-        // treat it as alive rather than open a second Talos in place.
-        if let Ok(Some(status)) = child.try_wait() {
-            return Err(std::io::Error::other(format!(
-                "it exited at once ({status})"
-            )));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -737,6 +802,97 @@ mod tests {
     }
 
     #[test]
+    fn the_launcher_a_relocation_came_from_is_remembered_with_its_kit() {
+        let d = tmp("launcher");
+        let eng = d.join("engine");
+        let kit = d.join("share");
+        std::fs::create_dir_all(&kit).unwrap();
+        let launcher = kit.join("Talos.exe");
+        std::fs::write(&launcher, b"v1").unwrap();
+        let local = hand_over(&launcher, &eng, "v1", &kit, &[], |_, _| Ok(()))
+            .unwrap()
+            .local;
+        assert_eq!(remembered_launcher(&eng), Some(launcher));
+        assert_eq!(remembered_kit(&eng), Some(kit));
+        assert!(local.starts_with(&eng));
+    }
+
+    #[test]
+    fn a_kit_remembered_before_the_launcher_was_still_reads_back() {
+        let d = tmp("oldformat");
+        let eng = d.join("engine");
+        let kit = d.join("share");
+        std::fs::create_dir_all(&kit).unwrap();
+        std::fs::create_dir_all(&eng).unwrap();
+        std::fs::write(eng.join("last-kit.txt"), kit.to_string_lossy().as_bytes()).unwrap();
+        assert_eq!(remembered_kit(&eng), Some(kit));
+        assert_eq!(remembered_launcher(&eng), None);
+    }
+
+    /// An engine relocated from `kit/Talos.exe` holding `old`; the share's exe now holds `now`.
+    fn pinned(name: &str, old: &[u8], now: &[u8]) -> (PathBuf, PathBuf, PathBuf) {
+        let d = tmp(name);
+        let eng = d.join("engine");
+        let kit = d.join("share");
+        std::fs::create_dir_all(&kit).unwrap();
+        let launcher = kit.join("Talos.exe");
+        std::fs::write(&launcher, old).unwrap();
+        let local = hand_over(&launcher, &eng, "v1", &kit, &[], |_, _| Ok(()))
+            .unwrap()
+            .local;
+        std::fs::write(&launcher, now).unwrap();
+        (local, eng, launcher)
+    }
+
+    #[test]
+    fn an_engine_started_by_hand_hands_back_to_a_kit_exe_that_changed() {
+        // A pin on the old engine would run an old version against the new content.
+        let (local, eng, launcher) = pinned("handback", b"v1", b"v2");
+        let mut seen = None;
+        let r = hand_back(&local, &eng, &s(&["--x"]), |p, a| {
+            seen = Some((p.to_path_buf(), a.to_vec()));
+            Ok(())
+        });
+        assert_eq!(r, Ok(Some(launcher.clone())));
+        let want: Vec<std::ffi::OsString> = vec!["--x".into()];
+        assert_eq!(
+            seen,
+            Some((launcher, want)),
+            "no --kit: the launcher relocates itself"
+        );
+    }
+
+    #[test]
+    fn an_engine_started_by_hand_runs_when_the_kit_exe_is_the_same() {
+        let (local, eng, _) = pinned("same", b"v1", b"v1");
+        let mut spawned = false;
+        let r = hand_back(&local, &eng, &[], |_, _| {
+            spawned = true;
+            Ok(())
+        });
+        assert_eq!(r, Ok(None));
+        assert!(!spawned);
+    }
+
+    #[test]
+    fn a_hand_back_that_fails_says_why_and_the_engine_runs() {
+        let (local, eng, _) = pinned("handbackfail", b"v1", b"v2");
+        let r = hand_back(&local, &eng, &[], |_, _| {
+            Err(std::io::Error::other("blocked by policy"))
+        });
+        assert!(r.unwrap_err().contains("blocked by policy"));
+    }
+
+    #[test]
+    fn an_engine_with_no_remembered_launcher_runs() {
+        let d = tmp("nolauncher");
+        let exe = d.join("Talos-v1-abc.exe");
+        std::fs::write(&exe, b"v1").unwrap();
+        let r = hand_back(&exe, &d, &[], |_, _| Ok(()));
+        assert_eq!(r, Ok(None));
+    }
+
+    #[test]
     fn a_kit_inside_the_engine_folder_is_refused_and_never_remembered() {
         let d = tmp("selfkit");
         let exe = d.join("Talos.exe");
@@ -820,7 +976,7 @@ mod tests {
         let kit = d.join("share");
         std::fs::create_dir_all(&kit).unwrap();
         assert_eq!(remembered_kit(&eng), None);
-        remember_kit(&eng, &kit);
+        remember_kit(&eng, &kit, &kit.join("Talos.exe"));
         assert_eq!(remembered_kit(&eng), Some(kit.clone()));
         // A kit that has gone away is not adopted.
         std::fs::remove_dir_all(&kit).unwrap();
