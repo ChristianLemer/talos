@@ -15,7 +15,9 @@
 //! which file an integrator publishes beside the kit. A copy goes through a per-launch
 //! `.partial` + rename.
 //!
-//! Every failure — the copy, the rename, the spawn (a policy refusing executables under
+//! A copy that fails — a publication replacing the share's exe mid-copy — is tried once more,
+//! then the newest local engine whose bytes match its name is started instead. Every other
+//! failure — no engine to fall back on, the spawn (a policy refusing executables under
 //! `AppData\Local` is refused by CreateProcess, synchronously), an engine that exits within
 //! two seconds — falls back to running IN PLACE, which is what every build did before. What
 //! it cannot see is an engine that dies LATER than that; `last-launch.txt` then says
@@ -281,8 +283,15 @@ pub fn remembered_kit(engine_dir: &Path) -> Option<PathBuf> {
     kit.is_dir().then_some(kit)
 }
 
+/// A hand-over that happened: the engine started, and why it is not a fresh copy, if it is not.
+#[derive(Debug)]
+pub struct HandedOver {
+    pub local: PathBuf,
+    pub note: Option<String>,
+}
+
 /// Copy, prune, spawn the local engine with `--kit <kit>` and the original arguments.
-/// `Ok(local)` = handed over, this process should exit; `Err(why)` = run in place.
+/// `Ok` = handed over, this process should exit; `Err(why)` = run in place.
 /// `spawn` is injected so the sequence is tested without starting anything.
 pub fn hand_over(
     exe: &Path,
@@ -291,20 +300,74 @@ pub fn hand_over(
     kit: &Path,
     rest: &[String],
     spawn: impl FnOnce(&Path, &[std::ffi::OsString]) -> std::io::Result<()>,
-) -> Result<PathBuf, String> {
+) -> Result<HandedOver, String> {
     // A kit inside the engine folder is the engine pointing at itself (a path spelled so that
     // `relocation` missed it): no content there, and remembering it would empty every later
     // launch started by hand.
     if within(kit, engine_dir) {
         return Err(format!("the kit {} is the engine folder", kit.display()));
     }
-    let local = install(exe, engine_dir, tag).map_err(|e| format!("copy failed: {e}"))?;
+    // A copy fails at exactly the moment a publication replaces the share's exe ("changed while
+    // it was copied"). Running in place would then lock the share for the session at the very
+    // moment the publication lands: try once more, then fall back to the newest local engine
+    // whose bytes still match its name — an older version beats a locked share.
+    let (local, note) = match retry_once(RETRY_PAUSE, || install(exe, engine_dir, tag)) {
+        Ok(local) => (local, None),
+        Err(e) => match newest_whole_engine(engine_dir) {
+            Some(local) => {
+                let note = format!("copy failed ({e}): the newest verified local engine instead");
+                (local, Some(note))
+            }
+            None => return Err(format!("copy failed: {e}")),
+        },
+    };
     prune(engine_dir, &local);
     let mut args: Vec<std::ffi::OsString> = vec![KIT_FLAG.into(), kit.as_os_str().to_owned()];
     args.extend(rest.iter().map(std::ffi::OsString::from));
     spawn(&local, &args).map_err(|e| format!("{} refused to start: {e}", local.display()))?;
     remember_kit(engine_dir, kit);
-    Ok(local)
+    Ok(HandedOver { local, note })
+}
+
+/// Long enough for OneDrive to finish writing an exe it is replacing.
+const RETRY_PAUSE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// `f`, and once more after `pause` if it failed.
+fn retry_once<T>(
+    pause: std::time::Duration,
+    mut f: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    f().or_else(|_| {
+        std::thread::sleep(pause);
+        f()
+    })
+}
+
+/// The newest `Talos-*.exe` in `engine_dir` whose sha256 still matches the 12 hex its name
+/// carries (`Talos-<tag>-<hex>.exe`, or `…-<hex>-<pid>.exe` for a second name).
+fn newest_whole_engine(engine_dir: &Path) -> Option<PathBuf> {
+    let mut engines: Vec<_> = std::fs::read_dir(engine_dir)
+        .ok()?
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let stem = name
+                .strip_prefix("Talos-")?
+                .strip_suffix(".exe")?
+                .to_owned();
+            let mtime = e.metadata().and_then(|m| m.modified()).ok()?;
+            Some((mtime, e.path(), stem))
+        })
+        .collect();
+    engines.sort_by_key(|e| std::cmp::Reverse(e.0));
+    engines.into_iter().find_map(|(_, path, stem)| {
+        let hash = sha256_hex(&path).ok()?;
+        let short = &hash[..12];
+        stem.rsplit('-')
+            .take(2)
+            .any(|seg| seg == short)
+            .then_some(path)
+    })
 }
 
 /// A local engine started WITHOUT `--kit`: a taskbar pin, a double-click in AppData.
@@ -349,7 +412,13 @@ pub fn launch(os: Os, args: &LaunchArgs) -> Launched {
         spawn_detached,
     );
     let line = match &outcome {
-        Ok(local) => format!("relocated: {} started {}", exe.display(), local.display()),
+        Ok(h) => {
+            let mut line = format!("relocated: {} started {}", exe.display(), h.local.display());
+            if let Some(note) = &h.note {
+                line.push_str(&format!(" ({note})"));
+            }
+            line
+        }
         Err(why) => format!("in place: {} ({why})", exe.display()),
     };
     println!("[launch] {line}");
@@ -614,6 +683,60 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_install_is_tried_once_more() {
+        let mut tries = 0;
+        let r = retry_once(std::time::Duration::ZERO, || {
+            tries += 1;
+            if tries == 1 {
+                Err(std::io::Error::other("the exe changed while it was copied"))
+            } else {
+                Ok("copied")
+            }
+        });
+        assert_eq!(r.unwrap(), "copied");
+        assert_eq!(tries, 2);
+    }
+
+    #[test]
+    fn a_copy_that_cannot_be_made_starts_the_newest_verified_local_engine() {
+        // A publication replacing the share's exe mid-copy: running in place would lock the
+        // share for the session at exactly the moment a publication is landing.
+        let d = tmp("publishing");
+        let eng = d.join("engine");
+        let old = d.join("old.exe");
+        std::fs::write(&old, b"the previous engine").unwrap();
+        let verified = install(&old, &eng, "v1").unwrap();
+        let mut seen = None;
+        let r = hand_over(
+            &d.join("being-replaced.exe"),
+            &eng,
+            "v2",
+            &d,
+            &[],
+            |p, _| {
+                seen = Some(p.to_path_buf());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(r.local, verified);
+        assert_eq!(seen, Some(verified));
+        assert!(r.note.unwrap().contains("copy failed"));
+    }
+
+    #[test]
+    fn a_local_engine_whose_bytes_do_not_match_its_name_is_never_the_fallback() {
+        let d = tmp("nofallback");
+        let eng = d.join("engine");
+        let old = d.join("old.exe");
+        std::fs::write(&old, b"the previous engine").unwrap();
+        let local = install(&old, &eng, "v1").unwrap();
+        std::fs::write(&local, b"tampered").unwrap();
+        let r = hand_over(&d.join("absent.exe"), &eng, "v2", &d, &[], |_, _| Ok(()));
+        assert!(r.is_err());
+    }
+
+    #[test]
     fn a_kit_inside_the_engine_folder_is_refused_and_never_remembered() {
         let d = tmp("selfkit");
         let exe = d.join("Talos.exe");
@@ -806,7 +929,8 @@ mod tests {
             seen = Some((p.to_path_buf(), a.to_vec()));
             Ok(())
         })
-        .unwrap();
+        .unwrap()
+        .local;
         let (p, a) = seen.unwrap();
         assert_eq!(p, local);
         assert!(local.starts_with(&eng));
