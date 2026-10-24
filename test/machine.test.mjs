@@ -186,10 +186,10 @@ test("machine data reaches the page as text, never as markup", () => {
 
 test("the copy is the card as plain text, ready for a chat", () => {
   const scan = { total_ms: 41000, packages: 30, probes: [{ name: "winget list", ms: 9000 }] };
-  const m = { ...windows, at: "2026-10-24T09:00:00Z", talos: "v0.0.1-beta.57 · abc1234" };
+  const m = { ...windows, at: "2026-10-24T09:00:00Z", talos: "v0.0.1-beta.57 abc1234" };
   const lines = machineText(m, scan).split("\n");
   // Which build, and when: a pasted profile is read away from the machine that wrote it.
-  assert.equal(lines[0], "Talos machine profile · 2026-10-24T09:00:00Z · v0.0.1-beta.57 · abc1234");
+  assert.equal(lines[0], "Talos machine profile · 2026-10-24T09:00:00Z · v0.0.1-beta.57 abc1234");
   // Every row of the card, label then value, in the card's order.
   const rows = machineRows(m);
   assert.equal(lines.length, 1 + rows.length + 1);
@@ -207,7 +207,8 @@ test("nothing to copy before the profile is in", () => {
 test("the Machine tab copies like a terminal: the same button, the same check mark", () => {
   const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
   const card = html.slice(html.indexOf('id="machine-card"'), html.indexOf('id="view-log"'));
-  assert.match(card, /<button id="mc-copy" class="copy"/);
+  // Disabled until a profile is in: before it, a click would copy nothing.
+  assert.match(card, /<button id="mc-copy" class="copy" disabled/);
   assert.match(html, /#machine-card \{[^}]*position:relative/);
   const appjs = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
   const at = appjs.indexOf('getElementById("mc-copy")');
@@ -216,4 +217,5 @@ test("the Machine tab copies like a terminal: the same button, the same check ma
   assert.match(wiring, /machineText\(/);
   assert.match(wiring, /copyText\(/);
   assert.match(wiring, /ICON_OK/);
+  assert.match(appjs, /mcCopy\.disabled\s*=\s*!machine\b/);
 });
