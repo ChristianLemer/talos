@@ -365,9 +365,23 @@ pub fn launch(os: Os, args: &LaunchArgs) -> Launched {
     }
 }
 
-/// Start the local engine, DETACHED + new process group on Windows so it outlives this
-/// process and owns no console, in its own folder so it holds no directory handle on the share
-/// (the kit comes from `--kit`; the cwd is only `content_dirs_in`'s last fallback).
+/// Windows' ERROR_ACCESS_DENIED: what CreateProcess answers when the caller's job forbids
+/// `CREATE_BREAKAWAY_FROM_JOB`.
+const ACCESS_DENIED: i32 = 5;
+
+/// Start with breakaway from the caller's job; if the job forbids it, start without.
+/// `start(true)` = with breakaway. Any other failure is the answer.
+fn with_breakaway<T>(mut start: impl FnMut(bool) -> std::io::Result<T>) -> std::io::Result<T> {
+    match start(true) {
+        Err(e) if e.raw_os_error() == Some(ACCESS_DENIED) => start(false),
+        r => r,
+    }
+}
+
+/// Start the local engine, DETACHED + new process group + out of the caller's job on Windows so
+/// it outlives this process and owns no console, in its own folder so it holds no directory
+/// handle on the share (the kit comes from `--kit`; the cwd is only `content_dirs_in`'s last
+/// fallback).
 ///
 /// Then watch it for `ALIVE_CHECK`: an engine that exits at once — a security product killing a
 /// new unsigned exe after it started, a crash only the local copy hits — is a failure, and the
@@ -385,14 +399,27 @@ fn spawn_detached(local: &Path, args: &[std::ffi::OsString]) -> std::io::Result<
     if let Some(dir) = local.parent() {
         cmd.current_dir(dir);
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
-    }
-    let mut child = cmd.spawn()?;
+    // Out of the caller's job when it allows it: a launcher started from a kill-on-close job
+    // (an IDE terminal, a deployment agent) would otherwise take the engine down when it exits,
+    // AFTER the alive check — "relocated" in the log, nothing on screen.
+    let mut child = with_breakaway(|breakaway| {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const DETACHED_PROCESS: u32 = 0x0000_0008;
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+            const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+            let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+            cmd.creation_flags(if breakaway {
+                flags | CREATE_BREAKAWAY_FROM_JOB
+            } else {
+                flags
+            });
+        }
+        #[cfg(not(windows))]
+        let _ = breakaway;
+        cmd.spawn()
+    })?;
     let deadline = std::time::Instant::now() + ALIVE_CHECK;
     while std::time::Instant::now() < deadline {
         // A `try_wait` that errors says nothing about the child, which may well be running:
@@ -558,6 +585,32 @@ mod tests {
         let args: Vec<std::ffi::OsString> = vec!["-c".into(), script.into()];
         let r = spawn_detached(Path::new("/bin/sh"), &args);
         assert!(r.is_ok(), "{r:?}");
+    }
+
+    #[test]
+    fn a_job_that_forbids_breakaway_gets_a_second_try_without_it() {
+        let mut tries = Vec::new();
+        let r = with_breakaway(|b| {
+            tries.push(b);
+            if b {
+                Err(std::io::Error::from_raw_os_error(ACCESS_DENIED))
+            } else {
+                Ok("started")
+            }
+        });
+        assert_eq!(r.unwrap(), "started");
+        assert_eq!(tries, vec![true, false]);
+    }
+
+    #[test]
+    fn any_other_spawn_failure_is_not_retried() {
+        let mut tries = 0;
+        let r: std::io::Result<()> = with_breakaway(|_| {
+            tries += 1;
+            Err(std::io::Error::other("blocked by policy"))
+        });
+        assert!(r.is_err());
+        assert_eq!(tries, 1);
     }
 
     #[test]
