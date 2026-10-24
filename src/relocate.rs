@@ -296,6 +296,11 @@ pub fn hand_over(
     Ok(local)
 }
 
+/// A local engine started WITHOUT `--kit`: a taskbar pin, a double-click in AppData.
+pub fn started_by_hand(args: &LaunchArgs, exe: &Path, engine_dir: &Path) -> bool {
+    args.kit.is_none() && exe.parent().is_some_and(|p| same_path(p, engine_dir))
+}
+
 /// What `main` does after `launch`.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Launched {
@@ -318,7 +323,7 @@ pub fn launch(os: Os, args: &LaunchArgs) -> Launched {
     let release = !cfg!(debug_assertions);
     if let Err(why) = relocation(os, release, args, in_place_env, &exe, &engine_dir) {
         println!("[launch] in place: {why}");
-        let by_hand = args.kit.is_none() && exe.parent() == Some(engine_dir.as_path());
+        let by_hand = started_by_hand(args, &exe, &engine_dir);
         return Launched::Here(by_hand.then(|| remembered_kit(&engine_dir)).flatten());
     }
     // From here on a relocation was ATTEMPTED, and only that is worth the file: the engine
@@ -487,6 +492,23 @@ mod tests {
         let eng = abs_engine();
         let upper = PathBuf::from(eng.to_string_lossy().to_uppercase()).join("Talos-v1-abc.exe");
         assert!(relocation(Os::Windows, true, &plain(&[]), false, &upper, &eng).is_err());
+    }
+
+    #[test]
+    fn a_local_engine_started_by_hand_is_recognised_whatever_the_case_of_its_path() {
+        let eng = abs_engine();
+        let upper = PathBuf::from(eng.to_string_lossy().to_uppercase()).join("Talos-v1-abc.exe");
+        assert!(started_by_hand(&plain(&[]), &upper, &eng));
+        assert!(!started_by_hand(
+            &plain(&[]),
+            Path::new(r"S:\Kit\Talos.exe"),
+            &eng
+        ));
+        let relocated = LaunchArgs {
+            kit: Some(PathBuf::from(r"S:\Kit")),
+            rest: vec![],
+        };
+        assert!(!started_by_hand(&relocated, &upper, &eng));
     }
 
     #[test]
