@@ -219,6 +219,9 @@ same copy. The content is **never copied per machine**: `catalog/`, `bundles/`,
   another one, if the machine has two. If that kit's `Talos.exe` has changed since, the copy
   starts it and steps aside, so the new version opens; but once two newer versions have run,
   that copy is gone and the pin leads nowhere.
+- A copy that fails while a publication is replacing the share's exe is tried once more,
+  then the newest verified local copy starts instead — an older version for one session
+  beats locking the share at the moment the publication lands.
 - If the local copy cannot start (a policy refusing executables under `AppData\Local`),
   Talos runs from the share as it always did. `engine\last-launch.txt` says which way the
   last launch went; `TALOS_IN_PLACE=1` forces running from the share.
