@@ -377,6 +377,11 @@ fn spawn_detached(local: &Path, args: &[std::ffi::OsString]) -> std::io::Result<
     const ALIVE_CHECK: std::time::Duration = std::time::Duration::from_secs(2);
     let mut cmd = std::process::Command::new(local);
     cmd.args(args);
+    // No inherited handle: `Talos.exe > \\share\log.txt` would keep the share open for the
+    // session, a piped caller would wait for it. A release build has no console to write to.
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
     if let Some(dir) = local.parent() {
         cmd.current_dir(dir);
     }
@@ -541,6 +546,18 @@ mod tests {
             r.is_err(),
             "the kit is the engine folder under another name"
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_local_engine_inherits_no_standard_handle() {
+        // `Talos.exe > \\share\log.txt`, or a caller reading a pipe: an inherited handle keeps
+        // the share open, or the caller waiting, for the whole session. The child stays alive
+        // only if all three of its standard handles are /dev/null.
+        let script = r#"for f in 0 1 2; do [ "$(readlink /proc/$$/fd/$f)" = /dev/null ] || exit 1; done; sleep 3"#;
+        let args: Vec<std::ffi::OsString> = vec!["-c".into(), script.into()];
+        let r = spawn_detached(Path::new("/bin/sh"), &args);
+        assert!(r.is_ok(), "{r:?}");
     }
 
     #[test]
