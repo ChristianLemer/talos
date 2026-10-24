@@ -178,15 +178,23 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
                 false
             }
         };
-        // An extension route carries no pin and builds no upgrade: the command is dropped.
-        let on_extension = cp.pkg.claude_plugin.is_some()
-            || cp.pkg.copilot_plugin.is_some()
-            || cp.pkg.skill.is_some()
-            || cp.pkg.vscode_extension.is_some();
-        if cp.pkg.update.is_some() && on_extension {
+        // Where an extension is the route that wins, the package carries no pin, so `self`
+        // never applies and the route keeps its own update: the command is dropped there.
+        // Asked per OS, of the route that runs — a manager or npm may win before it.
+        let extension_on: Vec<&str> = [
+            (crate::platform::Os::Windows, "windows"),
+            (crate::platform::Os::Darwin, "macos"),
+            (crate::platform::Os::Linux, "linux"),
+        ]
+        .into_iter()
+        .filter(|(os, _)| crate::bundles::is_extension_route_for(&cp.pkg, *os))
+        .map(|(_, name)| name)
+        .collect();
+        if cp.pkg.update.is_some() && !extension_on.is_empty() {
             r.errors.push(format!(
-                "{label}: `update:` never runs on an extension — its route carries no version \
-                 and builds no upgrade"
+                "{label}: `update:` never runs where an extension is the route ({}) — an \
+                 extension carries no version, so `self` does not apply there",
+                extension_on.join(", ")
             ));
         }
         if cp.pkg.update_on.is_some() && cp.pkg.update.is_none() {
@@ -733,9 +741,29 @@ mod tests {
             "catalog/e.yaml",
             "name: E\nvscode-extension: e.e\nversion: self\nupdate: e update\nupdate-on: apply\n",
         );
+        // npm wins over the skill on every OS: the command runs, no finding.
+        write(
+            &d,
+            "catalog/f.yaml",
+            "name: F\nnpm: f\nskill: o/f\nversion: self\nupdate: f update\nupdate-on: apply\n",
+        );
+        // brew wins where it is the system manager (macOS, Linux): on Windows the extension is
+        // the route, and that is named.
+        write(
+            &d,
+            "catalog/g.yaml",
+            "name: G\nbrew: g\nvscode-extension: g.g\ndetect: g\nversion: self\nupdate: g update\n",
+        );
         let text = run(&d.join("catalog"), &d.join("bundles")).render();
         assert!(
-            text.contains("catalog/e.yaml: `update:` never runs on an extension"),
+            text.contains("catalog/e.yaml: `update:` never runs where an extension is the route"),
+            "{text}"
+        );
+        assert!(!text.contains("catalog/f.yaml"), "{text}");
+        assert!(
+            text.contains(
+                "catalog/g.yaml: `update:` never runs where an extension is the route (windows)"
+            ),
             "{text}"
         );
         assert!(

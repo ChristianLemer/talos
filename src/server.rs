@@ -2703,7 +2703,7 @@ async fn apply_diff(
         match batch_action(action_for(desired, &facts), step.downgrade.is_some()) {
             // A change that already ran toward this target in this session and moved nothing
             // is not run again: the row says why, and a new target lifts the hold.
-            Ok(Some(a @ (Action::Upgrade | Action::Downgrade))) => {
+            Ok(Some(a @ (Action::Upgrade | Action::Downgrade))) if judges_version(step, a) => {
                 let announced = od.map(|o| o.available.as_str());
                 let installed = presences[i].version.as_deref();
                 match unmoved_in_view(state, step, installed, announced).await {

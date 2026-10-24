@@ -347,11 +347,11 @@ export function actionOf(model, i) {
   });
 }
 // Does the Apply run this row's own `update:` every time (`update-on: apply`)? Only for a row
-// it keeps present: an auto row is never touched, an unwanted one is removed.
+// it will act on: an auto row is never touched, an unwanted or out-of-scope one is not updated.
 export function isUpdatedEachApply(model, i) {
   const p = model.pkgs.get(i);
   return !!(p?.selfUpdate && p?.updateEachApply) && isSelfUpdating(model, i)
-    && desiredOf(model, i) === "present";
+    && actionOf(model, i) === "upgrade";
 }
 // Does this row declare `version: self` — the application updates itself?
 export function isSelfUpdating(model, i) {
@@ -374,6 +374,8 @@ function unmovedHold(model, i) {
   if (!u || !installed) return null;
   const a = actionOf(model, i);
   if (a !== "upgrade" && a !== "downgrade") return null;
+  // Never judged by its version, so never held by it (the server's `judges_version`).
+  if (isUpdatedEachApply(model, i)) return null;
   return installed === u.found && targetOf(p) === u.target ? u.reason : null;
 }
 // A version change that exited ok and moved nothing (the server's `unmoved` message:

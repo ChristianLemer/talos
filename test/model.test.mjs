@@ -422,6 +422,14 @@ test("update-on apply: the Apply runs the tool's update every time, and the row 
   assert.equal(actionOf(m, 0), "upgrade", "nothing announced, and still run");
   assert.equal(isActionable(m, 0), true);
   assert.deepEqual(versionSummary(m, 0), { from: "2.1.308", to: null, pinned: null, muted: false, held: false });
+  // Never held by a remembered "unchanged": such a row is never judged by its version.
+  setUnmoved(m, 0, { found: "2.1.308", target: "", reason: "it moved nothing" });
+  assert.equal(isActionable(m, 0), true);
+  assert.equal(holdReason(m, 0), null);
+  // Out of scope: the Apply leaves it, and the row does not claim otherwise.
+  setScope(m, 0, "out", { trace: false });
+  assert.equal(isUpdatedEachApply(m, 0), false);
+  setScope(m, 0, null, { trace: false });
   // Wanted absent: an uninstall, never an update — and the row no longer says it is updated.
   setDecision(m, 0, "out");
   assert.equal(actionOf(m, 0), "uninstall");
