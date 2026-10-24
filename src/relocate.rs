@@ -43,14 +43,18 @@ pub struct LaunchArgs {
 }
 
 /// Take `--kit <dir>` out of the arguments. A `--kit` with nothing after it is dropped, not
-/// read as a kit: an empty path would resolve to the cwd and quietly adopt it.
+/// read as a kit: an empty path would resolve to the cwd and quietly adopt it. A relative kit
+/// is made absolute against the cwd at launch: a sidecar's `{dir}` and a step terminal's cwd
+/// are built from it, and a terminal resolving a relative folder lands in System32.
 pub fn split_kit(args: &[String]) -> LaunchArgs {
     let mut kit = None;
     let mut rest = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         if a == KIT_FLAG {
-            kit = it.next().map(PathBuf::from);
+            kit = it
+                .next()
+                .map(|k| std::path::absolute(k).unwrap_or_else(|_| PathBuf::from(k)));
         } else {
             rest.push(a.clone());
         }
@@ -410,8 +414,9 @@ mod tests {
 
     #[test]
     fn the_kit_flag_is_taken_out_of_the_command_line() {
-        let a = split_kit(&s(&["--kit", r"C:\Share\Kit", "--foo"]));
-        assert_eq!(a.kit, Some(PathBuf::from(r"C:\Share\Kit")));
+        let kit = std::env::temp_dir().join("Share").join("Kit");
+        let a = split_kit(&s(&["--kit", &kit.to_string_lossy(), "--foo"]));
+        assert_eq!(a.kit, Some(kit));
         assert_eq!(a.rest, s(&["--foo"]));
     }
 
@@ -420,6 +425,16 @@ mod tests {
         let a = split_kit(&s(&["--check", "c", "b"]));
         assert_eq!(a.kit, None);
         assert_eq!(a.rest, s(&["--check", "c", "b"]));
+    }
+
+    #[test]
+    fn a_relative_kit_is_made_absolute() {
+        // Every consumer of the kit — a sidecar's `{dir}`, a step terminal's cwd — needs an
+        // absolute folder: a relative one resolves against whatever cwd a terminal starts in.
+        let a = split_kit(&s(&["--kit", "share"]));
+        let kit = a.kit.unwrap();
+        assert!(kit.is_absolute(), "{}", kit.display());
+        assert!(kit.ends_with("share"));
     }
 
     #[test]
