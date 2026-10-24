@@ -397,6 +397,10 @@ application — so the row is **not** arbitration and shows one number with `upd
   "nothing to do" is its usual answer. The price is that the Apply always has something to
   run, so it never says the machine already matches while such a row is wanted. A package
   the manager upgrades normally needs none of this: no `self`, no `update-on`.
+- Where an extension route wins (`claude-plugin`, `copilot-plugin`, `skill`,
+  `vscode-extension`, a released `nu-plugin`), the package carries no version, so `self` and
+  `update:` do not apply there and the route keeps its own update. `--check` names a package
+  where that is so on every OS.
 - The command must fit how the tool is installed on the machine: `claude update` updates an
   npm or native install and does nothing under mise (measured), where `mise upgrade claude`
   is the one.

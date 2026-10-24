@@ -227,12 +227,29 @@ async fn emit_unmoved(socket: &mut WebSocket, i: usize, u: &Unmoved) {
 async fn unmoved_in_view(
     state: &AppState,
     step: &crate::bundles::Step,
+    action: crate::decision::Action,
     installed: Option<&str>,
     announced: Option<&str>,
 ) -> Option<Unmoved> {
-    let target = step_target(step.pin.as_deref(), announced).unwrap_or_default();
     let memory = state.unmoved.lock().await;
-    held_unmoved(&memory, &step.id, installed.unwrap_or(""), &target)
+    hold_for(&memory, step, action, installed, announced)
+}
+
+/// The remembered change that holds this step, if any: only for a step judged by the version it
+/// leaves (`judges_version`, the predicate the recording uses), from the version installed now
+/// toward the target now in view.
+fn hold_for(
+    memory: &std::collections::HashMap<String, Unmoved>,
+    step: &crate::bundles::Step,
+    action: crate::decision::Action,
+    installed: Option<&str>,
+    announced: Option<&str>,
+) -> Option<Unmoved> {
+    if !judges_version(step, action) {
+        return None;
+    }
+    let target = step_target(step.pin.as_deref(), announced).unwrap_or_default();
+    held_unmoved(memory, &step.id, installed.unwrap_or(""), &target)
         .then(|| memory.get(&step.id).cloned())
         .flatten()
 }
@@ -1717,7 +1734,9 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &Arc<AppState>) {
             emit_outdated_if(socket, i, od).await;
             let announced = od.map(|o| o.available.as_str());
             if hold_still_in_view(step, od) {
-                if let Some(u) = unmoved_in_view(state, step, p.version.as_deref(), announced).await
+                let act = crate::decision::Action::Upgrade;
+                if let Some(u) =
+                    unmoved_in_view(state, step, act, p.version.as_deref(), announced).await
                 {
                     emit_unmoved(socket, i, &u).await;
                 }
@@ -2703,10 +2722,10 @@ async fn apply_diff(
         match batch_action(action_for(desired, &facts), step.downgrade.is_some()) {
             // A change that already ran toward this target in this session and moved nothing
             // is not run again: the row says why, and a new target lifts the hold.
-            Ok(Some(a @ (Action::Upgrade | Action::Downgrade))) if judges_version(step, a) => {
+            Ok(Some(a @ (Action::Upgrade | Action::Downgrade))) => {
                 let announced = od.map(|o| o.available.as_str());
                 let installed = presences[i].version.as_deref();
-                match unmoved_in_view(state, step, installed, announced).await {
+                match unmoved_in_view(state, step, a, installed, announced).await {
                     Some(u) => {
                         println!("[apply] {} held: {}", step.name, u.reason);
                         emit_unmoved(socket, i, &u).await;
@@ -5646,6 +5665,36 @@ mod tests {
             super::winget_plan(Action::Upgrade, &plain, listed, Some(Machine), None),
             None
         );
+    }
+
+    #[test]
+    fn a_tool_updated_on_every_apply_is_never_held_by_a_remembered_change() {
+        // A hold recorded before the author added `update-on: apply` survives a Refresh (the
+        // memory is keyed by id). The Apply must still run the row: it is never judged by the
+        // version it leaves, so it is never held by it either.
+        let mut memory = std::collections::HashMap::new();
+        memory.insert(
+            "copilot-cli".to_string(),
+            Unmoved {
+                found: "1.0.102".into(),
+                target: "1.0.103".into(),
+                reason: "it moved nothing".into(),
+            },
+        );
+        let mut step = brew_step("copilot-cli", Some("self"));
+        step.upgrade = Some("copilot update".into());
+        let hold = |s: &Step| {
+            hold_for(
+                &memory,
+                s,
+                Action::Upgrade,
+                Some("1.0.102"),
+                Some("1.0.103"),
+            )
+        };
+        assert!(hold(&step).is_some(), "behind-only: held as before");
+        step.update_each_apply = true;
+        assert!(hold(&step).is_none(), "updated on every Apply: never held");
     }
 
     #[test]
