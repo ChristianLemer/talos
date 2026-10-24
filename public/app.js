@@ -6,7 +6,7 @@ import {
 } from "./decision.js";
 import * as M from "./model.js";
 import { estimate, formatEstimate } from "./estimate.js";
-import { machineRows, scanSummary, shareLine } from "./machine.js";
+import { machineRows, machineText, scanSummary, shareLine } from "./machine.js";
 const model = M.createModel();
 
 const stepsEl = document.getElementById("steps");
@@ -2106,8 +2106,23 @@ function showBuild(build, distribution) {
 }
 
 // The "This machine" card: the records the journal received, as text (see machine.js).
+// The Copy button copies what the card shows, as the terminal's copies its output: the
+// same icon, the same check mark for a moment when it worked.
 let machineRetry = null;
+let machineShown = [null, null];
+const mcCopy = document.getElementById("mc-copy");
+mcCopy.innerHTML = ICON_COPY;
+mcCopy.onclick = () => {
+  const text = machineText(...machineShown);
+  if (!text) return;
+  copyText(text).then((ok) => {
+    mcCopy.innerHTML = ok ? ICON_OK : ICON_COPY;
+    if (ok) setTimeout(() => (mcCopy.innerHTML = ICON_COPY), 1200);
+  });
+};
 function renderMachine(machine, scan, consent, sharedTo) {
+  machineShown = [machine, scan];
+  mcCopy.disabled = !machine;
   document.getElementById("mc-share").textContent = shareLine(consent, sharedTo);
   const grid = document.getElementById("mc-grid");
   grid.replaceChildren();

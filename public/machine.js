@@ -91,3 +91,16 @@ export function scanSummary(s) {
   if (s.profile_running) line += " · measured while the machine profile was being collected";
   return line;
 }
+
+// The card as plain text, for a chat: what a colleague is asked for when something fails on
+// a machine they cannot see. The header says which build wrote it and when, because the
+// paste is read away from the machine; a flagged row says it with "⚠", because the colour
+// does not survive a paste. Empty while there is no profile to copy.
+export function machineText(m, scan) {
+  if (!m) return "";
+  const lines = [["Talos machine profile", m.at, m.talos].filter(Boolean).join(" · ")];
+  for (const r of machineRows(m)) lines.push(`${r.warn ? "⚠ " : ""}${r.label}: ${r.value}`);
+  const s = scanSummary(scan);
+  if (s) lines.push(s);
+  return lines.join("\n");
+}

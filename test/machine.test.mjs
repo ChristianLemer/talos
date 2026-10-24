@@ -7,6 +7,7 @@ import {
   formatMb,
   formatMs,
   machineRows,
+  machineText,
   scanSummary,
   shareLine,
   SLOW_SHELL_MS,
@@ -181,4 +182,38 @@ test("machine data reaches the page as text, never as markup", () => {
   const fn = body.slice(0, body.indexOf("\n}\n"));
   assert.ok(fn.length > 0, "renderMachine must exist");
   assert.ok(!fn.includes("innerHTML"), "renderMachine must not use innerHTML");
+});
+
+test("the copy is the card as plain text, ready for a chat", () => {
+  const scan = { total_ms: 41000, packages: 30, probes: [{ name: "winget list", ms: 9000 }] };
+  const m = { ...windows, at: "2026-10-24T09:00:00Z", talos: "v0.0.1-beta.57 · abc1234" };
+  const lines = machineText(m, scan).split("\n");
+  // Which build, and when: a pasted profile is read away from the machine that wrote it.
+  assert.equal(lines[0], "Talos machine profile · 2026-10-24T09:00:00Z · v0.0.1-beta.57 · abc1234");
+  // Every row of the card, label then value, in the card's order.
+  const rows = machineRows(m);
+  assert.equal(lines.length, 1 + rows.length + 1);
+  rows.forEach((r, i) => assert.ok(lines[1 + i].endsWith(`${r.label}: ${r.value}`), lines[1 + i]));
+  // The colour does not survive a paste, so a flagged row says it in the text.
+  assert.equal(lines[1 + rows.findIndex((r) => r.label === "winget")], "⚠ winget: not found");
+  assert.equal(lines[1 + rows.findIndex((r) => r.label === "CPU")], "CPU: Intel Core i5 · 8 logical cores");
+  assert.equal(lines.at(-1), scanSummary(scan));
+});
+
+test("nothing to copy before the profile is in", () => {
+  assert.equal(machineText(null, null), "");
+});
+
+test("the Machine tab copies like a terminal: the same button, the same check mark", () => {
+  const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+  const card = html.slice(html.indexOf('id="machine-card"'), html.indexOf('id="view-log"'));
+  assert.match(card, /<button id="mc-copy" class="copy"/);
+  assert.match(html, /#machine-card \{[^}]*position:relative/);
+  const appjs = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
+  const at = appjs.indexOf('getElementById("mc-copy")');
+  assert.notEqual(at, -1, "the button must be wired");
+  const wiring = appjs.slice(at, appjs.indexOf("\n}", at));
+  assert.match(wiring, /machineText\(/);
+  assert.match(wiring, /copyText\(/);
+  assert.match(wiring, /ICON_OK/);
 });

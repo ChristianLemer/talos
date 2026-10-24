@@ -663,7 +663,9 @@
       #arb-head .arb-note { font-size:11px; color:var(--dim); }
       /* "This machine": what the journal received about this machine, shown as-is — the
          answer to "what does sharing send?". Filled by renderMachine (app.js). */
-      #machine-card { padding:4px 0 14px; }
+      #machine-card { position:relative; padding:4px 0 14px; }
+      #machine-card .copy { top:2px; right:0; }
+      #machine-card .copy:disabled { opacity:.25; cursor:default; }
       #machine-card .mc-share { font-size:12px; color:var(--dim); margin:2px 0 8px; }
       #machine-card .mc-grid { display:grid; grid-template-columns:max-content 1fr; gap:3px 14px;
         font-size:12px; }
@@ -1299,6 +1301,7 @@
     <div id="view-machine" class="view">
       <div id="machine-card">
         <div class="set-title">This machine</div>
+        <button id="mc-copy" class="copy" title="Copy this machine's profile, as text for a chat"></button>
         <div class="mc-share" id="mc-share"></div>
         <div class="mc-grid" id="mc-grid"></div>
         <div class="mc-scan" id="mc-scan"></div>
