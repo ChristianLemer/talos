@@ -238,7 +238,8 @@ test("actionFor: `self` resolves as a table — the SAME rows as decision.rs", (
     ["update:, the receipt lags, the tool is current", true, true, "1.1", "1.1", true, null],
     ["update:, the tool is ahead", true, true, "1.2", "1.1", true, null],
     ["update:, nothing announced", true, false, "1.0", "", true, null],
-    ["update:, version unread", true, true, "", "1.1", true, "upgrade"],
+    ["update:, version unread", true, true, "", "1.1", true, null],
+    ["update:, outdated with no version named", true, true, "1.0", "", true, "upgrade"],
     ["update:, a v-prefixed announcement", true, true, "1.0.96", "v1.0.102", true, "upgrade"],
     ["update:, v-prefixed and current", true, true, "1.0.102", "v1.0.102", true, null],
   ];

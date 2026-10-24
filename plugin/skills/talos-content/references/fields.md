@@ -384,8 +384,11 @@ application — so the row is **not** arbitration and shows one number with `upd
 - **Present, with `update:`** → the Apply runs that command, and nothing else, when the version
   `detect:` reads is **behind** what the manager announces. The manager's own receipt does not
   count: the tool rewrote itself behind it. So the trigger is the manager's catalogue, read on
-  every scan, never a network call of Talos's own; a package with no `winget:`/`brew:` id is
-  never announced behind, and its `update:` never runs.
+  every scan, never a network call of Talos's own. A version `detect:` cannot read is no
+  evidence: the command does not run.
+- `update:` therefore needs `detect:` (without it the version read is the manager's stale
+  receipt) and a `winget:` or `brew:` id (nothing else announces a newer version). `--check`
+  names either one missing.
 - `update:` goes through the network on the tool's own terms: a failure is a line on the row,
   never an Apply paused on a 403. It must be non-interactive, like every command.
 - `update:` without `version: "self"` would never run; `--check` says so.
@@ -399,8 +402,9 @@ After an upgrade or a downgrade that exited 0, Talos reads the version again. To
 pin, the step succeeded when the pin is read (at its own precision); otherwise when the version
 changed. If not, the row says so (`unchanged`, and a line such as *winget reported success, but
 1.141.2 is still installed, not 1.142.0*), the journal records `ok: false` with `found` and
-`target`, and the Apply does not run that change again while the same target is in view — a
-newer announcement, or an edited pin, lifts it. The memory is the running Talos's: a restart
+`target`, and the Apply does not run that change again while the same version faces the same
+target — a newer announcement, an edited pin, or the version moving (by hand, or by the tool
+itself) lifts it. The memory is the running Talos's: a restart
 tries once more. A version that cannot be read gives no verdict.
 
 ⚠️ **Anything else is REFUSED at load**, named in the log, and the package behaves as if

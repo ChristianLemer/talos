@@ -103,7 +103,7 @@ pub fn action_for(desired: Desired, f: &MachineFacts) -> Option<Action> {
     }
     if desired == Desired::Present && f.present {
         if let Some(pin) = f.pin.filter(|p| !p.is_empty()) {
-            // ⭐ THE TWO KEYWORDS FIRST, because they are statements about POLICY, not versions
+            // ⭐ THE KEYWORDS FIRST, because they are statements about POLICY, not versions
             // to converge on — and `compare_versions` would happily read them as 0.0.0.
             // MEASURED: `compare_versions("2.50.1", "pending") == 1`, i.e. "installed is above
             // the pin" → Downgrade → an `uninstall && install pkg@pending` that the Apply
@@ -127,9 +127,11 @@ pub fn action_for(desired: Desired, f: &MachineFacts) -> Option<Action> {
                 fn bare(v: &str) -> &str {
                     v.strip_prefix(['v', 'V']).unwrap_or(v)
                 }
-                let behind = f.installed_version.is_empty()
-                    || f.available.is_empty()
-                    || compare_versions(bare(f.installed_version), bare(f.available)) < 0;
+                // An unread version is no evidence: no verdict could follow the update, so it
+                // would run on every Apply. An outdated row naming no version: the scan decides.
+                let behind = !f.installed_version.is_empty()
+                    && (f.available.is_empty()
+                        || compare_versions(bare(f.installed_version), bare(f.available)) < 0);
                 return (f.can_self_update && f.outdated && behind).then_some(Action::Upgrade);
             }
             // `latest` = the author DECIDED to take the newest. Same effect as declaring
@@ -512,13 +514,16 @@ mod tests {
                 true,
                 None,
             ),
-            // A version the probe could not read cannot be compared: the announcement decides.
+            // A version the probe could not read is no evidence the tool is behind — and no
+            // verdict could follow, so `update:` would run on every Apply. Nothing.
+            ("update:, version unread", true, true, "", "1.1", true, None),
+            // The scan says outdated but names no version: the scan decides.
             (
-                "update:, version unread",
+                "update:, outdated with no version named",
                 true,
                 true,
+                "1.0",
                 "",
-                "1.1",
                 true,
                 Some(Action::Upgrade),
             ),

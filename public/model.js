@@ -354,25 +354,28 @@ function targetOf(p) {
   if (/^\d/.test(pin.trim())) return pin.trim();
   return p.available || "";
 }
-// The reason this row's change is held because it already ran toward the same target and
-// moved nothing, or null. Twin of the server's `held_unmoved`.
+// The reason this row's change is held because it already ran, from the version installed
+// now, toward the same target and moved nothing — or null. The machine moving or a new target
+// lifts it. Twin of the server's `held_unmoved`.
 function unmovedHold(model, i) {
   const p = model.pkgs.get(i);
-  if (!p?.unmoved?.target) return null;
+  const u = p?.unmoved;
+  const installed = String(p?.installedVersion || "").trim();
+  if (!u || !installed) return null;
   const a = actionOf(model, i);
   if (a !== "upgrade" && a !== "downgrade") return null;
-  return targetOf(p) === p.unmoved.target ? p.unmoved.reason : null;
+  return installed === u.found && targetOf(p) === u.target ? u.reason : null;
 }
-// A version change that exited ok and moved nothing (the server's `unmoved` message). Off an
-// exact pin, the announcement it ran toward is shown again, greyed: the row says what it did
-// not reach.
-export function setUnmoved(model, i, target, reason) {
+// A version change that exited ok and moved nothing (the server's `unmoved` message:
+// `found`, `target`, `reason`). Off an exact pin, the row is outdated again toward what it ran
+// for, shown greyed: the row says what it did not reach.
+export function setUnmoved(model, i, { found, target, reason } = {}) {
   const p = model.pkgs.get(i);
   if (!p) return;
-  p.unmoved = { target: target || "", reason: reason || "" };
-  if (target && targetOf({ pin: p.pin, available: "" }) === "") {
+  p.unmoved = { found: found || "", target: target || "", reason: reason || "" };
+  if (targetOf({ pin: p.pin, available: "" }) === "") {
     p.outdated = true;
-    p.available = target;
+    p.available = target || "";
   }
 }
 // The row's version display — the SINGLE source of truth for what numbers show,
@@ -488,8 +491,9 @@ export function planCounts(model) {
 export function planSeconds(model) {
   return applyPlan(model).map((i) => model.pkgs.get(i)?.secs ?? 0);
 }
-// WHY the Apply leaves a row it would otherwise act on, or null. Today one case: a pinned row
-// above its pin whose route cannot go down. The words are the server's `NO_DOWNGRADE_ROUTE`,
+// WHY the Apply leaves a row it would otherwise act on, or null. Two cases: a change that
+// already ran and moved nothing (`unmovedHold`), and a pinned row above its pin whose route
+// cannot go down. The words are the server's `NO_DOWNGRADE_ROUTE`,
 // word for word, so the row and the log say the same thing.
 export function holdReason(model, i) {
   const unmoved = unmovedHold(model, i);

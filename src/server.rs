@@ -179,24 +179,31 @@ async fn emit_outdated_if(
 }
 
 /// Tell the front a row's last version change moved nothing, so it holds the row (and says
-/// why) while `target` is in view — the same rule the Apply applies (`held_unmoved`).
-async fn emit_unmoved(socket: &mut WebSocket, i: usize, target: &str, reason: &str) {
+/// why) while the same version is installed and the same target in view — the rule the Apply
+/// applies (`held_unmoved`).
+async fn emit_unmoved(socket: &mut WebSocket, i: usize, u: &Unmoved) {
     let _ = socket
         .send(Message::Text(
-            json!({ "type": "unmoved", "i": i, "target": target, "reason": reason }).to_string(),
+            json!({
+                "type": "unmoved", "i": i,
+                "found": u.found, "target": u.target, "reason": u.reason,
+            })
+            .to_string(),
         ))
         .await;
 }
 
-/// The row's held change, when the session remembers one for the target now in view.
+/// The row's held change, when the session remembers one for the version installed now and
+/// the target now in view.
 async fn unmoved_in_view(
     state: &AppState,
     step: &crate::bundles::Step,
+    installed: Option<&str>,
     announced: Option<&str>,
-) -> Option<(String, String)> {
-    let target = step_target(step.pin.as_deref(), announced);
+) -> Option<Unmoved> {
+    let target = step_target(step.pin.as_deref(), announced).unwrap_or_default();
     let memory = state.unmoved.lock().await;
-    held_unmoved(&memory, &step.id, target.as_deref())
+    held_unmoved(&memory, &step.id, installed.unwrap_or(""), &target)
         .then(|| memory.get(&step.id).cloned())
         .flatten()
 }
@@ -322,10 +329,10 @@ struct AppState {
     machine_shared: std::sync::atomic::AtomicBool,
     /// The last scan's timings, as journalled — for the Machine tab's one-line summary.
     last_scan: std::sync::Mutex<Option<crate::machine::ScanRecord>>,
-    /// The version changes that exited ok and moved nothing, by package id: the target they
-    /// ran toward and the row's sentence (`unmoved_reason`). The Apply holds the row while that
-    /// same target is in view; another one lifts it. Never written: a restart tries once more.
-    unmoved: tokio::sync::Mutex<std::collections::HashMap<String, (String, String)>>,
+    /// The version changes that exited ok and moved nothing, by package id (`Unmoved`). The
+    /// Apply holds the row while the same version is installed and the same target in view;
+    /// a change of either lifts it. Never written: a restart tries once more.
+    unmoved: tokio::sync::Mutex<std::collections::HashMap<String, Unmoved>>,
 }
 
 /// Records one observed presence in `last_seen` (grows the vector if the plan is
@@ -1679,8 +1686,8 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &Arc<AppState>) {
             let od = outdated_for(step.system_id.as_deref(), &scan);
             emit_outdated_if(socket, i, od).await;
             let announced = od.map(|o| o.available.as_str());
-            if let Some((target, why)) = unmoved_in_view(state, step, announced).await {
-                emit_unmoved(socket, i, &target, &why).await;
+            if let Some(u) = unmoved_in_view(state, step, p.version.as_deref(), announced).await {
+                emit_unmoved(socket, i, &u).await;
             }
         }
         // Remember the verdict: the Apply re-scan is SCOPED to the diff, and the rows
@@ -2160,7 +2167,8 @@ async fn winget_in_place(
     let remembered = state.found_scope.lock().await.get(&step.id).copied();
     let probes = match action {
         Action::Downgrade => step.pin.is_some(),
-        Action::Upgrade => step.scope.is_some(),
+        // A `self` row upgrades by its own `update:`, never by a rebuilt winget line.
+        Action::Upgrade => step.scope.is_some() && !is_self_updating(step),
         _ => false,
     };
     let (listed, found) = if probes {
@@ -2670,10 +2678,11 @@ async fn apply_diff(
             // is not run again: the row says why, and a new target lifts the hold.
             Ok(Some(a @ (Action::Upgrade | Action::Downgrade))) => {
                 let announced = od.map(|o| o.available.as_str());
-                match unmoved_in_view(state, step, announced).await {
-                    Some((target, why)) => {
-                        println!("[apply] {} held: {why}", step.name);
-                        emit_unmoved(socket, i, &target, &why).await;
+                let installed = presences[i].version.as_deref();
+                match unmoved_in_view(state, step, installed, announced).await {
+                    Some(u) => {
+                        println!("[apply] {} held: {}", step.name, u.reason);
+                        emit_unmoved(socket, i, &u).await;
                     }
                     None => visual_plan.push((i, a)),
                 }
@@ -3390,14 +3399,32 @@ fn unmoved_reason(
     })
 }
 
-/// Has this package's change already been run, in this session, toward this same target and
-/// left the version where it was? Then the Apply holds it until something new is announced.
+/// A version change that exited ok and moved nothing, as the session remembers it.
+#[derive(Debug, Clone, Default)]
+struct Unmoved {
+    /// The version read after the change — the one it left in place.
+    found: String,
+    /// What it ran toward (`step_target`), or empty when nothing was named.
+    target: String,
+    /// The row's sentence (`unmoved_reason`).
+    reason: String,
+}
+
+/// Has this package's change already been run, in this session, from the version installed
+/// now toward this same target, and left the version where it was? Then the Apply holds it.
+/// The machine moving (by hand, or by the tool itself) or a new target lifts the hold: what
+/// was remembered no longer describes what is there.
 fn held_unmoved(
-    memory: &std::collections::HashMap<String, (String, String)>,
+    memory: &std::collections::HashMap<String, Unmoved>,
     id: &str,
-    target: Option<&str>,
+    installed: &str,
+    target: &str,
 ) -> bool {
-    target.is_some_and(|t| memory.get(id).is_some_and(|(seen, _)| seen == t))
+    let installed = installed.trim();
+    !installed.is_empty()
+        && memory
+            .get(id)
+            .is_some_and(|u| u.found == installed && u.target == target)
 }
 
 /// What a step was run from and toward, for the verdict on the version it leaves
@@ -3649,15 +3676,24 @@ async fn do_step(
     });
     if let Some(why) = &unmoved {
         let t = target.clone().unwrap_or_default();
+        let found = after
+            .as_ref()
+            .and_then(|p| p.version.as_deref())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let until = if matches!(
             crate::bundles::classify_pin(step.pin.as_deref()),
             Some(crate::bundles::PinKind::Exact(_))
         ) {
-            "Until the pin changes, the Apply leaves this row".to_string()
+            format!("Until {found} or the pin changes, the Apply leaves this row")
         } else if t.is_empty() {
-            "The Apply may try it again".to_string()
+            format!("Until {found} changes, the Apply leaves this row")
         } else {
-            format!("Until a version other than {t} is announced, the Apply leaves this row")
+            format!(
+                "Until {found} changes or a version other than {t} is announced, the Apply \
+                 leaves this row"
+            )
         };
         say(
             socket,
@@ -3668,12 +3704,19 @@ async fn do_step(
             ),
         )
         .await;
-        emit_unmoved(socket, i, &t, why).await;
-        state
-            .unmoved
-            .lock()
-            .await
-            .insert(step.id.clone(), (t, why.clone()));
+        let u = Unmoved {
+            found,
+            target: t,
+            reason: why.clone(),
+        };
+        // The `ok` sent above was the exit code's; the verdict outranks it, as in the journal.
+        let _ = socket
+            .send(Message::Text(
+                json!({ "type": "step", "i": i, "status": "fail" }).to_string(),
+            ))
+            .await;
+        emit_unmoved(socket, i, &u).await;
+        state.unmoved.lock().await.insert(step.id.clone(), u);
     } else if ok {
         state.unmoved.lock().await.remove(&step.id);
     }
@@ -3767,7 +3810,11 @@ async fn do_step(
             },
         },
     );
-    StepOutcome { ok, blocked, after }
+    StepOutcome {
+        ok: ok && unmoved.is_none(),
+        blocked,
+        after,
+    }
 }
 
 #[cfg(test)]
@@ -3903,20 +3950,33 @@ mod tests {
         let mut memory = std::collections::HashMap::new();
         memory.insert(
             "visual-studio-code".to_string(),
-            (
-                "1.142.0".to_string(),
-                "winget reported success…".to_string(),
-            ),
+            Unmoved {
+                found: "1.141.2".into(),
+                target: "1.142.0".into(),
+                reason: "winget reported success…".into(),
+            },
         );
-        assert!(held_unmoved(&memory, "visual-studio-code", Some("1.142.0")));
+        let held = |id: &str, found: &str, target: &str| held_unmoved(&memory, id, found, target);
+        assert!(held("visual-studio-code", "1.141.2", "1.142.0"));
         // A new announcement — the manifest changed — is worth one more try.
-        assert!(!held_unmoved(
-            &memory,
-            "visual-studio-code",
-            Some("1.142.1")
-        ));
-        assert!(!held_unmoved(&memory, "visual-studio-code", None));
-        assert!(!held_unmoved(&memory, "git", Some("1.142.0")));
+        assert!(!held("visual-studio-code", "1.141.2", "1.142.1"));
+        assert!(!held("visual-studio-code", "1.141.2", ""));
+        // The machine moved since — by hand, or by the tool itself: what was remembered no
+        // longer describes it. Detect, don't remember.
+        assert!(!held("visual-studio-code", "1.141.5", "1.142.0"));
+        assert!(!held("visual-studio-code", "", "1.142.0"));
+        assert!(!held("git", "1.141.2", "1.142.0"));
+        // A change toward no named version is held too, while the version stays.
+        memory.insert(
+            "git".to_string(),
+            Unmoved {
+                found: "2.50.1".into(),
+                target: String::new(),
+                reason: "brew reported success, but 2.50.1 is still installed".into(),
+            },
+        );
+        assert!(held_unmoved(&memory, "git", "2.50.1", ""));
+        assert!(!held_unmoved(&memory, "git", "2.50.2", ""));
         // The target: an exact pin owns it; otherwise what the manager announced.
         assert_eq!(
             step_target(Some("0.113.1"), Some("0.116.1")).as_deref(),

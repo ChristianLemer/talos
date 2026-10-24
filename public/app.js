@@ -2357,7 +2357,7 @@ ws.onmessage = (ev) => {
     }
     case "unmoved": { // a version change exited ok and moved nothing (server: unmoved_reason)
       if (!rows[msg.i]) break;
-      M.setUnmoved(model, msg.i, msg.target, msg.reason);
+      M.setUnmoved(model, msg.i, msg);
       paintVersion(msg.i);
       // The reason is written in the row's terminal: show it, like a failure.
       rows[msg.i].details.open = true;

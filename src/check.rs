@@ -166,6 +166,23 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
                  upgrades the package and the command never runs"
             ));
         }
+        // It runs when the version the tool reports is behind what winget or brew announces:
+        // both halves must exist, or the command is dead or runs for nothing.
+        if cp.pkg.update.is_some() && pin == Some(PinKind::SelfUpdating) {
+            if cp.pkg.detect.is_none() {
+                r.errors.push(format!(
+                    "{label}: `update:` needs `detect:` — without it the version read is the \
+                     manager's receipt, stale for a tool that updates itself, and the update \
+                     would run for nothing"
+                ));
+            }
+            if cp.pkg.winget.is_none() && cp.pkg.brew.is_none() {
+                r.errors.push(format!(
+                    "{label}: `update:` needs a `winget:` or `brew:` id — only their scan \
+                     announces a newer version, so here the command never runs"
+                ));
+            }
+        }
         // `scope:` says where winget puts the package. A word that is not one is no scope at
         // all at runtime, and on another route it means nothing — both are the author's
         // mistake, and both are said here rather than left to a machine to reveal.
@@ -624,12 +641,25 @@ mod tests {
         write(
             &d,
             "catalog/b.yaml",
-            "name: B\nwinget: B.B\nversion: \"self\"\nupdate: b update\n",
+            "name: B\nwinget: B.B\ndetect: b --version\nversion: \"self\"\nupdate: b update\n",
         );
         write(
             &d,
             "catalog/c.yaml",
             "name: C\nwinget: C.C\nversion: self\n",
+        );
+        // Without `detect:` the version read is the manager's receipt — stale by construction
+        // for a tool that rewrote itself — so the tool would read as behind on every scan.
+        write(
+            &d,
+            "catalog/d.yaml",
+            "name: D\nwinget: D.D\nversion: self\nupdate: d update\n",
+        );
+        // No winget nor brew id: nothing ever announces a newer version, so it never runs.
+        write(
+            &d,
+            "catalog/e.yaml",
+            "name: E\nnpm: e\ndetect: e --version\nversion: self\nupdate: e update\n",
         );
         let text = run(&d.join("catalog"), &d.join("bundles")).render();
         assert!(
@@ -638,6 +668,14 @@ mod tests {
         );
         assert!(!text.contains("catalog/b.yaml"), "{text}");
         assert!(!text.contains("catalog/c.yaml"), "{text}");
+        assert!(
+            text.contains("catalog/d.yaml: `update:` needs `detect:`"),
+            "{text}"
+        );
+        assert!(
+            text.contains("catalog/e.yaml: `update:` needs a `winget:` or `brew:` id"),
+            "{text}"
+        );
     }
 
     #[test]

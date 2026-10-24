@@ -142,7 +142,7 @@ export function actionFor(
   if (desired === "present" && !present) return "install";
   if (desired === "present" && present) {
     if (pin) {
-      // ⭐ THE TWO KEYWORDS FIRST — they state POLICY, not a version to converge on, and
+      // ⭐ THE KEYWORDS FIRST — they state POLICY, not a version to converge on, and
       // compareVersions would read them as 0.0.0. MEASURED:
       // compareVersions("2.50.1", "pending") === 1, i.e. "installed is above the pin" →
       // "downgrade" → an uninstall + reinstall the Apply batches. The order is load-bearing.
@@ -161,7 +161,9 @@ export function actionFor(
         const inst = installedVersion || "";
         // A leading `v` is a spelling, not a segment: winget writes `v1.0.102`.
         const bare = (v) => String(v).replace(/^[vV]/, "");
-        const behind = !inst || !available || compareVersions(bare(inst), bare(available)) < 0;
+        // An unread version is no evidence: no verdict could follow the update, so it would run
+        // on every Apply. An outdated row naming no version: the scan decides.
+        const behind = !!inst && (!available || compareVersions(bare(inst), bare(available)) < 0);
         return canSelfUpdate && outdated && behind ? "upgrade" : null;
       }
       // `latest`: the author decided to take the newest. Falls through to the `outdated` check

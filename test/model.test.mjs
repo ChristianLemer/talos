@@ -410,7 +410,7 @@ test("self: one number, never arbitration, and the Apply leaves it unless it has
   assert.deepEqual(versionSummary(m, 0), { from: "1.142.0", to: null, pinned: null, muted: false, held: false });
 });
 
-test("unmoved: a change that exited ok and moved nothing is held while its target is in view", () => {
+test("unmoved: a change that exited ok and moved nothing is held while the same version faces the same target", () => {
   const m = seedPinned({ pin: null });
   setDecision(m, 0, "in");
   setStatusData(m, 0, "ok");
@@ -420,7 +420,7 @@ test("unmoved: a change that exited ok and moved nothing is held while its targe
   assert.equal(isActionable(m, 0), true);
   const why = "winget reported success, but 1.141.2 is still installed, not 1.142.0";
   setStatusData(m, 0, "ok"); // the step's own status arrives first, and clears `outdated`
-  setUnmoved(m, 0, "1.142.0", why);
+  setUnmoved(m, 0, { found: "1.141.2", target: "1.142.0", reason: why });
   assert.equal(isActionable(m, 0), false, "not run again toward the same target");
   assert.equal(holdReason(m, 0), why);
   assert.deepEqual(heldRows(m), [0], "the empty state must not claim a match");
@@ -429,12 +429,26 @@ test("unmoved: a change that exited ok and moved nothing is held while its targe
   setOutdated(m, 0, true, "1.142.1");
   assert.equal(isActionable(m, 0), true);
   assert.equal(holdReason(m, 0), null);
+  // The machine moved — by hand, or by the tool — : the hold no longer describes it.
+  setOutdated(m, 0, true, "1.142.0");
+  assert.equal(isActionable(m, 0), false);
+  setInstalledVersion(m, 0, "1.141.5");
+  assert.equal(isActionable(m, 0), true, "detect, don't remember");
+  // A change toward no named version is held too, while the version stays.
+  const n = seedPinned({ pin: null });
+  setDecision(n, 0, "in");
+  setStatusData(n, 0, "ok");
+  setInstalledVersion(n, 0, "2.50.1");
+  setOutdated(n, 0, true, "");
+  setUnmoved(n, 0, { found: "2.50.1", target: "", reason: "brew reported success, but 2.50.1 is still installed" });
+  assert.equal(isActionable(n, 0), false);
+  assert.match(holdReason(n, 0), /still installed/);
   // A pin: held while the pin is the same.
   const p = seedPinned({ canDowngrade: true }); // pin 1.8
   setDecision(p, 0, "in");
   setStatusData(p, 0, "ok");
   setInstalledVersion(p, 0, "2.0");
-  setUnmoved(p, 0, "1.8", "winget reported success, but 2.0 is installed, not 1.8");
+  setUnmoved(p, 0, { found: "2.0", target: "1.8", reason: "winget reported success, but 2.0 is installed, not 1.8" });
   assert.equal(isActionable(p, 0), false);
   assert.match(holdReason(p, 0), /not 1\.8/);
 });
