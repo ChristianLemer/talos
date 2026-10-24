@@ -346,10 +346,12 @@ export function actionOf(model, i) {
     updateEachApply: p.updateEachApply,
   });
 }
-// Does this row run its tool's own `update:` on every Apply (`update-on: apply`)?
+// Does the Apply run this row's own `update:` every time (`update-on: apply`)? Only for a row
+// it keeps present: an auto row is never touched, an unwanted one is removed.
 export function isUpdatedEachApply(model, i) {
   const p = model.pkgs.get(i);
-  return !!(p?.selfUpdate && p?.updateEachApply) && isSelfUpdating(model, i);
+  return !!(p?.selfUpdate && p?.updateEachApply) && isSelfUpdating(model, i)
+    && desiredOf(model, i) === "present";
 }
 // Does this row declare `version: self` — the application updates itself?
 export function isSelfUpdating(model, i) {
@@ -427,7 +429,7 @@ function summary(model, i) {
     if (String(p.pin).toLowerCase() === "self") {
       // Run on every Apply: no target to show, the command decides.
       if (actionOf(model, i) === "upgrade" && !isUpdatedEachApply(model, i)) {
-        return { from: inst, to: p.available, pinned: null, muted: false, held: false };
+        return { from: inst, to: p.available || null, pinned: null, muted: false, held: false };
       }
       return { from: inst, to: null, pinned: null, muted: false, held: false };
     }

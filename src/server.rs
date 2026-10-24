@@ -118,6 +118,17 @@ fn is_self_updating(step: &crate::bundles::Step) -> bool {
     crate::bundles::classify_pin(step.pin.as_deref()) == Some(crate::bundles::PinKind::SelfUpdating)
 }
 
+/// Would this present row still act toward what it last ran for, so a remembered hold is worth
+/// re-sending to the front? Toward an exact pin, yes while the pin is declared; otherwise only
+/// while the manager still lists it behind — a row it no longer lists does nothing, and a hold
+/// re-sent there made the front fabricate an outdated row.
+fn hold_still_in_view(step: &crate::bundles::Step, od: Option<&crate::managers::Outdated>) -> bool {
+    matches!(
+        crate::bundles::classify_pin(step.pin.as_deref()),
+        Some(crate::bundles::PinKind::Exact(_))
+    ) || is_outdated_now(od)
+}
+
 /// Is this row re-observed before every Apply, wanted present and already there? Yes when
 /// presence alone cannot say there is nothing to do: an exact pin (the VERSION decides), and
 /// a tool updated on every Apply (it acts whenever present, so it must be seen first).
@@ -1705,8 +1716,11 @@ async fn scan_and_emit(socket: &mut WebSocket, state: &Arc<AppState>) {
             let od = outdated_for(step.system_id.as_deref(), &scan);
             emit_outdated_if(socket, i, od).await;
             let announced = od.map(|o| o.available.as_str());
-            if let Some(u) = unmoved_in_view(state, step, p.version.as_deref(), announced).await {
-                emit_unmoved(socket, i, &u).await;
+            if hold_still_in_view(step, od) {
+                if let Some(u) = unmoved_in_view(state, step, p.version.as_deref(), announced).await
+                {
+                    emit_unmoved(socket, i, &u).await;
+                }
             }
         }
         // Remember the verdict: the Apply re-scan is SCOPED to the diff, and the rows
@@ -5632,6 +5646,26 @@ mod tests {
             super::winget_plan(Action::Upgrade, &plain, listed, Some(Machine), None),
             None
         );
+    }
+
+    #[test]
+    fn a_scan_repeats_a_hold_only_for_a_row_that_would_still_act() {
+        // The scan re-sends a remembered hold so the front keeps the row greyed. A row the
+        // manager no longer lists as behind would do nothing: re-sending the hold there made
+        // the front fabricate an outdated row the server would never touch.
+        let od = crate::managers::Outdated {
+            current: "2.50.1".into(),
+            available: String::new(),
+            is_cask: false,
+        };
+        let plain = brew_step("git", None);
+        assert!(hold_still_in_view(&plain, Some(&od)));
+        assert!(!hold_still_in_view(&plain, None));
+        // An exact pin owns its target: the pin is in view as long as it is declared.
+        assert!(hold_still_in_view(
+            &brew_step("nushell", Some("0.113.1")),
+            None
+        ));
     }
 
     #[test]

@@ -422,9 +422,21 @@ test("update-on apply: the Apply runs the tool's update every time, and the row 
   assert.equal(actionOf(m, 0), "upgrade", "nothing announced, and still run");
   assert.equal(isActionable(m, 0), true);
   assert.deepEqual(versionSummary(m, 0), { from: "2.1.308", to: null, pinned: null, muted: false, held: false });
-  // Wanted absent: an uninstall, never an update.
+  // Wanted absent: an uninstall, never an update — and the row no longer says it is updated.
   setDecision(m, 0, "out");
   assert.equal(actionOf(m, 0), "uninstall");
+  assert.equal(isUpdatedEachApply(m, 0), false, "only a row the Apply keeps present");
+});
+
+test("self: outdated with no version named — a push, not an arrow to nothing", () => {
+  const m = seedPinned({ pin: "self" });
+  setDecision(m, 0, "in");
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "1.0");
+  setOutdated(m, 0, true, "");
+  m.pkgs.get(0).selfUpdate = true;
+  assert.equal(actionOf(m, 0), "upgrade");
+  assert.equal(versionSummary(m, 0).to, null);
 });
 
 test("unmoved: a change that exited ok and moved nothing is held while the same version faces the same target", () => {

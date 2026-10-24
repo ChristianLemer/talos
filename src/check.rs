@@ -178,6 +178,17 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
                 false
             }
         };
+        // An extension route carries no pin and builds no upgrade: the command is dropped.
+        let on_extension = cp.pkg.claude_plugin.is_some()
+            || cp.pkg.copilot_plugin.is_some()
+            || cp.pkg.skill.is_some()
+            || cp.pkg.vscode_extension.is_some();
+        if cp.pkg.update.is_some() && on_extension {
+            r.errors.push(format!(
+                "{label}: `update:` never runs on an extension — its route carries no version \
+                 and builds no upgrade"
+            ));
+        }
         if cp.pkg.update_on.is_some() && cp.pkg.update.is_none() {
             r.errors.push(format!(
                 "{label}: `update-on:` needs `update:` — there is no command to run"
@@ -716,7 +727,17 @@ mod tests {
             "catalog/c.yaml",
             "name: C\nnpm: c\nversion: self\nupdate: c update\nupdate-on: apply\n",
         );
+        // A content route has no upgrade at all: the tool's command would never run.
+        write(
+            &d,
+            "catalog/e.yaml",
+            "name: E\nvscode-extension: e.e\nversion: self\nupdate: e update\nupdate-on: apply\n",
+        );
         let text = run(&d.join("catalog"), &d.join("bundles")).render();
+        assert!(
+            text.contains("catalog/e.yaml: `update:` never runs on an extension"),
+            "{text}"
+        );
         assert!(
             text.contains("catalog/a.yaml: `update-on:` needs `update:`"),
             "{text}"

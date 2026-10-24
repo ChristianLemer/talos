@@ -391,12 +391,15 @@ application — so the row is **not** arbitration and shows one number with `upd
   names either one missing.
 - **`update-on: apply`** → the Apply runs `update:` on **every** Apply while the package is
   wanted and present, behind or not: the command itself knows when there is nothing to do.
-  No announcement is needed, so neither `detect:` nor a `winget:`/`brew:` id is — the form for
-  a tool nothing scans (npm, a tool installed by mise). Such a row is never judged
-  `unchanged`: "nothing to do" is its usual answer. The price is that the Apply always has
-  something to run, so it never says the machine already matches while such a row is wanted.
-  Choose the command for the way the tool is installed: `claude update` does nothing under
-  mise (measured), where `mise upgrade claude` is the one.
+  The route does not matter — winget, brew, npm alike install it; what makes the row is that
+  the tool updates itself and has a command to trigger it. No announcement is needed, so
+  neither `detect:` nor a `winget:`/`brew:` id is. Such a row is never judged `unchanged`:
+  "nothing to do" is its usual answer. The price is that the Apply always has something to
+  run, so it never says the machine already matches while such a row is wanted. A package
+  the manager upgrades normally needs none of this: no `self`, no `update-on`.
+- The command must fit how the tool is installed on the machine: `claude update` updates an
+  npm or native install and does nothing under mise (measured), where `mise upgrade claude`
+  is the one.
 - `update:` goes through the network on the tool's own terms: a failure is a line on the row,
   never an Apply paused on a 403. It must be non-interactive, like every command.
 - `update:` without `version: "self"` would never run; `--check` says so.
