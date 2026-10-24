@@ -1,0 +1,12 @@
+# FORM: `update-on: apply` — the tool's own `update:` runs on EVERY Apply, and the command
+# itself knows when there is nothing to do. No scan is needed, so the route can be one nothing
+# scans (npm here) and no `detect:` is required.
+name: Updated Each Apply
+description: A tool kept current by its own update command, at every Apply
+npm: "@vendor/each-apply"
+version: "self"
+update: each-apply update
+update-on: apply
+category: [agents]
+requires:
+  - Node.js

@@ -87,6 +87,8 @@ pub struct MachineFacts<'a> {
     pub available: &'a str,
     /// The package declares `version: self` AND its own `update:` command.
     pub can_self_update: bool,
+    /// ... AND `update-on: apply`: that command runs on every Apply, behind or not.
+    pub update_each_apply: bool,
 }
 
 /// The action an Apply would take — or None. The rule the server EXECUTES and
@@ -123,6 +125,11 @@ pub fn action_for(desired: Desired, f: &MachineFacts) -> Option<Action> {
             // tool rewrote itself behind it. Without `update:`, nothing: not a decision left
             // pending, a decision to leave it to the application.
             if pin.eq_ignore_ascii_case("self") {
+                // `update-on: apply`: the command itself knows whether there is anything to
+                // do, so no announcement is needed — nor a version read.
+                if f.can_self_update && f.update_each_apply {
+                    return Some(Action::Upgrade);
+                }
                 // A leading `v` is a spelling, not a segment: winget writes `v1.0.102`.
                 fn bare(v: &str) -> &str {
                     v.strip_prefix(['v', 'V']).unwrap_or(v)
@@ -177,6 +184,7 @@ mod tests {
             installed_version: "",
             available: "",
             can_self_update: false,
+            update_each_apply: false,
         };
         assert_eq!(action_for(Desired::Present, &f), Some(Action::Install));
     }
@@ -191,6 +199,7 @@ mod tests {
             installed_version: "1.0",
             available: "",
             can_self_update: false,
+            update_each_apply: false,
         };
         assert_eq!(action_for(Desired::Present, &f), Some(Action::Upgrade));
     }
@@ -222,6 +231,7 @@ mod tests {
             installed_version: "2.50.1.windows.1",
             available: "",
             can_self_update: false,
+            update_each_apply: false,
         };
         assert_eq!(
             action_for(Desired::Present, &f),
@@ -240,6 +250,7 @@ mod tests {
             installed_version: "1.0",
             available: "",
             can_self_update: false,
+            update_each_apply: false,
         };
         assert_eq!(action_for(Desired::Present, &below), Some(Action::Upgrade));
         let above = MachineFacts {
@@ -250,6 +261,7 @@ mod tests {
             installed_version: "3.0",
             available: "",
             can_self_update: false,
+            update_each_apply: false,
         };
         assert_eq!(
             action_for(Desired::Present, &above),
@@ -263,6 +275,7 @@ mod tests {
             installed_version: "2.0",
             available: "",
             can_self_update: false,
+            update_each_apply: false,
         };
         assert_eq!(action_for(Desired::Present, &at), None);
     }
@@ -277,6 +290,7 @@ mod tests {
             installed_version: "",
             available: "",
             can_self_update: false,
+            update_each_apply: false,
         };
         assert_eq!(
             action_for(Desired::Absent, &removable),
@@ -290,6 +304,7 @@ mod tests {
             installed_version: "",
             available: "",
             can_self_update: false,
+            update_each_apply: false,
         };
         assert_eq!(action_for(Desired::Absent, &not), None);
     }
@@ -400,6 +415,7 @@ mod tests {
                 installed_version: installed,
                 available: "",
                 can_self_update: false,
+                update_each_apply: false,
             };
             assert_eq!(action_for(Desired::Present, &f), *expected, "{what}");
         }
@@ -432,8 +448,45 @@ mod tests {
             installed_version: "2.50.1",
             available: "",
             can_self_update: false,
+            update_each_apply: false,
         };
         assert_eq!(action_for(Desired::Present, &f), None, "never a downgrade");
+    }
+
+    #[test]
+    fn a_tool_updated_on_every_apply_runs_its_update_whenever_it_is_present() {
+        // `update-on: apply`: no announcement needed, an unread version included — the command
+        // itself knows whether there is anything to do.
+        let base = MachineFacts {
+            present: true,
+            outdated: false,
+            can_uninstall: true,
+            pin: Some("self"),
+            installed_version: "2.1.308",
+            available: "",
+            can_self_update: true,
+            update_each_apply: true,
+        };
+        assert_eq!(action_for(Desired::Present, &base), Some(Action::Upgrade));
+        let unread = MachineFacts {
+            installed_version: "",
+            ..base
+        };
+        assert_eq!(action_for(Desired::Present, &unread), Some(Action::Upgrade));
+        let absent = MachineFacts {
+            present: false,
+            ..base
+        };
+        assert_eq!(action_for(Desired::Present, &absent), Some(Action::Install));
+        // Nothing to run → nothing, whatever the word says.
+        let no_update = MachineFacts {
+            can_self_update: false,
+            update_each_apply: false,
+            ..base
+        };
+        assert_eq!(action_for(Desired::Present, &no_update), None);
+        // Wanted absent: still an uninstall, never an update.
+        assert_eq!(action_for(Desired::Absent, &base), Some(Action::Uninstall));
     }
 
     #[test]
@@ -557,6 +610,7 @@ mod tests {
                 installed_version: installed,
                 available,
                 can_self_update: *can,
+                update_each_apply: false,
             };
             assert_eq!(action_for(Desired::Present, &f), *expected, "{what}");
         }
@@ -569,6 +623,7 @@ mod tests {
             installed_version: "1.0",
             available: "",
             can_self_update: true,
+            update_each_apply: false,
         };
         assert_eq!(action_for(Desired::Absent, &f), Some(Action::Uninstall));
     }
@@ -585,6 +640,7 @@ mod tests {
             installed_version: "1.0",
             available: "",
             can_self_update: false,
+            update_each_apply: false,
         };
         assert_eq!(action_for(Desired::Absent, &f), Some(Action::Uninstall));
     }
@@ -613,6 +669,7 @@ mod tests {
                             installed_version: installed,
                             available: "",
                             can_self_update: false,
+                            update_each_apply: false,
                         };
                         assert_eq!(
                             action_for(desired, &facts(Some("latest"))),

@@ -166,9 +166,27 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
                  upgrades the package and the command never runs"
             ));
         }
-        // It runs when the version the tool reports is behind what winget or brew announces:
-        // both halves must exist, or the command is dead or runs for nothing.
-        if cp.pkg.update.is_some() && pin == Some(PinKind::SelfUpdating) {
+        // `update-on:` has one word, and nothing to run without `update:`.
+        let each_apply = match cp.pkg.update_on.as_deref().map(str::trim) {
+            None => false,
+            Some(w) if w.eq_ignore_ascii_case("apply") => true,
+            Some(w) => {
+                r.errors.push(format!(
+                    "{label}: `update-on: {w}` is not `apply` — the runtime ignores it and \
+                     runs `update:` only when the tool is behind"
+                ));
+                false
+            }
+        };
+        if cp.pkg.update_on.is_some() && cp.pkg.update.is_none() {
+            r.errors.push(format!(
+                "{label}: `update-on:` needs `update:` — there is no command to run"
+            ));
+        }
+        // Without `update-on: apply`, it runs when the version the tool reports is behind what
+        // winget or brew announces: both halves must exist, or the command is dead or runs for
+        // nothing. On every Apply, neither is needed.
+        if cp.pkg.update.is_some() && pin == Some(PinKind::SelfUpdating) && !each_apply {
             if cp.pkg.detect.is_none() {
                 r.errors.push(format!(
                     "{label}: `update:` needs `detect:` — without it the version read is the \
@@ -676,6 +694,38 @@ mod tests {
             text.contains("catalog/e.yaml: `update:` needs a `winget:` or `brew:` id"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn update_on_is_named_when_it_means_nothing() {
+        let d = tmp("update-on");
+        write(
+            &d,
+            "catalog/a.yaml",
+            "name: A\nwinget: A.A\nversion: self\nupdate-on: apply\n",
+        );
+        write(
+            &d,
+            "catalog/b.yaml",
+            "name: B\nwinget: B.B\ndetect: b\nversion: self\nupdate: b update\nupdate-on: daily\n",
+        );
+        // On every Apply, no announcement is needed: no id, no `detect:` — an npm tool, or
+        // one installed by mise, is the very case.
+        write(
+            &d,
+            "catalog/c.yaml",
+            "name: C\nnpm: c\nversion: self\nupdate: c update\nupdate-on: apply\n",
+        );
+        let text = run(&d.join("catalog"), &d.join("bundles")).render();
+        assert!(
+            text.contains("catalog/a.yaml: `update-on:` needs `update:`"),
+            "{text}"
+        );
+        assert!(
+            text.contains("catalog/b.yaml: `update-on: daily` is not `apply`"),
+            "{text}"
+        );
+        assert!(!text.contains("catalog/c.yaml"), "{text}");
     }
 
     #[test]

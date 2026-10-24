@@ -1362,6 +1362,7 @@ Nushell                                                      Nushell.Nushell    
             installed_version: "0.114.0",
             available: "",
             can_self_update: false,
+            update_each_apply: false,
         };
         assert_eq!(
             action_for(Desired::Present, &f),

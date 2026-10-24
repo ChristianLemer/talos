@@ -118,6 +118,24 @@ fn is_self_updating(step: &crate::bundles::Step) -> bool {
     crate::bundles::classify_pin(step.pin.as_deref()) == Some(crate::bundles::PinKind::SelfUpdating)
 }
 
+/// Is this row re-observed before every Apply, wanted present and already there? Yes when
+/// presence alone cannot say there is nothing to do: an exact pin (the VERSION decides), and
+/// a tool updated on every Apply (it acts whenever present, so it must be seen first).
+fn always_probed(step: &crate::bundles::Step) -> bool {
+    matches!(
+        crate::bundles::classify_pin(step.pin.as_deref()),
+        Some(crate::bundles::PinKind::Exact(_))
+    ) || (step.update_each_apply && step.upgrade.is_some())
+}
+
+/// Is this step judged by the version it leaves (`unmoved_reason`)? Not a tool updated on
+/// every Apply: "nothing to do" is its usual answer, and a success.
+fn judges_version(step: &crate::bundles::Step, action: crate::decision::Action) -> bool {
+    !(action == crate::decision::Action::Upgrade
+        && is_self_updating(step)
+        && step.update_each_apply)
+}
+
 fn is_outdated_now(od: Option<&crate::managers::Outdated>) -> bool {
     // Approach B: presence in the scan IS the outdated signal, for casks and
     // formulae alike. The scan uses `--greedy-auto-updates`, so a self-updating
@@ -1115,6 +1133,7 @@ fn step_json(
         // `version: self` with its own `update:`: the Apply runs that command when the tool is
         // behind what the manager announces. The front's twin of `action_for` reads it.
         "selfUpdate": is_self_updating(s) && s.upgrade.is_some(),
+        "updateEachApply": is_self_updating(s) && s.upgrade.is_some() && s.update_each_apply,
         "pin": s.pin, "categories": s.categories,
         "requires": s.requires, // package names this one needs (B5 transitive pull, §8)
         "uac": f.uac, "forbidden": f.forbidden, "slow": crate::plan_facts::is_slow(&f),
@@ -2475,14 +2494,7 @@ async fn apply_diff(
     // do NOT make version the deciding fact, so they must NOT seed — seeding them
     // would re-introduce the serial scan cost the batching work removed. `trim`
     // reasoning stays (the pin is author-written YAML), but is now inside classify_pin.
-    let is_pinned_row = |i: usize| -> bool {
-        steps.get(i).is_some_and(|s| {
-            matches!(
-                crate::bundles::classify_pin(s.pin.as_deref()),
-                Some(crate::bundles::PinKind::Exact(_))
-            )
-        })
-    };
+    let is_pinned_row = |i: usize| -> bool { steps.get(i).is_some_and(always_probed) };
     // The guard is BOUND, not passed as a temporary: a temporary would live to the end
     // of the statement while the closures run, which is one refactor away from a
     // self-deadlock if a closure ever needs `state`.
@@ -2672,6 +2684,7 @@ async fn apply_diff(
             installed_version: presences[i].version.as_deref().unwrap_or(""),
             available: od.map(|o| o.available.as_str()).unwrap_or(""),
             can_self_update: is_self_updating(step) && step.upgrade.is_some(),
+            update_each_apply: step.update_each_apply,
         };
         match batch_action(action_for(desired, &facts), step.downgrade.is_some()) {
             // A change that already ran toward this target in this session and moved nothing
@@ -3664,16 +3677,19 @@ async fn do_step(
     } else {
         step.route.clone().unwrap_or_else(|| "the command".into())
     };
-    let unmoved = after.as_ref().and_then(|p| {
-        unmoved_reason(
-            action,
-            step.pin.as_deref(),
-            aim.before,
-            p,
-            target.as_deref(),
-            &by,
-        )
-    });
+    let unmoved = after
+        .as_ref()
+        .filter(|_| judges_version(step, action))
+        .and_then(|p| {
+            unmoved_reason(
+                action,
+                step.pin.as_deref(),
+                aim.before,
+                p,
+                target.as_deref(),
+                &by,
+            )
+        });
     if let Some(why) = &unmoved {
         let t = target.clone().unwrap_or_default();
         let found = after
@@ -4117,6 +4133,7 @@ mod tests {
             posture: Posture::OptIn,
             categories: Vec::new(),
             overrides: Overrides::default(),
+            update_each_apply: false,
         }
     }
 
@@ -4170,6 +4187,10 @@ mod tests {
         s.upgrade = Some("copilot update".into());
         let row = super::step_json(&s, 0, &[], &no_timings, Os::Darwin);
         assert_eq!(row["selfUpdate"], true);
+        assert_eq!(row["updateEachApply"], false, "run only when behind");
+        s.update_each_apply = true;
+        let row = super::step_json(&s, 0, &[], &no_timings, Os::Darwin);
+        assert_eq!(row["updateEachApply"], true);
         let plain = brew_step("git", None);
         let row = super::step_json(&plain, 0, &[], &no_timings, Os::Darwin);
         assert_eq!(
@@ -5611,6 +5632,27 @@ mod tests {
             super::winget_plan(Action::Upgrade, &plain, listed, Some(Machine), None),
             None
         );
+    }
+
+    #[test]
+    fn a_tool_updated_on_every_apply_is_looked_at_first_and_never_judged_unchanged() {
+        let mut each = brew_step("claude-code", Some("self"));
+        each.upgrade = Some("claude update".into());
+        each.update_each_apply = true;
+        // Acted on at every Apply, so re-observed before, like an exact pin.
+        assert!(always_probed(&each));
+        assert!(always_probed(&brew_step("nushell", Some("0.113.1"))));
+        assert!(!always_probed(&brew_step("nushell", Some("latest"))));
+        let mut behind = each.clone();
+        behind.update_each_apply = false;
+        assert!(!always_probed(&behind));
+        // "Nothing to do" is the usual answer, and a success: no `unchanged` verdict.
+        assert!(!judges_version(&each, Action::Upgrade));
+        assert!(judges_version(&behind, Action::Upgrade));
+        assert!(judges_version(
+            &brew_step("nushell", Some("0.113.1")),
+            Action::Downgrade
+        ));
     }
 
     #[test]

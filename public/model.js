@@ -70,6 +70,8 @@ export function loadPlan(model, steps, profiles = []) {
       // `version: self` with its own `update:` command: the Apply runs that command when the
       // tool is behind what the manager announces (`step_json`). False for every other row.
       selfUpdate: !!s.selfUpdate,
+      // `update-on: apply`: that update runs on every Apply while the row is wanted.
+      updateEachApply: !!s.updateEachApply,
       // The last version change that exited ok and moved nothing — { target, reason } from the
       // server's `unmoved` message — or null. Held while that target is in view.
       unmoved: null,
@@ -341,7 +343,13 @@ export function actionOf(model, i) {
     installedVersion: p.installedVersion,
     available: p.available,
     canSelfUpdate: p.selfUpdate,
+    updateEachApply: p.updateEachApply,
   });
+}
+// Does this row run its tool's own `update:` on every Apply (`update-on: apply`)?
+export function isUpdatedEachApply(model, i) {
+  const p = model.pkgs.get(i);
+  return !!(p?.selfUpdate && p?.updateEachApply) && isSelfUpdating(model, i);
 }
 // Does this row declare `version: self` — the application updates itself?
 export function isSelfUpdating(model, i) {
@@ -417,7 +425,8 @@ function summary(model, i) {
     // `self`: one number — the application keeps itself current — unless the row has its own
     // `update:` and the Apply will run it (`actionOf` decides, with the server's rule).
     if (String(p.pin).toLowerCase() === "self") {
-      if (actionOf(model, i) === "upgrade") {
+      // Run on every Apply: no target to show, the command decides.
+      if (actionOf(model, i) === "upgrade" && !isUpdatedEachApply(model, i)) {
         return { from: inst, to: p.available, pinned: null, muted: false, held: false };
       }
       return { from: inst, to: null, pinned: null, muted: false, held: false };

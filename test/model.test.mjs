@@ -49,6 +49,7 @@ import {
   setStatusData,
   setUnmoved,
   isSelfUpdating,
+  isUpdatedEachApply,
   toggleOf,
   unmanagedIndices,
   versionSummary,
@@ -408,6 +409,22 @@ test("self: one number, never arbitration, and the Apply leaves it unless it has
   setInstalledVersion(m, 0, "1.142.0");
   assert.equal(actionOf(m, 0), null, "the receipt lags; the tool is current");
   assert.deepEqual(versionSummary(m, 0), { from: "1.142.0", to: null, pinned: null, muted: false, held: false });
+});
+
+test("update-on apply: the Apply runs the tool's update every time, and the row shows one number", () => {
+  const m = seedPinned({ pin: "self" });
+  setDecision(m, 0, "in");
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "2.1.308");
+  m.pkgs.get(0).selfUpdate = true;
+  m.pkgs.get(0).updateEachApply = true;
+  assert.equal(isUpdatedEachApply(m, 0), true);
+  assert.equal(actionOf(m, 0), "upgrade", "nothing announced, and still run");
+  assert.equal(isActionable(m, 0), true);
+  assert.deepEqual(versionSummary(m, 0), { from: "2.1.308", to: null, pinned: null, muted: false, held: false });
+  // Wanted absent: an uninstall, never an update.
+  setDecision(m, 0, "out");
+  assert.equal(actionOf(m, 0), "uninstall");
 });
 
 test("unmoved: a change that exited ok and moved nothing is held while the same version faces the same target", () => {

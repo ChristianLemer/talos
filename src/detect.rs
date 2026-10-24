@@ -686,6 +686,7 @@ mod tests {
             posture: Posture::OptIn,
             categories: vec!["misc".into()],
             overrides: Overrides::default(),
+            update_each_apply: false,
         }
     }
 

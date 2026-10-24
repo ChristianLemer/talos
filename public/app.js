@@ -584,9 +584,11 @@ function paintVersion(i) {
   if (v.to === null) {
     // One number — the current state, blue. 📌 when it IS the pin (at rest). A `self` row says
     // who keeps it current: the application, not Talos — so no newer number is compared.
-    const own = M.isSelfUpdating(model, i)
-      ? ` <span class="v-held" title="the application keeps itself current; Talos installs it when it is missing">updates itself</span>`
-      : "";
+    const own = M.isUpdatedEachApply(model, i)
+      ? ` <span class="v-held" title="the Apply runs the tool's own update command every time; the command knows when there is nothing to do">updated each Apply</span>`
+      : M.isSelfUpdating(model, i)
+        ? ` <span class="v-held" title="the application keeps itself current; Talos installs it when it is missing">updates itself</span>`
+        : "";
     r.delta.innerHTML = cur(v.pinned === "from" ? pin(v.from) : v.from) + own;
     return;
   }

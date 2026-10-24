@@ -259,6 +259,18 @@ test("actionFor: `self` resolves as a table — the SAME rows as decision.rs", (
   );
 });
 
+test("actionFor: `update-on: apply` runs the tool's update whenever it is present — as decision.rs", () => {
+  const base = {
+    present: true, outdated: false, canUninstall: true, pin: "self",
+    installedVersion: "2.1.308", available: "", canSelfUpdate: true, updateEachApply: true,
+  };
+  assert.equal(actionFor("present", base), "upgrade");
+  assert.equal(actionFor("present", { ...base, installedVersion: "" }), "upgrade", "unread");
+  assert.equal(actionFor("present", { ...base, present: false }), "install");
+  assert.equal(actionFor("present", { ...base, canSelfUpdate: false }), null, "nothing to run");
+  assert.equal(actionFor("absent", base), "uninstall");
+});
+
 test("actionFor: a keyword is never compared as a version", () => {
   // The same measurement the Rust twin records: `compareVersions("2.50.1", "pending")` is 1,
   // so a naive implementation returns "downgrade" — the destructive path.

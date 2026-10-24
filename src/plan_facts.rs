@@ -128,6 +128,7 @@ mod tests {
             posture: Posture::OptIn,
             categories: Vec::new(),
             overrides: ov,
+            update_each_apply: false,
         }
     }
 

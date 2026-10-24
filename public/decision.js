@@ -137,7 +137,7 @@ export function forbiddenMessage(gesture, paused) {
 //                                   Apply since 2026-10-10, when the per-row button left)
 export function actionFor(
   desired,
-  { present, outdated, canUninstall, pin, installedVersion, available, canSelfUpdate },
+  { present, outdated, canUninstall, pin, installedVersion, available, canSelfUpdate, updateEachApply },
 ) {
   if (desired === "present" && !present) return "install";
   if (desired === "present" && present) {
@@ -158,6 +158,9 @@ export function actionFor(
       // `update:` runs when the version the tool REPORTS is behind what the manager announces
       // (the receipt is stale by construction). Without `update:`, nothing.
       if (p === "self") {
+        // `update-on: apply`: the command itself knows whether there is anything to do, so no
+        // announcement is needed — nor a version read.
+        if (canSelfUpdate && updateEachApply) return "upgrade";
         const inst = installedVersion || "";
         // A leading `v` is a spelling, not a segment: winget writes `v1.0.102`.
         const bare = (v) => String(v).replace(/^[vV]/, "");

@@ -389,6 +389,14 @@ application — so the row is **not** arbitration and shows one number with `upd
 - `update:` therefore needs `detect:` (without it the version read is the manager's stale
   receipt) and a `winget:` or `brew:` id (nothing else announces a newer version). `--check`
   names either one missing.
+- **`update-on: apply`** → the Apply runs `update:` on **every** Apply while the package is
+  wanted and present, behind or not: the command itself knows when there is nothing to do.
+  No announcement is needed, so neither `detect:` nor a `winget:`/`brew:` id is — the form for
+  a tool nothing scans (npm, a tool installed by mise). Such a row is never judged
+  `unchanged`: "nothing to do" is its usual answer. The price is that the Apply always has
+  something to run, so it never says the machine already matches while such a row is wanted.
+  Choose the command for the way the tool is installed: `claude update` does nothing under
+  mise (measured), where `mise upgrade claude` is the one.
 - `update:` goes through the network on the tool's own terms: a failure is a line on the row,
   never an Apply paused on a 403. It must be non-interactive, like every command.
 - `update:` without `version: "self"` would never run; `--check` says so.

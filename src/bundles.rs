@@ -96,6 +96,7 @@ impl RawPkg {
         "version",
         "scope",
         "update",
+        "update-on",
         "requires",
         "category",
         "uac",
@@ -171,6 +172,10 @@ pub struct RawPkg {
     /// row's upgrade instead of the manager's. Ignored without `self` (`--check` says so).
     #[serde(default)]
     pub update: Option<String>,
+    /// With `update:` only: `apply` runs it on EVERY Apply (the command itself knows when
+    /// there is nothing to do), instead of only when the tool reads as behind.
+    #[serde(default, rename = "update-on")]
+    pub update_on: Option<String>,
     #[serde(default)]
     pub requires: Vec<String>,
     #[serde(default)]
@@ -351,6 +356,9 @@ pub struct Step {
     /// resolution needs the collected half, which lives on the share and is read by the
     /// server, not here.
     pub overrides: Overrides,
+    /// `update-on: apply`: the row's upgrade is the tool's own `update:`, run on every Apply
+    /// while the package is wanted and present — never judged by the version it leaves.
+    pub update_each_apply: bool,
 }
 
 #[derive(Debug)]
@@ -932,6 +940,12 @@ pub fn load_from_catalog(
                 p.category.clone()
             },
             overrides: p.overrides(),
+            update_each_apply: declared == Some(PinKind::SelfUpdating)
+                && !is_extension
+                && p.update.is_some()
+                && p.update_on
+                    .as_deref()
+                    .is_some_and(|w| w.trim().eq_ignore_ascii_case("apply")),
         });
     }
     Plan { steps }
@@ -1533,6 +1547,12 @@ mod tests {
             }
             if let Some(u) = &p.update {
                 y.push_str(&format!("update: {u}\n"));
+            }
+            if let Some(n) = &p.npm {
+                y.push_str(&format!("npm: \"{n}\"\n"));
+            }
+            if let Some(u) = &p.update_on {
+                y.push_str(&format!("update-on: {u}\n"));
             }
             std::fs::write(dir.join(format!("{stem}.yaml")), y).expect("write fixture");
         }
@@ -2625,6 +2645,37 @@ slow: true
             steps[0].upgrade, None,
             "no update: → the app's own mechanism"
         );
+    }
+
+    #[test]
+    fn update_on_apply_runs_the_tools_own_update_on_every_apply() {
+        // The operator's form (2026-10-24): a tool kept current by running its own update
+        // command on every Apply — a no-op when there is nothing to do. No scan needed, so it
+        // works for routes nothing scans (npm, a tool installed by mise).
+        let mut p = pkg("Claude Code");
+        p.npm = Some("@anthropic-ai/claude-code".into());
+        p.version = Some("self".into());
+        p.update = Some("claude update".into());
+        p.update_on = Some("apply".into());
+        let steps = steps_from_pkgs(&[("claude-code", p.clone())], Os::Linux);
+        assert!(steps[0].update_each_apply);
+        assert_eq!(steps[0].upgrade.as_deref(), Some("claude update"));
+        // The word is case-blind, like the version keywords.
+        p.update_on = Some("Apply".into());
+        assert!(steps_from_pkgs(&[("c", p.clone())], Os::Linux)[0].update_each_apply);
+        // Without the word: the update runs when the tool is behind, as before.
+        p.update_on = None;
+        assert!(!steps_from_pkgs(&[("c", p.clone())], Os::Linux)[0].update_each_apply);
+        // A word it does not know means nothing (`--check` names it).
+        p.update_on = Some("daily".into());
+        assert!(!steps_from_pkgs(&[("c", p.clone())], Os::Linux)[0].update_each_apply);
+        // Nothing to run, or not a tool that updates itself: never.
+        p.update_on = Some("apply".into());
+        p.update = None;
+        assert!(!steps_from_pkgs(&[("c", p.clone())], Os::Linux)[0].update_each_apply);
+        p.update = Some("claude update".into());
+        p.version = None;
+        assert!(!steps_from_pkgs(&[("c", p)], Os::Linux)[0].update_each_apply);
     }
 
     #[test]
