@@ -178,9 +178,7 @@ pub fn install(exe: &Path, engine_dir: &Path, tag: &str) -> std::io::Result<Path
         Ok(h) if h == digest => {}
         Ok(_) => {
             let _ = std::fs::remove_file(&partial);
-            return Err(std::io::Error::other(
-                "the copy does not match the source: the exe changed while it was copied",
-            ));
+            return Err(source_changed());
         }
         Err(e) => {
             let _ = std::fs::remove_file(&partial);
@@ -204,6 +202,31 @@ pub fn install(exe: &Path, engine_dir: &Path, tag: &str) -> std::io::Result<Path
         return Ok(alt);
     }
     Ok(target)
+}
+
+/// The share's exe was replaced under the copy: a publication landing. Its own type, so that
+/// `published_meanwhile` reads it from the error rather than from a sentence.
+#[derive(Debug)]
+struct SourceChanged;
+
+impl std::fmt::Display for SourceChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the copy does not match the source: the exe changed while it was copied")
+    }
+}
+
+impl std::error::Error for SourceChanged {}
+
+fn source_changed() -> std::io::Error {
+    std::io::Error::other(SourceChanged)
+}
+
+/// Did this copy fail because a publication replaced the share's exe? The copy read bytes that
+/// changed under it, or the exe is gone — OneDrive removes it before writing the new one. Any
+/// other failure (a full disk, an antivirus quarantining the `.partial`, a rename refused) says
+/// nothing of a publication, and lasts.
+fn published_meanwhile(exe: &Path, e: &std::io::Error) -> bool {
+    e.get_ref().is_some_and(|r| r.is::<SourceChanged>()) || !exe.is_file()
 }
 
 /// Clear a read-only attribute the copy carried over from the share (a view-only library may
@@ -333,6 +356,20 @@ pub fn hand_over(
     rest: &[String],
     spawn: impl FnOnce(&Path, &[std::ffi::OsString]) -> std::io::Result<()>,
 ) -> Result<HandedOver, String> {
+    let copy = || install(exe, engine_dir, tag);
+    hand_over_with(exe, engine_dir, kit, rest, RETRY_PAUSE, copy, spawn)
+}
+
+/// `hand_over`, with the copy injected: what a publication does to it cannot be staged on disk.
+fn hand_over_with(
+    exe: &Path,
+    engine_dir: &Path,
+    kit: &Path,
+    rest: &[String],
+    pause: std::time::Duration,
+    copy: impl FnMut() -> std::io::Result<PathBuf>,
+    spawn: impl FnOnce(&Path, &[std::ffi::OsString]) -> std::io::Result<()>,
+) -> Result<HandedOver, String> {
     // A kit inside the engine folder is the engine pointing at itself (a path spelled so that
     // `relocation` missed it): no content there, and remembering it would empty every later
     // launch started by hand.
@@ -343,9 +380,13 @@ pub fn hand_over(
     // it was copied"). Running in place would then lock the share for the session at the very
     // moment the publication lands: try once more, then fall back to the newest local engine
     // whose bytes still match its name — an older version beats a locked share.
-    let (local, note) = match retry_once(RETRY_PAUSE, || install(exe, engine_dir, tag)) {
+    //
+    // ⚠️ ONLY then (`published_meanwhile`). A failure that lasts — a full disk, an antivirus
+    // quarantining the `.partial` — would otherwise run an old engine against new content on
+    // every launch, where running in place runs the right one.
+    let (local, note) = match retry_once(pause, copy) {
         Ok(local) => (local, None),
-        Err(e) => match newest_whole_engine(engine_dir) {
+        Err(e) => match newest_whole_engine(engine_dir).filter(|_| published_meanwhile(exe, &e)) {
             Some(local) => {
                 let note = format!("copy failed ({e}): the newest verified local engine instead");
                 (local, Some(note))
@@ -427,13 +468,43 @@ pub fn launch(os: Os, args: &LaunchArgs) -> Launched {
     };
     let in_place_env = std::env::var_os(IN_PLACE_ENV).is_some();
     let release = !cfg!(debug_assertions);
-    if let Err(why) = relocation(os, release, args, in_place_env, &exe, &engine_dir) {
+    launch_in(
+        os,
+        release,
+        args,
+        in_place_env,
+        &exe,
+        &engine_dir,
+        spawn_detached,
+        spawn_launcher,
+    )
+}
+
+/// `launch`, with what it reads from the process and the two ways it starts another injected:
+/// the whole decision is tested on any OS.
+#[allow(clippy::too_many_arguments)]
+fn launch_in(
+    os: Os,
+    release: bool,
+    args: &LaunchArgs,
+    in_place_env: bool,
+    exe: &Path,
+    engine_dir: &Path,
+    spawn_engine: impl FnOnce(&Path, &[std::ffi::OsString]) -> std::io::Result<()>,
+    spawn_kit_exe: impl FnOnce(&Path, &[std::ffi::OsString]) -> std::io::Result<()>,
+) -> Launched {
+    if let Err(why) = relocation(os, release, args, in_place_env, exe, engine_dir) {
         println!("[launch] in place: {why}");
-        if !started_by_hand(args, &exe, &engine_dir) {
+        if !started_by_hand(args, exe, engine_dir) {
             return Launched::Here(None);
         }
-        let (line, launched) = match hand_back(&exe, &engine_dir, &args.rest, spawn_launcher) {
-            Ok(None) => return Launched::Here(remembered_kit(&engine_dir)),
+        // The escape hatch says "run here", for a pinned engine as for the share's exe: no
+        // hand-back either, whatever a publication did to the kit.
+        if in_place_env {
+            return Launched::Here(remembered_kit(engine_dir));
+        }
+        let (line, launched) = match hand_back(exe, engine_dir, &args.rest, spawn_kit_exe) {
+            Ok(None) => return Launched::Here(remembered_kit(engine_dir)),
             Ok(Some(launcher)) => (
                 format!(
                     "by hand: the kit's exe changed, started {}",
@@ -443,22 +514,22 @@ pub fn launch(os: Os, args: &LaunchArgs) -> Launched {
             ),
             Err(why) => (
                 format!("by hand: running {} ({why})", exe.display()),
-                Launched::Here(remembered_kit(&engine_dir)),
+                Launched::Here(remembered_kit(engine_dir)),
             ),
         };
-        record(&engine_dir, &line);
+        record(engine_dir, &line);
         return launched;
     }
     // From here on a relocation was ATTEMPTED, and only that is worth the file: the engine
     // it starts comes back through here with `--kit` and must not overwrite the outcome.
-    let kit = crate::platform::exe_sibling_dir(&exe);
+    let kit = crate::platform::exe_sibling_dir(exe);
     let outcome = hand_over(
-        &exe,
-        &engine_dir,
+        exe,
+        engine_dir,
         crate::build_info::TAG,
         &kit,
         &args.rest,
-        spawn_detached,
+        spawn_engine,
     );
     let line = match &outcome {
         Ok(h) => {
@@ -470,7 +541,7 @@ pub fn launch(os: Os, args: &LaunchArgs) -> Launched {
         }
         Err(why) => format!("in place: {} ({why})", exe.display()),
     };
-    record(&engine_dir, &line);
+    record(engine_dir, &line);
     match outcome {
         Ok(_) => Launched::HandedOver,
         Err(_) => Launched::Here(None),
@@ -511,26 +582,42 @@ fn with_breakaway<T>(mut start: impl FnMut(bool) -> std::io::Result<T>) -> std::
 /// launch runs in place instead of leaving nothing on screen. The share's exe is held that much
 /// longer; the engine is starting in parallel, so the person waits for nothing.
 fn spawn_detached(local: &Path, args: &[std::ffi::OsString]) -> std::io::Result<()> {
-    const ALIVE_CHECK: std::time::Duration = std::time::Duration::from_secs(2);
-    let mut child = detached_child(local, args)?;
-    let deadline = std::time::Instant::now() + ALIVE_CHECK;
+    watch(detached_child(local, args)?, ALIVE_CHECK, false)
+}
+
+/// How long a started process is watched before it counts as started.
+const ALIVE_CHECK: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Start the kit's exe for a hand-back, watched like the engine: a share exe that dies at once
+/// (blocked, crashing) would leave nothing on screen, so the pinned engine runs instead. A
+/// success inside the window is not a death: that exe relocates itself and exits once its own
+/// engine is up — normally after its own `ALIVE_CHECK`, so rarely inside this one.
+fn spawn_launcher(launcher: &Path, args: &[std::ffi::OsString]) -> std::io::Result<()> {
+    watch(detached_child(launcher, args)?, ALIVE_CHECK, true)
+}
+
+/// `child` still running after `window`, or ended with a success when `success_is_fine`.
+fn watch(
+    mut child: std::process::Child,
+    window: std::time::Duration,
+    success_is_fine: bool,
+) -> std::io::Result<()> {
+    let deadline = std::time::Instant::now() + window;
     while std::time::Instant::now() < deadline {
         // A `try_wait` that errors says nothing about the child, which may well be running:
         // treat it as alive rather than open a second Talos in place.
-        if let Ok(Some(status)) = child.try_wait() {
-            return Err(std::io::Error::other(format!(
-                "it exited at once ({status})"
-            )));
+        match child.try_wait() {
+            Ok(Some(status)) if success_is_fine && status.success() => return Ok(()),
+            Ok(Some(status)) => {
+                return Err(std::io::Error::other(format!(
+                    "it exited at once ({status})"
+                )))
+            }
+            _ => {}
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     Ok(())
-}
-
-/// Start the kit's exe for a hand-back. No alive check: that exe relocates itself and EXITS
-/// after its own, so an early exit is its normal course, not a failure.
-fn spawn_launcher(launcher: &Path, args: &[std::ffi::OsString]) -> std::io::Result<()> {
-    detached_child(launcher, args).map(drop)
 }
 
 /// `exe` started detached, with no standard handle, in its own folder.
@@ -787,6 +874,225 @@ mod tests {
         assert_eq!(r.local, verified);
         assert_eq!(seen, Some(verified));
         assert!(r.note.unwrap().contains("copy failed"));
+    }
+
+    #[test]
+    fn only_a_publication_falls_back_to_an_older_engine() {
+        // The beta.58 pre-tag review: after two failed copies, ANY cause started the newest
+        // verified local engine. A lasting one — a full disk, an antivirus quarantining the
+        // `.partial`, a rename refused — then ran an old engine against new content on every
+        // launch. Only a share's exe replaced under the copy is a publication.
+        let d = tmp("narrowed");
+        let eng = d.join("engine");
+        let exe = d.join("Talos.exe");
+        std::fs::write(&exe, b"the share's engine").unwrap();
+        let old = d.join("old.exe");
+        std::fs::write(&old, b"the previous engine").unwrap();
+        let verified = install(&old, &eng, "v1").unwrap();
+        // Changed while it was copied, twice: the previous engine, and the log says why.
+        let mut seen = None;
+        let r = hand_over_with(
+            &exe,
+            &eng,
+            &d,
+            &[],
+            std::time::Duration::ZERO,
+            || Err(source_changed()),
+            |p, _| {
+                seen = Some(p.to_path_buf());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(r.local, verified);
+        assert_eq!(seen, Some(verified));
+        assert!(r.note.unwrap().contains("changed while it was copied"));
+        // A local failure that lasts: in place, never the old engine.
+        for e in [
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            std::io::Error::from(std::io::ErrorKind::NotFound), // the `.partial` quarantined
+            std::io::Error::other("There is not enough space on the disk."),
+        ] {
+            let kind = e.kind();
+            let mut once = Some(e);
+            let mut spawned = false;
+            let r = hand_over_with(
+                &exe,
+                &eng,
+                &d,
+                &[],
+                std::time::Duration::ZERO,
+                || Err(once.take().unwrap_or_else(|| kind.into())),
+                |_, _| {
+                    spawned = true;
+                    Ok(())
+                },
+            );
+            assert!(r.unwrap_err().contains("copy failed"), "{kind:?}");
+            assert!(!spawned, "{kind:?}: an old engine started");
+        }
+    }
+
+    #[test]
+    fn a_publication_is_the_source_replaced_or_gone() {
+        let d = tmp("published");
+        let exe = d.join("Talos.exe");
+        std::fs::write(&exe, b"engine").unwrap();
+        assert!(published_meanwhile(&exe, &source_changed()));
+        assert!(!published_meanwhile(
+            &exe,
+            &std::io::Error::from(std::io::ErrorKind::NotFound)
+        ));
+        let gone = d.join("being-replaced.exe");
+        assert!(published_meanwhile(
+            &gone,
+            &std::io::Error::from(std::io::ErrorKind::NotFound)
+        ));
+        // A copy that read a half-written source says so with the same error.
+        assert!(source_changed()
+            .to_string()
+            .contains("changed while it was copied"));
+    }
+
+    /// An engine relocated from `<d>/share/Talos.exe` holding `old`; the share's exe now holds
+    /// `now`. The local engine, the engine folder, the launcher, the kit.
+    fn by_hand(name: &str, old: &[u8], now: &[u8]) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+        let (local, eng, launcher) = pinned(name, old, now);
+        let kit = launcher.parent().unwrap().to_path_buf();
+        (local, eng, launcher, kit)
+    }
+
+    fn last_launch(eng: &Path) -> String {
+        std::fs::read_to_string(eng.join("last-launch.txt")).unwrap_or_default()
+    }
+
+    #[test]
+    fn talos_in_place_also_stops_the_hand_back() {
+        // The escape hatch says "run here": a pinned engine must not start the kit's exe
+        // because a publication replaced it.
+        let (local, eng, _, kit) = by_hand("inplace-handback", b"v1", b"v2");
+        let mut spawned = false;
+        let r = launch_in(
+            Os::Windows,
+            true,
+            &plain(&[]),
+            true,
+            &local,
+            &eng,
+            |_, _| unreachable!("no relocation under TALOS_IN_PLACE"),
+            |_, _| {
+                spawned = true;
+                Ok(())
+            },
+        );
+        assert_eq!(r, Launched::Here(Some(kit)));
+        assert!(!spawned);
+    }
+
+    #[test]
+    fn a_pinned_engine_hands_back_through_launch() {
+        let (local, eng, launcher, _) = by_hand("launch-handback", b"v1", b"v2");
+        let mut seen = None;
+        let r = launch_in(
+            Os::Windows,
+            true,
+            &plain(&["--x"]),
+            false,
+            &local,
+            &eng,
+            |_, _| unreachable!("a local engine is not relocated"),
+            |p, _| {
+                seen = Some(p.to_path_buf());
+                Ok(())
+            },
+        );
+        assert_eq!(r, Launched::HandedOver);
+        assert_eq!(seen, Some(launcher));
+        assert!(last_launch(&eng).contains("the kit's exe changed"));
+    }
+
+    #[test]
+    fn a_hand_back_that_dies_keeps_the_pinned_engine_running_and_says_why() {
+        let (local, eng, _, kit) = by_hand("launch-handback-dies", b"v1", b"v2");
+        let r = launch_in(
+            Os::Windows,
+            true,
+            &plain(&[]),
+            false,
+            &local,
+            &eng,
+            |_, _| unreachable!(),
+            |_, _| Err(std::io::Error::other("it exited at once (exit code: 3)")),
+        );
+        assert_eq!(r, Launched::Here(Some(kit)));
+        assert!(
+            last_launch(&eng).contains("exited at once"),
+            "{}",
+            last_launch(&eng)
+        );
+    }
+
+    #[test]
+    fn a_launch_from_the_share_relocates_and_says_so() {
+        let d = tmp("launch-share");
+        let eng = d.join("engine");
+        let kit = d.join("share");
+        std::fs::create_dir_all(&kit).unwrap();
+        let exe = kit.join("Talos.exe");
+        std::fs::write(&exe, b"engine").unwrap();
+        let mut seen = None;
+        let r = launch_in(
+            Os::Windows,
+            true,
+            &plain(&["--y"]),
+            false,
+            &exe,
+            &eng,
+            |p, a| {
+                seen = Some((p.to_path_buf(), a.to_vec()));
+                Ok(())
+            },
+            |_, _| unreachable!(),
+        );
+        assert_eq!(r, Launched::HandedOver);
+        let (local, args) = seen.unwrap();
+        assert!(local.starts_with(&eng));
+        let want: Vec<std::ffi::OsString> =
+            vec![KIT_FLAG.into(), kit.clone().into_os_string(), "--y".into()];
+        assert_eq!(args, want);
+        assert!(last_launch(&eng).contains("relocated:"));
+        // Elsewhere than Windows: in place, nothing started, nothing recorded.
+        let other = tmp("launch-mac");
+        let r = launch_in(
+            Os::Darwin,
+            true,
+            &plain(&[]),
+            false,
+            &exe,
+            &other.join("engine"),
+            |_, _| unreachable!(),
+            |_, _| unreachable!(),
+        );
+        assert_eq!(r, Launched::Here(None));
+        assert_eq!(last_launch(&other.join("engine")), "");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_process_that_exits_at_once_is_a_failure_unless_it_succeeded() {
+        let sh = |script: &str| {
+            std::process::Command::new("sh")
+                .args(["-c", script])
+                .spawn()
+                .unwrap()
+        };
+        let window = std::time::Duration::from_millis(400);
+        assert!(watch(sh("exit 3"), window, false).is_err());
+        assert!(watch(sh("exit 3"), window, true).is_err());
+        // The engine must live; the launcher may finish its own hand-over with a success.
+        assert!(watch(sh("exit 0"), window, false).is_err());
+        assert!(watch(sh("exit 0"), window, true).is_ok());
+        assert!(watch(sh("sleep 2"), window, false).is_ok());
     }
 
     #[test]

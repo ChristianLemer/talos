@@ -212,8 +212,9 @@ same copy. The content is **never copied per machine**: `catalog/`, `bundles/`,
   deletions. So a release build copies itself, once per version, to
   `%LOCALAPPDATA%\Talos\engine\Talos-<tag>-<hash>.exe` (named after its own sha256, so a
   half-copied file never runs), starts that copy pointed back at the kit (`--kit`), and
-  exits. The share's exe is open for a second, not a session: a publication lands even
-  where Talos is open. The copy just launched and the newest other one are kept.
+  exits. The share's exe is open for a few seconds, not a session — the copy, one retry a
+  second later if it failed, and a two-second check that the local copy stayed up: a
+  publication lands even where Talos is open. The copy just launched and the newest other one are kept.
 - **Pin the share's `Talos.exe`, or a shortcut to it — not the running window.** The window
   belongs to the local copy: pinned, it opens the kit this machine last launched from —
   another one, if the machine has two. If that kit's `Talos.exe` has changed since, the copy

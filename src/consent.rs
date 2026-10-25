@@ -232,8 +232,8 @@ pub fn append_record<T: Serialize>(s: &ConsentStore, record: &T) {
 /// and renames it over: an install line appended by another task in that window would land
 /// in the replaced file and vanish — breaking the one promise compaction makes, that every
 /// install is kept. The profile task, the scan and an Apply's steps all write. Held across
-/// the append AND the compaction. (Two Talos instances for one user stay unserialised; the
-/// port self-heal kills a stale one at launch.)
+/// the append AND the compaction. (Two Talos instances for one user stay unserialised: only
+/// one binds 127.0.0.1:1420, so the second runs no scan and no Apply.)
 static JOURNAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn journal_lock() -> std::sync::MutexGuard<'static, ()> {
