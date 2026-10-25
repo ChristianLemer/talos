@@ -1,18 +1,49 @@
 // 403 firewall detector, PURE, manager-agnostic.
 use regex::Regex;
+use std::sync::LazyLock;
+
+// winget : "Forbidden (403)"
+static WINGET: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)Forbidden \(403\)").unwrap());
+// brew/curl: a bare 403 near a download failure
+static BARE403: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b403\b").unwrap());
+static CONTEXT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)curl:\s*\(22\)|Download failed|returned error").unwrap());
 
 /// 403 corporate-firewall in the output (streamed chunk or whole buffer).
 /// Deliberately broad: a false positive only costs a useless Retry.
+/// The streamed step reads it through `Watch403`; this whole-text form is the rule's
+/// reference, which the tests hold `Watch403` to.
+#[cfg(test)]
 pub fn is403(text: &str) -> bool {
-    // winget : "Forbidden (403)"
-    let winget = Regex::new(r"(?i)Forbidden \(403\)").unwrap();
-    if winget.is_match(text) {
-        return true;
+    WINGET.is_match(text) || (BARE403.is_match(text) && CONTEXT.is_match(text))
+}
+
+/// `is403` for a buffer that grows chunk by chunk, reading only what each chunk added — the
+/// whole buffer re-read on every chunk made a long step quadratic. Each pattern is
+/// remembered once seen, so the verdict is the whole buffer's, as `is403` would give it.
+#[derive(Debug, Default)]
+pub struct Watch403 {
+    winget: bool,
+    bare: bool,
+    context: bool,
+}
+
+impl Watch403 {
+    /// Longer than any of the patterns, so one cut between two chunks is still matched.
+    const OVERLAP: usize = 64;
+
+    /// `buf` has just grown from `appended_from`; true once the 403 is seen.
+    pub fn feed(&mut self, buf: &str, appended_from: usize) -> bool {
+        let mut from = appended_from.saturating_sub(Self::OVERLAP).min(buf.len());
+        while !buf.is_char_boundary(from) {
+            from -= 1;
+        }
+        let new = &buf[from..];
+        self.winget = self.winget || WINGET.is_match(new);
+        self.bare = self.bare || BARE403.is_match(new);
+        self.context = self.context || CONTEXT.is_match(new);
+        self.winget || (self.bare && self.context)
     }
-    // brew/curl: a bare 403 near a download failure
-    let bare403 = Regex::new(r"\b403\b").unwrap();
-    let ctx = Regex::new(r"(?i)curl:\s*\(22\)|Download failed|returned error").unwrap();
-    bare403.is_match(text) && ctx.is_match(text)
 }
 
 /// First http(s) URL, stopping at control characters (winget's OSC progress
@@ -44,6 +75,30 @@ mod tests {
     #[test]
     fn ignores_bare_403_without_context() {
         assert!(!is403("build 403 succeeded")); // bare 403 without download failure
+    }
+
+    /// Streamed, the verdict is the whole buffer's: a pattern cut between two chunks is still
+    /// seen, and a 403 in one chunk meets its download-failure context in a later one.
+    #[test]
+    fn the_streamed_verdict_is_the_whole_buffers() {
+        for whole in [
+            "Downloading...\nForbidden (403)\nbye",
+            "curl: (22) The requested URL returned error: 403",
+            "HTTP 403\n...lots of output...\nDownload failed",
+            "build 403 succeeded",
+        ] {
+            for size in [1, 2, 3, 7, 64] {
+                let mut buf = String::new();
+                let mut watch = Watch403::default();
+                let mut seen = false;
+                for chunk in whole.as_bytes().chunks(size) {
+                    let from = buf.len();
+                    buf.push_str(std::str::from_utf8(chunk).unwrap());
+                    seen |= watch.feed(&buf, from);
+                }
+                assert_eq!(seen, is403(whole), "{whole:?} in chunks of {size}");
+            }
+        }
     }
 
     #[test]

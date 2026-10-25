@@ -2903,8 +2903,9 @@ async fn apply_diff(
 struct PtyRun {
     /// The child's exit code, or -1 if it could not be reaped.
     code: i32,
-    /// `forbidden::is403` matched the streamed bytes. RAW — not "the step failed with a
-    /// 403"; see the observation site in `do_step` for why that distinction is kept.
+    /// The 403 rule (`forbidden::Watch403`) matched the streamed bytes. RAW — not "the step
+    /// failed with a 403"; see the observation site in `do_step` for why that distinction
+    /// is kept.
     forbidden: bool,
     /// The first URL in the output, extracted only when `forbidden` — what the modal
     /// offers to open.
@@ -3007,6 +3008,8 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
     let mut buf = String::new();
     // Where the output after the last answer starts, and what was answered (see `PtyRun`).
     let mut answered_at = 0usize;
+    // `is403` over the whole buffer, read one chunk at a time (see `Watch403`).
+    let mut watch403 = crate::forbidden::Watch403::default();
     let mut typed: Vec<String> = Vec::new();
     let mut forbidden = false;
     // Set when the USER killed this step. Distinct from `forbidden` and from a plain
@@ -3080,8 +3083,9 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
         };
         // Always accumulate (the sudo prompt may be split across several chunks,
         // or "Password:" arrive in a separate piece → testing the chunk alone misses it).
+        let appended_from = buf.len();
         buf.push_str(&String::from_utf8_lossy(&chunk));
-        if !forbidden && crate::forbidden::is403(&buf) {
+        if !forbidden && watch403.feed(&buf, appended_from) {
             forbidden = true;
         }
         let out = json!({ "type": "out", "i": i, "data": STANDARD.encode(&chunk) });
@@ -3173,11 +3177,13 @@ fn step_tail(buf: &str, typed: &[String]) -> String {
 }
 
 /// The end of the output a prompt is looked for in: what followed the last answer, and at
-/// most its last `PROMPT_WINDOW` bytes. A prompt is one short line; reading the whole buffer
-/// on every chunk made a long step quadratic, and let a `password` printed anywhere earlier
-/// arm the detection for any later line ending in `:`.
+/// most its last `PROMPT_WINDOW` bytes. Reading the whole buffer on every chunk made a long
+/// step quadratic, and let a `password` printed anywhere earlier arm the detection for any
+/// later line ending in `:`. The window is generous on purpose: a prompt that names a long
+/// path, wrapped in ConPTY's escapes, must still fit — a prompt cut out of it is a step that
+/// hangs on a question nobody answers.
 fn prompt_window(buf: &str, answered_at: usize) -> &str {
-    const PROMPT_WINDOW: usize = 256;
+    const PROMPT_WINDOW: usize = 4096;
     let mut start = answered_at
         .max(buf.len().saturating_sub(PROMPT_WINDOW))
         .min(buf.len());
@@ -3814,8 +3820,8 @@ async fn do_step(
     // installer's own window, which the monotone design tolerates: a false positive
     // costs one label of caution, never a wrong promise.
     //
-    // `forbidden` is `run_in_pty`'s raw signal: `forbidden::is403` matched the streamed
-    // bytes. It is deliberately NOT the `blocked` computed above — that one is
+    // `forbidden` is `run_in_pty`'s raw signal: the 403 rule (`forbidden::Watch403`) matched
+    // the streamed bytes. It is deliberately NOT the `blocked` computed above — that one is
     // `!ok && forbidden`, the UI verdict, which is right for a modal ("offer Retry") and
     // wrong for a fact ("this package's source is blocked here"). A tool that prints a 403
     // for one mirror and then succeeds from another still met the firewall, and the row label
@@ -3929,11 +3935,17 @@ mod tests {
         // Just answered: nothing after it, so the same prompt is not answered twice.
         assert_eq!(prompt_window(answered, answered.len()), "");
         // A `password` far back no longer arms a later `:`.
-        let long = format!("password reset\n{}\nContinue:", "x".repeat(1000));
+        let long = format!("password reset\n{}\nContinue:", "x".repeat(5000));
         assert!(!prompt_window(&long, 0).contains("password"));
         // On a char boundary, whatever the cut.
-        let wide = "é".repeat(300);
+        let wide = "é".repeat(3000);
         assert!(prompt_window(&wide, 0).chars().all(|c| c == 'é'));
+        // A long prompt, escapes and all, is still read whole.
+        let prompt = format!(
+            "\x1b[33mEnter password for C:{}\\store.jks:\x1b[0m",
+            "\\some-long-directory".repeat(40)
+        );
+        assert!(prompt_window(&prompt, 0).contains("password"));
     }
     use crate::bundles::{Overrides, Posture, Step};
     use crate::managers::Outdated;

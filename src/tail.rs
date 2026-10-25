@@ -26,10 +26,10 @@ pub const MAX_BYTES: usize = 2048;
 /// Only the end of the output is rendered: a build that printed megabytes still yields its
 /// last lines from this much, and the cost stays flat. Cut on a char boundary.
 const RENDER_LAST_BYTES: usize = 256 * 1024;
-/// The row terminal's geometry (`pty::run` with no size): ConPTY positions its cursor in
-/// THIS screen, so the emulator must have the same one to put each cell back where it was.
-const ROWS: u16 = 24;
-const COLS: u16 = 100;
+/// The row terminal's geometry, the one `pty::run` opens: ConPTY positions its cursor in
+/// THAT screen, so the emulator must have the same one to put each cell back where it was.
+const ROWS: u16 = crate::pty::ROW_TERMINAL_ROWS;
+const COLS: u16 = crate::pty::ROW_TERMINAL_COLS;
 /// Lines kept above the screen. Enough for `MAX_LINES` even when many are blank.
 const SCROLLBACK: usize = 1000;
 
@@ -40,26 +40,46 @@ static URL_CREDENTIALS: LazyLock<regex::Regex> =
 
 /// A user-profile folder, whoever's and however spelled: `C:\Users\<name>` (the 8.3
 /// `CHRIST~1` included), `C:/Users/<name>`, MSYS `/c/Users/<name>`, `/home/<name>`,
-/// `/Users/<name>`. The name ends at a separator or at what cannot be part of a path.
+/// `/Users/<name>`. It must START a path — `api.github.com/users/x` and `/srv/myhome` are
+/// not profiles — and the name runs to the next separator or to what cannot be in a path; a
+/// space is part of it only when a separator follows (`replace_profiles` decides).
 static PROFILE_PATH: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(
-        r#"(?i)(?:\b[a-z]:|/[a-z](?:/|\\))?[\\/]?(?:users|home)[\\/][^\\/\s"'<>|:;,()\[\]]+"#,
+        r#"(?i)(^|[^\w.~-])((?:[a-z]:|/[a-z])?[\\/](?:users|home)[\\/])([^\\/\r\n"'<>|:;,()\[\]]+)"#,
     )
     .unwrap()
 });
+
+/// Folders under `Users` or `home` that are nobody's profile. Masking them would send a
+/// reader to a per-user path that does not exist.
+const NOT_A_PROFILE: &[&str] = &[
+    "public",
+    "default",
+    "default user",
+    "all users",
+    "linuxbrew",
+];
 
 /// The readable end of `raw`: the screen a terminal would have left, its last `MAX_LINES`
 /// non-blank lines within `MAX_BYTES`, joined by `\n`. `home` (may be empty) is written `~`;
 /// each of `typed` (what Talos answered into the step) is written `***`.
 pub fn readable_tail(raw: &str, home: &str, typed: &[&str]) -> String {
-    let lines = screen_lines(keep_last_bytes(raw, RENDER_LAST_BYTES));
+    // Masked in the raw bytes AND in the rendered text: the terminal may render an answer
+    // differently from what was typed (a trailing space trimmed off the line).
+    let mut raw = keep_last_bytes(raw, RENDER_LAST_BYTES).to_string();
+    for secret in typed.iter().filter(|s| !s.is_empty()) {
+        raw = raw.replace(secret, "***");
+    }
+    // A third-party parser fed a tool's arbitrary bytes: should it ever panic, the journal
+    // line is still written, without its tail — never an Apply lost mid-run.
+    let lines = std::panic::catch_unwind(|| screen_lines(&raw)).unwrap_or_default();
     let start = lines.len().saturating_sub(MAX_LINES);
     let mut text = lines[start..].join("\n");
-    for secret in typed.iter().filter(|s| !s.is_empty()) {
+    for secret in typed.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         text = text.replace(secret, "***");
     }
     let text = tilde_home(&text, home);
-    let text = PROFILE_PATH.replace_all(&text, "~");
+    let text = replace_profiles(&text);
     let text = URL_CREDENTIALS.replace_all(&text, "${1}***@");
     keep_last_bytes(&text, MAX_BYTES).to_string()
 }
@@ -69,6 +89,11 @@ pub fn readable_tail(raw: &str, home: &str, typed: &[&str]) -> String {
 fn screen_lines(raw: &str) -> Vec<String> {
     let mut parser = vt100::Parser::new(ROWS, COLS, SCROLLBACK);
     parser.process(raw.as_bytes());
+    // A full-screen tool that died in its alternate screen leaves the main one — where the
+    // error was printed — hidden behind its last frame.
+    if parser.screen().alternate_screen() {
+        parser.process(b"\x1b[?1049l");
+    }
     let screen = parser.screen_mut();
     // `set_scrollback(k)` shows the rows `k` above the screen; it clamps to what exists.
     screen.set_scrollback(usize::MAX);
@@ -99,6 +124,39 @@ fn screen_lines(raw: &str) -> Vec<String> {
     if !line.trim().is_empty() {
         out.push(line.to_string());
     }
+    out
+}
+
+/// Every profile path written `~` (see `PROFILE_PATH`), what precedes it kept.
+fn replace_profiles(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for c in PROFILE_PATH.captures_iter(text) {
+        let (Some(lead), Some(name)) = (c.get(1), c.get(3)) else {
+            continue;
+        };
+        // A name runs across a space only into a path: `C:\Users\John Smith\AppData`, but
+        // not `/home/alice is missing`.
+        let into_path = text[name.end()..].starts_with(['\\', '/']);
+        let name_end = if into_path {
+            name.end()
+        } else {
+            name.start()
+                + name
+                    .as_str()
+                    .find(char::is_whitespace)
+                    .unwrap_or(name.len())
+        };
+        let own = text[name.start()..name_end].trim().to_lowercase();
+        out.push_str(&text[last..lead.end()]);
+        if NOT_A_PROFILE.contains(&own.as_str()) {
+            out.push_str(&text[lead.end()..name_end]);
+        } else {
+            out.push('~');
+        }
+        last = name_end;
+    }
+    out.push_str(&text[last..]);
     out
 }
 
@@ -260,6 +318,46 @@ mod tests {
             readable_tail("/opt/alice2 and /opt/al/x\n", "/opt/al", &[]),
             "/opt/alice2 and ~/x"
         );
+    }
+
+    #[test]
+    fn what_is_not_a_profile_is_left_alone() {
+        // Shared folders and Linuxbrew's own prefix are nobody's home, and `users/` in a URL
+        // or `home` inside a longer name is no profile at all.
+        let raw = "/home/linuxbrew/.linuxbrew/bin/brew: failed\r\n\
+                   C:\\Users\\Public\\Desktop\\x.lnk\r\n\
+                   GET https://api.github.com/users/octocat/repos 403\r\n\
+                   /srv/myhome/cfg and npm @users/pkg\r\n";
+        assert_eq!(
+            tail(raw),
+            "/home/linuxbrew/.linuxbrew/bin/brew: failed\n\
+             C:\\Users\\Public\\Desktop\\x.lnk\n\
+             GET https://api.github.com/users/octocat/repos 403\n\
+             /srv/myhome/cfg and npm @users/pkg"
+        );
+    }
+
+    #[test]
+    fn a_profile_name_with_a_space_is_masked_whole_and_the_text_after_it_kept() {
+        let raw = "Log: C:\\Users\\John Smith\\AppData\\x.log\r\n\
+                   /home/alice is missing\r\n";
+        assert_eq!(tail(raw), "Log: ~\\AppData\\x.log\n~ is missing");
+    }
+
+    #[test]
+    fn a_typed_answer_is_masked_however_the_terminal_renders_it() {
+        // A trailing space is trimmed off the rendered line; the raw bytes still carry it.
+        let raw = "Password: hunter2 \r\nSorry, try again.\r\n";
+        assert_eq!(
+            readable_tail(raw, "", &["hunter2 "]),
+            "Password: ***\nSorry, try again."
+        );
+    }
+
+    #[test]
+    fn a_step_that_ends_in_the_alternate_screen_still_shows_its_main_screen() {
+        let raw = "error: the real cause\r\n\x1b[?1049h\x1b[Hsome full-screen frame";
+        assert_eq!(tail(raw), "error: the real cause");
     }
 
     #[test]

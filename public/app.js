@@ -1119,11 +1119,6 @@ function ensureTerm(i) {
   return r.term;
 }
 
-// Copy text to the clipboard, robustly. navigator.clipboard is often UNAVAILABLE in
-// a WKWebView served over plain http://127.0.0.1 (non-secure context) — it either
-// doesn't exist or its promise rejects, and the old code had no fallback, so copying
-// failed silently. Try the modern API, then fall back to a hidden-textarea +
-// execCommand("copy") (works in non-secure contexts). Returns true on success.
 // A copy button's one gesture: copy, then a check mark for a moment when it worked. The
 // terminal's button, the Machine card's and a History line's — one look for all three.
 function copyWithCheck(btn, text) {
@@ -1133,6 +1128,11 @@ function copyWithCheck(btn, text) {
   });
 }
 
+// Copy text to the clipboard, robustly. navigator.clipboard is often UNAVAILABLE in
+// a WKWebView served over plain http://127.0.0.1 (non-secure context) — it either
+// doesn't exist or its promise rejects, and the old code had no fallback, so copying
+// failed silently. Try the modern API, then fall back to a hidden-textarea +
+// execCommand("copy") (works in non-secure contexts). Returns true on success.
 async function copyText(text) {
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) {

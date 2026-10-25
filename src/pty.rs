@@ -78,6 +78,11 @@ pub fn claude_would_refuse(candidate: &str, cwd: &str) -> bool {
     }
 }
 
+/// A row terminal's size when the caller passes none: a fixed-width display box. `tail.rs`
+/// emulates the SAME screen to read a failed step back — ConPTY positions its cursor in it.
+pub const ROW_TERMINAL_COLS: u16 = 100;
+pub const ROW_TERMINAL_ROWS: u16 = 24;
+
 /// Where a pty starts, and — when the surface can be resized — where it goes next.
 ///
 /// One struct rather than two parameters so `run`'s signature does not creep: an initial
@@ -131,7 +136,7 @@ pub fn run<F: FnMut(&[u8])>(
 ) -> std::io::Result<i32> {
     let (cols, rows, resize, cwd) = match size {
         Some(g) => (g.cols, g.rows, g.updates, g.cwd),
-        None => (100, 24, None, None),
+        None => (ROW_TERMINAL_COLS, ROW_TERMINAL_ROWS, None, None),
     };
     let pty = native_pty_system();
     let pair = pty
