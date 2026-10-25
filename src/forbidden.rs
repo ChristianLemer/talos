@@ -35,8 +35,19 @@ impl Watch403 {
     /// Longer than any of the patterns, so one cut between two chunks is still matched.
     const OVERLAP: usize = 64;
 
-    /// `buf` has just grown from `appended_from`; true once the 403 is seen.
+    /// `buf` has just grown from `appended_from`; true once the 403 is seen. A `403` that
+    /// ends the buffer is held back: the next chunk may make it `4035` (`finish` decides
+    /// when there is none).
     pub fn feed(&mut self, buf: &str, appended_from: usize) -> bool {
+        self.scan(buf, appended_from, false)
+    }
+
+    /// The output is complete: a `403` that ended it counts.
+    pub fn finish(&mut self, buf: &str) -> bool {
+        self.scan(buf, buf.len(), true)
+    }
+
+    fn scan(&mut self, buf: &str, appended_from: usize, complete: bool) -> bool {
         let mut from = appended_from.saturating_sub(Self::OVERLAP).min(buf.len());
         while !buf.is_char_boundary(from) {
             from -= 1;
@@ -45,12 +56,16 @@ impl Watch403 {
         self.winget = self.winget || WINGET.is_match(new);
         // The slice starts mid-text: `\b` sees a boundary at its first byte that the whole
         // buffer may not have (`51403` cut before the `4`). A match there counts only if what
-        // precedes it in the buffer is not part of a word.
+        // precedes it in the buffer is not part of a word — and one at the very end only once
+        // nothing more can follow it.
         let glued = buf[..from]
             .chars()
             .next_back()
             .is_some_and(|c| c.is_alphanumeric() || c == '_');
-        self.bare = self.bare || BARE403.find_iter(new).any(|m| m.start() > 0 || !glued);
+        self.bare = self.bare
+            || BARE403
+                .find_iter(new)
+                .any(|m| (m.start() > 0 || !glued) && (complete || m.end() < new.len()));
         self.context = self.context || CONTEXT.is_match(new);
         self.winget || (self.bare && self.context)
     }
@@ -96,7 +111,11 @@ mod tests {
             "curl: (22) The requested URL returned error: 403",
             "HTTP 403\n...lots of output...\nDownload failed",
             "build 403 succeeded",
+            // And one that ENDS the output still counts.
+            "Download failed: 403",
             // A slice cut inside `51403` must not see a word starting at `403`.
+            // A `403` that ends one chunk and turns into `4035` in the next is no 403.
+            "the size 4035 bytes was returned error 500 from the mirror, over and over and over",
             "copied 51403 bytes\n.......................................................\
              ............ and later the request returned error 500",
         ] {
@@ -109,6 +128,7 @@ mod tests {
                     buf.push_str(std::str::from_utf8(chunk).unwrap());
                     seen |= watch.feed(&buf, from);
                 }
+                seen |= watch.finish(&buf);
                 assert_eq!(seen, is403(whole), "{whole:?} in chunks of {size}");
             }
         }

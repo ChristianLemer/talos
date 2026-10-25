@@ -3100,11 +3100,12 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
                 typed,
             };
         }
-        let tail = prompt_window(&buf, answered_at).trim_end().to_lowercase();
+        // The last line of what followed the last answer, lowercased ONCE per chunk.
+        let last = last_line(prompt_window(&buf, answered_at));
         // A REFUSAL invalidates whatever we just sent. If it came from the cache, drop
         // it: the whole Apply would otherwise keep replaying the same wrong secret,
         // every sudo row hanging in turn. Clearing makes the next prompt ask the user.
-        if tail.ends_with("try again.") && last_from_cache {
+        if last.ends_with("try again.") && last_from_cache {
             clear_sudo_pw(state).await;
             last_from_cache = false;
         }
@@ -3116,7 +3117,7 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
         // is not re-detected on the next chunk — its tail would still end with ':' and we
         // would answer a question already answered, burning the attempt budget on nothing.
         // The buffer itself is kept whole: `extract_url` and the journal's tail read it.
-        if sudo_tries < SUDO_MAX_TRIES && prompt_armed(prompt_window(&buf, answered_at)) {
+        if sudo_tries < SUDO_MAX_TRIES && prompt_armed(&last) {
             if let Some((pw, from_cache)) = obtain_sudo_pw(socket, state, i).await {
                 let mut line = pw.clone().into_bytes();
                 line.push(b'\n');
@@ -3152,6 +3153,11 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
             .await;
     }
 
+    // A `403` that ended the output was held back by `feed` (a next chunk could have made it
+    // `4035`); there is no next chunk now.
+    if !forbidden && watch403.finish(&buf) {
+        forbidden = true;
+    }
     let code = code_rx.await.unwrap_or(-1);
     let url = if forbidden {
         crate::forbidden::extract_url(&buf)
@@ -3193,14 +3199,24 @@ fn prompt_window(buf: &str, answered_at: usize) -> &str {
     &buf[start..]
 }
 
-/// Is the window's LAST line a password prompt? It ends in `:` and names a password. Only
+/// Is the window's LAST line (`last_line`) a password prompt? It ends in `:` and names a
+/// password. Only
 /// that line: a `password` printed on an earlier one ("Checking password policy...") must
 /// not arm a later `Select option:` — answering it would type the sudo password into a
 /// stdin that echoes it.
-fn prompt_armed(window: &str) -> bool {
-    let tail = window.trim_end().to_lowercase();
-    let last_line = tail.rsplit(['\n', '\r']).next().unwrap_or("");
-    tail.ends_with(':') && last_line.contains("password")
+fn prompt_armed(last_line: &str) -> bool {
+    last_line.ends_with(':') && last_line.contains("password")
+}
+
+/// The window's last line, trimmed and lowercased — what `prompt_armed` and the refusal
+/// check read. Only that line is copied, not the window.
+fn last_line(window: &str) -> String {
+    window
+        .trim_end()
+        .rsplit(['\n', '\r'])
+        .next()
+        .unwrap_or("")
+        .to_lowercase()
 }
 
 /// Obtains the sudo password — MODEL C. If the RAM cache already holds it (entered
@@ -3946,12 +3962,15 @@ mod tests {
         assert_eq!(prompt_window(answered, answered.len()), "");
         // A `password` on an earlier line does not arm a later `:`.
         let near = "Checking password policy...\nSelect option:";
-        assert!(!prompt_armed(prompt_window(near, 0)));
-        assert!(prompt_armed(prompt_window("Password for al:", 0)));
-        assert!(prompt_armed(prompt_window(
+        assert!(!prompt_armed(&last_line(prompt_window(near, 0))));
+        assert!(prompt_armed(&last_line(prompt_window(
+            "Password for al:",
+            0
+        ))));
+        assert!(prompt_armed(&last_line(prompt_window(
             "ok\n[sudo] password for al: ",
             0
-        )));
+        ))));
         // A `password` far back no longer arms a later `:`.
         let long = format!("password reset\n{}\nContinue:", "x".repeat(5000));
         assert!(!prompt_window(&long, 0).contains("password"));

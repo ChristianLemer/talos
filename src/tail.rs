@@ -32,6 +32,17 @@ const ROWS: u16 = crate::pty::ROW_TERMINAL_ROWS;
 const COLS: u16 = crate::pty::ROW_TERMINAL_COLS;
 /// Lines kept above the screen. Enough for `MAX_LINES` even when many are blank.
 const SCROLLBACK: usize = 1000;
+/// The shortest answer Talos masks (see `readable_tail`).
+const MIN_TYPED: usize = 4;
+/// How much of a full-screen frame left on screen is kept, after the main screen's lines:
+/// enough for a crash message, never so much that it pushes the main screen's error out.
+const ALTERNATE_LINES: usize = 5;
+
+// `readable_tail` survives a panic in the emulator only by unwinding through
+// `catch_unwind`. With `panic = "abort"` — set in Cargo.toml, `.cargo/config.toml` or
+// RUSTFLAGS alike — that promise would silently become a lost Apply; refuse to build.
+#[cfg(panic = "abort")]
+compile_error!("tail.rs needs panic = \"unwind\": its catch_unwind keeps an Apply alive");
 
 /// A URL's userinfo, `user:secret@` or a token alone (`https://ghp_x@github.com`). The scheme
 /// is kept so the line still reads as a URL.
@@ -41,13 +52,14 @@ static URL_CREDENTIALS: LazyLock<regex::Regex> =
 /// A user-profile folder, whoever's and however spelled: `C:\Users\<name>` (the 8.3
 /// `CHRIST~1` included), `C:/Users/<name>`, MSYS `/c/Users/<name>`, `/home/<name>`,
 /// `/Users/<name>`. It must START a path — `api.github.com/users/x` and `/srv/myhome` are
-/// not profiles — or follow a compiler flag glued to it (`-L/home/bob/lib`). The name runs to
+/// not profiles — or follow a compiler flag glued to it (`-L/home/bob/lib`), a flag being a
+/// hyphen that starts a word (`/opt/my-app/home` is no flag). The name runs to
 /// the next separator or to what cannot be in a path; words joined by ONE space are captured
 /// together, and `replace_profiles` keeps them together only for a Windows profile that a
 /// separator follows (`C:\Users\John Smith\AppData`).
 static PROFILE_PATH: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(
-        r#"(?i)(^|[^\w.~-]|-[a-z]+)((?:[a-z]:|/[a-z])?[\\/](?:users|home)[\\/])([^\\/\s"'<>|:;,()\[\]]+(?: [^\\/\s"'<>|:;,()\[\]]+)*)"#,
+        r#"(?i)(^|[^\w.~-]|(?:^|\s)-[a-z]+)((?:[a-z]:|/[a-z])?[\\/](?:users|home)[\\/])([^\\/\s"'<>|:;,()\[\]]+(?: [^\\/\s"'<>|:;,()\[\]]+)*)"#,
     )
     .unwrap()
 });
@@ -66,24 +78,27 @@ const NOT_A_PROFILE: &[&str] = &[
 /// non-blank lines within `MAX_BYTES`, joined by `\n`. `home` (may be empty) is written `~`;
 /// each of `typed` (what Talos answered into the step) is written `***`.
 pub fn readable_tail(raw: &str, home: &str, typed: &[&str]) -> String {
-    // Masked in the raw bytes AND in the rendered text: the terminal may render an answer
-    // differently from what was typed (a trailing space trimmed off the line).
-    let mut raw = keep_last_bytes(raw, RENDER_LAST_BYTES).to_string();
-    for secret in typed.iter().filter(|s| !s.is_empty()) {
-        raw = raw.replace(secret, "***");
+    // Masked in the raw bytes — the WHOLE output, before the render window cuts an echoed
+    // answer in two — AND in the rendered text, which may render it differently (a trailing
+    // space trimmed off the line). An answer under `MIN_TYPED` characters is not masked: it
+    // would mask ordinary words, and escapes (`m` in every `ESC[0m`).
+    let typed: Vec<&str> = typed
+        .iter()
+        .copied()
+        .filter(|s| s.trim().chars().count() >= MIN_TYPED)
+        .collect();
+    let mut whole = raw.to_string();
+    for secret in &typed {
+        whole = whole.replace(secret, "***");
     }
+    let raw = keep_last_bytes(&whole, RENDER_LAST_BYTES);
     // A third-party parser fed a tool's arbitrary bytes: should it ever panic, the journal
     // line is still written, without its tail — never an Apply lost mid-run.
-    let lines = std::panic::catch_unwind(|| screen_lines(&raw)).unwrap_or_default();
+    let lines = std::panic::catch_unwind(|| screen_lines(raw)).unwrap_or_default();
     let start = lines.len().saturating_sub(MAX_LINES);
     let mut text = lines[start..].join("\n");
-    // The trimmed core too, for a rendering that trimmed the answer — but never a core so
-    // short it would mask ordinary words.
-    for secret in typed
-        .iter()
-        .map(|s| s.trim())
-        .filter(|s| s.chars().count() >= 4)
-    {
+    // The trimmed core too, for a rendering that trimmed the answer.
+    for secret in typed.iter().map(|s| s.trim()) {
         text = text.replace(secret, "***");
     }
     let text = tilde_home(&text, home);
@@ -127,7 +142,8 @@ fn screen_lines(raw: &str) -> Vec<String> {
         rows.push((text, screen.row_wrapped(r as u16)));
     }
     let mut out = joined_lines(rows);
-    out.extend(alternate);
+    let skip = alternate.len().saturating_sub(ALTERNATE_LINES);
+    out.extend(alternate.into_iter().skip(skip));
     out
 }
 
@@ -162,7 +178,10 @@ fn replace_profiles(text: &str) -> String {
         };
         // A name runs across a space only in a Windows profile, and only into a path:
         // `C:\Users\John Smith\AppData`, but not `/home/alice is missing`.
-        let windows = root.as_str().as_bytes().get(1) == Some(&b':');
+        // `C:\Users\…`, or its MSYS spelling `/c/Users/…`.
+        let r = root.as_str().as_bytes();
+        let windows = r.get(1) == Some(&b':')
+            || (r.first() == Some(&b'/') && r.len() > 3 && matches!(r.get(2), Some(b'/' | b'\\')));
         let into_path = text[name.end()..].starts_with(['\\', '/']);
         let name_end = if windows && into_path {
             name.end()
@@ -402,15 +421,47 @@ mod tests {
             readable_tail("table abort\r\n", "", &["  ab "]),
             "table abort"
         );
+        assert_eq!(
+            readable_tail("\x1b[0mtable abort\r\n", "", &["ab"]),
+            "table abort"
+        );
+        assert_eq!(readable_tail("\x1b[0mok\r\n", "", &["m"]), "ok");
     }
 
-    /// `readable_tail` survives a panic in the emulator only if panics unwind.
     #[test]
-    fn the_release_build_unwinds_on_a_panic() {
-        let toml = include_str!("../Cargo.toml");
-        assert!(
-            !toml.replace(' ', "").contains("panic=\"abort\""),
-            "`panic = \"abort\"` would turn an emulator panic into a lost Apply"
+    fn an_answer_cut_by_the_render_window_is_still_masked() {
+        let pw = "correct-horse-battery";
+        let pad = "x".repeat(RENDER_LAST_BYTES - 10);
+        let raw = format!("Password: {pw}\r\n{pad}\r\nfailed\r\n");
+        // The cut falls inside the echoed answer; no piece of it may survive.
+        let t = readable_tail(&raw, "", &[pw]);
+        assert!(!t.contains("battery") && t.ends_with("failed"), "{t}");
+    }
+
+    #[test]
+    fn a_full_screen_frame_never_pushes_the_error_out() {
+        let frame: String = (1..=24)
+            .map(|n| format!("\x1b[{n};1Hframe row {n}"))
+            .collect();
+        let raw = format!("error: the real cause\r\n\x1b[?1049h{frame}");
+        let t = tail(&raw);
+        assert!(t.starts_with("error: the real cause\n"), "{t}");
+        assert!(t.ends_with("frame row 24"), "{t}");
+    }
+
+    #[test]
+    fn a_hyphenated_name_before_home_is_no_compiler_flag() {
+        assert_eq!(
+            tail("/opt/my-app/home/config/x and https://my-host/users/bob/repo\r\n"),
+            "/opt/my-app/home/config/x and https://my-host/users/bob/repo"
+        );
+    }
+
+    #[test]
+    fn an_msys_profile_name_with_a_space_is_masked_whole() {
+        assert_eq!(
+            tail("/c/Users/John Smith/AppData/x.log\r\n"),
+            "~/AppData/x.log"
         );
     }
 
