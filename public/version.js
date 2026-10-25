@@ -13,8 +13,16 @@
 //   - a missing trailing segment counts as 0: "1.8" == "1.8.0".
 //   - empty / non-numeric → 0, the harmless direction.
 // Pure, no shell, no dependency — testable like decision/model.
+// A version without its spelling: surrounding blanks, and a leading `v` before a digit
+// (winget writes `v1.0.102` where the tool answers `1.0.102`). The ONE place a spelling is
+// shed: every comparison goes through it. Twin of `decision::bare_version`.
+export function bareVersion(v) {
+  const s = String(v ?? "").trim();
+  return /^[vV]\d/.test(s) ? s.slice(1) : s;
+}
+
 export function compareVersions(a, b) {
-  const seg = (v) => String(v).split(".").map((s) => parseInt(s, 10) || 0);
+  const seg = (v) => bareVersion(v).split(".").map((s) => parseInt(s, 10) || 0);
   const as = seg(a);
   const bs = seg(b);
   const n = Math.max(as.length, bs.length);
@@ -33,6 +41,7 @@ export function compareVersions(a, b) {
 // a suffix read as "above the pin" would reinstall the package on every Apply, and never
 // converge — the probe reads the same suffix afterwards. Twin of `decision::compare_to_pin`.
 export function compareToPin(installed, pin) {
-  const n = String(pin).split(".").length;
-  return compareVersions(String(installed).split(".").slice(0, n).join("."), pin);
+  const p = bareVersion(pin);
+  const n = p.split(".").length;
+  return compareVersions(bareVersion(installed).split(".").slice(0, n).join("."), p);
 }

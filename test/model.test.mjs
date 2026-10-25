@@ -488,6 +488,14 @@ test("unmoved: a change that exited ok and moved nothing is held while the same 
   setUnmoved(p, 0, { found: "2.0", target: "1.8", reason: "winget reported success, but 2.0 is installed, not 1.8" });
   assert.equal(isActionable(p, 0), false);
   assert.match(holdReason(p, 0), /not 1\.8/);
+  // A spelling is not a move: winget's listing writes `v`, the post-step probe may not.
+  const v = seedPinned({ pin: null });
+  setDecision(v, 0, "in");
+  setStatusData(v, 0, "ok");
+  setInstalledVersion(v, 0, "v1.0.96");
+  setOutdated(v, 0, true, "v1.0.102");
+  setUnmoved(v, 0, { found: "1.0.96", target: "1.0.102", reason: "it moved nothing" });
+  assert.equal(isActionable(v, 0), false, "the same version, the same target, spelled twice");
 });
 
 test("versionSummary: absent → empty (nothing installed to show)", () => {

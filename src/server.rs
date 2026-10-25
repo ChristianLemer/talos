@@ -249,7 +249,8 @@ fn hold_for(
         return None;
     }
     let target = step_target(step.pin.as_deref(), announced).unwrap_or_default();
-    held_unmoved(memory, &step.id, installed.unwrap_or(""), &target)
+    let cmd = change_command(step, action);
+    held_unmoved(memory, &step.id, installed.unwrap_or(""), &target, &cmd)
         .then(|| memory.get(&step.id).cloned())
         .flatten()
 }
@@ -2009,39 +2010,45 @@ async fn retry_attempt(socket: &mut WebSocket, state: &AppState, i: usize, actio
         "downgrade" => Action::Downgrade,
         _ => return,
     };
-    // A retried downgrade may find the package already removed by its own first half.
-    let act = if act == Action::Downgrade {
+    // ⭐ A retried version change is judged like the batch's (`unmoved_reason`): from a fresh
+    // probe of what is there now, toward what the manager announces. Without them a retry gave
+    // no verdict off a pin, and its exit 0 lifted a hold and journalled a success that had
+    // moved nothing.
+    let before = if matches!(act, Action::Upgrade | Action::Downgrade) {
         let (step_c, os) = (step.clone(), state.os);
-        let now = tokio::task::spawn_blocking(move || detect_present_detailed(&step_c, os))
+        tokio::task::spawn_blocking(move || detect_present_detailed(&step_c, os))
             .await
             .ok()
-            .and_then(|p| p.present);
-        retry_action(act, now)
+    } else {
+        None
+    };
+    // A retried downgrade may find the package already removed by its own first half.
+    let act = if act == Action::Downgrade {
+        retry_action(act, before.as_ref().and_then(|p| p.present))
     } else {
         act
     };
-    // A row-upgrade is only meaningful for an outdated package; determine cask-ness
-    // via a fresh outdated scan (blocking → spawn_blocking, like the other sites),
-    // ONLY for Upgrade (don't scan on an install/uninstall retry). This makes the
-    // retry use the SAME forced-cask path as the batch Apply.
-    // A `self` row's upgrade is the tool's own command, never brew's: not a cask upgrade.
-    let is_cask = if act == Action::Upgrade && !is_self_updating(step) {
+    // A row-upgrade is only meaningful for an outdated package: a fresh outdated scan says
+    // what it runs toward and, for brew, whether it is a cask (blocking → spawn_blocking, like
+    // the other sites), ONLY for Upgrade (don't scan on an install/uninstall retry). This
+    // makes the retry use the SAME forced-cask path and the same target as the batch Apply.
+    let od = if act == Action::Upgrade {
         let os = state.os;
         // An unreadable scan cannot tell cask from formula. Defaulting to false
         // is the safe direction here: the cask path adds --force, and forcing on
-        // a guess is worse than not forcing.
+        // a guess is worse than not forcing. Nor does it announce anything.
         let scan = tokio::task::spawn_blocking(move || scan_outdated(os))
             .await
             .unwrap_or(Err(crate::outdated::ScanFailure::CommandFailed(
                 "the scan task did not finish".into(),
             )))
             .unwrap_or_default();
-        outdated_for(step.system_id.as_deref(), &scan)
-            .map(|o| o.is_cask)
-            .unwrap_or(false)
+        outdated_for(step.system_id.as_deref(), &scan).cloned()
     } else {
-        false
+        None
     };
+    // A `self` row's upgrade is the tool's own command, never brew's: not a cask upgrade.
+    let is_cask = !is_self_updating(step) && od.as_ref().is_some_and(|o| o.is_cask);
     if cask_upgrade_blocked(act, is_cask, state.appmgmt) {
         let _ = socket
             .send(Message::Text(
@@ -2050,8 +2057,11 @@ async fn retry_attempt(socket: &mut WebSocket, state: &AppState, i: usize, actio
             .await;
         return;
     }
-    // A retry has no `before` the Apply decided from, so it gives no verdict on the version.
-    do_step(socket, state, i, act, step, is_cask, Aim::default()).await;
+    let aim = Aim {
+        before: before.as_ref(),
+        announced: od.as_ref().map(|o| o.available.as_str()),
+    };
+    do_step(socket, state, i, act, step, is_cask, aim).await;
     // A retry is an Apply of ONE step, and what it observed is just as real. So the
     // flush belongs on THIS ending as much as on the batch one.
     //
@@ -3518,8 +3528,13 @@ fn step_target(pin: Option<&str>, announced: Option<&str>) -> Option<String> {
 /// 2026-10-22), and `winget install --version 0.113.1 --force --uninstall-previous` printed
 /// "Successfully installed" with `nu` still 0.116.1 (Windows VM, 2026-10-20). So the version
 /// read AFTER the step is the verdict: toward a pin, it must be the pin (at the pin's own
-/// precision); otherwise it must have moved. A version that cannot be read, before or after,
-/// gives no verdict — never a guess.
+/// precision); otherwise it must have moved, or be at or past what was announced. A version
+/// that cannot be read, before or after, gives no verdict — never a guess.
+///
+/// ⚠️ "At or past the announcement" is not a courtesy. A tool that updates itself (Copilot
+/// CLI, VS Code) is often already current when the manager's stale receipt still lists it as
+/// behind: the upgrade runs, exits 0 or winget's benign "no applicable upgrade", and the
+/// version does not move because it was already there. Before this, that row ended red.
 fn unmoved_reason(
     action: crate::decision::Action,
     pin: Option<&str>,
@@ -3529,21 +3544,39 @@ fn unmoved_reason(
     by: &str,
 ) -> Option<String> {
     use crate::bundles::{classify_pin, PinKind};
-    use crate::decision::Action;
+    use crate::decision::{bare_version, compare_versions, Action};
     if !matches!(action, Action::Upgrade | Action::Downgrade) || after.present != Some(true) {
         return None;
     }
-    let read = |p: &crate::detect::Presence| p.version.as_deref().unwrap_or("").trim().to_string();
-    let now = read(after);
-    if now.is_empty() || now == "?" {
+    let read = |v: Option<&str>| bare_version(v.unwrap_or("")).to_string();
+    let known = |v: &str| !v.is_empty() && v != "?";
+    let now = read(after.version.as_deref());
+    if !known(&now) {
         return None;
     }
+    // Toward a pin, what RUNS is the verdict: the manager's word is exactly what lied in the
+    // measured downgrade.
     if let Some(PinKind::Exact(p)) = classify_pin(pin) {
         return (crate::decision::compare_to_pin(&now, &p) != 0)
             .then(|| format!("{by} reported success, but {now} is installed, not {p}"));
     }
-    let was = read(before?);
-    if was != now {
+    // Otherwise the manager's own copy counts too: `detect:` may read another one that comes
+    // first on PATH (a mise `node` ahead of winget's), and the manager changed ITS copy.
+    let managed_now = read(after.managed.as_deref());
+    let target = target.map(bare_version).filter(|t| !t.is_empty());
+    if let Some(t) = target {
+        if [&now, &managed_now]
+            .into_iter()
+            .any(|v| known(v) && compare_versions(v, t) >= 0)
+        {
+            return None;
+        }
+    }
+    let before = before?;
+    let was = read(before.version.as_deref());
+    let managed_was = read(before.managed.as_deref());
+    let managed_moved = known(&managed_was) && known(&managed_now) && managed_was != managed_now;
+    if !known(&was) || was != now || managed_moved {
         return None;
     }
     Some(match target {
@@ -3561,23 +3594,43 @@ struct Unmoved {
     target: String,
     /// The row's sentence (`unmoved_reason`).
     reason: String,
+    /// The command the row runs for this change (`change_command`). Another command — the
+    /// author moved to `version: self` and its `update:` — is another attempt, never held.
+    cmd: String,
 }
 
-/// Has this package's change already been run, in this session, from the version installed
-/// now toward this same target, and left the version where it was? Then the Apply holds it.
-/// The machine moving (by hand, or by the tool itself) or a new target lifts the hold: what
-/// was remembered no longer describes what is there.
+/// The command a step carries for a version change, as the catalogue gave it: what tells one
+/// attempt from another for a hold (`held_unmoved`). The forms rebuilt at run time (a forced
+/// cask, a winget scope) follow from it and from the machine, so they need no key of their own.
+fn change_command(step: &crate::bundles::Step, action: crate::decision::Action) -> String {
+    use crate::decision::Action;
+    match action {
+        Action::Upgrade => step.upgrade.clone(),
+        Action::Downgrade => step.downgrade.clone(),
+        Action::Install | Action::Uninstall => None,
+    }
+    .unwrap_or_default()
+}
+
+/// Has this package's change already been run, in this session, by this same command, from the
+/// version installed now toward this same target, and left the version where it was? Then the
+/// Apply holds it. The machine moving (by hand, or by the tool itself), a new target or another
+/// command lifts the hold: what was remembered no longer describes what would run.
 fn held_unmoved(
     memory: &std::collections::HashMap<String, Unmoved>,
     id: &str,
     installed: &str,
     target: &str,
+    cmd: &str,
 ) -> bool {
-    let installed = installed.trim();
+    use crate::decision::bare_version;
+    let installed = bare_version(installed);
     !installed.is_empty()
-        && memory
-            .get(id)
-            .is_some_and(|u| u.found == installed && u.target == target)
+        && memory.get(id).is_some_and(|u| {
+            bare_version(&u.found) == installed
+                && bare_version(&u.target) == bare_version(target)
+                && u.cmd == cmd
+        })
 }
 
 /// What a step was run from and toward, for the verdict on the version it leaves
@@ -3866,6 +3919,7 @@ async fn do_step(
             found,
             target: t,
             reason: why.clone(),
+            cmd: change_command(step, action),
         };
         // The `ok` sent above was the exit code's; the verdict outranks it, as in the journal.
         let _ = socket
@@ -4123,6 +4177,109 @@ mod tests {
     }
 
     #[test]
+    fn an_upgrade_that_finds_the_tool_already_at_the_announced_version_is_a_success() {
+        use crate::decision::Action;
+        // The review of `self-updating`, finding 1, on SHIPPED content: Copilot CLI (winget,
+        // `latest`) updated itself to 1.0.102 while winget's receipt still says v1.0.96. The
+        // scan lists it outdated, winget's upgrade exits 0 — or with its benign "no applicable
+        // upgrade" — and `detect:` reads 1.0.102 before and after. It is where it was run to
+        // be: no verdict, whatever the spelling of the announcement.
+        let current = observed(Some(true), "1.0.102");
+        for target in ["v1.0.102", "1.0.102", "1.0.101"] {
+            assert_eq!(
+                unmoved_reason(
+                    Action::Upgrade,
+                    None,
+                    Some(&current),
+                    &current,
+                    Some(target),
+                    "winget",
+                ),
+                None,
+                "{target}"
+            );
+        }
+        assert!(benign_code(Action::Upgrade, -1978335189));
+        // `latest` is the same rule as silence.
+        assert_eq!(
+            unmoved_reason(
+                Action::Upgrade,
+                Some("latest"),
+                Some(&current),
+                &current,
+                Some("v1.0.102"),
+                "winget",
+            ),
+            None
+        );
+        // Still behind the announcement and unmoved: the failure it always was.
+        let behind = observed(Some(true), "1.0.96");
+        assert!(unmoved_reason(
+            Action::Upgrade,
+            None,
+            Some(&behind),
+            &behind,
+            Some("v1.0.102"),
+            "winget",
+        )
+        .is_some());
+        // A spelling is not a move: `v1.0.96` then `1.0.96` moved nothing.
+        assert!(unmoved_reason(
+            Action::Upgrade,
+            None,
+            Some(&observed(Some(true), "v1.0.96")),
+            &behind,
+            Some("1.0.102"),
+            "winget",
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn the_copy_the_manager_upgraded_counts_even_when_another_one_runs() {
+        use crate::decision::Action;
+        // The review's finding 2: winget upgrades Node.js, but a mise `node` comes first on PATH,
+        // so `node --version` does not move. The manager's own reading did: its copy is the one
+        // it was asked to upgrade, and it did. A success — never "still installed".
+        let with = |run: &str, managed: &str| crate::detect::Presence {
+            managed: Some(managed.into()),
+            ..observed(Some(true), run)
+        };
+        assert_eq!(
+            unmoved_reason(
+                Action::Upgrade,
+                None,
+                Some(&with("20.11.0", "20.11.0")),
+                &with("20.11.0", "22.1.0"),
+                Some("22.1.0"),
+                "winget",
+            ),
+            None
+        );
+        // Neither copy moved: the failure stands.
+        assert!(unmoved_reason(
+            Action::Upgrade,
+            None,
+            Some(&with("20.11.0", "20.11.0")),
+            &with("20.11.0", "20.11.0"),
+            Some("22.1.0"),
+            "winget",
+        )
+        .is_some());
+        // Toward an exact pin, what RUNS is the verdict: winget's word was exactly what lied
+        // in the measured downgrade.
+        assert!(unmoved_reason(
+            Action::Downgrade,
+            Some("0.113.1"),
+            Some(&with("0.116.1", "0.116.1")),
+            &with("0.116.1", "0.113.1"),
+            Some("0.113.1"),
+            "winget",
+        )
+        .is_some());
+    }
+
+    #[test]
     fn a_version_change_toward_a_pin_succeeds_only_at_the_pin() {
         use crate::decision::Action;
         // The 2026-10-20 request, measured in the VM: `winget install --version 0.113.1
@@ -4175,9 +4332,12 @@ mod tests {
                 found: "1.141.2".into(),
                 target: "1.142.0".into(),
                 reason: "winget reported success…".into(),
+                cmd: "winget upgrade code".into(),
             },
         );
-        let held = |id: &str, found: &str, target: &str| held_unmoved(&memory, id, found, target);
+        let held = |id: &str, found: &str, target: &str| {
+            held_unmoved(&memory, id, found, target, "winget upgrade code")
+        };
         assert!(held("visual-studio-code", "1.141.2", "1.142.0"));
         // A new announcement — the manifest changed — is worth one more try.
         assert!(!held("visual-studio-code", "1.141.2", "1.142.1"));
@@ -4194,10 +4354,41 @@ mod tests {
                 found: "2.50.1".into(),
                 target: String::new(),
                 reason: "brew reported success, but 2.50.1 is still installed".into(),
+                cmd: "brew upgrade git".into(),
             },
         );
-        assert!(held_unmoved(&memory, "git", "2.50.1", ""));
-        assert!(!held_unmoved(&memory, "git", "2.50.2", ""));
+        assert!(held_unmoved(
+            &memory,
+            "git",
+            "2.50.1",
+            "",
+            "brew upgrade git"
+        ));
+        assert!(!held_unmoved(
+            &memory,
+            "git",
+            "2.50.2",
+            "",
+            "brew upgrade git"
+        ));
+        // The review's finding 3: held after the manager's upgrade, the author switches to
+        // `version: self` + `update:`. Another command is another attempt — never held by
+        // what the first one did.
+        assert!(!held_unmoved(
+            &memory,
+            "git",
+            "2.50.1",
+            "",
+            "git self-update"
+        ));
+        // A spelling is not a move: winget's listing writes `v`, the tool does not.
+        assert!(held_unmoved(
+            &memory,
+            "git",
+            "v2.50.1",
+            "",
+            "brew upgrade git"
+        ));
         // The target: an exact pin owns it; otherwise what the manager announced.
         assert_eq!(
             step_target(Some("0.113.1"), Some("0.116.1")).as_deref(),
@@ -5840,6 +6031,27 @@ mod tests {
     }
 
     #[test]
+    fn a_retried_version_change_is_judged_like_the_batch() {
+        // The review's finding 4: the retry passed `Aim::default()` — no `before`, no
+        // announcement — so off a pin its exit 0 lifted the hold and journalled a success that
+        // moved nothing, while its comment claimed "no verdict". `do_step` needs a live socket
+        // and a pty, so the wiring is pinned on the source, as `requirement_blocks_row` is.
+        let body = fn_body("retry_attempt");
+        assert!(
+            !body.contains("Aim::default()"),
+            "the retry gives no verdict again"
+        );
+        assert!(
+            body.contains("before: before.as_ref()"),
+            "no fresh probe to judge from"
+        );
+        assert!(
+            body.contains("announced: od"),
+            "no announcement to judge toward"
+        );
+    }
+
+    #[test]
     fn a_tool_updated_on_every_apply_is_never_held_by_a_remembered_change() {
         // A hold recorded before the author added `update-on: apply` survives a Refresh (the
         // memory is keyed by id). The Apply must still run the row: it is never judged by the
@@ -5851,6 +6063,7 @@ mod tests {
                 found: "1.0.102".into(),
                 target: "1.0.103".into(),
                 reason: "it moved nothing".into(),
+                cmd: "copilot update".into(),
             },
         );
         let mut step = brew_step("copilot-cli", Some("self"));

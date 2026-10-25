@@ -162,11 +162,9 @@ export function actionFor(
         // announcement is needed — nor a version read.
         if (canSelfUpdate && updateEachApply) return "upgrade";
         const inst = installedVersion || "";
-        // A leading `v` is a spelling, not a segment: winget writes `v1.0.102`.
-        const bare = (v) => String(v).replace(/^[vV]/, "");
         // An unread version is no evidence: no verdict could follow the update, so it would run
         // on every Apply. An outdated row naming no version: the scan decides.
-        const behind = !!inst && (!available || compareVersions(bare(inst), bare(available)) < 0);
+        const behind = !!inst && (!available || compareVersions(inst, available) < 0);
         return canSelfUpdate && outdated && behind ? "upgrade" : null;
       }
       // `latest`: the author decided to take the newest. Falls through to the `outdated` check

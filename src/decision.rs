@@ -3,12 +3,25 @@
 // Two questions: what is the DESIRED state (posture + toggle), and what ACTION
 // an Apply would take (desire × machine reality × pin).
 
+/// A version without its spelling: surrounding blanks, and a leading `v` before a digit
+/// (winget writes `v1.0.102` where the tool answers `1.0.102`). The ONE place a spelling is
+/// shed: every comparison below goes through it, and so does the server's verdict. Twin of
+/// `version.js::bareVersion`.
+pub fn bare_version(v: &str) -> &str {
+    let v = v.trim();
+    match v.strip_prefix(['v', 'V']) {
+        Some(rest) if rest.starts_with(|c: char| c.is_ascii_digit()) => rest,
+        _ => v,
+    }
+}
+
 /// Compares two dotted versions, NUMERICALLY segment by segment (2.10 > 2.9).
 /// Segment = numeric prefix (parseInt: "0-beta" → 0). Missing segment = 0.
 /// Returns -1 (a<b) / 0 (==) / 1 (a>b). Not full semver (see talos-version-pin).
 pub fn compare_versions(a: &str, b: &str) -> i32 {
     let seg = |v: &str| -> Vec<i64> {
-        v.split('.')
+        bare_version(v)
+            .split('.')
             .map(|s| {
                 let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
                 digits.parse::<i64>().unwrap_or(0)
@@ -36,8 +49,9 @@ pub fn compare_versions(a: &str, b: &str) -> i32 {
 /// reinstall), so a suffix read as "above the pin" would reinstall the package on every
 /// Apply and never converge. Twin of `version.js::compareToPin`.
 pub fn compare_to_pin(installed: &str, pin: &str) -> i32 {
+    let pin = bare_version(pin);
     let n = pin.split('.').count();
-    let cut: Vec<&str> = installed.split('.').take(n).collect();
+    let cut: Vec<&str> = bare_version(installed).split('.').take(n).collect();
     compare_versions(&cut.join("."), pin)
 }
 
@@ -130,15 +144,11 @@ pub fn action_for(desired: Desired, f: &MachineFacts) -> Option<Action> {
                 if f.can_self_update && f.update_each_apply {
                     return Some(Action::Upgrade);
                 }
-                // A leading `v` is a spelling, not a segment: winget writes `v1.0.102`.
-                fn bare(v: &str) -> &str {
-                    v.strip_prefix(['v', 'V']).unwrap_or(v)
-                }
                 // An unread version is no evidence: no verdict could follow the update, so it
                 // would run on every Apply. An outdated row naming no version: the scan decides.
                 let behind = !f.installed_version.is_empty()
                     && (f.available.is_empty()
-                        || compare_versions(bare(f.installed_version), bare(f.available)) < 0);
+                        || compare_versions(f.installed_version, f.available) < 0);
                 return (f.can_self_update && f.outdated && behind).then_some(Action::Upgrade);
             }
             // `latest` = the author DECIDED to take the newest. Same effect as declaring
@@ -419,6 +429,36 @@ mod tests {
             };
             assert_eq!(action_for(Desired::Present, &f), *expected, "{what}");
         }
+    }
+
+    #[test]
+    fn a_leading_v_is_a_spelling_in_every_comparison() {
+        // MEASURED (Windows VM, 2026-10-22): winget lists Copilot CLI as `v1.0.96`, the tool
+        // answers `1.0.96`. Read as a number, `v1` is 0 — so an exact pin of 1.0.96 against
+        // winget's spelling read "below the pin" and upgraded on every Apply. One place sheds
+        // the spelling, and every comparison goes through it.
+        assert_eq!(bare_version(" v1.0.102 "), "1.0.102");
+        assert_eq!(bare_version("V2"), "2");
+        assert_eq!(bare_version("vscode"), "vscode", "a word keeps its v");
+        assert_eq!(compare_versions("v1.0.102", "1.0.102"), 0);
+        assert_eq!(compare_versions("1.0.96", "v1.0.102"), -1);
+        assert_eq!(compare_to_pin("v1.0.96", "1.0.96"), 0);
+        assert_eq!(compare_to_pin("1.0.96", "v1.0.96"), 0);
+        let f = MachineFacts {
+            present: true,
+            outdated: true,
+            can_uninstall: true,
+            pin: Some("1.0.96"),
+            installed_version: "v1.0.96",
+            available: "v1.0.102",
+            can_self_update: false,
+            update_each_apply: false,
+        };
+        assert_eq!(
+            action_for(Desired::Present, &f),
+            None,
+            "at the pin, whatever the spelling"
+        );
     }
 
     #[test]

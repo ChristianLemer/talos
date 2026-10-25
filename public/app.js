@@ -6,7 +6,7 @@ import {
 } from "./decision.js";
 import * as M from "./model.js";
 import { estimate, formatEstimate } from "./estimate.js";
-import { failureText, machineRows, machineText, scanSummary, shareLine } from "./machine.js";
+import { changeText, failureText, machineRows, machineText, scanSummary, shareLine } from "./machine.js";
 const model = M.createModel();
 
 const stepsEl = document.getElementById("steps");
@@ -2191,6 +2191,16 @@ function renderLog(consent, history, sharedTo) {
       `<span class="h-act ${e.ok ? "ok" : "fail"}">${e.action}${
         e.ok ? "" : " ✗"
       }</span>`;
+    // A failed version change says where it was found and what it ran toward, as the journal
+    // records it: "upgrade ✗" alone cannot tell a failure from an exit 0 that moved nothing.
+    // Through textContent: the numbers are the tool's, never markup.
+    const change = e.ok ? "" : changeText(e);
+    if (change) {
+      const span = document.createElement("span");
+      span.className = "h-change";
+      span.textContent = change;
+      row.querySelector(".h-act").append(" ", span);
+    }
     // A failure says why: hovering the line shows the exit code and the command's last
     // lines, and the button copies them for a message. Through `title` and the clipboard
     // only — the output is the tool's text, never markup.

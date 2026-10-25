@@ -12,7 +12,7 @@ import {
   toggleState,
 } from "./decision.js";
 import { scopeOf as scopeRule, scopeReason as scopeReasonRule } from "./scope.js";
-import { compareToPin, compareVersions } from "./version.js";
+import { bareVersion, compareToPin, compareVersions } from "./version.js";
 
 // The user's own editable bundle — always active, promotes what the user ADDED
 // from the Catalog. "Wanting" lives here (force is retired, spec §17): a package
@@ -370,13 +370,14 @@ function targetOf(p) {
 function unmovedHold(model, i) {
   const p = model.pkgs.get(i);
   const u = p?.unmoved;
-  const installed = String(p?.installedVersion || "").trim();
+  const installed = bareVersion(p?.installedVersion || "");
   if (!u || !installed) return null;
   const a = actionOf(model, i);
   if (a !== "upgrade" && a !== "downgrade") return null;
   // Never judged by its version, so never held by it (the server's `judges_version`).
   if (isUpdatedEachApply(model, i)) return null;
-  return installed === u.found && targetOf(p) === u.target ? u.reason : null;
+  const same = installed === bareVersion(u.found) && bareVersion(targetOf(p)) === bareVersion(u.target);
+  return same ? u.reason : null;
 }
 // A version change that exited ok and moved nothing (the server's `unmoved` message:
 // `found`, `target`, `reason`). Off an exact pin, the row is outdated again toward what it ran

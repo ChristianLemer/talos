@@ -19,6 +19,12 @@ pub struct Presence {
     pub reason: Option<String>,
     pub version: Option<String>,
     pub external: bool,
+    /// What the MANAGER reads for its own copy, when `version` came from the binary that runs
+    /// — which may be another copy (a mise `node` ahead of winget's on PATH). `None` when the
+    /// manager did not answer, or when `version` is already its reading. Only the verdict on a
+    /// version change reads it (`server::unmoved_reason`): the copy the manager was asked to
+    /// change is the one that tells whether it did.
+    pub managed: Option<String>,
     /// The detection evidence: command run + output + code. Exposed to the operator
     /// (written to the row's terminal at scan time) — "which command decided?".
     pub diag: Option<ProbeResult>,
@@ -106,6 +112,14 @@ pub fn version_from(step: &Step, output: &str) -> String {
         .find(&clean)
         .map(|m| m.as_str().to_string())
         .unwrap_or_default()
+}
+
+/// The version the MANAGER's own listing gives, by the manager's parser alone: `version_regex`
+/// is written for the binary's output, not for this one. `None` when it names none.
+fn managed_version(step: &Step, output: &str) -> Option<String> {
+    let (route, sid) = (step.route.as_deref()?, step.system_id.as_deref()?);
+    let mgr = managers().into_iter().find(|m| m.route == route)?;
+    Some(mgr.parse_version(sid, &strip_ansi(output))).filter(|v| !v.is_empty())
 }
 
 /// The user's HOME (Mac/Linux $HOME, Windows %USERPROFILE%). The .app/.exe runs
@@ -530,14 +544,14 @@ pub fn detect_present_detailed_with_vscode(
                     Some(v)
                 }
             });
-            let v = if bin_ok {
-                bin_version.unwrap_or_else(|| version_from(step, &sd.output))
-            } else {
-                version_from(step, &sd.output)
+            let (v, managed) = match bin_version.filter(|_| bin_ok) {
+                Some(b) => (b, managed_version(step, &sd.output)),
+                None => (version_from(step, &sd.output), None),
             };
             return Presence {
                 present: Some(true),
                 version: Some(v),
+                managed,
                 diag: Some(sd),
                 ..Default::default()
             };

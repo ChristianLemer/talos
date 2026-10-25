@@ -13,7 +13,7 @@ import {
   profileState,
   toggleState,
 } from "../public/decision.js";
-import { compareVersions, compareToPin } from "../public/version.js";
+import { bareVersion, compareVersions, compareToPin } from "../public/version.js";
 
 test("403 recovery: Retry while paused RETRIES — it does not just continue", () => {
   // The bug this pins: the button labelled "Retry" (and the modal step that says
@@ -316,5 +316,24 @@ test("a pin is matched to its own precision, so a suffix never reinstalls", () =
   assert.equal(
     actionFor("present", { present: true, outdated: false, canUninstall: true, pin: "2.50.1", installedVersion: "2.50.1.windows.1" }),
     null,
+  );
+});
+
+test("a leading v is a spelling in every comparison — as decision.rs", () => {
+  // MEASURED (Windows VM, 2026-10-22): winget writes `v1.0.96`, the tool answers `1.0.96`.
+  assert.equal(bareVersion(" v1.0.102 "), "1.0.102");
+  assert.equal(bareVersion("V2"), "2");
+  assert.equal(bareVersion("vscode"), "vscode", "a word keeps its v");
+  assert.equal(compareVersions("v1.0.102", "1.0.102"), 0);
+  assert.equal(compareVersions("1.0.96", "v1.0.102"), -1);
+  assert.equal(compareToPin("v1.0.96", "1.0.96"), 0);
+  assert.equal(compareToPin("1.0.96", "v1.0.96"), 0);
+  assert.equal(
+    actionFor("present", {
+      present: true, outdated: true, canUninstall: true, pin: "1.0.96",
+      installedVersion: "v1.0.96", available: "v1.0.102",
+    }),
+    null,
+    "at the pin, whatever the spelling",
   );
 });

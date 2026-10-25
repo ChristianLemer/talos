@@ -105,10 +105,20 @@ export function machineText(m, scan) {
   return lines.join("\n");
 }
 
-// What a failed History line shows on hover and copies: the exit code, then the last lines
-// the command printed (`tail.rs` made them readable). Empty for a success, and for a line
-// journalled before the engine kept either. Plain text — the output is the tool's, not markup.
+// What a version change was found at and run toward, as the journal records it ("1.141.2 →
+// 1.142.0") — "" when it names no target. What tells "failed" from "succeeded and moved
+// nothing", which an exit 0 alone cannot.
+export function changeText(entry) {
+  if (!entry?.target) return "";
+  return `${entry.found || "?"} → ${entry.target}`;
+}
+
+// What a failed History line shows on hover and copies: where the change went from and to,
+// the exit code, then the last lines the command printed (`tail.rs` made them readable). Empty
+// for a success, and for a line journalled before the engine kept an exit. Plain text — the
+// output is the tool's, not markup.
 export function failureText(entry) {
   if (!entry || entry.ok || entry.exit === undefined || entry.exit === null) return "";
-  return entry.tail ? `exit ${entry.exit}\n${entry.tail}` : `exit ${entry.exit}`;
+  const lines = [changeText(entry), `exit ${entry.exit}`, entry.tail || ""];
+  return lines.filter(Boolean).join("\n");
 }

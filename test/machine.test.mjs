@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   failureText,
+  changeText,
   formatMb,
   formatMs,
   machineRows,
@@ -232,4 +233,16 @@ test("a failed History line says why: its exit code, then the command's last lin
   // A line from before the fields existed, and a success, say nothing.
   assert.equal(failureText({ ok: false }), "");
   assert.equal(failureText({ ok: true, exit: 0, tail: "x" }), "");
+});
+
+test("a version change that failed says what it was found at and run toward", () => {
+  // The review's nit: the Log tab said `upgrade ✗` while the journal held both numbers.
+  assert.equal(
+    failureText({ ok: false, exit: 0, tail: "", found: "1.141.2", target: "1.142.0" }),
+    "1.141.2 → 1.142.0\nexit 0",
+  );
+  assert.equal(changeText({ found: "1.141.2", target: "1.142.0" }), "1.141.2 → 1.142.0");
+  assert.equal(changeText({ found: "", target: "1.142.0" }), "? → 1.142.0");
+  assert.equal(changeText({ found: "1.141.2", target: "" }), "");
+  assert.equal(changeText({}), "");
 });
