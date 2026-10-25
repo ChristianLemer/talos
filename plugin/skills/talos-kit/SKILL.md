@@ -241,7 +241,7 @@ slow or never finds a tool. Three kinds of line, one JSON object each:
 
 | line | when | what it carries |
 |---|---|---|
-| install (has `package`) | each step | `package`, `version`, `action`, `ok`, `secs` |
+| install (has `package`) | each step | `package`, `version`, `action`, `ok`, `secs`; for a version change `found` and `target`; and when `ok` is `false`, **`exit`** (the command's exit code) and **`tail`** (its last 20 lines, at most 2 KB, colours and progress repaints removed) |
 | `"kind": "machine"` | once per launch, after the first scan | OS, CPU and logical cores, RAM total/free, free space on the system disk, where the kit sits (`local`, `network`, `onedrive`, `synced`), **`shell_ms`** — one empty shell through the probe wrapper — and where each manager the plan uses resolves; on Windows also the winget alias state, the antivirus products the OS declares, Defender real-time, AC or battery, **`policies`** — every value under the AppInstaller and WindowsStore policy keys (machine and user) and their subkeys, as stored — and **`user_path_kind`** / **`user_path_vars`**, the registry type of the user PATH and whether it names a `%variable%`. A collection that failed or took over 60 s carries `error` instead, its other fields empty |
 | `"kind": "scan"` | each scan | total, the three batched calls, every package probe in **ms**, and why a batched call gave no answer; `profile_running: true` when the machine profile was being collected meanwhile — its timings are then not the machine's alone |
 
@@ -262,11 +262,15 @@ What to read first:
   Talos does. `null` means not read, `[]` read in full with none set.
 - **A `scan` line's `unavailable`** quotes the reason the release's missing console used to
   swallow.
+- **A failed install line says why** in its `tail`: the tool's own last words, as the row's
+  terminal showed them. `exit: 0` with `ok: false` is an exit 0 that changed nothing. The user
+  sees the same text by hovering the line in the History tab, and its button copies it — the
+  way to get it from someone who does not share.
 - **Past 2 MB a journal is compacted**, local and shared alike: every install line stays,
   but only the last 100 machine lines and the last 200 scan lines.
 
 What is NOT collected: no serial number, no MAC address, no user name beyond the one the
-file's own path carries; the home folder is written `~` in every path. The **Machine tab shows
+file's own path carries; the home folder is written `~` in every path, and in a `tail` too, where a URL's embedded credentials (`https://user:token@host`) are written `***@`. Nothing else in a `tail` is masked: a tool that prints a secret in its error output would be journalled with it. The **Machine tab shows
 the latest machine profile**, as the values themselves — what the user sees there
 is what the share receives. Only bookkeeping stays in the file alone: timestamps, the build
 stamp, the collection's own durations, the per-probe list. Turning sharing on mid-session

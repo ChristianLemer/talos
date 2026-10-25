@@ -6,7 +6,7 @@ import {
 } from "./decision.js";
 import * as M from "./model.js";
 import { estimate, formatEstimate } from "./estimate.js";
-import { machineRows, machineText, scanSummary, shareLine } from "./machine.js";
+import { failureText, machineRows, machineText, scanSummary, shareLine } from "./machine.js";
 const model = M.createModel();
 
 const stepsEl = document.getElementById("steps");
@@ -2188,6 +2188,22 @@ function renderLog(consent, history, sharedTo) {
       `<span class="h-act ${e.ok ? "ok" : "fail"}">${e.action}${
         e.ok ? "" : " ✗"
       }</span>`;
+    // A failure says why: hovering the line shows the exit code and the command's last
+    // lines, and the button copies them for a message. Through `title` and the clipboard
+    // only — the output is the tool's text, never markup.
+    const why = failureText(e);
+    if (why) {
+      row.title = why;
+      const copy = document.createElement("button");
+      copy.className = "h-copy";
+      copy.title = "Copy the error";
+      copy.innerHTML = ICON_COPY;
+      copy.onclick = () => copyText(why).then((ok) => {
+        copy.innerHTML = ok ? ICON_OK : ICON_COPY;
+        if (ok) setTimeout(() => (copy.innerHTML = ICON_COPY), 1200);
+      });
+      row.append(copy);
+    }
     h.append(row);
   }
 }

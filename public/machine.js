@@ -104,3 +104,11 @@ export function machineText(m, scan) {
   if (s) lines.push(s);
   return lines.join("\n");
 }
+
+// What a failed History line shows on hover and copies: the exit code, then the last lines
+// the command printed (`tail.rs` made them readable). Empty for a success, and for a line
+// journalled before the engine kept either. Plain text — the output is the tool's, not markup.
+export function failureText(entry) {
+  if (!entry || entry.ok || entry.exit === undefined || entry.exit === null) return "";
+  return entry.tail ? `exit ${entry.exit}\n${entry.tail}` : `exit ${entry.exit}`;
+}

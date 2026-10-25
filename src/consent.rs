@@ -57,6 +57,15 @@ pub struct HistEntry {
     pub found: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub target: String,
+    /// For a line that ends `ok: false`: the command's exit code, and the last lines it
+    /// printed (`tail::readable_tail` — escapes removed, the home folder written `~`, bounded).
+    /// So a failure seen on the share says WHY, not only THAT. `exit: 0` is the verdict
+    /// "exited 0, changed nothing", or a step whose code was not the failure. Both omitted on
+    /// a success, so its line keeps its shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<i32>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tail: String,
 }
 
 /// The consent state.
@@ -107,6 +116,15 @@ pub fn parse_history(raw: &str) -> Vec<HistEntry> {
                 .to_string(),
             target: v
                 .get("target")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
+            exit: v
+                .get("exit")
+                .and_then(|x| x.as_i64())
+                .and_then(|x| i32::try_from(x).ok()),
+            tail: v
+                .get("tail")
                 .and_then(|x| x.as_str())
                 .unwrap_or("")
                 .to_string(),
@@ -400,6 +418,8 @@ mod tests {
             secs: 65,
             found: "1.141.2".into(),
             target: "1.142.0".into(),
+            exit: None,
+            tail: String::new(),
         };
         let line = serde_json::to_string(&e).unwrap();
         assert!(
@@ -414,6 +434,45 @@ mod tests {
             !line.contains("found") && !line.contains("target"),
             "{line}"
         );
+    }
+
+    #[test]
+    fn a_failure_says_why_and_a_success_keeps_its_shape() {
+        let failed = HistEntry {
+            at: "t".into(),
+            package: "Orca".into(),
+            version: String::new(),
+            action: "upgrade".into(),
+            ok: false,
+            secs: 2,
+            found: "1.4.237".into(),
+            target: "1.4.240".into(),
+            exit: Some(1),
+            tail: "Unknown flag --force for command: update".into(),
+        };
+        let line = serde_json::to_string(&failed).unwrap();
+        assert!(
+            line.ends_with(r#""exit":1,"tail":"Unknown flag --force for command: update"}"#),
+            "{line}"
+        );
+        assert_eq!(parse_history(&line), vec![failed.clone()]);
+        // An exit 0 that moved nothing is a failure too, and says so with its code.
+        let unmoved = HistEntry {
+            exit: Some(0),
+            ..failed.clone()
+        };
+        let line = serde_json::to_string(&unmoved).unwrap();
+        assert!(line.contains(r#""exit":0"#), "{line}");
+        assert_eq!(parse_history(&line), vec![unmoved]);
+        let ok = HistEntry {
+            ok: true,
+            exit: None,
+            tail: String::new(),
+            ..failed
+        };
+        let line = serde_json::to_string(&ok).unwrap();
+        assert!(!line.contains("exit") && !line.contains("tail"), "{line}");
+        assert_eq!(parse_history(&line), vec![ok]);
     }
 
     #[test]
@@ -447,6 +506,8 @@ mod tests {
             secs: 0,
             found: String::new(),
             target: String::new(),
+            exit: None,
+            tail: String::new(),
         };
         // No consent yet → local written, shared ABSENT.
         append_history(&s, &e);
@@ -568,6 +629,8 @@ mod tests {
             secs: 0,
             found: String::new(),
             target: String::new(),
+            exit: None,
+            tail: String::new(),
         };
         append_history(&s, &e);
         let shared = shared_log_path(&s.exe_dir, &s.host, &s.user);
@@ -589,6 +652,8 @@ mod tests {
             secs: 242,
             found: String::new(),
             target: String::new(),
+            exit: None,
+            tail: String::new(),
         };
         let line = serde_json::to_string(&e).unwrap();
         let back = parse_history(&format!("{line}\n"));

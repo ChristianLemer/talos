@@ -416,8 +416,8 @@ Brew casks declaring `auto_updates true` are **not** read as `self`: Talos scans
 After an upgrade or a downgrade that exited 0, Talos reads the version again. Toward an exact
 pin, the step succeeded when the pin is read (at its own precision); otherwise when the version
 changed. If not, the row says so (`unchanged`, and a line such as *winget reported success, but
-1.141.2 is still installed, not 1.142.0*), the journal records `ok: false` with `found` and
-`target`, and the Apply does not run that change again while the same version faces the same
+1.141.2 is still installed, not 1.142.0*), the journal records `ok: false` with `found`,
+`target`, `exit: 0` and the tool's last lines (`tail`), and the Apply does not run that change again while the same version faces the same
 target — a newer announcement, an edited pin, or the version moving (by hand, or by the tool
 itself) lifts it. The memory is the running Talos's: a restart
 tries once more. A version that cannot be read gives no verdict.

@@ -27,6 +27,7 @@ mod pty;
 mod relocate;
 mod selection;
 mod server;
+mod tail;
 mod timings;
 mod vscode;
 mod watch;

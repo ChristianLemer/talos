@@ -2915,6 +2915,9 @@ struct PtyRun {
     /// The Windows watcher saw a foreign window during this step — our only elevation
     /// signal, imprecise by nature (see behaviour.rs). Always false on macOS/Linux.
     saw_window: bool,
+    /// Everything the step printed, as the 403 and sudo scans accumulated it — MOVED out, not
+    /// copied. The journal makes its tail from it (`step_tail`), and only for a failure.
+    output: String,
 }
 
 /// Streams the command into a pty,
@@ -3083,6 +3086,7 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
                 url: None,
                 cancelled,
                 saw_window,
+                output: buf,
             };
         }
         let tail = buf.trim_end().to_lowercase();
@@ -3149,7 +3153,13 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
         url,
         cancelled,
         saw_window,
+        output: buf,
     }
+}
+
+/// The journal's tail of a step's output, the home folder written `~` like the rest of it.
+fn step_tail(buf: &str) -> String {
+    crate::tail::readable_tail(buf, &crate::detect::user_home().to_string_lossy())
 }
 
 /// Obtains the sudo password — MODEL C. If the RAM cache already holds it (entered
@@ -3568,6 +3578,7 @@ async fn do_step(
         url,
         cancelled,
         saw_window,
+        output,
     } = run_in_pty(socket, state, i as u32, cmd).await;
     let ok = code == 0 || benign_code(code);
 
@@ -3835,6 +3846,10 @@ async fn do_step(
         started.elapsed().as_secs(),
     )
     .await;
+    // ⭐ A failure says WHY on the share, not only THAT: the exit code and the last lines the
+    // command printed. Every `ok: false` carries them — a plain failure, a Stop, and the exit 0
+    // that moved nothing (`unmoved`), where the tool's own words are the best clue there is.
+    let failed = !(ok && unmoved.is_none());
     append_history(
         &state.consent,
         &HistEntry {
@@ -3842,7 +3857,13 @@ async fn do_step(
             package: step.name.clone(),
             version,
             action: action.as_str().to_string(),
-            ok: ok && unmoved.is_none(),
+            ok: !failed,
+            exit: failed.then_some(code),
+            tail: if failed {
+                step_tail(&output)
+            } else {
+                String::new()
+            },
             secs: started.elapsed().as_secs(),
             // What it was found at and run toward — for a version change only, so a reader of
             // the journal can tell "failed" from "succeeded without changing anything".

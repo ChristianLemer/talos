@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+  failureText,
   formatMb,
   formatMs,
   machineRows,
@@ -218,4 +219,16 @@ test("the Machine tab copies like a terminal: the same button, the same check ma
   assert.match(wiring, /copyText\(/);
   assert.match(wiring, /ICON_OK/);
   assert.match(appjs, /mcCopy\.disabled\s*=\s*!machine\b/);
+});
+
+test("a failed History line says why: its exit code, then the command's last lines", () => {
+  assert.equal(
+    failureText({ ok: false, exit: 1, tail: "Unknown flag --force for command: update" }),
+    "exit 1\nUnknown flag --force for command: update",
+  );
+  // The exit 0 that moved nothing is a failure, and its 0 is worth saying.
+  assert.equal(failureText({ ok: false, exit: 0, tail: "" }), "exit 0");
+  // A line from before the fields existed, and a success, say nothing.
+  assert.equal(failureText({ ok: false }), "");
+  assert.equal(failureText({ ok: true, exit: 0, tail: "x" }), "");
 });
