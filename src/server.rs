@@ -3408,10 +3408,16 @@ async fn await_forbidden_decision(
     ForbiddenChoice::Stop
 }
 
-// Benign exit codes (winget: "already installed / no applicable upgrade").
-// A non-zero exit in this list = success anyway. Port of BENIGN_CODES.
-fn benign_code(code: i32) -> bool {
-    matches!(code, -1978335189 | -1978335212)
+// Benign exit codes: a non-zero exit that is a success anyway, for THIS action.
+// - winget "no applicable upgrade" (-1978335189): already current, whatever asked.
+// - winget "no package found" (-1978335212): gone is what an uninstall wants. For an
+//   install or an upgrade it is the failure itself (MEASURED: a wrong id journalled ok).
+fn benign_code(action: crate::decision::Action, code: i32) -> bool {
+    match code {
+        -1978335189 => true,
+        -1978335212 => action == crate::decision::Action::Uninstall,
+        _ => false,
+    }
 }
 
 /// One step of an Apply, with the 403 pause around it. Returns the LAST attempt's outcome
@@ -3672,7 +3678,7 @@ async fn do_step(
         output,
         typed,
     } = run_in_pty(socket, state, i as u32, cmd).await;
-    let ok = code == 0 || benign_code(code);
+    let ok = code == 0 || benign_code(action, code);
 
     // The queued notes, NOW: before the command they were wiped twice over — by the front's
     // reset on the running status, and by ConPTY clearing the screen as the command starts.
@@ -5946,6 +5952,28 @@ mod tests {
         let (cmd, note) = super::winget_plan(Action::Downgrade, &free, listed, None, None).unwrap();
         assert!(!cmd.contains("--scope"), "{cmd}");
         assert!(note.contains("could not be read"), "{note}");
+    }
+
+    #[test]
+    fn winget_not_found_is_success_only_for_a_removal() {
+        // MEASURED: `winget install --id <no such id>` exits -1978335212 (no package found);
+        // read as benign for every action, it journalled `ok:true` for an install that never
+        // happened. Gone is what an uninstall wants; it is what an install or upgrade failed at.
+        const NOT_FOUND: i32 = -1978335212;
+        assert!(benign_code(Action::Uninstall, NOT_FOUND));
+        for a in [Action::Install, Action::Upgrade, Action::Downgrade] {
+            assert!(!benign_code(a, NOT_FOUND), "{a:?}");
+        }
+        // "No applicable upgrade": already current, whatever asked.
+        for a in [
+            Action::Install,
+            Action::Upgrade,
+            Action::Downgrade,
+            Action::Uninstall,
+        ] {
+            assert!(benign_code(a, -1978335189), "{a:?}");
+            assert!(!benign_code(a, 1), "{a:?}");
+        }
     }
 
     #[test]
