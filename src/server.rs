@@ -6239,10 +6239,11 @@ mod tests {
         d
     }
 
-    /// A tool updated on every Apply is done for the session after an `ok` of its OWN update,
-    /// and only then: a failure, another action, or a row run only when behind leaves it armed.
+    /// A tool whose own update runs at each Apply is done for the session after an `ok` of that
+    /// update or of its install, and only then: a failure, a removal, or a row run only when
+    /// behind leaves it armed.
     #[test]
-    fn only_a_successful_update_run_each_apply_makes_its_row_done_for_the_session() {
+    fn only_a_successful_update_or_install_makes_its_row_done_for_the_session() {
         let mut s = brew_step("claude-code", Some("self"));
         s.upgrade = Some("claude update".into());
         s.update_each_apply = true;

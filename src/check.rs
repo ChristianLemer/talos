@@ -726,7 +726,7 @@ mod tests {
             "catalog/b.yaml",
             "name: B\nwinget: B.B\ndetect: b\nversion: self\nupdate: b update\nupdate-on: daily\n",
         );
-        // On every Apply, no announcement is needed: no id, no `detect:` — an npm tool, or
+        // With `update-on: apply`, no announcement is needed: no id, no `detect:` — an npm tool, or
         // one installed by mise, is the very case.
         write(
             &d,
