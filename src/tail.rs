@@ -67,9 +67,10 @@ pub fn readable_tail(raw: &str, home: &str, user: &str, typed: &[&str]) -> Strin
     }
     let mut raw = keep_last_bytes(&whole, RENDER_LAST_BYTES);
     // Cut mid-output, the window starts mid-line: that first line is a fragment — of a
-    // longer line, or of an answer too short to be masked in the raw bytes. Dropped.
+    // longer line, or of an answer too short to be masked in the raw bytes. Dropped — unless
+    // the window holds no line break at all (a long repaint), which would leave nothing.
     if raw.len() < whole.len() {
-        raw = raw.split_once('\n').map_or("", |(_, rest)| rest);
+        raw = raw.split_once('\n').map_or(raw, |(_, rest)| rest);
     }
     // A third-party parser fed a tool's arbitrary bytes: should it ever panic, the journal
     // line is still written, without its tail — never an Apply lost mid-run.
@@ -482,6 +483,13 @@ mod tests {
         let filler = "\x07".repeat(RENDER_LAST_BYTES + 11 - head.len() - end.len());
         let t = readable_tail(&format!("{head}{filler}{end}"), "", "", &["ab9"]);
         assert!(!t.contains("b9") && t.ends_with("failed"), "{t}");
+    }
+
+    #[test]
+    fn a_cut_window_without_a_line_break_still_has_a_tail() {
+        let repaint: String = (0..40_000).map(|n| format!("\r{n:>7}")).collect();
+        let t = readable_tail(&repaint, "", "", &[]);
+        assert_eq!(t.trim(), "39999");
     }
 
     #[test]
