@@ -3002,9 +3002,9 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
         let _ = code_tx.send(code);
     });
 
-    // Sudo prompt detection as it streams (the 403 is read once, at the end). The "Password:" prompt
-    // is NOT followed by a newline (sudo writes it raw), so we test the END of the
-    // current buffer. Once answered, we don't re-ask for this step.
+    // Sudo prompt detection as it streams (the 403 is read once, at the end). The
+    // "Password:" prompt is NOT followed by a newline (sudo writes it raw), so we test the
+    // END of the current buffer. Once answered, we don't re-ask for this step.
     let mut buf = String::new();
     // Where the output after the last answer starts, and what was answered (see `PtyRun`).
     let mut answered_at = 0usize;
@@ -3133,6 +3133,8 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
         }
     }
 
+    // The pty is closed: whatever `decode_chunk` still held can never be completed.
+    buf.push_str(&String::from_utf8_lossy(&carry));
     // pty finished: stop the watcher + wait-clear (like watcher.stop()).
     #[cfg(target_os = "windows")]
     {
@@ -3168,22 +3170,19 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
     }
 }
 
-/// The journal's tail of a step's output, the home folder written `~` like the rest of it and
-/// what Talos typed into the step written `***`.
-fn step_tail(buf: &str, typed: &[String]) -> String {
+/// The journal's tail of a step's output, this user written out of it (`~`, `<user>`) and
+/// what Talos typed into the step written `***`. `user` is the journal's own user name
+/// (`ConsentStore::user`), so the tail masks the name the shared file is named after.
+fn step_tail(buf: &str, typed: &[String], user: &str) -> String {
     let typed: Vec<&str> = typed.iter().map(String::as_str).collect();
-    // Who the user is. On Windows the PROFILE folder, not `HOME`: a Git-Bash or corporate
+    // Who the user is. On Windows the PROFILE folder before `HOME`: a Git-Bash or corporate
     // `HOME` (`/c/Users/al`, `H:\`) is not the spelling tools print. And the account name as
     // well, which may differ from the folder's (`al.CORP`).
-    let home = if cfg!(windows) {
-        std::env::var("USERPROFILE").unwrap_or_default()
-    } else {
-        crate::detect::user_home().to_string_lossy().into_owned()
-    };
-    let user = std::env::var("USERNAME")
-        .or_else(|_| std::env::var("USER"))
-        .unwrap_or_default();
-    crate::tail::readable_tail(buf, &home, &user, &typed)
+    let home = std::env::var("USERPROFILE")
+        .ok()
+        .filter(|h| cfg!(windows) && !h.is_empty())
+        .unwrap_or_else(|| crate::detect::user_home().to_string_lossy().into_owned());
+    crate::tail::readable_tail(buf, &home, user, &typed)
 }
 
 /// The end of the output a prompt is looked for in: what followed the last answer, and at
@@ -3953,7 +3952,7 @@ async fn do_step(
             ok: !failed,
             exit: failed.then_some(code),
             tail: if failed {
-                step_tail(&output, &typed)
+                step_tail(&output, &typed, &state.consent.user)
             } else {
                 String::new()
             },

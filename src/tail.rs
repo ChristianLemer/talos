@@ -65,7 +65,12 @@ pub fn readable_tail(raw: &str, home: &str, user: &str, typed: &[&str]) -> Strin
     for secret in typed.iter().filter(|s| s.chars().count() >= RAW_MASK_MIN) {
         whole = std::borrow::Cow::Owned(whole.replace(secret, "***"));
     }
-    let raw = keep_last_bytes(&whole, RENDER_LAST_BYTES);
+    let mut raw = keep_last_bytes(&whole, RENDER_LAST_BYTES);
+    // Cut mid-output, the window starts mid-line: that first line is a fragment — of a
+    // longer line, or of an answer too short to be masked in the raw bytes. Dropped.
+    if raw.len() < whole.len() {
+        raw = raw.split_once('\n').map_or("", |(_, rest)| rest);
+    }
     // A third-party parser fed a tool's arbitrary bytes: should it ever panic, the journal
     // line is still written, without its tail — never an Apply lost mid-run.
     let lines = std::panic::catch_unwind(|| screen_lines(raw)).unwrap_or_default();
@@ -164,17 +169,34 @@ fn mask_user(text: &str, home: &str, user: &str) -> String {
                     .join(sep)
             };
             spellings = vec![parts(home)];
-            // The 8.3 short form: the first six characters Windows keeps (no space, no dot;
-            // `+,;=[]` become `_`), `~`, a number.
-            let short: String = name
-                .chars()
-                .filter(|c| !matches!(c, ' ' | '.'))
-                .map(|c| if "+,;=[]".contains(c) { '_' } else { c })
-                .take(6)
-                .collect();
+            // The 8.3 short form: of the part before the LAST dot, the first six characters
+            // Windows keeps (no space; what is not plain ASCII becomes `_`), `~`, a number,
+            // then the first three of the extension (`christian.CORP` → `CHRIST~1.COR`).
+            let short_of = |part: &str, n: usize| -> String {
+                part.chars()
+                    .filter(|c| !matches!(c, ' ' | '.'))
+                    .map(|c| {
+                        if c.is_ascii_alphanumeric() || "-_$!#%&'(){}@^`~".contains(c) {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
+                    .take(n)
+                    .collect()
+            };
+            let (base, ext) = name.rsplit_once('.').unwrap_or((name, ""));
+            let short = short_of(base, 6);
             if !short.is_empty() {
+                let ext = short_of(ext, 3);
+                let ext = if ext.is_empty() {
+                    String::new()
+                } else {
+                    // Optional: the spelling without it is masked too.
+                    format!(r"(?:\.{})?", regex::escape(&ext))
+                };
                 spellings.push(format!(
-                    "{}{sep}{}~[0-9]+",
+                    "{}{sep}{}~[0-9]+{ext}",
                     parts(parent),
                     regex::escape(&short)
                 ));
@@ -425,6 +447,41 @@ mod tests {
             ),
             "CORP\\<user> in ~\\x"
         );
+    }
+
+    #[test]
+    fn the_short_form_of_a_dotted_or_accented_profile_is_masked() {
+        // Windows: base before the last dot, six characters, `~N`, then the first three of
+        // the extension; what it cannot keep becomes `_`.
+        assert_eq!(
+            readable_tail(
+                "C:\\Users\\CHRIST~1.COR\\AppData\\x.log\r\n",
+                "C:\\Users\\christian.CORP",
+                "",
+                &[]
+            ),
+            "~\\AppData\\x.log"
+        );
+        assert_eq!(
+            readable_tail(
+                "C:\\Users\\J_R_ME~1.DUP\\x\r\n",
+                "C:\\Users\\Jérôme.Dupont",
+                "",
+                &[]
+            ),
+            "~\\x"
+        );
+    }
+
+    #[test]
+    fn a_short_answer_cut_by_the_render_window_leaves_no_fragment() {
+        let head = "Password: ab9\r\n";
+        let end = "\r\nfailed\r\n";
+        // The cut lands on the `b`: what remains of the answer is a fragment of a line.
+        // Invisible bytes (BEL), so that fragment would stay on screen, near the end.
+        let filler = "\x07".repeat(RENDER_LAST_BYTES + 11 - head.len() - end.len());
+        let t = readable_tail(&format!("{head}{filler}{end}"), "", "", &["ab9"]);
+        assert!(!t.contains("b9") && t.ends_with("failed"), "{t}");
     }
 
     #[test]
