@@ -3172,7 +3172,18 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
 /// what Talos typed into the step written `***`.
 fn step_tail(buf: &str, typed: &[String]) -> String {
     let typed: Vec<&str> = typed.iter().map(String::as_str).collect();
-    crate::tail::readable_tail(buf, &crate::detect::user_home().to_string_lossy(), &typed)
+    // Who the user is. On Windows the PROFILE folder, not `HOME`: a Git-Bash or corporate
+    // `HOME` (`/c/Users/al`, `H:\`) is not the spelling tools print. And the account name as
+    // well, which may differ from the folder's (`al.CORP`).
+    let home = if cfg!(windows) {
+        std::env::var("USERPROFILE").unwrap_or_default()
+    } else {
+        crate::detect::user_home().to_string_lossy().into_owned()
+    };
+    let user = std::env::var("USERNAME")
+        .or_else(|_| std::env::var("USER"))
+        .unwrap_or_default();
+    crate::tail::readable_tail(buf, &home, &user, &typed)
 }
 
 /// The end of the output a prompt is looked for in: what followed the last answer, and at
@@ -3219,13 +3230,25 @@ fn last_line(window: &str) -> String {
 /// follows is replaced, as before.
 fn decode_chunk(carry: &mut Vec<u8>, chunk: &[u8]) -> String {
     carry.extend_from_slice(chunk);
-    let complete = match std::str::from_utf8(carry) {
-        Ok(_) => carry.len(),
-        // `error_len() == None`: the input ENDED inside a character — keep that part.
-        Err(e) if e.error_len().is_none() => e.valid_up_to(),
-        Err(_) => carry.len(),
-    };
-    let rest = carry.split_off(complete);
+    // Walk back over at most three continuation bytes to the last lead byte: if the
+    // character it starts is longer than what arrived, it waits — whatever came before.
+    let mut start = carry.len();
+    for back in 1..=carry.len().min(4) {
+        let b = carry[carry.len() - back];
+        if b & 0b1100_0000 != 0b1000_0000 {
+            let need = match b {
+                0xC0..=0xDF => 2,
+                0xE0..=0xEF => 3,
+                0xF0..=0xF7 => 4,
+                _ => 1,
+            };
+            if need > back {
+                start = carry.len() - back;
+            }
+            break;
+        }
+    }
+    let rest = carry.split_off(start);
     let text = String::from_utf8_lossy(carry).into_owned();
     *carry = rest;
     text
@@ -3973,6 +3996,9 @@ mod tests {
         assert!(carry.is_empty());
         // A byte that can never start a character is still replaced, not held forever.
         assert_eq!(decode_chunk(&mut carry, b"a\xffb"), "a\u{FFFD}b");
+        // An invalid byte EARLIER in the read does not stop the cut character being held.
+        assert_eq!(decode_chunk(&mut carry, b"\xff p\xc3"), "\u{FFFD} p");
+        assert_eq!(decode_chunk(&mut carry, b"\xa4ss"), "\u{e4}ss");
     }
 
     /// The sudo prompt is looked for in what followed the last answer, and in the end only.

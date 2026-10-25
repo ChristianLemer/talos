@@ -35,6 +35,8 @@ const SCROLLBACK: usize = 1000;
 /// How much of a full-screen frame left on screen is kept, after the main screen's lines:
 /// enough for a crash message, never so much that it pushes the main screen's error out.
 const ALTERNATE_LINES: usize = 5;
+/// The shortest answer masked in the raw bytes (see `readable_tail`).
+const RAW_MASK_MIN: usize = 4;
 
 // `readable_tail` survives a panic in the emulator only by unwinding through
 // `catch_unwind`. With `panic = "abort"` — set in Cargo.toml, `.cargo/config.toml` or
@@ -51,17 +53,19 @@ static URL_CREDENTIALS: LazyLock<regex::Regex> =
 /// non-blank lines within `MAX_BYTES`, joined by `\n`. `home` (may be empty) is written `~`
 /// and its last component, the user name, `<user>`; each of `typed` (what Talos answered
 /// into the step) is written `***`.
-pub fn readable_tail(raw: &str, home: &str, typed: &[&str]) -> String {
-    // Masked in the raw bytes, over a window wide enough that the render cut cannot split an
-    // echoed answer in two — AND in the rendered text, which may render it differently (a
-    // trailing space trimmed off the line). Every answer, however short: it is a password.
+pub fn readable_tail(raw: &str, home: &str, user: &str, typed: &[&str]) -> String {
+    // Masked in the raw bytes — the WHOLE output, so the render cut cannot split an echoed
+    // answer in two (an answer exists only on a sudo step, so this copy is rare) — AND in
+    // the rendered text, which may render it differently (a trailing space trimmed off the
+    // line). The raw pass skips an answer under `RAW_MASK_MIN` characters: `m` ends every
+    // colour reset, and masking it there would scramble the screen; the rendered pass masks
+    // every answer, however short — it is a password.
     let typed: Vec<&str> = typed.iter().copied().filter(|s| !s.is_empty()).collect();
-    let longest = typed.iter().map(|s| s.len()).max().unwrap_or(0);
-    let mut raw = keep_last_bytes(raw, RENDER_LAST_BYTES + longest).to_string();
-    for secret in &typed {
-        raw = raw.replace(secret, "***");
+    let mut whole = std::borrow::Cow::Borrowed(raw);
+    for secret in typed.iter().filter(|s| s.chars().count() >= RAW_MASK_MIN) {
+        whole = std::borrow::Cow::Owned(whole.replace(secret, "***"));
     }
-    let raw = keep_last_bytes(&raw, RENDER_LAST_BYTES);
+    let raw = keep_last_bytes(&whole, RENDER_LAST_BYTES);
     // A third-party parser fed a tool's arbitrary bytes: should it ever panic, the journal
     // line is still written, without its tail — never an Apply lost mid-run.
     let lines = std::panic::catch_unwind(|| screen_lines(raw)).unwrap_or_default();
@@ -70,7 +74,7 @@ pub fn readable_tail(raw: &str, home: &str, typed: &[&str]) -> String {
     for secret in typed.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         text = text.replace(secret, "***");
     }
-    let text = mask_user(&text, home);
+    let text = mask_user(&text, home, user);
     let text = URL_CREDENTIALS.replace_all(&text, "${1}***@");
     keep_last_bytes(&text, MAX_BYTES).to_string()
 }
@@ -138,58 +142,87 @@ fn joined_lines(rows: Vec<(String, bool)>) -> Vec<String> {
 
 /// This user, written out of the text: the home folder `~` — in either slash, without case
 /// on Windows, in its MSYS spelling and its 8.3 short form (`C:\Users\CHRIST~1`) — and then
-/// the user name (the home's last component) `<user>`, as a whole word. Never inside a
-/// longer name: `/home/al` is not the start of `/home/alice2`, nor `al` a word of `also`.
-fn mask_user(text: &str, home: &str) -> String {
+/// the user name `<user>`: the home's last component and the account name (`user`, may be
+/// empty), as whole words, without case, every time they appear. A name under 3 characters
+/// is not masked as a word (it would mask ordinary text). Never inside a longer name:
+/// `/home/al` is not the start of `/home/alice2`, nor `christian` a word of `christians`.
+fn mask_user(text: &str, home: &str, user: &str) -> String {
     let home = home.trim_end_matches(['/', '\\']);
-    if home.is_empty() {
-        return text.to_string();
-    }
-    let windows = home.contains('\\') || home.as_bytes().get(1) == Some(&b':');
-    let (parent, name) = home.rsplit_once(['/', '\\']).unwrap_or(("", home));
-    let mut spellings = vec![regex::escape(home)];
-    if windows {
-        let sep = r"[\\/]";
-        let parts = |p: &str| -> String {
-            p.split(['/', '\\'])
-                .map(regex::escape)
-                .collect::<Vec<_>>()
-                .join(sep)
-        };
-        spellings = vec![parts(home)];
-        // The 8.3 short form: the first six characters that survive, `~`, a digit.
-        let short: String = name
-            .chars()
-            .filter(|c| c.is_alphanumeric())
-            .take(6)
-            .collect();
-        if !short.is_empty() {
-            spellings.push(format!(
-                "{}{sep}{}~[0-9]+",
-                parts(parent),
-                regex::escape(&short)
-            ));
-        }
-        // MSYS: `C:\Users\al` is `/c/Users/al`.
-        if let Some(rest) = home
-            .get(2..)
-            .filter(|_| home.as_bytes().get(1) == Some(&b':'))
-        {
-            spellings.push(format!("/{}{}", regex::escape(&home[..1]), parts(rest)));
-        }
-    }
-    let case = if windows { "(?i)" } else { "" };
     let mut out = text.to_string();
-    let home_re = format!(r"{case}(?:{})([\\/]|$|[^\w.~-])", spellings.join("|"));
-    if let Ok(re) = regex::Regex::new(&home_re) {
-        out = re.replace_all(&out, "~${1}").into_owned();
-    }
-    if name.chars().count() >= 3 {
-        let name_re = format!(r"{case}(^|[^\w.-]){}($|[^\w-])", regex::escape(name));
-        if let Ok(re) = regex::Regex::new(&name_re) {
-            out = re.replace_all(&out, "${1}<user>${2}").into_owned();
+    let mut names: Vec<&str> = vec![user.trim()];
+    if !home.is_empty() {
+        let windows = home.contains('\\') || home.as_bytes().get(1) == Some(&b':');
+        let (parent, name) = home.rsplit_once(['/', '\\']).unwrap_or(("", home));
+        names.push(name);
+        let mut spellings = vec![regex::escape(home)];
+        if windows {
+            let sep = r"[\\/]";
+            let parts = |p: &str| -> String {
+                p.split(['/', '\\'])
+                    .map(regex::escape)
+                    .collect::<Vec<_>>()
+                    .join(sep)
+            };
+            spellings = vec![parts(home)];
+            // The 8.3 short form: the first six characters Windows keeps (no space, no dot;
+            // `+,;=[]` become `_`), `~`, a number.
+            let short: String = name
+                .chars()
+                .filter(|c| !matches!(c, ' ' | '.'))
+                .map(|c| if "+,;=[]".contains(c) { '_' } else { c })
+                .take(6)
+                .collect();
+            if !short.is_empty() {
+                spellings.push(format!(
+                    "{}{sep}{}~[0-9]+",
+                    parts(parent),
+                    regex::escape(&short)
+                ));
+            }
+            // MSYS: `C:\Users\al` is `/c/Users/al`.
+            if let Some(rest) = home
+                .get(2..)
+                .filter(|_| home.as_bytes().get(1) == Some(&b':'))
+            {
+                spellings.push(format!("/{}{}", regex::escape(&home[..1]), parts(rest)));
+            }
+        }
+        let case = if windows { "(?i)" } else { "" };
+        let home_re = format!(r"{case}(?:{})([\\/]|$|[^\w.~-])", spellings.join("|"));
+        if let Ok(re) = regex::Regex::new(&home_re) {
+            out = re.replace_all(&out, "~${1}").into_owned();
         }
     }
+    names.sort_unstable_by_key(|n| std::cmp::Reverse(n.len()));
+    names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    for name in names.into_iter().filter(|n| n.chars().count() >= 3) {
+        out = mask_word(&out, name);
+    }
+    out
+}
+
+/// Every whole-word occurrence of `word`, without case, written `<user>`. The boundaries are
+/// checked by hand rather than consumed by the pattern, so two occurrences one separator
+/// apart (`christian:christian`) are both found.
+fn mask_word(text: &str, word: &str) -> String {
+    let Ok(re) = regex::Regex::new(&format!("(?i){}", regex::escape(word))) else {
+        return text.to_string();
+    };
+    let part_of_name = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for m in re.find_iter(text) {
+        let before = text[..m.start()].chars().next_back();
+        let after = text[m.end()..].chars().next();
+        let whole = !before.is_some_and(|c| part_of_name(c) || c == '.')
+            && !after.is_some_and(part_of_name);
+        if whole {
+            out.push_str(&text[last..m.start()]);
+            out.push_str("<user>");
+            last = m.end();
+        }
+    }
+    out.push_str(&text[last..]);
     out
 }
 
@@ -210,7 +243,7 @@ mod tests {
     use super::*;
 
     fn tail(raw: &str) -> String {
-        readable_tail(raw, "", &[])
+        readable_tail(raw, "", "", &[])
     }
 
     #[test]
@@ -303,11 +336,11 @@ mod tests {
     fn the_home_folder_is_written_as_a_tilde_whatever_its_case_or_slashes() {
         let raw = "Log: c:\\users\\ALICE\\AppData\\Local\\Temp\\x.log\r\nsee C:/Users/alice/x\r\n";
         assert_eq!(
-            readable_tail(raw, "C:\\Users\\alice", &[]),
+            readable_tail(raw, "C:\\Users\\alice", "", &[]),
             "Log: ~\\AppData\\Local\\Temp\\x.log\nsee ~/x"
         );
         assert_eq!(
-            readable_tail("open /home/alice/.npmrc\n", "/home/alice", &[]),
+            readable_tail("open /home/alice/.npmrc\n", "/home/alice", "", &[]),
             "open ~/.npmrc"
         );
     }
@@ -318,7 +351,7 @@ mod tests {
         let pad = "x".repeat(RENDER_LAST_BYTES - 10);
         let raw = format!("Password: {pw}\r\n{pad}\r\nfailed\r\n");
         // The cut falls inside the echoed answer; no piece of it may survive.
-        let t = readable_tail(&raw, "", &[pw]);
+        let t = readable_tail(&raw, "", "", &[pw]);
         assert!(!t.contains("battery") && t.ends_with("failed"), "{t}");
     }
 
@@ -338,7 +371,7 @@ mod tests {
         // A trailing space is trimmed off the rendered line; the raw bytes still carry it.
         let raw = "Password: hunter2 \r\nSorry, try again.\r\n";
         assert_eq!(
-            readable_tail(raw, "", &["hunter2 "]),
+            readable_tail(raw, "", "", &["hunter2 "]),
             "Password: ***\nSorry, try again."
         );
     }
@@ -360,14 +393,50 @@ mod tests {
                    access denied for user CHRISTIAN.\r\n\
                    christians and christian-ish stay\r\n";
         assert_eq!(
-            readable_tail(raw, home, &[]),
+            readable_tail(raw, home, "", &[]),
             "~\\AppData\\Local\\Temp\\i.log\n~/.bashrc\n\
              access denied for user <user>.\n\
              christians and christian-ish stay"
         );
         assert_eq!(
-            readable_tail("/opt/alice2 and /opt/al/x\n", "/opt/al", &[]),
+            readable_tail("/opt/alice2 and /opt/al/x\n", "/opt/al", "", &[]),
             "/opt/alice2 and ~/x"
+        );
+    }
+
+    #[test]
+    fn the_user_name_is_masked_each_time_in_any_case_and_from_the_account_too() {
+        assert_eq!(
+            readable_tail(
+                "chown christian:christian /x\r\nby Christian\r\n",
+                "/home/christian",
+                "",
+                &[]
+            ),
+            "chown <user>:<user> /x\nby <user>"
+        );
+        // A profile folder that is not the account name (a domain collision): both are masked.
+        assert_eq!(
+            readable_tail(
+                "CORP\\christian in C:\\Users\\christian.CORP\\x\r\n",
+                "C:\\Users\\christian.CORP",
+                "christian",
+                &[]
+            ),
+            "CORP\\<user> in ~\\x"
+        );
+    }
+
+    #[test]
+    fn the_short_form_keeps_the_characters_windows_keeps() {
+        assert_eq!(
+            readable_tail(
+                "C:\\Users\\JEAN-L~1\\AppData\\setup.log\r\n",
+                "C:\\Users\\jean-luc.picard",
+                "",
+                &[]
+            ),
+            "~\\AppData\\setup.log"
         );
     }
 
@@ -375,15 +444,24 @@ mod tests {
     fn another_persons_path_is_not_masked_by_design() {
         // What is masked is what identifies THIS user; the doc says so.
         assert_eq!(
-            readable_tail("cp /Users/bob/x failed\r\n", "/home/alice", &[]),
+            readable_tail("cp /Users/bob/x failed\r\n", "/home/alice", "", &[]),
             "cp /Users/bob/x failed"
+        );
+    }
+
+    #[test]
+    fn a_short_answer_never_breaks_the_escapes_around_it() {
+        // `m` ends every colour reset: masked in the raw bytes, it would scramble the screen.
+        assert_eq!(
+            readable_tail("\x1b[31mError\x1b[0m: bad answer m\r\n", "", "", &["m"]),
+            "Error: bad answer ***"
         );
     }
 
     #[test]
     fn a_short_answer_is_masked_too() {
         assert_eq!(
-            readable_tail("Password: ab9\r\n", "", &["ab9"]),
+            readable_tail("Password: ab9\r\n", "", "", &["ab9"]),
             "Password: ***"
         );
     }
@@ -408,7 +486,7 @@ mod tests {
         // A prompt that echoes: the password Talos answered comes back as output.
         let raw = "Password: s3cr3t-pw\r\nSorry, try again.\r\n";
         assert_eq!(
-            readable_tail(raw, "", &["s3cr3t-pw"]),
+            readable_tail(raw, "", "", &["s3cr3t-pw"]),
             "Password: ***\nSorry, try again."
         );
     }
@@ -416,6 +494,6 @@ mod tests {
     #[test]
     fn an_empty_output_has_an_empty_tail() {
         assert_eq!(tail(""), "");
-        assert_eq!(readable_tail("\r\n\x1b[0m\r\n", "/home/a", &[]), "");
+        assert_eq!(readable_tail("\r\n\x1b[0m\r\n", "/home/a", "", &[]), "");
     }
 }

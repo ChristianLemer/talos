@@ -271,7 +271,7 @@ What to read first:
   failures keep their `tail`.
 
 What is NOT collected: no serial number, no MAC address, no user name beyond the one the
-file's own path carries; the home folder is written `~` in every path. A `tail` is the tool's own text, so it gets more: what identifies **this** user — the home folder in any spelling (case, slashes, MSYS `/c/…`, its 8.3 short form like `CHRIST~1`) is written `~`, the user name `<user>` — a URL's credentials (`https://user:token@host`, or a token alone) `***@`, and what Talos itself typed into the step (a sudo password) `***`. Nothing else in a `tail` is masked: another person's name in a path, or a secret a tool prints in its error output, would be journalled as printed. The **Machine tab shows
+file's own path carries; the home folder is written `~` in every path. A `tail` is the tool's own text, so it gets more: what identifies **this** user — the home folder in any spelling (case, slashes, MSYS `/c/…`, its 8.3 short form like `CHRIST~1`) is written `~`, the user name (the profile folder's and the account's, 3 characters or more, any case) `<user>` — a URL's credentials (`https://user:token@host`, or a token alone) `***@`, and what Talos itself typed into the step (a sudo password) `***`. Nothing else in a `tail` is masked: another person's name in a path, or a secret a tool prints in its error output, would be journalled as printed. The **Machine tab shows
 the latest machine profile**, as the values themselves — what the user sees there
 is what the share receives. Only bookkeeping stays in the file alone: timestamps, the build
 stamp, the collection's own durations, the per-probe list. Turning sharing on mid-session
