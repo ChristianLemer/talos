@@ -446,7 +446,9 @@ pub fn parse_winget_version(id: &str, output: &str) -> String {
                 // the version. Strip it if present (the parse_winget_list test exercises
                 // that case; this parser shares the same shape).
                 let v = next.trim_start_matches('>').trim();
-                if v.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                // A leading `v` is a spelling (`v1.0.96`), not a word (`bare_version`).
+                let bare = crate::decision::bare_version(v);
+                if bare.chars().next().is_some_and(|c| c.is_ascii_digit()) {
                     versions.push(v.to_string());
                 }
             }
@@ -1212,6 +1214,23 @@ Nushell   Nushell.Nushell  0.111.1              winget
             parse_winget_version("Nushell.Nushell", output_rev),
             "0.114.0",
             "must return MAX regardless of order"
+        );
+    }
+
+    #[test]
+    fn a_winget_version_spelled_with_a_v_is_still_read() {
+        // MEASURED (Windows VM, 2026-10-22): winget lists Copilot CLI as `v1.0.96`. Refused for
+        // not starting with a digit, the manager's own reading of it was empty — no version on a
+        // row without `detect:`, no `managed` reading for the verdict on one with it.
+        let output = "\
+Name         Id             Version  Available Source
+------------------------------------------------------
+GitHub Copilot GitHub.Copilot v1.0.96 v1.0.102 winget
+";
+        assert_eq!(parse_winget_version("GitHub.Copilot", output), "v1.0.96");
+        assert_eq!(
+            parse_winget_version("GitHub.Copilot", "GitHub.Copilot vscode"),
+            ""
         );
     }
 
