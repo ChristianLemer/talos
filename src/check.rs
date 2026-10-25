@@ -202,7 +202,7 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
         }
         // Without `update-on: apply`, it runs when the version the tool reports is behind what
         // winget or brew announces: both halves must exist, or the command is dead or runs for
-        // nothing. On every Apply, neither is needed.
+        // nothing. With `update-on: apply`, neither is needed.
         if cp.pkg.update.is_some() && pin == Some(PinKind::SelfUpdating) && !each_apply {
             if cp.pkg.detect.is_none() {
                 r.errors.push(format!(

@@ -72,8 +72,8 @@ export function loadPlan(model, steps, profiles = []) {
       selfUpdate: !!s.selfUpdate,
       // `update-on: apply`: that update runs at each Apply while the row is wanted, until it succeeds.
       updateEachApply: !!s.updateEachApply,
-      // That update already succeeded in this Talos session (the server's `updatedThisSession`
-      // on the plan, then its `self-updated` message): done until a Refresh re-arms it.
+      // Done for this Talos session — its update exited ok, or the Apply installed it (the
+      // server's `updatedThisSession` on the plan, then its `self-updated`), until a Refresh.
       updatedThisSession: !!s.updatedThisSession,
       // The last version change that exited ok and moved nothing — { target, reason } from the
       // server's `unmoved` message — or null. Held while that target is in view.
@@ -353,17 +353,18 @@ export function actionOf(model, i) {
     updatedThisSession: p.updatedThisSession,
   });
 }
-// Does the Apply run this row's own `update:` every time (`update-on: apply`)? Only for a row
+// Will the next Apply run this row's own `update:` (`update-on: apply`)? Only for a row
 // it will act on: an auto row is never touched, an unwanted or out-of-scope one is not updated.
 export function isUpdatedEachApply(model, i) {
   const p = model.pkgs.get(i);
   return !!(p?.selfUpdate && p?.updateEachApply) && isSelfUpdating(model, i)
     && actionOf(model, i) === "upgrade";
 }
-// The server's `self-updated`: this row's own `update:` succeeded in this session.
-export function setUpdatedThisSession(model, i) {
+// The server's `self-updated`: done for the session (its update exited ok, or the Apply installed
+// it), or — `done` false — forgotten by a removal that exited ok.
+export function setUpdatedThisSession(model, i, done = true) {
   const p = model.pkgs.get(i);
-  if (p) p.updatedThisSession = true;
+  if (p) p.updatedThisSession = !!done;
 }
 // Is this row done for the session — its update ran ok, and the Apply leaves it until a
 // Refresh? The row says so instead of looking as if nothing had happened.
@@ -452,7 +453,7 @@ function summary(model, i) {
     // `self`: one number — the application keeps itself current — unless the row has its own
     // `update:` and the Apply will run it (`actionOf` decides, with the server's rule).
     if (String(p.pin).toLowerCase() === "self") {
-      // Run on every Apply: no target to show, the command decides.
+      // Run by the Apply, behind or not: no target to show, the command decides.
       if (actionOf(model, i) === "upgrade" && !isUpdatedEachApply(model, i)) {
         return { from: inst, to: p.available || null, pinned: null, muted: false, held: false };
       }

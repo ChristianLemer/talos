@@ -7,9 +7,9 @@ import { readFileSync } from "node:fs";
 
 const appjs = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
 
-test("`self-updated` marks the row done in the model, then repaints and re-counts the Apply", () => {
+test("`self-updated` sets the row done (or forgets it) in the model, then repaints and re-counts the Apply", () => {
   const at = appjs.indexOf('case "self-updated":');
   assert.notEqual(at, -1, "the front no longer handles `self-updated`");
   const arm = appjs.slice(at, appjs.indexOf("case ", at + 20));
-  assert.match(arm, /M\.setUpdatedThisSession\(model, msg\.i\);[^]*refreshLiveness\(\);/);
+  assert.match(arm, /M\.setUpdatedThisSession\(model, msg\.i, msg\.done !== false\);[^]*refreshLiveness\(\);/);
 });

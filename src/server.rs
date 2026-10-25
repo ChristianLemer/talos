@@ -131,7 +131,8 @@ fn hold_still_in_view(step: &crate::bundles::Step, od: Option<&crate::managers::
 
 /// Is this row re-observed before every Apply, wanted present and already there? Yes when
 /// presence alone cannot say there is nothing to do: an exact pin (the VERSION decides), and
-/// a tool updated on every Apply (it acts whenever present, so it must be seen first).
+/// a tool whose own update runs at each Apply (it acts whenever present, so it must be seen
+/// first — and once done for the session, a removal since must still be seen live).
 fn always_probed(step: &crate::bundles::Step) -> bool {
     matches!(
         crate::bundles::classify_pin(step.pin.as_deref()),
@@ -139,8 +140,8 @@ fn always_probed(step: &crate::bundles::Step) -> bool {
     ) || (step.update_each_apply && step.upgrade.is_some())
 }
 
-/// Is this step judged by the version it leaves (`unmoved_reason`)? Not a tool updated on
-/// every Apply: "nothing to do" is its usual answer, and a success.
+/// Is this step judged by the version it leaves (`unmoved_reason`)? Not a tool whose own update
+/// runs at each Apply: "nothing to do" is its usual answer, and a success.
 fn judges_version(step: &crate::bundles::Step, action: crate::decision::Action) -> bool {
     !(action == crate::decision::Action::Upgrade
         && is_self_updating(step)
@@ -164,7 +165,8 @@ fn arms_session_done(
         && step.update_each_apply
 }
 
-/// Has this row's own update already succeeded in this session (`arms_session_done`)?
+/// Is this row done for the session — its own update exited ok, or the Apply installed it
+/// (`arms_session_done`)?
 fn updated_this_session(state: &AppState, step: &crate::bundles::Step) -> bool {
     state
         .updated_this_session
@@ -413,8 +415,9 @@ struct AppState {
     /// Cleared when the Apply ends, so a later retry never acts on an old answer.
     brew_pins:
         tokio::sync::Mutex<std::collections::HashMap<String, Option<crate::managers::BrewPin>>>,
-    /// The rows updated on every Apply (`update-on: apply`) whose own `update:` already
-    /// succeeded in this session, by package id (`arms_session_done`). `action_for` reads it:
+    /// The rows whose own `update:` runs at each Apply (`update-on: apply`) and is done for this
+    /// session — it exited ok, or the Apply installed the row — by package id
+    /// (`arms_session_done`). `action_for` reads it:
     /// such a row is done until the Refresh button re-arms it, so the end of a run can say the
     /// machine already matches. Never written: a restart re-arms it too. A std Mutex, never
     /// held across an await — `plan_message`, which is not async, reads it.
@@ -1464,7 +1467,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 // Lines queued for a row's terminal name a row by its INDEX, which this
                 // reload may have given to another package.
                 state.notes.lock().await.clear();
-                // ⭐ The Refresh BUTTON re-arms the tools updated on every Apply — this one
+                // ⭐ The Refresh BUTTON re-arms the tools whose update runs at each Apply — this one
                 // gesture, never the Apply's own re-scan nor the probe after a step, or the end
                 // of every run would find them pending again.
                 state
@@ -4352,12 +4355,21 @@ async fn do_step(
     // A tool's own update run at each Apply, done: the row leaves the plan until a Refresh, and
     // says so — in its terminal and on the row (`self-updated`), so it does not look untouched.
     // A removal forgets it: a later reinstall is a new copy, and arms the row again.
+    // The front is told both ways (`done`): a removal that exits ok can leave another copy
+    // present, and a front still holding "done" would hide the update the next Apply runs.
     if ok && !cancelled && action == Action::Uninstall {
-        state
+        let forgot = state
             .updated_this_session
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&step.id);
+        if forgot {
+            let _ = socket
+                .send(Message::Text(
+                    json!({ "type": "self-updated", "i": i, "done": false }).to_string(),
+                ))
+                .await;
+        }
     }
     if arms_session_done(step, action, ok && !cancelled) {
         state
@@ -4368,12 +4380,15 @@ async fn do_step(
         say(
             socket,
             i,
-            "[update] done for this session — the Apply leaves this row until Refresh re-arms it.",
+            &format!(
+                "[{}] done for this session — the Apply leaves this row until Refresh re-arms it.",
+                action.as_str()
+            ),
         )
         .await;
         let _ = socket
             .send(Message::Text(
-                json!({ "type": "self-updated", "i": i }).to_string(),
+                json!({ "type": "self-updated", "i": i, "done": true }).to_string(),
             ))
             .await;
     }
@@ -6790,6 +6805,10 @@ mod tests {
             step.contains(".remove(&step.id)"),
             "a removal no longer forgets it"
         );
+        assert!(
+            step.contains(r#""done": false"#),
+            "a removal forgets it without telling the front"
+        );
         let apply = fn_body("apply_diff");
         assert!(
             apply.contains("updated_this_session: updated_this_session(state, step)"),
@@ -6797,9 +6816,15 @@ mod tests {
         );
         let squash = |t: &str| t.split_whitespace().collect::<String>();
         let clear = ".updated_this_session.lock().unwrap_or_else(|e|e.into_inner()).clear()";
+        let socket = squash(&fn_body("handle_socket"));
+        let refresh = &socket[socket.find("\"rescan\"=>").expect("the rescan arm")..];
+        let cleared = refresh.find(clear).expect("the Refresh no longer re-arms");
+        let planned = refresh
+            .find("plan_message(")
+            .expect("the Refresh sends a plan");
         assert!(
-            squash(&fn_body("handle_socket")).contains(clear),
-            "the Refresh no longer re-arms"
+            cleared < planned,
+            "the set is emptied after the plan is built: the front would keep rows done"
         );
         let src = include_str!("server.rs");
         let code = &src[..src

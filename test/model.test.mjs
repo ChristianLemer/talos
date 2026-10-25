@@ -459,6 +459,11 @@ test("update-on apply: once the update succeeded, the end of the run already mat
   assert.deepEqual(versionSummary(m, 0), { from: "2.1.308", to: null, pinned: null, muted: false, held: false });
   setUnmoved(m, 0, { found: "2.1.308", target: "", reason: "it moved nothing" });
   assert.equal(holdReason(m, 0), null, "still never judged by its version");
+  // A removal that exited ok while another copy stays present: the server forgets it
+  // (`done: false`), and the front offers the update the next Apply runs.
+  setUpdatedThisSession(m, 0, false);
+  assert.equal(actionOf(m, 0), "upgrade", "forgotten: as the server decides");
+  setUpdatedThisSession(m, 0);
   // Gone since: installed again, and the row no longer says it was updated.
   setStatusData(m, 0, "waiting");
   assert.equal(actionOf(m, 0), "install");

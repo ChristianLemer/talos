@@ -2426,9 +2426,9 @@ ws.onmessage = (ev) => {
       paintVersion(msg.i);
       refreshLiveness();
       break;
-    case "self-updated": { // a tool's own update, run on every Apply, succeeded (server: arms_session_done)
+    case "self-updated": { // done for the session, or forgotten by a removal (server: arms_session_done)
       if (!rows[msg.i]) break;
-      M.setUpdatedThisSession(model, msg.i);
+      M.setUpdatedThisSession(model, msg.i, msg.done !== false);
       paintVersion(msg.i);
       refreshLiveness(); // the Apply leaves this row until a Refresh re-arms it
       break;

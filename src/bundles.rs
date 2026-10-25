@@ -357,9 +357,9 @@ pub struct Step {
     /// resolution needs the collected half, which lives on the share and is read by the
     /// server, not here.
     pub overrides: Overrides,
-    /// `update-on: apply`: the row's upgrade is the tool's own `update:`, run on every Apply
-    /// while the package is wanted and present — once per session, until a Refresh — and never
-    /// judged by the version it leaves.
+    /// `update-on: apply`: the row's upgrade is the tool's own `update:`, run at each Apply while
+    /// the package is wanted and present, until it succeeds — then done until a Refresh — and
+    /// never judged by the version it leaves.
     pub update_each_apply: bool,
 }
 
@@ -2650,9 +2650,9 @@ slow: true
     }
 
     #[test]
-    fn update_on_apply_runs_the_tools_own_update_on_every_apply() {
+    fn update_on_apply_runs_the_tools_own_update_at_each_apply() {
         // The operator's form (2026-10-24): a tool kept current by running its own update
-        // command on every Apply — a no-op when there is nothing to do. No scan needed, so it
+        // command at each Apply — a no-op when there is nothing to do. No scan needed, so it
         // works for routes nothing scans (npm, a tool installed by mise).
         let mut p = pkg("Claude Code");
         p.npm = Some("@anthropic-ai/claude-code".into());
