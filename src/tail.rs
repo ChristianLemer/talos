@@ -9,12 +9,12 @@
 //! have read.
 //!
 //! Written only when a step ends `ok: false` (`server::do_step`), and only into the journal,
-//! which reaches the share under the user's consent like every other line. On the way:
-//! every user-profile path is written `~` (the home folder, a short `CHRIST~1` form, another
-//! profile, an MSYS `/c/Users/…`), a URL's credentials become `***@`, and the answers Talos
-//! itself typed into the step (a sudo password) become `***`. Nothing else is masked — a tool
-//! that prints a secret in plain text in its error output, or a user name outside a path,
-//! would be journalled with it. Pure, so it is tested.
+//! which reaches the share under the user's consent like every other line. What is masked is
+//! what identifies THIS user and what Talos itself typed: the home folder in any spelling
+//! (case, slashes, MSYS `/c/…`, its 8.3 short form) is written `~`, the user name `<user>`, a
+//! URL's credentials `***@`, and an answer Talos typed into the step (a sudo password) `***`.
+//! Nothing else: another person's name in a path, or a secret a tool prints in plain text,
+//! would be journalled as printed. Pure, so it is tested.
 
 use std::sync::LazyLock;
 
@@ -32,8 +32,6 @@ const ROWS: u16 = crate::pty::ROW_TERMINAL_ROWS;
 const COLS: u16 = crate::pty::ROW_TERMINAL_COLS;
 /// Lines kept above the screen. Enough for `MAX_LINES` even when many are blank.
 const SCROLLBACK: usize = 1000;
-/// The shortest answer Talos masks (see `readable_tail`).
-const MIN_TYPED: usize = 4;
 /// How much of a full-screen frame left on screen is kept, after the main screen's lines:
 /// enough for a crash message, never so much that it pushes the main screen's error out.
 const ALTERNATE_LINES: usize = 5;
@@ -49,60 +47,30 @@ compile_error!("tail.rs needs panic = \"unwind\": its catch_unwind keeps an Appl
 static URL_CREDENTIALS: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@]+@").unwrap());
 
-/// A user-profile folder, whoever's and however spelled: `C:\Users\<name>` (the 8.3
-/// `CHRIST~1` included), `C:/Users/<name>`, MSYS `/c/Users/<name>`, `/home/<name>`,
-/// `/Users/<name>`. It must START a path — `api.github.com/users/x` and `/srv/myhome` are
-/// not profiles — or follow a compiler flag glued to it (`-L/home/bob/lib`), a flag being a
-/// hyphen that starts a word (`/opt/my-app/home` is no flag). The name runs to
-/// the next separator or to what cannot be in a path; words joined by ONE space are captured
-/// together, and `replace_profiles` keeps them together only for a Windows profile that a
-/// separator follows (`C:\Users\John Smith\AppData`).
-static PROFILE_PATH: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(
-        r#"(?i)(^|[^\w.~-]|(?:^|\s)-[a-z]+)((?:[a-z]:|/[a-z])?[\\/](?:users|home)[\\/])([^\\/\s"'<>|:;,()\[\]]+(?: [^\\/\s"'<>|:;,()\[\]]+)*)"#,
-    )
-    .unwrap()
-});
-
-/// Folders under `Users` or `home` that are nobody's profile. Masking them would send a
-/// reader to a per-user path that does not exist.
-const NOT_A_PROFILE: &[&str] = &[
-    "public",
-    "default",
-    "default user",
-    "all users",
-    "linuxbrew",
-];
-
 /// The readable end of `raw`: the screen a terminal would have left, its last `MAX_LINES`
-/// non-blank lines within `MAX_BYTES`, joined by `\n`. `home` (may be empty) is written `~`;
-/// each of `typed` (what Talos answered into the step) is written `***`.
+/// non-blank lines within `MAX_BYTES`, joined by `\n`. `home` (may be empty) is written `~`
+/// and its last component, the user name, `<user>`; each of `typed` (what Talos answered
+/// into the step) is written `***`.
 pub fn readable_tail(raw: &str, home: &str, typed: &[&str]) -> String {
-    // Masked in the raw bytes — the WHOLE output, before the render window cuts an echoed
-    // answer in two — AND in the rendered text, which may render it differently (a trailing
-    // space trimmed off the line). An answer under `MIN_TYPED` characters is not masked: it
-    // would mask ordinary words, and escapes (`m` in every `ESC[0m`).
-    let typed: Vec<&str> = typed
-        .iter()
-        .copied()
-        .filter(|s| s.trim().chars().count() >= MIN_TYPED)
-        .collect();
-    let mut whole = raw.to_string();
+    // Masked in the raw bytes, over a window wide enough that the render cut cannot split an
+    // echoed answer in two — AND in the rendered text, which may render it differently (a
+    // trailing space trimmed off the line). Every answer, however short: it is a password.
+    let typed: Vec<&str> = typed.iter().copied().filter(|s| !s.is_empty()).collect();
+    let longest = typed.iter().map(|s| s.len()).max().unwrap_or(0);
+    let mut raw = keep_last_bytes(raw, RENDER_LAST_BYTES + longest).to_string();
     for secret in &typed {
-        whole = whole.replace(secret, "***");
+        raw = raw.replace(secret, "***");
     }
-    let raw = keep_last_bytes(&whole, RENDER_LAST_BYTES);
+    let raw = keep_last_bytes(&raw, RENDER_LAST_BYTES);
     // A third-party parser fed a tool's arbitrary bytes: should it ever panic, the journal
     // line is still written, without its tail — never an Apply lost mid-run.
     let lines = std::panic::catch_unwind(|| screen_lines(raw)).unwrap_or_default();
     let start = lines.len().saturating_sub(MAX_LINES);
     let mut text = lines[start..].join("\n");
-    // The trimmed core too, for a rendering that trimmed the answer.
-    for secret in typed.iter().map(|s| s.trim()) {
+    for secret in typed.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         text = text.replace(secret, "***");
     }
-    let text = tilde_home(&text, home);
-    let text = replace_profiles(&text);
+    let text = mask_user(&text, home);
     let text = URL_CREDENTIALS.replace_all(&text, "${1}***@");
     keep_last_bytes(&text, MAX_BYTES).to_string()
 }
@@ -114,7 +82,7 @@ fn screen_lines(raw: &str) -> Vec<String> {
     parser.process(raw.as_bytes());
     // A full-screen tool that died in its alternate screen leaves the main one — where the
     // earlier output was printed — hidden behind its last frame, which may itself hold the
-    // crash message. Both are read: the main screen, then that frame.
+    // crash message. Both are read: the main screen, then the end of that frame.
     let mut alternate = Vec::new();
     if parser.screen().alternate_screen() {
         alternate = joined_lines(
@@ -168,62 +136,58 @@ fn joined_lines(rows: Vec<(String, bool)>) -> Vec<String> {
     out
 }
 
-/// Every profile path written `~` (see `PROFILE_PATH`), what precedes it kept.
-fn replace_profiles(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut last = 0;
-    for c in PROFILE_PATH.captures_iter(text) {
-        let (Some(lead), Some(root), Some(name)) = (c.get(1), c.get(2), c.get(3)) else {
-            continue;
-        };
-        // A name runs across a space only in a Windows profile, and only into a path:
-        // `C:\Users\John Smith\AppData`, but not `/home/alice is missing`.
-        // `C:\Users\…`, or its MSYS spelling `/c/Users/…`.
-        let r = root.as_str().as_bytes();
-        let windows = r.get(1) == Some(&b':')
-            || (r.first() == Some(&b'/') && r.len() > 3 && matches!(r.get(2), Some(b'/' | b'\\')));
-        let into_path = text[name.end()..].starts_with(['\\', '/']);
-        let name_end = if windows && into_path {
-            name.end()
-        } else {
-            name.start()
-                + name
-                    .as_str()
-                    .find(char::is_whitespace)
-                    .unwrap_or(name.len())
-        };
-        let own = text[name.start()..name_end].trim().to_lowercase();
-        out.push_str(&text[last..lead.end()]);
-        if NOT_A_PROFILE.contains(&own.as_str()) {
-            out.push_str(&text[lead.end()..name_end]);
-        } else {
-            out.push('~');
-        }
-        last = name_end;
-    }
-    out.push_str(&text[last..]);
-    out
-}
-
-/// The home folder written `~`, wherever it appears. Without case for a Windows home, in
-/// either slash; never inside a longer name (`/home/al` is not the start of `/home/alice2`).
-fn tilde_home(text: &str, home: &str) -> String {
+/// This user, written out of the text: the home folder `~` — in either slash, without case
+/// on Windows, in its MSYS spelling and its 8.3 short form (`C:\Users\CHRIST~1`) — and then
+/// the user name (the home's last component) `<user>`, as a whole word. Never inside a
+/// longer name: `/home/al` is not the start of `/home/alice2`, nor `al` a word of `also`.
+fn mask_user(text: &str, home: &str) -> String {
     let home = home.trim_end_matches(['/', '\\']);
     if home.is_empty() {
         return text.to_string();
     }
     let windows = home.contains('\\') || home.as_bytes().get(1) == Some(&b':');
-    let spellings = if windows {
-        vec![home.replace('/', "\\"), home.replace('\\', "/")]
-    } else {
-        vec![home.to_string()]
-    };
+    let (parent, name) = home.rsplit_once(['/', '\\']).unwrap_or(("", home));
+    let mut spellings = vec![regex::escape(home)];
+    if windows {
+        let sep = r"[\\/]";
+        let parts = |p: &str| -> String {
+            p.split(['/', '\\'])
+                .map(regex::escape)
+                .collect::<Vec<_>>()
+                .join(sep)
+        };
+        spellings = vec![parts(home)];
+        // The 8.3 short form: the first six characters that survive, `~`, a digit.
+        let short: String = name
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .take(6)
+            .collect();
+        if !short.is_empty() {
+            spellings.push(format!(
+                "{}{sep}{}~[0-9]+",
+                parts(parent),
+                regex::escape(&short)
+            ));
+        }
+        // MSYS: `C:\Users\al` is `/c/Users/al`.
+        if let Some(rest) = home
+            .get(2..)
+            .filter(|_| home.as_bytes().get(1) == Some(&b':'))
+        {
+            spellings.push(format!("/{}{}", regex::escape(&home[..1]), parts(rest)));
+        }
+    }
+    let case = if windows { "(?i)" } else { "" };
     let mut out = text.to_string();
-    for spelling in spellings {
-        let case = if windows { "(?i)" } else { "" };
-        let pattern = format!(r"{case}{}([\\/]|$|[^\w.~-])", regex::escape(&spelling));
-        if let Ok(re) = regex::Regex::new(&pattern) {
-            out = re.replace_all(&out, "~${1}").into_owned();
+    let home_re = format!(r"{case}(?:{})([\\/]|$|[^\w.~-])", spellings.join("|"));
+    if let Ok(re) = regex::Regex::new(&home_re) {
+        out = re.replace_all(&out, "~${1}").into_owned();
+    }
+    if name.chars().count() >= 3 {
+        let name_re = format!(r"{case}(^|[^\w.-]){}($|[^\w-])", regex::escape(name));
+        if let Ok(re) = regex::Regex::new(&name_re) {
+            out = re.replace_all(&out, "${1}<user>${2}").into_owned();
         }
     }
     out
@@ -349,86 +313,6 @@ mod tests {
     }
 
     #[test]
-    fn any_profile_path_is_written_as_a_tilde() {
-        // The 8.3 short form %TEMP% often carries, an MSYS HOME, and a home that is a prefix
-        // of a longer name.
-        let raw = "C:\\Users\\CHRIST~1\\AppData\\Local\\Temp\\i.log\r\n\
-                   /c/Users/alice/x\r\n\
-                   /Users/bob/Library\r\n";
-        assert_eq!(
-            readable_tail(raw, "/c/Users/alice", &[]),
-            "~\\AppData\\Local\\Temp\\i.log\n~/x\n~/Library"
-        );
-        assert_eq!(
-            readable_tail("/opt/alice2 and /opt/al/x\n", "/opt/al", &[]),
-            "/opt/alice2 and ~/x"
-        );
-    }
-
-    #[test]
-    fn what_is_not_a_profile_is_left_alone() {
-        // Shared folders and Linuxbrew's own prefix are nobody's home, and `users/` in a URL
-        // or `home` inside a longer name is no profile at all.
-        let raw = "/home/linuxbrew/.linuxbrew/bin/brew: failed\r\n\
-                   C:\\Users\\Public\\Desktop\\x.lnk\r\n\
-                   GET https://api.github.com/users/octocat/repos 403\r\n\
-                   /srv/myhome/cfg and npm @users/pkg\r\n";
-        assert_eq!(
-            tail(raw),
-            "/home/linuxbrew/.linuxbrew/bin/brew: failed\n\
-             C:\\Users\\Public\\Desktop\\x.lnk\n\
-             GET https://api.github.com/users/octocat/repos 403\n\
-             /srv/myhome/cfg and npm @users/pkg"
-        );
-    }
-
-    #[test]
-    fn a_profile_name_with_a_space_is_masked_whole_and_the_text_after_it_kept() {
-        let raw = "Log: C:\\Users\\John Smith\\AppData\\x.log\r\n\
-                   /home/alice is missing\r\n";
-        assert_eq!(tail(raw), "Log: ~\\AppData\\x.log\n~ is missing");
-    }
-
-    #[test]
-    fn two_profiles_on_one_line_are_two_and_the_command_between_them_survives() {
-        assert_eq!(
-            tail("mv /Users/bob /Users/carol/x failed\r\n/home/alice /usr/bin\r\n"),
-            "mv ~ ~/x failed\n~ /usr/bin"
-        );
-    }
-
-    #[test]
-    fn a_profile_glued_to_a_compiler_flag_is_masked() {
-        assert_eq!(
-            tail("cc -L/home/bob/lib -I/Users/carol/include -isystem/home/dave/inc\r\n"),
-            "cc -L~/lib -I~/include -isystem~/inc"
-        );
-    }
-
-    #[test]
-    fn spaces_belong_to_a_name_only_between_words_of_a_windows_profile() {
-        assert_eq!(
-            tail("C:\\Users\\bob    (copy)\r\nC:\\Users\\Ann Lee\\x\r\n"),
-            "~    (copy)\n~\\x"
-        );
-        let t = tail("/home/alice\tdenied /tmp/x\r\n");
-        assert!(t.starts_with("~ ") && t.ends_with("denied /tmp/x"), "{t:?}");
-    }
-
-    #[test]
-    fn a_short_answer_never_masks_ordinary_words() {
-        assert_eq!(
-            readable_tail("table abort\r\n", "", &["  ab "]),
-            "table abort"
-        );
-        assert_eq!(
-            readable_tail("\x1b[0mtable abort\r\n", "", &["ab"]),
-            "table abort"
-        );
-        assert_eq!(readable_tail("\x1b[0mok\r\n", "", &["m"]), "ok");
-    }
-
-    #[test]
     fn an_answer_cut_by_the_render_window_is_still_masked() {
         let pw = "correct-horse-battery";
         let pad = "x".repeat(RENDER_LAST_BYTES - 10);
@@ -450,22 +334,6 @@ mod tests {
     }
 
     #[test]
-    fn a_hyphenated_name_before_home_is_no_compiler_flag() {
-        assert_eq!(
-            tail("/opt/my-app/home/config/x and https://my-host/users/bob/repo\r\n"),
-            "/opt/my-app/home/config/x and https://my-host/users/bob/repo"
-        );
-    }
-
-    #[test]
-    fn an_msys_profile_name_with_a_space_is_masked_whole() {
-        assert_eq!(
-            tail("/c/Users/John Smith/AppData/x.log\r\n"),
-            "~/AppData/x.log"
-        );
-    }
-
-    #[test]
     fn a_typed_answer_is_masked_however_the_terminal_renders_it() {
         // A trailing space is trimmed off the rendered line; the raw bytes still carry it.
         let raw = "Password: hunter2 \r\nSorry, try again.\r\n";
@@ -481,6 +349,42 @@ mod tests {
         assert_eq!(
             tail(raw),
             "error: the real cause\nframe\nthread 'main' panicked"
+        );
+    }
+
+    #[test]
+    fn this_user_is_masked_in_every_spelling_of_the_home_and_by_name() {
+        let home = "C:\\Users\\christian";
+        let raw = "C:\\Users\\CHRIST~1\\AppData\\Local\\Temp\\i.log\r\n\
+                   /c/Users/christian/.bashrc\r\n\
+                   access denied for user CHRISTIAN.\r\n\
+                   christians and christian-ish stay\r\n";
+        assert_eq!(
+            readable_tail(raw, home, &[]),
+            "~\\AppData\\Local\\Temp\\i.log\n~/.bashrc\n\
+             access denied for user <user>.\n\
+             christians and christian-ish stay"
+        );
+        assert_eq!(
+            readable_tail("/opt/alice2 and /opt/al/x\n", "/opt/al", &[]),
+            "/opt/alice2 and ~/x"
+        );
+    }
+
+    #[test]
+    fn another_persons_path_is_not_masked_by_design() {
+        // What is masked is what identifies THIS user; the doc says so.
+        assert_eq!(
+            readable_tail("cp /Users/bob/x failed\r\n", "/home/alice", &[]),
+            "cp /Users/bob/x failed"
+        );
+    }
+
+    #[test]
+    fn a_short_answer_is_masked_too() {
+        assert_eq!(
+            readable_tail("Password: ab9\r\n", "", &["ab9"]),
+            "Password: ***"
         );
     }
 

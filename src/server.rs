@@ -2903,7 +2903,7 @@ async fn apply_diff(
 struct PtyRun {
     /// The child's exit code, or -1 if it could not be reaped.
     code: i32,
-    /// The 403 rule (`forbidden::Watch403`) matched the streamed bytes. RAW — not "the step
+    /// `forbidden::is403` matched the step's output. RAW — not "the step
     /// failed with a 403"; see the observation site in `do_step` for why that distinction
     /// is kept.
     forbidden: bool,
@@ -3002,16 +3002,15 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
         let _ = code_tx.send(code);
     });
 
-    // 403 scan + sudo prompt detection as it streams. The "Password:" prompt
+    // Sudo prompt detection as it streams (the 403 is read once, at the end). The "Password:" prompt
     // is NOT followed by a newline (sudo writes it raw), so we test the END of the
     // current buffer. Once answered, we don't re-ask for this step.
     let mut buf = String::new();
     // Where the output after the last answer starts, and what was answered (see `PtyRun`).
     let mut answered_at = 0usize;
-    // The 403 rule over the whole buffer, read one chunk at a time (see `Watch403`).
-    let mut watch403 = crate::forbidden::Watch403::default();
     let mut typed: Vec<String> = Vec::new();
-    let mut forbidden = false;
+    // The bytes of a character a read cut in two, waiting for the rest (`decode_chunk`).
+    let mut carry: Vec<u8> = Vec::new();
     // Set when the USER killed this step. Distinct from `forbidden` and from a plain
     // non-zero exit: the caller must be able to tell "I stopped this" from "this broke".
     let mut cancelled = false;
@@ -3083,16 +3082,12 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
         };
         // Always accumulate (the sudo prompt may be split across several chunks,
         // or "Password:" arrive in a separate piece → testing the chunk alone misses it).
-        let appended_from = buf.len();
-        buf.push_str(&String::from_utf8_lossy(&chunk));
-        if !forbidden && watch403.feed(&buf, appended_from) {
-            forbidden = true;
-        }
+        buf.push_str(&decode_chunk(&mut carry, &chunk));
         let out = json!({ "type": "out", "i": i, "data": STANDARD.encode(&chunk) });
         if socket.send(Message::Text(out.to_string())).await.is_err() {
             return PtyRun {
                 code: -1,
-                forbidden,
+                forbidden: crate::forbidden::is403(&buf),
                 url: None,
                 cancelled,
                 saw_window,
@@ -3116,7 +3111,7 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
         // Only what came AFTER the last answer is read (`prompt_window`), so the SAME prompt
         // is not re-detected on the next chunk — its tail would still end with ':' and we
         // would answer a question already answered, burning the attempt budget on nothing.
-        // The buffer itself is kept whole: `extract_url` and the journal's tail read it.
+        // The buffer itself is kept whole: `is403`, `extract_url` and the journal's tail read it.
         if sudo_tries < SUDO_MAX_TRIES && prompt_armed(&last) {
             if let Some((pw, from_cache)) = obtain_sudo_pw(socket, state, i).await {
                 let mut line = pw.clone().into_bytes();
@@ -3153,11 +3148,9 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
             .await;
     }
 
-    // A `403` that ended the output was held back by `feed` (a next chunk could have made it
-    // `4035`); there is no next chunk now.
-    if !forbidden && watch403.finish(&buf) {
-        forbidden = true;
-    }
+    // The 403 rule, read ONCE over the whole output: nothing reads `forbidden` before the step
+    // ends, and one pass cannot disagree with itself at a chunk boundary.
+    let forbidden = crate::forbidden::is403(&buf);
     let code = code_rx.await.unwrap_or(-1);
     let url = if forbidden {
         crate::forbidden::extract_url(&buf)
@@ -3217,6 +3210,25 @@ fn last_line(window: &str) -> String {
         .next()
         .unwrap_or("")
         .to_lowercase()
+}
+
+/// A pty read as text, without splitting a character: a read can end inside a multi-byte
+/// character, and decoding each read on its own turned both halves into U+FFFD — a
+/// password with an `ä` echoed across two reads then no longer matched its mask. The
+/// incomplete end waits in `carry` for the next read; a byte that is invalid whatever
+/// follows is replaced, as before.
+fn decode_chunk(carry: &mut Vec<u8>, chunk: &[u8]) -> String {
+    carry.extend_from_slice(chunk);
+    let complete = match std::str::from_utf8(carry) {
+        Ok(_) => carry.len(),
+        // `error_len() == None`: the input ENDED inside a character — keep that part.
+        Err(e) if e.error_len().is_none() => e.valid_up_to(),
+        Err(_) => carry.len(),
+    };
+    let rest = carry.split_off(complete);
+    let text = String::from_utf8_lossy(carry).into_owned();
+    *carry = rest;
+    text
 }
 
 /// Obtains the sudo password — MODEL C. If the RAM cache already holds it (entered
@@ -3846,8 +3858,8 @@ async fn do_step(
     // installer's own window, which the monotone design tolerates: a false positive
     // costs one label of caution, never a wrong promise.
     //
-    // `forbidden` is `run_in_pty`'s raw signal: the 403 rule (`forbidden::Watch403`) matched
-    // the streamed bytes. It is deliberately NOT the `blocked` computed above — that one is
+    // `forbidden` is `run_in_pty`'s raw signal: `forbidden::is403` matched
+    // the step's output. It is deliberately NOT the `blocked` computed above — that one is
     // `!ok && forbidden`, the UI verdict, which is right for a modal ("offer Retry") and
     // wrong for a fact ("this package's source is blocked here"). A tool that prints a 403
     // for one mirror and then succeeds from another still met the firewall, and the row label
@@ -3948,6 +3960,20 @@ async fn do_step(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_character_cut_by_a_read_is_decoded_whole() {
+        let bytes = "pässwörd".as_bytes();
+        let mut carry = Vec::new();
+        let mut text = String::new();
+        for chunk in bytes.chunks(1) {
+            text.push_str(&decode_chunk(&mut carry, chunk));
+        }
+        assert_eq!(text, "pässwörd");
+        assert!(carry.is_empty());
+        // A byte that can never start a character is still replaced, not held forever.
+        assert_eq!(decode_chunk(&mut carry, b"a\xffb"), "a\u{FFFD}b");
+    }
 
     /// The sudo prompt is looked for in what followed the last answer, and in the end only.
     #[test]
