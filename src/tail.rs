@@ -41,11 +41,13 @@ static URL_CREDENTIALS: LazyLock<regex::Regex> =
 /// A user-profile folder, whoever's and however spelled: `C:\Users\<name>` (the 8.3
 /// `CHRIST~1` included), `C:/Users/<name>`, MSYS `/c/Users/<name>`, `/home/<name>`,
 /// `/Users/<name>`. It must START a path — `api.github.com/users/x` and `/srv/myhome` are
-/// not profiles — and the name runs to the next separator or to what cannot be in a path; a
-/// space is part of it only when a separator follows (`replace_profiles` decides).
+/// not profiles — or follow a compiler flag glued to it (`-L/home/bob/lib`). The name runs to
+/// the next separator or to what cannot be in a path; words joined by ONE space are captured
+/// together, and `replace_profiles` keeps them together only for a Windows profile that a
+/// separator follows (`C:\Users\John Smith\AppData`).
 static PROFILE_PATH: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(
-        r#"(?i)(^|[^\w.~-])((?:[a-z]:|/[a-z])?[\\/](?:users|home)[\\/])([^\\/\r\n"'<>|:;,()\[\]]+)"#,
+        r#"(?i)(^|[^\w.~-]|-[a-z]+)((?:[a-z]:|/[a-z])?[\\/](?:users|home)[\\/])([^\\/\s"'<>|:;,()\[\]]+(?: [^\\/\s"'<>|:;,()\[\]]+)*)"#,
     )
     .unwrap()
 });
@@ -75,7 +77,13 @@ pub fn readable_tail(raw: &str, home: &str, typed: &[&str]) -> String {
     let lines = std::panic::catch_unwind(|| screen_lines(&raw)).unwrap_or_default();
     let start = lines.len().saturating_sub(MAX_LINES);
     let mut text = lines[start..].join("\n");
-    for secret in typed.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    // The trimmed core too, for a rendering that trimmed the answer — but never a core so
+    // short it would mask ordinary words.
+    for secret in typed
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| s.chars().count() >= 4)
+    {
         text = text.replace(secret, "***");
     }
     let text = tilde_home(&text, home);
@@ -90,8 +98,18 @@ fn screen_lines(raw: &str) -> Vec<String> {
     let mut parser = vt100::Parser::new(ROWS, COLS, SCROLLBACK);
     parser.process(raw.as_bytes());
     // A full-screen tool that died in its alternate screen leaves the main one — where the
-    // error was printed — hidden behind its last frame.
+    // earlier output was printed — hidden behind its last frame, which may itself hold the
+    // crash message. Both are read: the main screen, then that frame.
+    let mut alternate = Vec::new();
     if parser.screen().alternate_screen() {
+        alternate = joined_lines(
+            parser
+                .screen()
+                .rows(0, COLS)
+                .enumerate()
+                .map(|(r, text)| (text, parser.screen().row_wrapped(r as u16)))
+                .collect(),
+        );
         parser.process(b"\x1b[?1049l");
     }
     let screen = parser.screen_mut();
@@ -108,6 +126,13 @@ fn screen_lines(raw: &str) -> Vec<String> {
     for (r, text) in screen.rows(0, COLS).enumerate() {
         rows.push((text, screen.row_wrapped(r as u16)));
     }
+    let mut out = joined_lines(rows);
+    out.extend(alternate);
+    out
+}
+
+/// Rows `(text, wrapped)` → the non-blank lines they show, a wrapped row joined to the next.
+fn joined_lines(rows: Vec<(String, bool)>) -> Vec<String> {
     let mut out = Vec::new();
     let mut current = String::new();
     for (text, wrapped) in rows {
@@ -132,13 +157,14 @@ fn replace_profiles(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut last = 0;
     for c in PROFILE_PATH.captures_iter(text) {
-        let (Some(lead), Some(name)) = (c.get(1), c.get(3)) else {
+        let (Some(lead), Some(root), Some(name)) = (c.get(1), c.get(2), c.get(3)) else {
             continue;
         };
-        // A name runs across a space only into a path: `C:\Users\John Smith\AppData`, but
-        // not `/home/alice is missing`.
+        // A name runs across a space only in a Windows profile, and only into a path:
+        // `C:\Users\John Smith\AppData`, but not `/home/alice is missing`.
+        let windows = root.as_str().as_bytes().get(1) == Some(&b':');
         let into_path = text[name.end()..].starts_with(['\\', '/']);
-        let name_end = if into_path {
+        let name_end = if windows && into_path {
             name.end()
         } else {
             name.start()
@@ -345,6 +371,50 @@ mod tests {
     }
 
     #[test]
+    fn two_profiles_on_one_line_are_two_and_the_command_between_them_survives() {
+        assert_eq!(
+            tail("mv /Users/bob /Users/carol/x failed\r\n/home/alice /usr/bin\r\n"),
+            "mv ~ ~/x failed\n~ /usr/bin"
+        );
+    }
+
+    #[test]
+    fn a_profile_glued_to_a_compiler_flag_is_masked() {
+        assert_eq!(
+            tail("cc -L/home/bob/lib -I/Users/carol/include -isystem/home/dave/inc\r\n"),
+            "cc -L~/lib -I~/include -isystem~/inc"
+        );
+    }
+
+    #[test]
+    fn spaces_belong_to_a_name_only_between_words_of_a_windows_profile() {
+        assert_eq!(
+            tail("C:\\Users\\bob    (copy)\r\nC:\\Users\\Ann Lee\\x\r\n"),
+            "~    (copy)\n~\\x"
+        );
+        let t = tail("/home/alice\tdenied /tmp/x\r\n");
+        assert!(t.starts_with("~ ") && t.ends_with("denied /tmp/x"), "{t:?}");
+    }
+
+    #[test]
+    fn a_short_answer_never_masks_ordinary_words() {
+        assert_eq!(
+            readable_tail("table abort\r\n", "", &["  ab "]),
+            "table abort"
+        );
+    }
+
+    /// `readable_tail` survives a panic in the emulator only if panics unwind.
+    #[test]
+    fn the_release_build_unwinds_on_a_panic() {
+        let toml = include_str!("../Cargo.toml");
+        assert!(
+            !toml.replace(' ', "").contains("panic=\"abort\""),
+            "`panic = \"abort\"` would turn an emulator panic into a lost Apply"
+        );
+    }
+
+    #[test]
     fn a_typed_answer_is_masked_however_the_terminal_renders_it() {
         // A trailing space is trimmed off the rendered line; the raw bytes still carry it.
         let raw = "Password: hunter2 \r\nSorry, try again.\r\n";
@@ -355,9 +425,12 @@ mod tests {
     }
 
     #[test]
-    fn a_step_that_ends_in_the_alternate_screen_still_shows_its_main_screen() {
-        let raw = "error: the real cause\r\n\x1b[?1049h\x1b[Hsome full-screen frame";
-        assert_eq!(tail(raw), "error: the real cause");
+    fn a_step_that_ends_in_the_alternate_screen_shows_both_screens() {
+        let raw = "error: the real cause\r\n\x1b[?1049h\x1b[Hframe\r\nthread 'main' panicked";
+        assert_eq!(
+            tail(raw),
+            "error: the real cause\nframe\nthread 'main' panicked"
+        );
     }
 
     #[test]

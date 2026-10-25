@@ -7,7 +7,10 @@ static WINGET: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)Forbidden \(4
 // brew/curl: a bare 403 near a download failure
 static BARE403: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b403\b").unwrap());
 static CONTEXT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)curl:\s*\(22\)|Download failed|returned error").unwrap());
+    // `\s{0,8}`, not `\s*`: every pattern must stay shorter than `Watch403::OVERLAP`.
+    LazyLock::new(|| {
+        Regex::new(r"(?i)curl:\s{0,8}\(22\)|Download failed|returned error").unwrap()
+    });
 
 /// 403 corporate-firewall in the output (streamed chunk or whole buffer).
 /// Deliberately broad: a false positive only costs a useless Retry.
@@ -40,7 +43,14 @@ impl Watch403 {
         }
         let new = &buf[from..];
         self.winget = self.winget || WINGET.is_match(new);
-        self.bare = self.bare || BARE403.is_match(new);
+        // The slice starts mid-text: `\b` sees a boundary at its first byte that the whole
+        // buffer may not have (`51403` cut before the `4`). A match there counts only if what
+        // precedes it in the buffer is not part of a word.
+        let glued = buf[..from]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        self.bare = self.bare || BARE403.find_iter(new).any(|m| m.start() > 0 || !glued);
         self.context = self.context || CONTEXT.is_match(new);
         self.winget || (self.bare && self.context)
     }
@@ -86,8 +96,11 @@ mod tests {
             "curl: (22) The requested URL returned error: 403",
             "HTTP 403\n...lots of output...\nDownload failed",
             "build 403 succeeded",
+            // A slice cut inside `51403` must not see a word starting at `403`.
+            "copied 51403 bytes\n.......................................................\
+             ............ and later the request returned error 500",
         ] {
-            for size in [1, 2, 3, 7, 64] {
+            for size in [1, 2, 3, 7, 64, 66, 67, 68, 69, 73] {
                 let mut buf = String::new();
                 let mut watch = Watch403::default();
                 let mut seen = false;

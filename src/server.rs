@@ -3008,7 +3008,7 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
     let mut buf = String::new();
     // Where the output after the last answer starts, and what was answered (see `PtyRun`).
     let mut answered_at = 0usize;
-    // `is403` over the whole buffer, read one chunk at a time (see `Watch403`).
+    // The 403 rule over the whole buffer, read one chunk at a time (see `Watch403`).
     let mut watch403 = crate::forbidden::Watch403::default();
     let mut typed: Vec<String> = Vec::new();
     let mut forbidden = false;
@@ -3115,8 +3115,8 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
         // Only what came AFTER the last answer is read (`prompt_window`), so the SAME prompt
         // is not re-detected on the next chunk — its tail would still end with ':' and we
         // would answer a question already answered, burning the attempt budget on nothing.
-        // The buffer itself is kept whole: `is403` and the journal's tail read it.
-        if sudo_tries < SUDO_MAX_TRIES && tail.ends_with(':') && tail.contains("password") {
+        // The buffer itself is kept whole: `extract_url` and the journal's tail read it.
+        if sudo_tries < SUDO_MAX_TRIES && prompt_armed(prompt_window(&buf, answered_at)) {
             if let Some((pw, from_cache)) = obtain_sudo_pw(socket, state, i).await {
                 let mut line = pw.clone().into_bytes();
                 line.push(b'\n');
@@ -3191,6 +3191,16 @@ fn prompt_window(buf: &str, answered_at: usize) -> &str {
         start += 1;
     }
     &buf[start..]
+}
+
+/// Is the window's LAST line a password prompt? It ends in `:` and names a password. Only
+/// that line: a `password` printed on an earlier one ("Checking password policy...") must
+/// not arm a later `Select option:` — answering it would type the sudo password into a
+/// stdin that echoes it.
+fn prompt_armed(window: &str) -> bool {
+    let tail = window.trim_end().to_lowercase();
+    let last_line = tail.rsplit(['\n', '\r']).next().unwrap_or("");
+    tail.ends_with(':') && last_line.contains("password")
 }
 
 /// Obtains the sudo password — MODEL C. If the RAM cache already holds it (entered
@@ -3825,7 +3835,7 @@ async fn do_step(
     // `!ok && forbidden`, the UI verdict, which is right for a modal ("offer Retry") and
     // wrong for a fact ("this package's source is blocked here"). A tool that prints a 403
     // for one mirror and then succeeds from another still met the firewall, and the row label
-    // wants to know. The cost is is403's own imprecision — a `\b403\b` near a
+    // wants to know. The cost is the 403 rule's own imprecision — a `\b403\b` near a
     // download-failure phrase — which the same monotone tolerance covers.
     //
     // Merged unconditionally, including on a failure or a cancel: a step that hit a 403
@@ -3934,6 +3944,14 @@ mod tests {
         );
         // Just answered: nothing after it, so the same prompt is not answered twice.
         assert_eq!(prompt_window(answered, answered.len()), "");
+        // A `password` on an earlier line does not arm a later `:`.
+        let near = "Checking password policy...\nSelect option:";
+        assert!(!prompt_armed(prompt_window(near, 0)));
+        assert!(prompt_armed(prompt_window("Password for al:", 0)));
+        assert!(prompt_armed(prompt_window(
+            "ok\n[sudo] password for al: ",
+            0
+        )));
         // A `password` far back no longer arms a later `:`.
         let long = format!("password reset\n{}\nContinue:", "x".repeat(5000));
         assert!(!prompt_window(&long, 0).contains("password"));
