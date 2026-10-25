@@ -27,6 +27,7 @@ sysinfo = { version = "0.39.6", default-features = false, features = ["system", 
 # The engine names its local copy after its own sha256 (relocate.rs). Already in the tree
 # through tauri; 0.10 is the line the lock carries.
 sha2 = "0.10"
+vt100 = "0.16"
 
 [[bin]]
 name = "pty-smoke"

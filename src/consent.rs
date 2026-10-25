@@ -245,24 +245,39 @@ const COMPACT_ABOVE: u64 = 2 * 1024 * 1024;
 /// What a compaction keeps of the two records written without a user's gesture.
 const KEEP_MACHINES: usize = 100;
 const KEEP_SCANS: usize = 200;
+/// How many install lines keep their `tail` through a compaction. A row whose own update fails
+/// on every Apply writes a failure — and ~2 KB of output — each time; the lines all stay (the
+/// trace), the older outputs go.
+const KEEP_TAILS: usize = 50;
 
 /// Shrinks a journal that grew past `COMPACT_ABOVE`: keeps EVERY install line (the trace
 /// `timings.rs` defers to, and what the History tab lists) and every line it does not
 /// recognise, but only the last `KEEP_MACHINES` machine profiles and `KEEP_SCANS` scans.
 /// Those two are written on every launch and every scan — a scan line is 1–3 KB — so
 /// without this the journal grew forever, on the local disk and on the share alike.
+/// A failed install line keeps its `tail` only among the last `KEEP_TAILS` that carry one:
+/// older ones are rewritten without it, everything else on the line unchanged.
 /// Order is preserved. Pure, so it is tested; `compact_if_large` is the IO.
 pub fn compact_journal(raw: &str) -> String {
     let kind = |line: &str| {
         serde_json::from_str::<serde_json::Value>(line)
             .ok()
-            .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(String::from))
+            .and_then(|v| {
+                if v.get("tail")
+                    .and_then(|t| t.as_str())
+                    .is_some_and(|t| !t.is_empty())
+                {
+                    return Some("tail".to_string());
+                }
+                v.get("kind").and_then(|k| k.as_str()).map(String::from)
+            })
     };
     let kinds: Vec<Option<String>> = raw.lines().map(kind).collect();
     let count = |k: &str| kinds.iter().filter(|x| x.as_deref() == Some(k)).count();
-    let (mut drop_machines, mut drop_scans) = (
+    let (mut drop_machines, mut drop_scans, mut drop_tails) = (
         count("machine").saturating_sub(KEEP_MACHINES),
         count("scan").saturating_sub(KEEP_SCANS),
+        count("tail").saturating_sub(KEEP_TAILS),
     );
     let mut out = String::with_capacity(raw.len());
     for (line, k) in raw.lines().zip(&kinds) {
@@ -274,6 +289,19 @@ pub fn compact_journal(raw: &str) -> String {
             Some("scan") if drop_scans > 0 => {
                 drop_scans -= 1;
                 true
+            }
+            Some("tail") if drop_tails > 0 => {
+                drop_tails -= 1;
+                // Through `HistEntry`, which writes its fields in their own order.
+                if let Some(mut e) = parse_history(line).pop() {
+                    e.tail.clear();
+                    if let Ok(shorter) = serde_json::to_string(&e) {
+                        out.push_str(&shorter);
+                        out.push('\n');
+                        continue;
+                    }
+                }
+                false
             }
             _ => false,
         };
@@ -586,6 +614,42 @@ mod tests {
         // Under the limits, nothing changes.
         let small = "{\"kind\":\"scan\"}\n{\"package\":\"jq\"}\n";
         assert_eq!(compact_journal(small), small);
+    }
+
+    #[test]
+    fn compaction_keeps_the_latest_tails_and_every_failure_without_the_older_ones() {
+        let line = |n: usize| {
+            let e = HistEntry {
+                at: format!("t{n}"),
+                package: "Copilot".into(),
+                version: String::new(),
+                action: "upgrade".into(),
+                ok: false,
+                secs: 2,
+                found: String::new(),
+                target: String::new(),
+                exit: Some(1),
+                tail: format!("network unreachable {n}"),
+            };
+            serde_json::to_string(&e).unwrap() + "\n"
+        };
+        let raw: String = (0..KEEP_TAILS + 7).map(line).collect();
+        let out = compact_journal(&raw);
+        let lines = parse_history(&out);
+        assert_eq!(lines.len(), KEEP_TAILS + 7, "every failure is still a line");
+        assert!(lines[..7]
+            .iter()
+            .all(|e| e.tail.is_empty() && e.exit == Some(1)));
+        assert!(lines[7..].iter().all(|e| !e.tail.is_empty()));
+        assert_eq!(
+            lines[7].tail, "network unreachable 7",
+            "the OLDEST tails go"
+        );
+        // The line keeps its shape, field order included, minus the tail.
+        assert!(
+            out.starts_with(r#"{"at":"t0","package":"Copilot","#),
+            "{out}"
+        );
     }
 
     #[test]

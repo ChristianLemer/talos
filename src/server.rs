@@ -2918,6 +2918,9 @@ struct PtyRun {
     /// Everything the step printed, as the 403 and sudo scans accumulated it — MOVED out, not
     /// copied. The journal makes its tail from it (`step_tail`), and only for a failure.
     output: String,
+    /// What Talos typed into the step (a sudo password), so the journal can write it `***`:
+    /// a prompt that echoes would otherwise hand it back as output.
+    typed: Vec<String>,
 }
 
 /// Streams the command into a pty,
@@ -3002,6 +3005,9 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
     // is NOT followed by a newline (sudo writes it raw), so we test the END of the
     // current buffer. Once answered, we don't re-ask for this step.
     let mut buf = String::new();
+    // Where the output after the last answer starts, and what was answered (see `PtyRun`).
+    let mut answered_at = 0usize;
+    let mut typed: Vec<String> = Vec::new();
     let mut forbidden = false;
     // Set when the USER killed this step. Distinct from `forbidden` and from a plain
     // non-zero exit: the caller must be able to tell "I stopped this" from "this broke".
@@ -3087,9 +3093,10 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
                 cancelled,
                 saw_window,
                 output: buf,
+                typed,
             };
         }
-        let tail = buf.trim_end().to_lowercase();
+        let tail = prompt_window(&buf, answered_at).trim_end().to_lowercase();
         // A REFUSAL invalidates whatever we just sent. If it came from the cache, drop
         // it: the whole Apply would otherwise keep replaying the same wrong secret,
         // every sudo row hanging in turn. Clearing makes the next prompt ask the user.
@@ -3101,19 +3108,19 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
         // test the ACCUMULATED BUFFER (the prompt may arrive in its own chunk). We answer
         // EACH prompt up to sudo's own budget — a re-prompt means the last answer was
         // refused, and leaving it unanswered is a permanent hang, not a safeguard.
-        // The buffer is TRUNCATED (not cleared) after answering, so the SAME prompt is
-        // not re-detected on the next chunk — its tail would still end with ':' and we
-        // would answer a question already answered, burning the attempt budget on
-        // nothing. A tail is kept because `is403` reads this buffer too: wiping it whole
-        // could split a "Forbidden (403)" across the cut and lose it.
+        // Only what came AFTER the last answer is read (`prompt_window`), so the SAME prompt
+        // is not re-detected on the next chunk — its tail would still end with ':' and we
+        // would answer a question already answered, burning the attempt budget on nothing.
+        // The buffer itself is kept whole: `is403` and the journal's tail read it.
         if sudo_tries < SUDO_MAX_TRIES && tail.ends_with(':') && tail.contains("password") {
             if let Some((pw, from_cache)) = obtain_sudo_pw(socket, state, i).await {
-                let mut line = pw.into_bytes();
+                let mut line = pw.clone().into_bytes();
                 line.push(b'\n');
                 let _ = in_tx.send(line);
                 sudo_tries += 1;
                 last_from_cache = from_cache;
-                buf.push_str("\n[answered]\n"); // breaks the ':' tail without dropping context
+                answered_at = buf.len();
+                typed.push(pw);
             }
         }
         // Relay the watcher signals (non-blocking) as they stream. A relayed message is
@@ -3154,12 +3161,30 @@ async fn run_in_pty(socket: &mut WebSocket, state: &AppState, i: u32, cmdline: &
         cancelled,
         saw_window,
         output: buf,
+        typed,
     }
 }
 
-/// The journal's tail of a step's output, the home folder written `~` like the rest of it.
-fn step_tail(buf: &str) -> String {
-    crate::tail::readable_tail(buf, &crate::detect::user_home().to_string_lossy())
+/// The journal's tail of a step's output, the home folder written `~` like the rest of it and
+/// what Talos typed into the step written `***`.
+fn step_tail(buf: &str, typed: &[String]) -> String {
+    let typed: Vec<&str> = typed.iter().map(String::as_str).collect();
+    crate::tail::readable_tail(buf, &crate::detect::user_home().to_string_lossy(), &typed)
+}
+
+/// The end of the output a prompt is looked for in: what followed the last answer, and at
+/// most its last `PROMPT_WINDOW` bytes. A prompt is one short line; reading the whole buffer
+/// on every chunk made a long step quadratic, and let a `password` printed anywhere earlier
+/// arm the detection for any later line ending in `:`.
+fn prompt_window(buf: &str, answered_at: usize) -> &str {
+    const PROMPT_WINDOW: usize = 256;
+    let mut start = answered_at
+        .max(buf.len().saturating_sub(PROMPT_WINDOW))
+        .min(buf.len());
+    while !buf.is_char_boundary(start) {
+        start += 1;
+    }
+    &buf[start..]
 }
 
 /// Obtains the sudo password — MODEL C. If the RAM cache already holds it (entered
@@ -3579,6 +3604,7 @@ async fn do_step(
         cancelled,
         saw_window,
         output,
+        typed,
     } = run_in_pty(socket, state, i as u32, cmd).await;
     let ok = code == 0 || benign_code(code);
 
@@ -3860,7 +3886,7 @@ async fn do_step(
             ok: !failed,
             exit: failed.then_some(code),
             tail: if failed {
-                step_tail(&output)
+                step_tail(&output, &typed)
             } else {
                 String::new()
             },
@@ -3890,6 +3916,25 @@ async fn do_step(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sudo prompt is looked for in what followed the last answer, and in the end only.
+    #[test]
+    fn a_prompt_is_read_after_the_last_answer_and_at_the_end_only() {
+        let answered = "Password for al:";
+        let buf = format!("{answered}\nSorry, try again.\nPassword for al:");
+        assert_eq!(
+            prompt_window(&buf, answered.len()),
+            "\nSorry, try again.\nPassword for al:"
+        );
+        // Just answered: nothing after it, so the same prompt is not answered twice.
+        assert_eq!(prompt_window(answered, answered.len()), "");
+        // A `password` far back no longer arms a later `:`.
+        let long = format!("password reset\n{}\nContinue:", "x".repeat(1000));
+        assert!(!prompt_window(&long, 0).contains("password"));
+        // On a char boundary, whatever the cut.
+        let wide = "é".repeat(300);
+        assert!(prompt_window(&wide, 0).chars().all(|c| c == 'é'));
+    }
     use crate::bundles::{Overrides, Posture, Step};
     use crate::managers::Outdated;
     use crate::platform::Os;

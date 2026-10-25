@@ -216,8 +216,9 @@ test("the Machine tab copies like a terminal: the same button, the same check ma
   assert.notEqual(at, -1, "the button must be wired");
   const wiring = appjs.slice(at, appjs.indexOf("\n}", at));
   assert.match(wiring, /machineText\(/);
-  assert.match(wiring, /copyText\(/);
-  assert.match(wiring, /ICON_OK/);
+  // The same gesture as the terminal's button: one helper, the same check mark.
+  assert.match(wiring, /copyWithCheck\(mcCopy,/);
+  assert.match(appjs, /function copyWithCheck\(btn, text\) \{[^}]*copyText\([\s\S]*?ICON_OK/);
   assert.match(appjs, /mcCopy\.disabled\s*=\s*!machine\b/);
 });
 

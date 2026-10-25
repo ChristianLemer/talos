@@ -1075,10 +1075,7 @@ function render(steps, profiles = [], columns = 2) {
         /\x1b\[[0-9;?]*[A-Za-z]/g,
         "",
       );
-      copyText(text).then((ok) => {
-        copy.innerHTML = ok ? ICON_OK : ICON_COPY;
-        if (ok) setTimeout(() => copy.innerHTML = ICON_COPY, 1200);
-      });
+      copyWithCheck(copy, text);
     };
     const host = document.createElement("div");
     host.className = "term-host";
@@ -1127,6 +1124,15 @@ function ensureTerm(i) {
 // doesn't exist or its promise rejects, and the old code had no fallback, so copying
 // failed silently. Try the modern API, then fall back to a hidden-textarea +
 // execCommand("copy") (works in non-secure contexts). Returns true on success.
+// A copy button's one gesture: copy, then a check mark for a moment when it worked. The
+// terminal's button, the Machine card's and a History line's — one look for all three.
+function copyWithCheck(btn, text) {
+  return copyText(text).then((ok) => {
+    btn.innerHTML = ok ? ICON_OK : ICON_COPY;
+    if (ok) setTimeout(() => (btn.innerHTML = ICON_COPY), 1200);
+  });
+}
+
 async function copyText(text) {
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -2127,10 +2133,7 @@ mcCopy.innerHTML = ICON_COPY;
 mcCopy.onclick = () => {
   const text = machineText(...machineShown);
   if (!text) return;
-  copyText(text).then((ok) => {
-    mcCopy.innerHTML = ok ? ICON_OK : ICON_COPY;
-    if (ok) setTimeout(() => (mcCopy.innerHTML = ICON_COPY), 1200);
-  });
+  copyWithCheck(mcCopy, text);
 };
 function renderMachine(machine, scan, consent, sharedTo) {
   machineShown = [machine, scan];
@@ -2198,10 +2201,7 @@ function renderLog(consent, history, sharedTo) {
       copy.className = "h-copy";
       copy.title = "Copy the error";
       copy.innerHTML = ICON_COPY;
-      copy.onclick = () => copyText(why).then((ok) => {
-        copy.innerHTML = ok ? ICON_OK : ICON_COPY;
-        if (ok) setTimeout(() => (copy.innerHTML = ICON_COPY), 1200);
-      });
+      copy.onclick = () => copyWithCheck(copy, why);
       row.append(copy);
     }
     h.append(row);
