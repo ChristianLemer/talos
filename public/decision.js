@@ -137,7 +137,7 @@ export function forbiddenMessage(gesture, paused) {
 //                                   Apply since 2026-10-10, when the per-row button left)
 export function actionFor(
   desired,
-  { present, outdated, canUninstall, pin, installedVersion, available, canSelfUpdate, updateEachApply },
+  { present, outdated, canUninstall, pin, installedVersion, available, canSelfUpdate, updateEachApply, updatedThisSession },
 ) {
   if (desired === "present" && !present) return "install";
   if (desired === "present" && present) {
@@ -159,8 +159,9 @@ export function actionFor(
       // (the receipt is stale by construction). Without `update:`, nothing.
       if (p === "self") {
         // `update-on: apply`: the command itself knows whether there is anything to do, so no
-        // announcement is needed — nor a version read.
-        if (canSelfUpdate && updateEachApply) return "upgrade";
+        // announcement is needed — nor a version read. Once per session: after it succeeded the
+        // row is done until a Refresh, or the end of a run would find it pending again.
+        if (canSelfUpdate && updateEachApply) return updatedThisSession ? null : "upgrade";
         const inst = installedVersion || "";
         // An unread version is no evidence: no verdict could follow the update, so it would run
         // on every Apply. An outdated row naming no version: the scan decides.

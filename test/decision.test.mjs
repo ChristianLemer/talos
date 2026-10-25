@@ -269,6 +269,11 @@ test("actionFor: `update-on: apply` runs the tool's update whenever it is presen
   assert.equal(actionFor("present", { ...base, present: false }), "install");
   assert.equal(actionFor("present", { ...base, canSelfUpdate: false }), null, "nothing to run");
   assert.equal(actionFor("absent", base), "uninstall");
+  // Once it succeeded in this session, done until a Refresh; still installed when gone.
+  const done = { ...base, updatedThisSession: true };
+  assert.equal(actionFor("present", done), null, "the end of the run: nothing to do");
+  assert.equal(actionFor("present", { ...done, present: false }), "install");
+  assert.equal(actionFor("absent", done), "uninstall");
 });
 
 test("actionFor: a keyword is never compared as a version", () => {

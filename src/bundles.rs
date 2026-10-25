@@ -357,7 +357,8 @@ pub struct Step {
     /// server, not here.
     pub overrides: Overrides,
     /// `update-on: apply`: the row's upgrade is the tool's own `update:`, run on every Apply
-    /// while the package is wanted and present — never judged by the version it leaves.
+    /// while the package is wanted and present — once per session, until a Refresh — and never
+    /// judged by the version it leaves.
     pub update_each_apply: bool,
 }
 

@@ -1623,6 +1623,7 @@ Nushell                                                      Nushell.Nushell    
             available: "",
             can_self_update: false,
             update_each_apply: false,
+            updated_this_session: false,
         };
         assert_eq!(
             action_for(Desired::Present, &f),

@@ -147,6 +147,29 @@ fn judges_version(step: &crate::bundles::Step, action: crate::decision::Action) 
         && step.update_each_apply)
 }
 
+/// Does this step, run to `ok`, make its row done for the rest of the session? Only a tool's own
+/// update run on every Apply: its exit code is the verdict (`judges_version` exempts it), so a
+/// success is an exit 0 not cancelled, and a failure leaves the row armed for the next Apply.
+fn arms_session_done(
+    step: &crate::bundles::Step,
+    action: crate::decision::Action,
+    ok: bool,
+) -> bool {
+    ok && action == crate::decision::Action::Upgrade
+        && is_self_updating(step)
+        && step.upgrade.is_some()
+        && step.update_each_apply
+}
+
+/// Has this row's own update already succeeded in this session (`arms_session_done`)?
+fn updated_this_session(state: &AppState, step: &crate::bundles::Step) -> bool {
+    state
+        .updated_this_session
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&step.id)
+}
+
 fn is_outdated_now(od: Option<&crate::managers::Outdated>) -> bool {
     // Approach B: presence in the scan IS the outdated signal, for casks and
     // formulae alike. The scan uses `--greedy-auto-updates`, so a self-updating
@@ -387,6 +410,12 @@ struct AppState {
     /// Cleared when the Apply ends, so a later retry never acts on an old answer.
     brew_pins:
         tokio::sync::Mutex<std::collections::HashMap<String, Option<crate::managers::BrewPin>>>,
+    /// The rows updated on every Apply (`update-on: apply`) whose own `update:` already
+    /// succeeded in this session, by package id (`arms_session_done`). `action_for` reads it:
+    /// such a row is done until the Refresh button re-arms it, so the end of a run can say the
+    /// machine already matches. Never written: a restart re-arms it too. A std Mutex, never
+    /// held across an await — `plan_message`, which is not async, reads it.
+    updated_this_session: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 /// Records one observed presence in `last_seen` (grows the vector if the plan is
@@ -639,6 +668,7 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         last_scan: std::sync::Mutex::new(None),
         unmoved: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         brew_pins: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        updated_this_session: std::sync::Mutex::new(std::collections::HashSet::new()),
     });
 
     let state_for_root = state.clone();
@@ -1198,7 +1228,14 @@ fn plan_message(state: &AppState, steps: &[crate::bundles::Step]) -> Value {
     let steps_json: Vec<_> = steps
         .iter()
         .enumerate()
-        .map(|(i, s)| step_json(s, i, &state.facts, &state.timings, state.os))
+        .map(|(i, s)| {
+            let mut row = step_json(s, i, &state.facts, &state.timings, state.os);
+            // Read here, not in `step_json`, because it is a fact of this SESSION: a front that
+            // connects again keeps the row done, and a Refresh — which empties the set before
+            // building this message — re-arms it.
+            row["updatedThisSession"] = json!(updated_this_session(state, s));
+            row
+        })
         .collect();
     // The top-panel "needs" (profiles.yaml), loaded at boot. Same keys the front
     // expects (renderProfiles, app.js:164): name/emoji/usage/highlights/description/packages.
@@ -1424,6 +1461,14 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 // Lines queued for a row's terminal name a row by its INDEX, which this
                 // reload may have given to another package.
                 state.notes.lock().await.clear();
+                // ⭐ The Refresh BUTTON re-arms the tools updated on every Apply — this one
+                // gesture, never the Apply's own re-scan nor the probe after a step, or the end
+                // of every run would find them pending again.
+                state
+                    .updated_this_session
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clear();
                 if before == n {
                     println!("[catalog] reloaded: {n} packages");
                 } else {
@@ -2858,6 +2903,7 @@ async fn apply_diff(
             available: od.map(|o| o.available.as_str()).unwrap_or(""),
             can_self_update: is_self_updating(step) && step.upgrade.is_some(),
             update_each_apply: step.update_each_apply,
+            updated_this_session: updated_this_session(state, step),
         };
         match batch_action(action_for(desired, &facts), step.downgrade.is_some()) {
             Ok(Some(a)) => {
@@ -4299,6 +4345,26 @@ async fn do_step(
         state.unmoved.lock().await.insert(step.id.clone(), u);
     } else if ok {
         state.unmoved.lock().await.remove(&step.id);
+    }
+    // A tool's own update run on every Apply, done: the row leaves the plan until a Refresh, and
+    // says so — in its terminal and on the row (`self-updated`), so it does not look untouched.
+    if arms_session_done(step, action, ok && !cancelled) {
+        state
+            .updated_this_session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(step.id.clone());
+        say(
+            socket,
+            i,
+            "[update] done for this session — the Apply leaves this row until Refresh re-arms it.",
+        )
+        .await;
+        let _ = socket
+            .send(Message::Text(
+                json!({ "type": "self-updated", "i": i }).to_string(),
+            ))
+            .await;
     }
     // What this step OBSERVED, for the shared behaviour file. Accumulated in memory
     // only; the write happens once, when the Apply ends.
@@ -6137,6 +6203,7 @@ mod tests {
             last_scan: std::sync::Mutex::new(None),
             unmoved: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             brew_pins: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            updated_this_session: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -6144,6 +6211,63 @@ mod tests {
         let d = std::env::temp_dir().join(name);
         let _ = std::fs::remove_dir_all(&d);
         d
+    }
+
+    /// A tool updated on every Apply is done for the session after an `ok` of its OWN update,
+    /// and only then: a failure, another action, or a row run only when behind leaves it armed.
+    #[test]
+    fn only_a_successful_update_run_each_apply_makes_its_row_done_for_the_session() {
+        let mut s = brew_step("claude-code", Some("self"));
+        s.upgrade = Some("claude update".into());
+        s.update_each_apply = true;
+        assert!(super::arms_session_done(&s, Action::Upgrade, true));
+        assert!(
+            !super::arms_session_done(&s, Action::Upgrade, false),
+            "failed: armed"
+        );
+        assert!(
+            !super::arms_session_done(&s, Action::Install, true),
+            "an install"
+        );
+        let mut behind_only = s.clone();
+        behind_only.update_each_apply = false;
+        assert!(!super::arms_session_done(
+            &behind_only,
+            Action::Upgrade,
+            true
+        ));
+        let mut managed = s.clone();
+        managed.pin = None;
+        assert!(
+            !super::arms_session_done(&managed, Action::Upgrade, true),
+            "a manager upgrade"
+        );
+    }
+
+    /// The plan tells the front which rows are done for the session, so the front's twin of
+    /// `action_for` reads the fact the Apply reads; emptying the set (the Refresh) re-arms them.
+    #[test]
+    fn the_plan_says_which_rows_already_updated_in_this_session() {
+        let dir = share("talos-test-plan-updated-this-session");
+        std::fs::create_dir_all(dir.join("catalog")).unwrap();
+        let state = state_with_share(&dir);
+        let mut s = brew_step("claude-code", Some("self"));
+        s.upgrade = Some("claude update".into());
+        s.update_each_apply = true;
+        let steps = vec![s.clone()];
+        let m = super::plan_message(&state, &steps);
+        assert_eq!(m["steps"][0]["updatedThisSession"], false, "{m}");
+        state
+            .updated_this_session
+            .lock()
+            .unwrap()
+            .insert(s.id.clone());
+        let m = super::plan_message(&state, &steps);
+        assert_eq!(m["steps"][0]["updatedThisSession"], true, "{m}");
+        assert!(super::updated_this_session(&state, &s));
+        state.updated_this_session.lock().unwrap().clear();
+        let m = super::plan_message(&state, &steps);
+        assert_eq!(m["steps"][0]["updatedThisSession"], false, "re-armed: {m}");
     }
 
     /// The first message names the distribution found beside the catalog, re-read on

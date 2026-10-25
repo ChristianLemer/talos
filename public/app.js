@@ -589,11 +589,13 @@ function paintVersion(i) {
   if (v.to === null) {
     // One number — the current state, blue. 📌 when it IS the pin (at rest). A `self` row says
     // who keeps it current: the application, not Talos — so no newer number is compared.
-    const own = M.isUpdatedEachApply(model, i)
-      ? ` <span class="v-held" title="the Apply runs the tool's own update command every time; the command knows when there is nothing to do">updated each Apply</span>`
-      : M.isSelfUpdating(model, i)
-        ? ` <span class="v-held" title="the application keeps itself current; Talos installs it when it is missing">updates itself</span>`
-        : "";
+    const own = M.isUpdatedThisSession(model, i)
+      ? ` <span class="v-held" title="its own update command ran ok in this session; the Apply leaves it until Refresh, and the next Apply runs it again">updated this session</span>`
+      : M.isUpdatedEachApply(model, i)
+        ? ` <span class="v-held" title="the Apply runs the tool's own update command every time; the command knows when there is nothing to do">updated each Apply</span>`
+        : M.isSelfUpdating(model, i)
+          ? ` <span class="v-held" title="the application keeps itself current; Talos installs it when it is missing">updates itself</span>`
+          : "";
     // At or past the announcement, the manager's record is what lags: held (the tool is ahead
     // of what the manager offers), or realigned by the Apply — the row says which.
     const lag = why
@@ -2424,6 +2426,13 @@ ws.onmessage = (ev) => {
       paintVersion(msg.i);
       refreshLiveness();
       break;
+    case "self-updated": { // a tool's own update, run on every Apply, succeeded (server: arms_session_done)
+      if (!rows[msg.i]) break;
+      M.setUpdatedThisSession(model, msg.i);
+      paintVersion(msg.i);
+      refreshLiveness(); // the Apply leaves this row until a Refresh re-arms it
+      break;
+    }
     case "step":
       setStatus(msg.i, msg.status);
       // A step that settled ok clears any lingering firewall recovery UI (the

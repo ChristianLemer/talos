@@ -101,8 +101,11 @@ pub struct MachineFacts<'a> {
     pub available: &'a str,
     /// The package declares `version: self` AND its own `update:` command.
     pub can_self_update: bool,
-    /// ... AND `update-on: apply`: that command runs on every Apply, behind or not.
+    /// ... AND `update-on: apply`: that command runs on every Apply, behind or not — once per
+    /// session (`updated_this_session`).
     pub update_each_apply: bool,
+    /// That command already SUCCEEDED in this Talos session, and no Refresh has re-armed it.
+    pub updated_this_session: bool,
 }
 
 /// The action an Apply would take — or None. The rule the server EXECUTES and
@@ -140,9 +143,11 @@ pub fn action_for(desired: Desired, f: &MachineFacts) -> Option<Action> {
             // pending, a decision to leave it to the application.
             if pin.eq_ignore_ascii_case("self") {
                 // `update-on: apply`: the command itself knows whether there is anything to
-                // do, so no announcement is needed — nor a version read.
+                // do, so no announcement is needed — nor a version read. Once per session: after
+                // it succeeded the row is done until a Refresh, or the end of a run would find it
+                // pending again and the machine could never read as matching.
                 if f.can_self_update && f.update_each_apply {
-                    return Some(Action::Upgrade);
+                    return (!f.updated_this_session).then_some(Action::Upgrade);
                 }
                 // An unread version is no evidence: no verdict could follow the update, so it
                 // would run on every Apply. An outdated row naming no version: the scan decides.
@@ -195,6 +200,7 @@ mod tests {
             available: "",
             can_self_update: false,
             update_each_apply: false,
+            updated_this_session: false,
         };
         assert_eq!(action_for(Desired::Present, &f), Some(Action::Install));
     }
@@ -210,6 +216,7 @@ mod tests {
             available: "",
             can_self_update: false,
             update_each_apply: false,
+            updated_this_session: false,
         };
         assert_eq!(action_for(Desired::Present, &f), Some(Action::Upgrade));
     }
@@ -242,6 +249,7 @@ mod tests {
             available: "",
             can_self_update: false,
             update_each_apply: false,
+            updated_this_session: false,
         };
         assert_eq!(
             action_for(Desired::Present, &f),
@@ -261,6 +269,7 @@ mod tests {
             available: "",
             can_self_update: false,
             update_each_apply: false,
+            updated_this_session: false,
         };
         assert_eq!(action_for(Desired::Present, &below), Some(Action::Upgrade));
         let above = MachineFacts {
@@ -272,6 +281,7 @@ mod tests {
             available: "",
             can_self_update: false,
             update_each_apply: false,
+            updated_this_session: false,
         };
         assert_eq!(
             action_for(Desired::Present, &above),
@@ -286,6 +296,7 @@ mod tests {
             available: "",
             can_self_update: false,
             update_each_apply: false,
+            updated_this_session: false,
         };
         assert_eq!(action_for(Desired::Present, &at), None);
     }
@@ -301,6 +312,7 @@ mod tests {
             available: "",
             can_self_update: false,
             update_each_apply: false,
+            updated_this_session: false,
         };
         assert_eq!(
             action_for(Desired::Absent, &removable),
@@ -315,6 +327,7 @@ mod tests {
             available: "",
             can_self_update: false,
             update_each_apply: false,
+            updated_this_session: false,
         };
         assert_eq!(action_for(Desired::Absent, &not), None);
     }
@@ -426,6 +439,7 @@ mod tests {
                 available: "",
                 can_self_update: false,
                 update_each_apply: false,
+                updated_this_session: false,
             };
             assert_eq!(action_for(Desired::Present, &f), *expected, "{what}");
         }
@@ -453,6 +467,7 @@ mod tests {
             available: "v1.0.102",
             can_self_update: false,
             update_each_apply: false,
+            updated_this_session: false,
         };
         assert_eq!(
             action_for(Desired::Present, &f),
@@ -489,6 +504,7 @@ mod tests {
             available: "",
             can_self_update: false,
             update_each_apply: false,
+            updated_this_session: false,
         };
         assert_eq!(action_for(Desired::Present, &f), None, "never a downgrade");
     }
@@ -506,6 +522,7 @@ mod tests {
             available: "",
             can_self_update: true,
             update_each_apply: true,
+            updated_this_session: false,
         };
         assert_eq!(action_for(Desired::Present, &base), Some(Action::Upgrade));
         let unread = MachineFacts {
@@ -513,6 +530,19 @@ mod tests {
             ..base
         };
         assert_eq!(action_for(Desired::Present, &unread), Some(Action::Upgrade));
+        // Once it succeeded in this session, the row is done until a Refresh — the end of the
+        // run reaches "nothing to do". It still installs when gone, and still leaves when unwanted.
+        let done = MachineFacts {
+            updated_this_session: true,
+            ..base
+        };
+        assert_eq!(action_for(Desired::Present, &done), None);
+        let gone = MachineFacts {
+            present: false,
+            ..done
+        };
+        assert_eq!(action_for(Desired::Present, &gone), Some(Action::Install));
+        assert_eq!(action_for(Desired::Absent, &done), Some(Action::Uninstall));
         let absent = MachineFacts {
             present: false,
             ..base
@@ -522,6 +552,7 @@ mod tests {
         let no_update = MachineFacts {
             can_self_update: false,
             update_each_apply: false,
+            updated_this_session: false,
             ..base
         };
         assert_eq!(action_for(Desired::Present, &no_update), None);
@@ -651,6 +682,7 @@ mod tests {
                 available,
                 can_self_update: *can,
                 update_each_apply: false,
+                updated_this_session: false,
             };
             assert_eq!(action_for(Desired::Present, &f), *expected, "{what}");
         }
@@ -664,6 +696,7 @@ mod tests {
             available: "",
             can_self_update: true,
             update_each_apply: false,
+            updated_this_session: false,
         };
         assert_eq!(action_for(Desired::Absent, &f), Some(Action::Uninstall));
     }
@@ -681,6 +714,7 @@ mod tests {
             available: "",
             can_self_update: false,
             update_each_apply: false,
+            updated_this_session: false,
         };
         assert_eq!(action_for(Desired::Absent, &f), Some(Action::Uninstall));
     }
@@ -710,6 +744,7 @@ mod tests {
                             available: "",
                             can_self_update: false,
                             update_each_apply: false,
+                            updated_this_session: false,
                         };
                         assert_eq!(
                             action_for(desired, &facts(Some("latest"))),

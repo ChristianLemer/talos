@@ -407,13 +407,16 @@ application — so the row is **not** arbitration and shows one number with `upd
 - `update:` therefore needs `detect:` (without it the version read is the manager's stale
   receipt) and a `winget:` or `brew:` id (nothing else announces a newer version). `--check`
   names either one missing.
-- **`update-on: apply`** → the Apply runs `update:` on **every** Apply while the package is
-  wanted and present, behind or not: the command itself knows when there is nothing to do.
+- **`update-on: apply`** → the Apply runs `update:` on the **first** Apply of each session while
+  the package is wanted and present, behind or not: the command itself knows when there is
+  nothing to do.
   The route does not matter — winget, brew, npm alike install it; what makes the row is that
   the tool updates itself and has a command to trigger it. No announcement is needed, so
   neither `detect:` nor a `winget:`/`brew:` id is. Such a row is never judged `unchanged`:
-  "nothing to do" is its usual answer. The price is that the Apply always has something to
-  run, so it never says the machine already matches while such a row is wanted. A package
+  "nothing to do" is its usual answer: an exit 0 is the success. Once it succeeded, the row is
+  done — it says `updated this session`, and the machine can read as already matching — until
+  the **Refresh** button or a restart of Talos re-arms it; the next Apply then runs it again.
+  A failed `update:` leaves the row armed. A package
   the manager upgrades normally needs none of this: no `self`, no `update-on`.
 - Where an extension route wins (`claude-plugin`, `copilot-plugin`, `skill`,
   `vscode-extension`, a released `nu-plugin`), the package carries no version, so `self` and

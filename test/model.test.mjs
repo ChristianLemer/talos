@@ -52,6 +52,8 @@ import {
   holdWord,
   isSelfUpdating,
   isUpdatedEachApply,
+  isUpdatedThisSession,
+  setUpdatedThisSession,
   toggleOf,
   unmanagedIndices,
   versionSummary,
@@ -436,6 +438,39 @@ test("update-on apply: the Apply runs the tool's update every time, and the row 
   setDecision(m, 0, "out");
   assert.equal(actionOf(m, 0), "uninstall");
   assert.equal(isUpdatedEachApply(m, 0), false, "only a row the Apply keeps present");
+});
+
+test("update-on apply: once the update succeeded, the end of the run already matches — until a Refresh", () => {
+  const m = seedPinned({ pin: "self", selfUpdate: true, updateEachApply: true });
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "2.1.308");
+  assert.equal(planCounts(m).total, 1, "before the run: the update is offered");
+  assert.equal(isUpdatedThisSession(m, 0), false);
+  // The server's `self-updated` after an exit 0.
+  setUpdatedThisSession(m, 0);
+  assert.equal(actionOf(m, 0), null);
+  assert.equal(isActionable(m, 0), false);
+  assert.deepEqual(applyPlan(m), [], "the end of the run: nothing to send");
+  assert.equal(planCounts(m).total, 0);
+  assert.deepEqual(heldRows(m), [], "already matches, not held");
+  // The row says it ran rather than looking untouched, and no longer claims the next Apply.
+  assert.equal(isUpdatedThisSession(m, 0), true);
+  assert.equal(isUpdatedEachApply(m, 0), false);
+  assert.deepEqual(versionSummary(m, 0), { from: "2.1.308", to: null, pinned: null, muted: false, held: false });
+  setUnmoved(m, 0, { found: "2.1.308", target: "", reason: "it moved nothing" });
+  assert.equal(holdReason(m, 0), null, "still never judged by its version");
+  // Gone since: installed again, and the row no longer says it was updated.
+  setStatusData(m, 0, "waiting");
+  assert.equal(actionOf(m, 0), "install");
+  assert.equal(isUpdatedThisSession(m, 0), false);
+  // A Refresh re-reads the plan, whose rows carry the server's fact — false once re-armed.
+  const r = seedPinned({ pin: "self", selfUpdate: true, updateEachApply: true, updatedThisSession: false });
+  setStatusData(r, 0, "ok");
+  assert.equal(actionOf(r, 0), "upgrade", "re-armed: the next Apply runs it again");
+  // A reconnect without a Refresh: the plan says it already ran.
+  const c = seedPinned({ pin: "self", selfUpdate: true, updateEachApply: true, updatedThisSession: true });
+  setStatusData(c, 0, "ok");
+  assert.equal(actionOf(c, 0), null);
 });
 
 test("self: outdated with no version named — a push, not an arrow to nothing", () => {

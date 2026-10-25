@@ -70,8 +70,11 @@ export function loadPlan(model, steps, profiles = []) {
       // `version: self` with its own `update:` command: the Apply runs that command when the
       // tool is behind what the manager announces (`step_json`). False for every other row.
       selfUpdate: !!s.selfUpdate,
-      // `update-on: apply`: that update runs on every Apply while the row is wanted.
+      // `update-on: apply`: that update runs on the first Apply of a session while the row is wanted.
       updateEachApply: !!s.updateEachApply,
+      // That update already succeeded in this Talos session (the server's `updatedThisSession`
+      // on the plan, then its `self-updated` message): done until a Refresh re-arms it.
+      updatedThisSession: !!s.updatedThisSession,
       // The last version change that exited ok and moved nothing — { target, reason } from the
       // server's `unmoved` message — or null. Held while that target is in view.
       unmoved: null,
@@ -347,6 +350,7 @@ export function actionOf(model, i) {
     available: p.available,
     canSelfUpdate: p.selfUpdate,
     updateEachApply: p.updateEachApply,
+    updatedThisSession: p.updatedThisSession,
   });
 }
 // Does the Apply run this row's own `update:` every time (`update-on: apply`)? Only for a row
@@ -355,6 +359,18 @@ export function isUpdatedEachApply(model, i) {
   const p = model.pkgs.get(i);
   return !!(p?.selfUpdate && p?.updateEachApply) && isSelfUpdating(model, i)
     && actionOf(model, i) === "upgrade";
+}
+// The server's `self-updated`: this row's own `update:` succeeded in this session.
+export function setUpdatedThisSession(model, i) {
+  const p = model.pkgs.get(i);
+  if (p) p.updatedThisSession = true;
+}
+// Is this row done for the session — its update ran ok, and the Apply leaves it until a
+// Refresh? The row says so instead of looking as if nothing had happened.
+export function isUpdatedThisSession(model, i) {
+  const p = model.pkgs.get(i);
+  return !!(p?.selfUpdate && p?.updateEachApply && p?.updatedThisSession) && p.present === true
+    && isSelfUpdating(model, i) && actionOf(model, i) === null;
 }
 // Does this row declare `version: self` — the application updates itself?
 export function isSelfUpdating(model, i) {
