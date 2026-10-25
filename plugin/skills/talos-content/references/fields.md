@@ -420,20 +420,25 @@ changed, when it is at or past the version announced, or when the manager's own 
 a segment: `v1.0.96` is `1.0.96` in every comparison. If not, the row says so (`unchanged`, and a line such as *winget reported success, but
 1.141.2 is still installed, not 1.142.0*), the journal records `ok: false` with `found`,
 `target`, `exit: 0` and the tool's last lines (`tail`), and the Apply does not run that change again while the same version faces the same
-target — a newer announcement, an edited pin, or the version moving (by hand, or by the tool
-itself) lifts it. The memory is the running Talos's: a restart
+target — a newer announcement, an edited pin, another command (the row moved to its own
+`update:`), or the version moving (by hand, or by the tool itself) lifts it. The memory is the running Talos's: a restart
 tries once more. A version that cannot be read gives no verdict.
 
 A row whose tool already reads the announced version while the manager still lists it as
 outdated (its record lags: the tool updated itself) shows one number and `record <version>`:
-the Apply still runs the manager's upgrade, which realigns that record.
+the Apply still runs the manager's upgrade, which realigns that record. If that upgrade moves
+nothing — not what runs, not the manager's record — running it again would change nothing
+either: the row is a success, says `current`, and the Apply leaves it like a held row.
 
 winget refuses to upgrade a **portable** package whose files changed since it installed them —
 what a tool that updates itself in winget's folder leaves (*Unable to remove Portable package
 as it has been modified*). Talos then reads the version: at or below the announcement, it runs
 the upgrade again with `--force`, which takes the tool there and realigns winget's record; past
 it, forcing would go back, so the row is left as it is, says `ahead`, and the Apply leaves it
-until the tool moves or a newer version is announced. Both are successes in the journal.
+until the tool moves or a newer version is announced. Only a version read from the tool itself
+(`detect:`) may force: without one, the version read is winget's own record, behind by
+definition. And only a plain `winget upgrade` takes the flag, never an author's compound
+`upgrade:`. Both are successes in the journal.
 `version: "self"` keeps winget away from such a tool altogether.
 
 ⚠️ **Anything else is REFUSED at load**, named in the log, and the package behaves as if

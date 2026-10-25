@@ -526,13 +526,18 @@ export function holdReason(model, i) {
   return model.pkgs.get(i)?.canDowngrade ? null : "above its pin — this route cannot go down to it";
 }
 // The one word a held row shows beside its reason: `unchanged` (it ran and moved nothing),
-// `ahead` (the tool is past what its manager offers), `held` (a pin this route cannot reach),
+// `ahead` (the tool is past what its manager offers), `current` (at it, with a manager record
+// the upgrade would not move), `held` (a pin this route cannot reach),
 // or "" when nothing holds the row.
 export function holdWord(model, i) {
   const why = holdReason(model, i);
   if (!why) return "";
   const u = model.pkgs.get(i)?.unmoved;
-  if (u && u.reason === why) return u.ahead ? "ahead" : "unchanged";
+  // `ahead` is a success: past the target, or AT it with a record that will not move.
+  if (u && u.reason === why) {
+    if (!u.ahead) return "unchanged";
+    return compareVersions(u.found, u.target) > 0 ? "ahead" : "current";
+  }
   return "held";
 }
 // The rows the Apply leaves at a gap it cannot close, in index order. The empty state asks,

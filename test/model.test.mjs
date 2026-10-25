@@ -1392,6 +1392,11 @@ test("a held row says why in one word: unchanged, ahead of its manager, or held"
   setUnmoved(m, 0, { found: "1.0.103", target: "1.0.102", reason: why, ahead: true });
   assert.equal(isActionable(m, 0), false, "not knocked on again for nothing");
   assert.equal(holdWord(m, 0), "ahead");
+  // At the announcement exactly, with a record that would not move: current, not ahead.
+  setInstalledVersion(m, 0, "1.0.102");
+  setUnmoved(m, 0, { found: "1.0.102", target: "1.0.102", reason: "already current", ahead: true });
+  assert.equal(holdWord(m, 0), "current");
+  setInstalledVersion(m, 0, "1.0.103");
   setUnmoved(m, 0, { found: "1.0.103", target: "1.0.102", reason: why });
   assert.equal(holdWord(m, 0), "unchanged");
   setInstalledVersion(m, 0, "1.0.104");

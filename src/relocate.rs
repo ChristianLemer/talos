@@ -163,7 +163,7 @@ pub fn sha256_hex(path: &Path) -> std::io::Result<String> {
 /// file replaced mid-copy) is refused, not launched. If the rename loses to another launch
 /// that got there first, its file is as good as ours: same name, same hash.
 pub fn install(exe: &Path, engine_dir: &Path, tag: &str) -> std::io::Result<PathBuf> {
-    let digest = sha256_hex(exe)?;
+    let digest = sha256_hex(exe).map_err(source_busy)?;
     let target = engine_dir.join(local_name(tag, &digest));
     let whole = |p: &Path| p.is_file() && sha256_hex(p).is_ok_and(|h| h == digest);
     if whole(&target) {
@@ -221,12 +221,32 @@ fn source_changed() -> std::io::Error {
     std::io::Error::other(SourceChanged)
 }
 
+/// The share's exe could not be READ — a sharing violation while OneDrive writes the new one is
+/// the case. A failure on this side is the publication too; one on the local side is not.
+#[derive(Debug)]
+struct SourceBusy(std::io::Error);
+
+impl std::fmt::Display for SourceBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the exe could not be read: {}", self.0)
+    }
+}
+
+impl std::error::Error for SourceBusy {}
+
+fn source_busy(e: std::io::Error) -> std::io::Error {
+    std::io::Error::other(SourceBusy(e))
+}
+
 /// Did this copy fail because a publication replaced the share's exe? The copy read bytes that
-/// changed under it, or the exe is gone — OneDrive removes it before writing the new one. Any
+/// changed under it, the exe could not be read (OneDrive writing it), or it is gone — OneDrive
+/// removes it before writing the new one. Any
 /// other failure (a full disk, an antivirus quarantining the `.partial`, a rename refused) says
 /// nothing of a publication, and lasts.
 fn published_meanwhile(exe: &Path, e: &std::io::Error) -> bool {
-    e.get_ref().is_some_and(|r| r.is::<SourceChanged>()) || !exe.is_file()
+    e.get_ref()
+        .is_some_and(|r| r.is::<SourceChanged>() || r.is::<SourceBusy>())
+        || !exe.is_file()
 }
 
 /// Clear a read-only attribute the copy carried over from the share (a view-only library may
@@ -384,9 +404,16 @@ fn hand_over_with(
     // ⚠️ ONLY then (`published_meanwhile`). A failure that lasts — a full disk, an antivirus
     // quarantining the `.partial` — would otherwise run an old engine against new content on
     // every launch, where running in place runs the right one.
-    let (local, note) = match retry_once(pause, copy) {
+    // A publication seen by EITHER attempt counts: the first may meet the replacement and the
+    // second OneDrive still writing, which fails otherwise.
+    let mut copy = copy;
+    let mut published = false;
+    let copied = retry_once(pause, || {
+        copy().inspect_err(|e| published |= published_meanwhile(exe, e))
+    });
+    let (local, note) = match copied {
         Ok(local) => (local, None),
-        Err(e) => match newest_whole_engine(engine_dir).filter(|_| published_meanwhile(exe, &e)) {
+        Err(e) => match newest_whole_engine(engine_dir).filter(|_| published) {
             Some(local) => {
                 let note = format!("copy failed ({e}): the newest verified local engine instead");
                 (local, Some(note))
@@ -931,6 +958,45 @@ mod tests {
             assert!(r.unwrap_err().contains("copy failed"), "{kind:?}");
             assert!(!spawned, "{kind:?}: an old engine started");
         }
+    }
+
+    #[test]
+    fn a_publication_seen_by_either_attempt_still_falls_back() {
+        // The pre-merge review: the first copy meets the replacement ("changed while it was
+        // copied"), the second finds OneDrive still writing and fails otherwise. Classified on
+        // the last error alone, that read as a lasting failure and locked the share again.
+        let d = tmp("either");
+        let eng = d.join("engine");
+        let exe = d.join("Talos.exe");
+        std::fs::write(&exe, b"the share's engine").unwrap();
+        let old = d.join("old.exe");
+        std::fs::write(&old, b"the previous engine").unwrap();
+        let verified = install(&old, &eng, "v1").unwrap();
+        let mut attempt = 0;
+        let r = hand_over_with(
+            &exe,
+            &eng,
+            &d,
+            &[],
+            std::time::Duration::ZERO,
+            || {
+                attempt += 1;
+                Err(if attempt == 1 {
+                    source_changed()
+                } else {
+                    std::io::Error::from(std::io::ErrorKind::PermissionDenied)
+                })
+            },
+            |_, _| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(r.local, verified);
+        // Reading the SOURCE failing (a sharing violation while OneDrive writes it) is the
+        // publication too; the destination failing is not.
+        assert!(published_meanwhile(
+            &exe,
+            &source_busy(std::io::Error::from_raw_os_error(32))
+        ));
     }
 
     #[test]

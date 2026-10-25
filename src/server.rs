@@ -249,7 +249,7 @@ fn hold_for(
         return None;
     }
     let target = step_target(step.pin.as_deref(), announced).unwrap_or_default();
-    let cmd = change_command(step, action);
+    let cmd = change_command(step);
     held_unmoved(memory, &step.id, installed.unwrap_or(""), &target, &cmd)
         .then(|| memory.get(&step.id).cloned())
         .flatten()
@@ -3575,7 +3575,10 @@ fn unmoved_reason(
     let before = before?;
     let was = read(before.version.as_deref());
     let managed_was = read(before.managed.as_deref());
-    let managed_moved = known(&managed_was) && known(&managed_now) && managed_was != managed_now;
+    // Numerically: the listing before and the probe after may spell one version two ways.
+    let managed_moved = known(&managed_was)
+        && known(&managed_now)
+        && compare_versions(&managed_was, &managed_now) != 0;
     if !known(&was) || was != now || managed_moved {
         return None;
     }
@@ -3633,11 +3636,15 @@ enum PortableChoice {
     Neither,
 }
 
-fn portable_choice(read: &str, target: Option<&str>) -> PortableChoice {
+///
+/// ⚠️ Only a reading of the BINARY may force (`from_binary`). Without one, the version read is
+/// the manager's own record — behind the announcement by definition — and would always say
+/// "force", over a tool that may well be ahead of it.
+fn portable_choice(read: &str, target: Option<&str>, from_binary: bool) -> PortableChoice {
     use crate::decision::{bare_version, compare_versions};
     let read = bare_version(read);
     match target.map(bare_version).filter(|t| !t.is_empty()) {
-        Some(t) if !read.is_empty() && read != "?" => {
+        Some(t) if from_binary && !read.is_empty() && read != "?" => {
             if compare_versions(read, t) > 0 {
                 PortableChoice::Ahead
             } else {
@@ -3648,6 +3655,45 @@ fn portable_choice(read: &str, target: Option<&str>) -> PortableChoice {
     }
 }
 
+/// A plain `winget upgrade`, one command: the only kind `--force` may be appended to. An
+/// author's compound `upgrade:` would take the flag on its last part.
+fn forceable(cmd: &str) -> bool {
+    cmd.trim_start().starts_with("winget upgrade ") && !cmd.contains([';', '&', '|'])
+}
+
+/// Did a version change find the tool already at or past its target and leave everything as it
+/// was — what runs, and the manager's own record? Then running it again changes nothing either:
+/// a record the manager will not realign (an installer of another technology, winget's "no
+/// applicable upgrade"), or the manager's copy behind one that comes first on PATH. A success,
+/// held like a tool ahead of its manager, so the Apply stops knocking.
+fn settled_without_moving(
+    before: Option<&crate::detect::Presence>,
+    after: &crate::detect::Presence,
+    target: Option<&str>,
+) -> bool {
+    use crate::decision::{bare_version, compare_versions};
+    let read = |v: Option<&str>| bare_version(v.unwrap_or("")).to_string();
+    let known = |v: &str| !v.is_empty() && v != "?";
+    let (Some(before), Some(t)) = (before, target.map(bare_version).filter(|t| !t.is_empty()))
+    else {
+        return false;
+    };
+    let (was, now) = (
+        read(before.version.as_deref()),
+        read(after.version.as_deref()),
+    );
+    let (m_was, m_now) = (
+        read(before.managed.as_deref()),
+        read(after.managed.as_deref()),
+    );
+    let reached = [&now, &m_now]
+        .into_iter()
+        .any(|v| known(v) && compare_versions(v, t) >= 0);
+    let moved = compare_versions(&was, &now) != 0
+        || (known(&m_was) && known(&m_now) && compare_versions(&m_was, &m_now) != 0);
+    known(&was) && known(&now) && reached && !moved
+}
+
 /// The hold of a tool past what its manager offers: remembered like a change that moved
 /// nothing (`held_unmoved`), but a success — the Apply stops knocking on the manager until it
 /// announces something newer, or the tool moves.
@@ -3655,26 +3701,33 @@ fn ahead_of_manager(found: &str, target: &str, cmd: &str) -> Unmoved {
     Unmoved {
         found: found.to_string(),
         target: target.to_string(),
-        reason: format!(
-            "{found} is past {target}, the newest its manager offers; the manager will not \
-             replace a package the tool updated itself, and forcing it would go back"
-        ),
+        reason: if crate::decision::compare_versions(found, target) > 0 {
+            format!(
+                "{found} is past {target}, the newest its manager offers; the manager will not \
+                 replace a package the tool updated itself, and forcing it would go back"
+            )
+        } else {
+            format!(
+                "{found} is already {target}, and the manager's record did not move: running \
+                 its upgrade again would change nothing"
+            )
+        },
         cmd: cmd.to_string(),
         ahead: true,
     }
 }
 
-/// The command a step carries for a version change, as the catalogue gave it: what tells one
-/// attempt from another for a hold (`held_unmoved`). The forms rebuilt at run time (a forced
-/// cask, a winget scope) follow from it and from the machine, so they need no key of their own.
-fn change_command(step: &crate::bundles::Step, action: crate::decision::Action) -> String {
-    use crate::decision::Action;
-    match action {
-        Action::Upgrade => step.upgrade.clone(),
-        Action::Downgrade => step.downgrade.clone(),
-        Action::Install | Action::Uninstall => None,
-    }
-    .unwrap_or_default()
+/// The commands a row changes its version with, as the catalogue gave them: what tells one
+/// attempt from another for a hold (`held_unmoved`). Both of them, whatever the action: the scan
+/// looks a hold up without knowing which one recorded it, and a downgrade hold keyed on its own
+/// command alone was never found again. The forms rebuilt at run time (a forced cask, a winget
+/// scope) follow from these and from the machine, so they need no key of their own.
+fn change_command(step: &crate::bundles::Step) -> String {
+    format!(
+        "{}\n{}",
+        step.upgrade.as_deref().unwrap_or(""),
+        step.downgrade.as_deref().unwrap_or("")
+    )
 }
 
 /// Has this package's change already been run, in this session, by this same command, from the
@@ -3807,13 +3860,14 @@ async fn do_step(
         )
     {
         let step_c = step.clone();
-        let read = tokio::task::spawn_blocking(move || detect_present_detailed(&step_c, os))
+        let p = tokio::task::spawn_blocking(move || detect_present_detailed(&step_c, os))
             .await
             .ok()
-            .and_then(|p| p.version)
             .unwrap_or_default();
-        match portable_choice(&read, target.as_deref()) {
-            PortableChoice::Force => {
+        // `managed` is set exactly when the version shown came from the binary.
+        let read = p.version.clone().unwrap_or_default();
+        match portable_choice(&read, target.as_deref(), p.managed.is_some()) {
+            PortableChoice::Force if forceable(cmd) => {
                 say(
                     socket,
                     i,
@@ -3828,7 +3882,7 @@ async fn do_step(
                 run = run_in_pty(socket, state, i as u32, &format!("{cmd} --force")).await;
             }
             PortableChoice::Ahead => ahead = Some(read),
-            PortableChoice::Neither => {}
+            PortableChoice::Force | PortableChoice::Neither => {}
         }
     }
     let PtyRun {
@@ -4027,7 +4081,7 @@ async fn do_step(
             found,
             target: t,
             reason: why.clone(),
-            cmd: change_command(step, action),
+            cmd: change_command(step),
             ahead: false,
         };
         // The `ok` sent above was the exit code's; the verdict outranks it, as in the journal.
@@ -4038,8 +4092,22 @@ async fn do_step(
             .await;
         emit_unmoved(socket, i, &u).await;
         state.unmoved.lock().await.insert(step.id.clone(), u);
-    } else if let (Some(found), Some(t)) = (&ahead, &target) {
-        let u = ahead_of_manager(found, t, &change_command(step, action));
+    } else if let Some((found, t)) = ahead.clone().zip(target.clone()).or_else(|| {
+        // Nothing moved, at or past the target: the same rerun would change nothing either.
+        let exact = matches!(
+            crate::bundles::classify_pin(step.pin.as_deref()),
+            Some(crate::bundles::PinKind::Exact(_))
+        );
+        let judged = ok && action == Action::Upgrade && !exact && judges_version(step, action);
+        let p = after.as_ref().filter(|_| judged)?;
+        if !settled_without_moving(aim.before, p, target.as_deref()) {
+            return None;
+        }
+        let found = crate::decision::bare_version(p.version.as_deref()?).to_string();
+        Some((found, target.clone()?))
+    }) {
+        let (found, t) = (&found, &t);
+        let u = ahead_of_manager(found, t, &change_command(step));
         say(
             socket,
             i,
@@ -4391,13 +4459,140 @@ mod tests {
         assert!(!portable_refused(Action::Upgrade, Some("winget"), false, 1));
         // Forced only where it takes the tool forward or to the same version: never backwards.
         use PortableChoice::*;
-        assert_eq!(portable_choice("1.8.2", Some("1.8.2")), Force);
-        assert_eq!(portable_choice("1.8.0", Some("v1.8.2")), Force);
-        assert_eq!(portable_choice("1.0.103", Some("v1.0.102")), Ahead);
+        assert_eq!(portable_choice("1.8.2", Some("1.8.2"), true), Force);
+        assert_eq!(portable_choice("1.8.0", Some("v1.8.2"), true), Force);
+        assert_eq!(portable_choice("1.0.103", Some("v1.0.102"), true), Ahead);
         // No evidence, no force: the refusal stands as the failure it is.
-        assert_eq!(portable_choice("", Some("1.8.2")), Neither);
-        assert_eq!(portable_choice("?", Some("1.8.2")), Neither);
-        assert_eq!(portable_choice("1.8.2", None), Neither);
+        assert_eq!(portable_choice("", Some("1.8.2"), true), Neither);
+        assert_eq!(portable_choice("?", Some("1.8.2"), true), Neither);
+        assert_eq!(portable_choice("1.8.2", None, true), Neither);
+        // The pre-merge review: a version that is the manager's OWN record says nothing of the
+        // tool — the record lags by definition, so it always read "behind" and forced 1.0.102
+        // over a tool at 1.0.103. Only a reading of the binary may force.
+        assert_eq!(portable_choice("v1.0.96", Some("v1.0.102"), false), Neither);
+        // And only a plain `winget upgrade`: a flag appended to an author's compound command
+        // would land on its last part.
+        assert!(forceable(
+            "winget upgrade --id jqlang.jq -e --source winget --accept-source-agreements"
+        ));
+        assert!(!forceable("winget upgrade --id a.b -e; do-something"));
+        assert!(!forceable("winget upgrade --id a.b -e && b"));
+        assert!(!forceable("custom-updater.exe"));
+    }
+
+    #[test]
+    fn a_change_that_finds_the_tool_current_and_moves_nothing_is_held_as_a_success() {
+        // The pre-merge review, finding 3: at or past the announcement is a success — but when
+        // nothing moved, not even the manager's record, the next Apply would run the same
+        // upgrade again, and again. Held like a tool ahead of its manager, never a failure.
+        let p = |run: &str, managed: Option<&str>| crate::detect::Presence {
+            managed: managed.map(str::to_string),
+            ..observed(Some(true), run)
+        };
+        let t = Some("1.8.2");
+        assert!(settled_without_moving(
+            Some(&p("1.8.2", Some("1.7.1"))),
+            &p("1.8.2", Some("1.7.1")),
+            t
+        ));
+        assert!(settled_without_moving(
+            Some(&p("1.8.2", None)),
+            &p("v1.8.2", None),
+            t
+        ));
+        // The record moved: realigned, nothing to hold.
+        assert!(!settled_without_moving(
+            Some(&p("1.8.2", Some("1.7.1"))),
+            &p("1.8.2", Some("1.8.2")),
+            t
+        ));
+        // What runs moved: a change, nothing to hold.
+        assert!(!settled_without_moving(
+            Some(&p("1.7.1", None)),
+            &p("1.8.2", None),
+            t
+        ));
+        // Below the target: the verdict's business, not this.
+        assert!(!settled_without_moving(
+            Some(&p("1.6", Some("1.7.1"))),
+            &p("1.6", Some("1.7.1")),
+            t
+        ));
+        // Finding 5: a mise `node` 22.1 ahead on PATH, winget's 20.11 that did not move — held,
+        // so the Apply stops knocking; never a rerun on every Apply.
+        assert!(settled_without_moving(
+            Some(&p("22.1.0", Some("20.11.0"))),
+            &p("22.1.0", Some("20.11.0")),
+            Some("21.0.0")
+        ));
+        // No before, no target: no evidence.
+        assert!(!settled_without_moving(None, &p("1.8.2", None), t));
+        assert!(!settled_without_moving(
+            Some(&p("1.8.2", None)),
+            &p("1.8.2", None),
+            None
+        ));
+    }
+
+    #[test]
+    fn the_managers_copy_moving_short_of_the_target_is_still_a_move() {
+        use crate::decision::Action;
+        let p = |run: &str, managed: &str| crate::detect::Presence {
+            managed: Some(managed.into()),
+            ..observed(Some(true), run)
+        };
+        // winget took its node from 20.11 to 21.0 toward 22.1; the mise node on PATH stays.
+        assert_eq!(
+            unmoved_reason(
+                Action::Upgrade,
+                None,
+                Some(&p("20.11.0", "20.11.0")),
+                &p("20.11.0", "21.0.0"),
+                Some("22.1.0"),
+                "winget",
+            ),
+            None
+        );
+        // Two spellings of one version (the listing before, the probe after) are no move.
+        assert!(unmoved_reason(
+            Action::Upgrade,
+            None,
+            Some(&p("20.11.0", "20.11.0")),
+            &p("20.11.0", "20.11.0.0"),
+            Some("22.1.0"),
+            "winget",
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn a_held_downgrade_is_still_seen_by_the_scan() {
+        use crate::decision::Action;
+        // The pre-merge review, finding 2: the hold was keyed on the ACTION's command, recorded
+        // with `downgrade` and looked up by the scan with `upgrade` — the measured nu case came
+        // back as pending work after a Refresh. The key is the row's commands, whatever the action.
+        let mut step = brew_step("nushell", Some("0.113.1"));
+        step.downgrade = Some("brew uninstall nushell && brew install nushell@0.113.1".into());
+        let mut memory = std::collections::HashMap::new();
+        memory.insert(
+            "nushell".to_string(),
+            Unmoved {
+                found: "0.116.1".into(),
+                target: "0.113.1".into(),
+                reason: "brew reported success, but 0.116.1 is installed, not 0.113.1".into(),
+                cmd: change_command(&step),
+                ahead: false,
+            },
+        );
+        for act in [Action::Upgrade, Action::Downgrade] {
+            assert!(
+                hold_for(&memory, &step, act, Some("0.116.1"), None).is_some(),
+                "{act:?}"
+            );
+        }
+        // Another command — the author moved the row to its own update — lifts it.
+        step.upgrade = Some("nu-update".into());
+        assert!(hold_for(&memory, &step, Action::Downgrade, Some("0.116.1"), None).is_none());
     }
 
     #[test]
@@ -6262,7 +6457,8 @@ mod tests {
                 found: "1.0.102".into(),
                 target: "1.0.103".into(),
                 reason: "it moved nothing".into(),
-                cmd: "copilot update".into(),
+                // `change_command`: the upgrade, then the downgrade (none here).
+                cmd: "copilot update\n".into(),
                 ahead: false,
             },
         );

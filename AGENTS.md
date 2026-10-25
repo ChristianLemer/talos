@@ -87,7 +87,7 @@ publish.
 Run all four before claiming anything works. These are exactly what CI enforces:
 
 ```bash
-cargo test --all-targets                      # 524 + 8 tests (2026-10-25)
+cargo test --all-targets                      # 528 + 8 tests (2026-10-25)
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings     # any lint fails the build
 node --test "test/*.test.mjs"                 # 207 tests
@@ -142,11 +142,15 @@ itself there (`Talos-<tag>-<sha256[..12]>.exe`), starts the copy with `--kit <th
 sat in>` and exits (`src/relocate.rs`): a running exe is locked, and a locked exe on the share
 turned every publication into OneDrive conflicts. `--kit` stands for "beside the exe"
 everywhere (`platform::exe_sibling`), so the kit layout above is unchanged. A copy that fails
-(a publication replacing the exe mid-copy) is tried once more, then the newest local engine
-whose bytes match its name starts instead; any other failure runs in place, as before.
+(a publication replacing the exe mid-copy) is tried once more, then — if either attempt saw
+the publication (the bytes changed under the copy, the exe could not be read or was gone) —
+the newest local engine whose bytes match its name starts instead; any other failure runs in
+place, as before.
 `engine\last-launch.txt` records which way it went. A local engine started by hand (a pin)
 reads the kit back from `engine\last-kit.txt` and hands back to the kit's exe if a publication
-replaced it. Not relocated: `--check`, debug builds, macOS, Linux, `TALOS_IN_PLACE=1`.
+replaced it (watched like the hand-over: a kit exe that dies at once leaves the local engine
+running). Not relocated: `--check`, debug builds, macOS, Linux, `TALOS_IN_PLACE=1` — which
+stops the hand-back too.
 
 Every binary bakes a build stamp (tag · sha · timestamp) so you can tell which build is
 running; locally the tag is `git describe --tags --dirty`, so it also says whether the build
