@@ -383,7 +383,10 @@ struct AppState {
     /// What brew offers for a pinned row, read when the Apply builds its plan and taken by the
     /// row's step, so one Apply asks brew once. A step that finds nothing here (a retry, a
     /// repair) asks brew itself.
-    brew_pins: tokio::sync::Mutex<std::collections::HashMap<String, crate::managers::BrewPin>>,
+    /// `None` = brew was asked and could not tell: kept, so the step does not ask again.
+    /// Cleared when the Apply ends, so a later retry never acts on an old answer.
+    brew_pins:
+        tokio::sync::Mutex<std::collections::HashMap<String, Option<crate::managers::BrewPin>>>,
 }
 
 /// Records one observed presence in `last_seen` (grows the vector if the plan is
@@ -2326,7 +2329,8 @@ fn drop_requiring_held(
 }
 
 /// Tells the front that the Apply leaves row `i` and why. The front keeps it as the row's hold
-/// until the next scan, so the Apply button stops offering a change brew cannot make.
+/// until the next plan (a Refresh), so the Apply button stops offering a change brew cannot
+/// make. The server keeps nothing: every Apply that wants the row asks brew again.
 async fn send_held(socket: &mut WebSocket, i: usize, why: &str) {
     let _ = socket
         .send(Message::Text(
@@ -2879,9 +2883,11 @@ async fn apply_diff(
                     }
                     continue;
                 }
-                if let Some(v) = verdict {
-                    state.brew_pins.lock().await.insert(step.id.clone(), v);
-                }
+                state
+                    .brew_pins
+                    .lock()
+                    .await
+                    .insert(step.id.clone(), verdict);
                 visual_plan.push((i, a));
             }
             Ok(None) => {}
@@ -2891,6 +2897,7 @@ async fn apply_diff(
         }
     }
     for (i, why) in drop_requiring_held(&mut visual_plan, &mut nodes, &idx, &held_absent) {
+        state.brew_pins.lock().await.remove(&steps[i].id);
         println!("[apply] {} held: {why}", steps[i].name);
         send_held(socket, i, &why).await;
     }
@@ -3042,6 +3049,7 @@ async fn apply_diff(
     // is WHY they are safe, not an accident to rely on: a future early exit placed AFTER a
     // do_step would drop that step's facts silently.
     flush_behaviour(state).await;
+    state.brew_pins.lock().await.clear(); // rows the Apply did not reach leave no answer behind
     clear_sudo_pw(state).await; // end of Apply: the cached password is cleared (model C)
     let _ = socket
         .send(Message::Text(json!({ "type": "done" }).to_string()))
@@ -3963,7 +3971,7 @@ async fn do_step(
         None => {
             let planned = state.brew_pins.lock().await.remove(&step.id);
             let verdict = match planned {
-                Some(v) => Some(v),
+                Some(answer) => answer,
                 None => ask_brew(action, step, os).await,
             };
             match brew_plan(action, step, verdict.as_ref()) {
@@ -6569,15 +6577,6 @@ mod tests {
     // computed at server.rs:1604 before this work and fed nothing but the row's text,
     // which is why a Microsoft redistributable kept an install button on a Mac.
 
-    /// The body of a named async fn in this source file, up to the next top-level item,
-    /// with every line comment STRIPPED.
-    ///
-    /// ⚠️ The stripping is not tidiness, it is the whole validity of the technique. The
-    /// first draft of these guards passed the moment a COMMENT elsewhere in `apply_diff`
-    /// mentioned `requires_blocked` — a green light for code that did not exist. A
-    /// text-level guard that reads comments proves nothing about behaviour, and this repo
-    /// has been burned by exactly that before (an exposure audit that counted comments as
-    /// assertions). Read code, never prose.
     #[test]
     fn a_brew_pin_is_asked_at_plan_time_and_again_at_the_step() {
         // The brew tests above are pure: removing the wiring would leave them green.
@@ -6591,12 +6590,31 @@ mod tests {
             at(&plan, "drop_requiring_held(") < at(&plan, "topo_sort("),
             "what requires a held row leaves the plan before it is ordered"
         );
+        // Second review: the plan's answer is kept even when it is "unknown", or the step asks
+        // brew again and may hold a row whose dependents are already ordered after it; and no
+        // answer outlives its Apply, or a later retry acts on it.
+        assert!(plan.contains(".insert(step.id.clone(), verdict);"));
+        assert!(plan.contains("brew_pins.lock().await.remove(&steps[i].id)"));
+        let cleared = plan.rfind("brew_pins.lock().await.clear()").unwrap_or(0);
+        assert!(
+            cleared > at(&plan, "flush_behaviour(state)"),
+            "cleared when the Apply ends"
+        );
         let step = fn_body("do_step");
         let rebuilt = at(&step, "brew_plan(action, step, verdict.as_ref())");
         assert!(at(&step, "winget_in_place(") < rebuilt);
         assert!(rebuilt < at(&step, "run_in_pty("));
     }
 
+    /// The body of a named async fn in this source file, up to the next top-level item,
+    /// with every line comment STRIPPED.
+    ///
+    /// ⚠️ The stripping is not tidiness, it is the whole validity of the technique. The
+    /// first draft of these guards passed the moment a COMMENT elsewhere in `apply_diff`
+    /// mentioned `requires_blocked` — a green light for code that did not exist. A
+    /// text-level guard that reads comments proves nothing about behaviour, and this repo
+    /// has been burned by exactly that before (an exposure audit that counted comments as
+    /// assertions). Read code, never prose.
     fn fn_body(name: &str) -> String {
         let src = include_str!("server.rs");
         let start = src

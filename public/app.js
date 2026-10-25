@@ -579,12 +579,11 @@ function paintVersion(i) {
     return;
   }
   if (!v.from) {
-    // Absent: no version to show — unless the Apply held its install, and then the pin it
-    // could not reach is the thing to show, greyed, with why.
+    // Absent: no version to show — unless the Apply held its install: then the word, with
+    // why, and the pin it could not reach when there is one (a dependent may have none).
     const p = model.pkgs.get(i);
-    r.delta.innerHTML = why && p?.pin
-      ? `<span class="v-muted" title="${attr(why)}">${pin(p.pin)}</span> <span class="v-held">held</span>`
-      : "";
+    const target = p?.pin ? `<span class="v-muted" title="${attr(why)}">${pin(p.pin)}</span> ` : "";
+    r.delta.innerHTML = why ? `${target}<span class="v-held" title="${attr(why)}">held</span>` : "";
     return;
   }
   if (v.to === null) {
@@ -2408,6 +2407,13 @@ ws.onmessage = (ev) => {
     case "held": // the Apply left this row: brew cannot serve its pin (server::send_held)
       clearForbidden(msg.i); // a held retry is that retry's verdict
       M.setHold(model, msg.i, msg.reason);
+      {
+        // The hold replaces a retry's "failed" or "blocked"; an absent row says why in its
+        // status, as a `state` with a reason does — it may have no pin to show it beside.
+        const present = model.pkgs.get(msg.i)?.present === true;
+        setStatus(msg.i, present ? "ok" : "waiting");
+        if (!present && rows[msg.i]) rows[msg.i].statusLabel.textContent = msg.reason;
+      }
       paintVersion(msg.i);
       refreshLiveness();
       break;

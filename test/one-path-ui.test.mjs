@@ -123,8 +123,14 @@ test("a row the server holds at Apply keeps the hold and shows it, even with not
   // A retry from the firewall banner can be held too (it asks brew again): the hold is the
   // retry's verdict, so it settles the banner, or its controls stay inert for good.
   assert.match(body, /clearForbidden\(msg\.i\)/);
+  // Found at the second review: the hold is the row's verdict, so a retry's "failed" or
+  // "blocked by firewall" no longer stands; and an ABSENT row — a dependent held with
+  // "requires nushell", no pin of its own — says why in its status, as a state with a reason does.
+  assert.match(body, /setStatus\(msg\.i, present \? "ok" : "waiting"\)/);
+  assert.match(body, /if \(!present && rows\[msg\.i\]\) rows\[msg\.i\]\.statusLabel\.textContent = msg\.reason/);
   const pv = appjs.slice(appjs.indexOf("function paintVersion("), appjs.indexOf("\n}\n", appjs.indexOf("function paintVersion(")));
   assert.match(pv, /if \(!v\.from\) \{[^}]*why/, "an absent held row shows why");
+  assert.doesNotMatch(pv, /why && p\?\.pin\s*\?/, "the held word does not wait for a pin");
 });
 
 test("the Apply button says how long, from what these rows took here", () => {

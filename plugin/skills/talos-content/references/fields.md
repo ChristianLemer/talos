@@ -303,8 +303,8 @@ brew's revision suffix is not a version: `0.116.1_1` (a rebuild) **is** the pin 
 Only an exact pin asks brew: a `self` row is never upgraded by brew, whatever brew offers.
 A plain brew change is judged like any other: exit 0 with the pin still not
 installed reads *unchanged*, and the Apply leaves the row until the version or the pin moves.
-A held row is not a failure, and the Apply button stops offering it; a Refresh lifts the hold
-and the next Apply asks brew again. While you sit *at* the pin, nothing runs and brew is not asked, so a newer brew
+A held row is not a failure, and the Apply button stops offering it until a Refresh. Each
+Apply that wants the row asks brew again, so once brew reaches the pin, the next Apply installs it. While you sit *at* the pin, nothing runs and brew is not asked, so a newer brew
 release is harmless until you actually drift. An exact pin that brew cannot serve also
 holds an **absent** package — it is not installed at another version — so a package
 pinned for winget's cadence and `brew:` on the side stays off the Mac until brew reaches
