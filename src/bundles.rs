@@ -172,8 +172,9 @@ pub struct RawPkg {
     /// row's upgrade instead of the manager's. Ignored without `self` (`--check` says so).
     #[serde(default)]
     pub update: Option<String>,
-    /// With `update:` only: `apply` runs it on EVERY Apply (the command itself knows when
-    /// there is nothing to do), instead of only when the tool reads as behind.
+    /// With `update:` only: `apply` runs it at each Apply, behind or not (the command itself
+    /// knows when there is nothing to do), until it succeeds once — then the row is done until
+    /// a Refresh — instead of only when the tool reads as behind.
     #[serde(default, rename = "update-on")]
     pub update_on: Option<String>,
     #[serde(default)]

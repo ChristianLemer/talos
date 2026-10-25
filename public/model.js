@@ -70,7 +70,7 @@ export function loadPlan(model, steps, profiles = []) {
       // `version: self` with its own `update:` command: the Apply runs that command when the
       // tool is behind what the manager announces (`step_json`). False for every other row.
       selfUpdate: !!s.selfUpdate,
-      // `update-on: apply`: that update runs on the first Apply of a session while the row is wanted.
+      // `update-on: apply`: that update runs at each Apply while the row is wanted, until it succeeds.
       updateEachApply: !!s.updateEachApply,
       // That update already succeeded in this Talos session (the server's `updatedThisSession`
       // on the plan, then its `self-updated` message): done until a Refresh re-arms it.

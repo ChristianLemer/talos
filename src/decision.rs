@@ -101,8 +101,8 @@ pub struct MachineFacts<'a> {
     pub available: &'a str,
     /// The package declares `version: self` AND its own `update:` command.
     pub can_self_update: bool,
-    /// ... AND `update-on: apply`: that command runs on every Apply, behind or not — once per
-    /// session (`updated_this_session`).
+    /// ... AND `update-on: apply`: that command runs at each Apply, behind or not, until it
+    /// succeeds once (`updated_this_session`).
     pub update_each_apply: bool,
     /// That command already SUCCEEDED in this Talos session, and no Refresh has re-armed it.
     pub updated_this_session: bool,

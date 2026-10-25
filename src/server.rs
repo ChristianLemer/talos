@@ -147,15 +147,18 @@ fn judges_version(step: &crate::bundles::Step, action: crate::decision::Action) 
         && step.update_each_apply)
 }
 
-/// Does this step, run to `ok`, make its row done for the rest of the session? Only a tool's own
-/// update run on every Apply: its exit code is the verdict (`judges_version` exempts it), so a
-/// success is an exit 0 not cancelled, and a failure leaves the row armed for the next Apply.
+/// Does this step, run to `ok`, make its row done for the rest of the session? Only for a tool
+/// whose own update runs at each Apply until it succeeds: its exit code is the verdict
+/// (`judges_version` exempts it), so a success is an exit 0 not cancelled, and a failure leaves
+/// the row armed. An INSTALL arms it too — the manager just put the current build there, and a
+/// row left offering its update would end the very run that installed it pending again.
 fn arms_session_done(
     step: &crate::bundles::Step,
     action: crate::decision::Action,
     ok: bool,
 ) -> bool {
-    ok && action == crate::decision::Action::Upgrade
+    use crate::decision::Action;
+    ok && matches!(action, Action::Upgrade | Action::Install)
         && is_self_updating(step)
         && step.upgrade.is_some()
         && step.update_each_apply
@@ -4346,8 +4349,16 @@ async fn do_step(
     } else if ok {
         state.unmoved.lock().await.remove(&step.id);
     }
-    // A tool's own update run on every Apply, done: the row leaves the plan until a Refresh, and
+    // A tool's own update run at each Apply, done: the row leaves the plan until a Refresh, and
     // says so — in its terminal and on the row (`self-updated`), so it does not look untouched.
+    // A removal forgets it: a later reinstall is a new copy, and arms the row again.
+    if ok && !cancelled && action == Action::Uninstall {
+        state
+            .updated_this_session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&step.id);
+    }
     if arms_session_done(step, action, ok && !cancelled) {
         state
             .updated_this_session
@@ -6226,8 +6237,12 @@ mod tests {
             "failed: armed"
         );
         assert!(
-            !super::arms_session_done(&s, Action::Install, true),
-            "an install"
+            super::arms_session_done(&s, Action::Install, true),
+            "installed: the manager put the current build there"
+        );
+        assert!(
+            !super::arms_session_done(&s, Action::Uninstall, true),
+            "a removal"
         );
         let mut behind_only = s.clone();
         behind_only.update_each_apply = false;
@@ -6755,6 +6770,46 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// The three wiring sites of "done for the session", each one a revert that no behaviour
+    /// test can see without a socket: the step arms (and a removal forgets), the Apply reads the
+    /// fact into `action_for`, and the Refresh button — ONLY it — empties the set.
+    #[test]
+    fn a_session_done_row_is_armed_by_its_step_read_by_the_apply_and_rearmed_only_by_refresh() {
+        let step = fn_body("do_step");
+        assert!(
+            step.contains("arms_session_done("),
+            "do_step no longer arms the row"
+        );
+        assert!(
+            step.contains(".insert(step.id.clone())"),
+            "do_step no longer records it"
+        );
+        assert!(
+            step.contains(".remove(&step.id)"),
+            "a removal no longer forgets it"
+        );
+        let apply = fn_body("apply_diff");
+        assert!(
+            apply.contains("updated_this_session: updated_this_session(state, step)"),
+            "the Apply no longer hands the fact to action_for"
+        );
+        let squash = |t: &str| t.split_whitespace().collect::<String>();
+        let clear = ".updated_this_session.lock().unwrap_or_else(|e|e.into_inner()).clear()";
+        assert!(
+            squash(&fn_body("handle_socket")).contains(clear),
+            "the Refresh no longer re-arms"
+        );
+        let src = include_str!("server.rs");
+        let code = &src[..src
+            .find("#[cfg(test)]\nmod tests")
+            .expect("the test module")];
+        assert_eq!(
+            squash(code).matches(clear).count(),
+            1,
+            "something other than the Refresh re-arms the rows"
+        );
     }
 
     #[test]
