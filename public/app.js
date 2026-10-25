@@ -2408,11 +2408,18 @@ ws.onmessage = (ev) => {
       clearForbidden(msg.i); // a held retry is that retry's verdict
       M.setHold(model, msg.i, msg.reason);
       {
-        // The hold replaces a retry's "failed" or "blocked"; an absent row says why in its
-        // status, as a `state` with a reason does — it may have no pin to show it beside.
-        const present = model.pkgs.get(msg.i)?.present === true;
-        setStatus(msg.i, present ? "ok" : "waiting");
-        if (!present && rows[msg.i]) rows[msg.i].statusLabel.textContent = msg.reason;
+        // The hold replaces a retry's "failed" or "blocked", and the status follows presence as
+        // a `state` does; a row not known present says why in it — it may have no pin to show
+        // it beside. "ok" clears what the row is behind on, and no `outdated` follows a `held`:
+        // kept, or a held upgrade would read current and its hold would vanish.
+        const p = model.pkgs.get(msg.i);
+        if (p) {
+          const present = p.present;
+          const { outdated, available } = p;
+          setStatus(msg.i, present === true ? "ok" : present === false ? "waiting" : "unknown");
+          Object.assign(p, { outdated, available });
+          if (present !== true && rows[msg.i]) rows[msg.i].statusLabel.textContent = msg.reason;
+        }
       }
       paintVersion(msg.i);
       refreshLiveness();
