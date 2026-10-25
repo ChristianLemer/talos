@@ -557,9 +557,10 @@ function paintVersion(i) {
   // A pin the route cannot go down to is HELD the same way, with its own word: the Apply leaves
   // the row, so the row says why (every gesture leaves a trace).
   const why = M.holdReason(model, i);
-  // A change that already ran toward this target and moved nothing says `unchanged`; its
-  // reason names a catalogue command, so it is escaped into the attribute.
-  const word = why && model.pkgs.get(i)?.unmoved?.reason === why ? "unchanged" : "held";
+  // A change that already ran toward this target and moved nothing says `unchanged`; a tool past
+  // what its manager offers says `ahead`. The reason names a catalogue command, so it is escaped
+  // into the attribute.
+  const word = M.holdWord(model, i);
   const attr = (t) => String(t).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
   const muted = (t, held) =>
     held
@@ -589,7 +590,14 @@ function paintVersion(i) {
       : M.isSelfUpdating(model, i)
         ? ` <span class="v-held" title="the application keeps itself current; Talos installs it when it is missing">updates itself</span>`
         : "";
-    r.delta.innerHTML = cur(v.pinned === "from" ? pin(v.from) : v.from) + own;
+    // At or past the announcement, the manager's record is what lags: held (the tool is ahead
+    // of what the manager offers), or realigned by the Apply — the row says which.
+    const lag = why
+      ? ` <span class="v-held" title="${attr(why)}">${word}</span>`
+      : v.record !== undefined
+        ? ` <span class="v-held" title="the package manager still records ${attr(v.record || "an older version")} and lists it as outdated; the Apply's upgrade realigns its record">record ${attr(v.record || "behind")}</span>`
+        : "";
+    r.delta.innerHTML = cur(v.pinned === "from" ? pin(v.from) : v.from) + own + lag;
     return;
   }
   // Two numbers: current(blue) → target. Muted (upgrade past a pin, or a pin the route
@@ -2378,7 +2386,7 @@ ws.onmessage = (ev) => {
       // Carry the available version into the model, then let paintVersion render
       // it (a pinned package ignores this — its pin owns the display, so no third
       // number). One renderer, no repetition.
-      M.setOutdated(model, msg.i, true, msg.available);
+      M.setOutdated(model, msg.i, true, msg.available, msg.current);
       paintVersion(msg.i);
       refreshLiveness(); // now this row's Apply is useful
       break;

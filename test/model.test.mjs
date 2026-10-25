@@ -48,6 +48,7 @@ import {
   setScope,
   setStatusData,
   setUnmoved,
+  holdWord,
   isSelfUpdating,
   isUpdatedEachApply,
   toggleOf,
@@ -1358,4 +1359,41 @@ test("planSeconds: what each row the Apply would run took here, 0 when never mea
   assert.deepEqual(planSeconds(m), [42]);
   m.pkgs.get(0).secs = 0;
   assert.deepEqual(planSeconds(m), [0], "never measured stays 0 — the estimate counts it unknown");
+});
+
+test("a tool already at the announced version shows the manager's stale record, not a push to itself", () => {
+  // The VM, 2026-10-25: winget records jq 1.7.1 and announces 1.8.2; the jq that runs is
+  // 1.8.2. The Apply still upgrades (it realigns the record), but `1.8.2 → 1.8.2` read as a push
+  // to nowhere. One number, and the record that is behind.
+  for (const pin of [null, "latest"]) {
+    const m = seedPinned({ pin });
+    setStatusData(m, 0, "ok");
+    setInstalledVersion(m, 0, "1.8.2");
+    setOutdated(m, 0, true, "v1.8.2", "1.7.1");
+    assert.equal(actionOf(m, 0), "upgrade", "the record is realigned");
+    assert.deepEqual(versionSummary(m, 0), {
+      from: "1.8.2", to: null, pinned: null, muted: false, held: false, record: "1.7.1",
+    });
+    // Ahead of the announcement: the same.
+    setInstalledVersion(m, 0, "1.9.0");
+    assert.equal(versionSummary(m, 0).record, "1.7.1");
+    // Behind it: the ordinary push, no record.
+    setInstalledVersion(m, 0, "1.7.1");
+    assert.deepEqual(versionSummary(m, 0), { from: "1.7.1", to: "v1.8.2", pinned: null, muted: false, held: false });
+  }
+});
+
+test("a held row says why in one word: unchanged, ahead of its manager, or held", () => {
+  const m = seedPinned({ pin: null });
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "1.0.103");
+  setOutdated(m, 0, true, "1.0.102", "1.0.96");
+  const why = "1.0.103 is past 1.0.102, the newest winget offers";
+  setUnmoved(m, 0, { found: "1.0.103", target: "1.0.102", reason: why, ahead: true });
+  assert.equal(isActionable(m, 0), false, "not knocked on again for nothing");
+  assert.equal(holdWord(m, 0), "ahead");
+  setUnmoved(m, 0, { found: "1.0.103", target: "1.0.102", reason: why });
+  assert.equal(holdWord(m, 0), "unchanged");
+  setInstalledVersion(m, 0, "1.0.104");
+  assert.equal(holdWord(m, 0), "", "nothing held");
 });

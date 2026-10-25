@@ -415,12 +415,26 @@ Brew casks declaring `auto_updates true` are **not** read as `self`: Talos scans
 
 After an upgrade or a downgrade that exited 0, Talos reads the version again. Toward an exact
 pin, the step succeeded when the pin is read (at its own precision); otherwise when the version
-changed. If not, the row says so (`unchanged`, and a line such as *winget reported success, but
+changed, when it is at or past the version announced, or when the manager's own copy moved
+(`detect:` may read another copy that comes first on `PATH`). A leading `v` is a spelling, not
+a segment: `v1.0.96` is `1.0.96` in every comparison. If not, the row says so (`unchanged`, and a line such as *winget reported success, but
 1.141.2 is still installed, not 1.142.0*), the journal records `ok: false` with `found`,
 `target`, `exit: 0` and the tool's last lines (`tail`), and the Apply does not run that change again while the same version faces the same
 target — a newer announcement, an edited pin, or the version moving (by hand, or by the tool
 itself) lifts it. The memory is the running Talos's: a restart
 tries once more. A version that cannot be read gives no verdict.
+
+A row whose tool already reads the announced version while the manager still lists it as
+outdated (its record lags: the tool updated itself) shows one number and `record <version>`:
+the Apply still runs the manager's upgrade, which realigns that record.
+
+winget refuses to upgrade a **portable** package whose files changed since it installed them —
+what a tool that updates itself in winget's folder leaves (*Unable to remove Portable package
+as it has been modified*). Talos then reads the version: at or below the announcement, it runs
+the upgrade again with `--force`, which takes the tool there and realigns winget's record; past
+it, forcing would go back, so the row is left as it is, says `ahead`, and the Apply leaves it
+until the tool moves or a newer version is announced. Both are successes in the journal.
+`version: "self"` keeps winget away from such a tool altogether.
 
 ⚠️ **Anything else is REFUSED at load**, named in the log, and the package behaves as if
 nothing was declared. That guard is not politeness: a word has no leading digits, so the

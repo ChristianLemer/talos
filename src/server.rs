@@ -215,7 +215,7 @@ async fn emit_unmoved(socket: &mut WebSocket, i: usize, u: &Unmoved) {
         .send(Message::Text(
             json!({
                 "type": "unmoved", "i": i,
-                "found": u.found, "target": u.target, "reason": u.reason,
+                "found": u.found, "target": u.target, "reason": u.reason, "ahead": u.ahead,
             })
             .to_string(),
         ))
@@ -3597,6 +3597,71 @@ struct Unmoved {
     /// The command the row runs for this change (`change_command`). Another command — the
     /// author moved to `version: self` and its `update:` — is another attempt, never held.
     cmd: String,
+    /// Not a failure: the tool is PAST what its manager offers, and forcing the manager would
+    /// take it back (`ahead_of_manager`). Held all the same, so the Apply stops asking.
+    ahead: bool,
+}
+
+/// winget's "Unable to remove Portable package as it has been modified; to override this check
+/// use --force" (MEASURED, winget v1.29, Windows VM, 2026-10-25).
+const PORTABLE_MODIFIED: i32 = -1978335145;
+
+/// Did winget refuse a manager upgrade because the PORTABLE package's files changed since it
+/// installed them — a tool that updated itself in winget's own folder? Not for a `self` row:
+/// its upgrade is the tool's command, never winget's.
+fn portable_refused(
+    action: crate::decision::Action,
+    route: Option<&str>,
+    self_updating: bool,
+    code: i32,
+) -> bool {
+    action == crate::decision::Action::Upgrade
+        && route == Some("winget")
+        && !self_updating
+        && code == PORTABLE_MODIFIED
+}
+
+/// What to do about that refusal, from the version the tool reports and the version winget
+/// announced.
+#[derive(Debug, PartialEq, Eq)]
+enum PortableChoice {
+    /// At or below the announcement: `--force` takes it there and realigns winget's record.
+    Force,
+    /// Past it: forcing would take the tool BACK. Left as it is.
+    Ahead,
+    /// No version read, or none announced: no evidence either way, the refusal stands.
+    Neither,
+}
+
+fn portable_choice(read: &str, target: Option<&str>) -> PortableChoice {
+    use crate::decision::{bare_version, compare_versions};
+    let read = bare_version(read);
+    match target.map(bare_version).filter(|t| !t.is_empty()) {
+        Some(t) if !read.is_empty() && read != "?" => {
+            if compare_versions(read, t) > 0 {
+                PortableChoice::Ahead
+            } else {
+                PortableChoice::Force
+            }
+        }
+        _ => PortableChoice::Neither,
+    }
+}
+
+/// The hold of a tool past what its manager offers: remembered like a change that moved
+/// nothing (`held_unmoved`), but a success — the Apply stops knocking on the manager until it
+/// announces something newer, or the tool moves.
+fn ahead_of_manager(found: &str, target: &str, cmd: &str) -> Unmoved {
+    Unmoved {
+        found: found.to_string(),
+        target: target.to_string(),
+        reason: format!(
+            "{found} is past {target}, the newest its manager offers; the manager will not \
+             replace a package the tool updated itself, and forcing it would go back"
+        ),
+        cmd: cmd.to_string(),
+        ahead: true,
+    }
 }
 
 /// The command a step carries for a version change, as the catalogue gave it: what tells one
@@ -3722,6 +3787,50 @@ async fn do_step(
 
     // The bare command is passed to run_in_pty, which wraps it in the native shell
     // (POSIX: user shell in -ilc via pty_shell; Windows: powershell + PATH refresh).
+    let mut run = run_in_pty(socket, state, i as u32, cmd).await;
+    // What a version change was run toward: an exact pin owns it, otherwise the announcement.
+    let target = step_target(step.pin.as_deref(), aim.announced);
+    // ⭐ winget refuses to upgrade a PORTABLE package whose files changed since it installed
+    // them (`PORTABLE_MODIFIED`) — what a tool that updates itself in winget's folder leaves
+    // behind. The version it reports decides: at or below the announcement, `--force` takes it
+    // there and realigns winget's record (MEASURED); past it, forcing would go back, so it is
+    // left as it is — a success, held (`ahead_of_manager`). A rebuilt command (a winget scope)
+    // is not a plain upgrade to add a flag to: its refusal stands.
+    let mut ahead: Option<String> = None;
+    if !run.cancelled
+        && rebuilt.is_none()
+        && portable_refused(
+            action,
+            step.route.as_deref(),
+            is_self_updating(step),
+            run.code,
+        )
+    {
+        let step_c = step.clone();
+        let read = tokio::task::spawn_blocking(move || detect_present_detailed(&step_c, os))
+            .await
+            .ok()
+            .and_then(|p| p.version)
+            .unwrap_or_default();
+        match portable_choice(&read, target.as_deref()) {
+            PortableChoice::Force => {
+                say(
+                    socket,
+                    i,
+                    &format!(
+                        "[upgrade] winget will not replace a portable package that changed since \
+                         it installed it; the tool reads {read}, not past {}, so the upgrade runs \
+                         again with --force.",
+                        target.as_deref().unwrap_or("")
+                    ),
+                )
+                .await;
+                run = run_in_pty(socket, state, i as u32, &format!("{cmd} --force")).await;
+            }
+            PortableChoice::Ahead => ahead = Some(read),
+            PortableChoice::Neither => {}
+        }
+    }
     let PtyRun {
         code,
         forbidden,
@@ -3730,8 +3839,8 @@ async fn do_step(
         saw_window,
         output,
         typed,
-    } = run_in_pty(socket, state, i as u32, cmd).await;
-    let ok = code == 0 || benign_code(action, code);
+    } = run;
+    let ok = code == 0 || benign_code(action, code) || ahead.is_some();
 
     // The queued notes, NOW: before the command they were wiped twice over — by the front's
     // reset on the running status, and by ConPTY clearing the screen as the command starts.
@@ -3866,7 +3975,6 @@ async fn do_step(
     // ⭐ The verdict on the version, read just above: an exit 0 that moved nothing is not a
     // success (`unmoved_reason`). Said on the row, journalled as a failure, and remembered so
     // the Apply does not run it again toward the same target.
-    let target = step_target(step.pin.as_deref(), aim.announced);
     let by = if own_update {
         format!("`{cmd}`")
     } else {
@@ -3920,6 +4028,7 @@ async fn do_step(
             target: t,
             reason: why.clone(),
             cmd: change_command(step, action),
+            ahead: false,
         };
         // The `ok` sent above was the exit code's; the verdict outranks it, as in the journal.
         let _ = socket
@@ -3927,6 +4036,20 @@ async fn do_step(
                 json!({ "type": "step", "i": i, "status": "fail" }).to_string(),
             ))
             .await;
+        emit_unmoved(socket, i, &u).await;
+        state.unmoved.lock().await.insert(step.id.clone(), u);
+    } else if let (Some(found), Some(t)) = (&ahead, &target) {
+        let u = ahead_of_manager(found, t, &change_command(step, action));
+        say(
+            socket,
+            i,
+            &format!(
+                "[upgrade] {} — left as it is. Until {found} changes or a version other than {t} \
+                 is announced, the Apply leaves this row.",
+                u.reason
+            ),
+        )
+        .await;
         emit_unmoved(socket, i, &u).await;
         state.unmoved.lock().await.insert(step.id.clone(), u);
     } else if ok {
@@ -4236,6 +4359,80 @@ mod tests {
     }
 
     #[test]
+    fn a_portable_package_the_tool_rewrote_is_forced_only_forward() {
+        use crate::decision::Action;
+        // MEASURED (Windows VM, winget v1.29, 2026-10-25): jq installed portable at 1.7.1, its
+        // exe replaced by 1.8.2. `winget upgrade` → "Unable to remove Portable package as it has
+        // been modified; to override this check use --force", exit -1978335145. With `--force`:
+        // exit 0, the record says 1.8.2, `jq` still answers. A tool that updates itself in
+        // winget's folder (Copilot CLI) meets this on every manager upgrade.
+        assert!(portable_refused(
+            Action::Upgrade,
+            Some("winget"),
+            false,
+            -1978335145
+        ));
+        assert!(
+            !portable_refused(Action::Upgrade, Some("winget"), true, -1978335145),
+            "self"
+        );
+        assert!(!portable_refused(
+            Action::Upgrade,
+            Some("brew"),
+            false,
+            -1978335145
+        ));
+        assert!(!portable_refused(
+            Action::Install,
+            Some("winget"),
+            false,
+            -1978335145
+        ));
+        assert!(!portable_refused(Action::Upgrade, Some("winget"), false, 1));
+        // Forced only where it takes the tool forward or to the same version: never backwards.
+        use PortableChoice::*;
+        assert_eq!(portable_choice("1.8.2", Some("1.8.2")), Force);
+        assert_eq!(portable_choice("1.8.0", Some("v1.8.2")), Force);
+        assert_eq!(portable_choice("1.0.103", Some("v1.0.102")), Ahead);
+        // No evidence, no force: the refusal stands as the failure it is.
+        assert_eq!(portable_choice("", Some("1.8.2")), Neither);
+        assert_eq!(portable_choice("?", Some("1.8.2")), Neither);
+        assert_eq!(portable_choice("1.8.2", None), Neither);
+    }
+
+    #[test]
+    fn a_tool_ahead_of_its_manager_is_held_but_never_called_a_failure() {
+        // Copilot CLI rewrote itself to 1.0.103 while winget-pkgs offers 1.0.102: forcing would
+        // take it BACK. It is left as it is, and remembered, so the next Apply does not knock on
+        // winget again for nothing — a hold that is a success.
+        let u = ahead_of_manager("1.0.103", "1.0.102", "winget upgrade --id GitHub.Copilot");
+        assert!(u.ahead);
+        assert!(
+            u.reason.contains("1.0.103") && u.reason.contains("1.0.102"),
+            "{}",
+            u.reason
+        );
+        let mut memory = std::collections::HashMap::new();
+        memory.insert("copilot-cli".to_string(), u);
+        let cmd = "winget upgrade --id GitHub.Copilot";
+        assert!(held_unmoved(
+            &memory,
+            "copilot-cli",
+            "1.0.103",
+            "1.0.102",
+            cmd
+        ));
+        // winget-pkgs catches up: a new target, one more try (it will be forced forward then).
+        assert!(!held_unmoved(
+            &memory,
+            "copilot-cli",
+            "1.0.103",
+            "1.0.104",
+            cmd
+        ));
+    }
+
+    #[test]
     fn the_copy_the_manager_upgraded_counts_even_when_another_one_runs() {
         use crate::decision::Action;
         // The review's finding 2: winget upgrades Node.js, but a mise `node` comes first on PATH,
@@ -4333,6 +4530,7 @@ mod tests {
                 target: "1.142.0".into(),
                 reason: "winget reported success…".into(),
                 cmd: "winget upgrade code".into(),
+                ahead: false,
             },
         );
         let held = |id: &str, found: &str, target: &str| {
@@ -4355,6 +4553,7 @@ mod tests {
                 target: String::new(),
                 reason: "brew reported success, but 2.50.1 is still installed".into(),
                 cmd: "brew upgrade git".into(),
+                ahead: false,
             },
         );
         assert!(held_unmoved(
@@ -6064,6 +6263,7 @@ mod tests {
                 target: "1.0.103".into(),
                 reason: "it moved nothing".into(),
                 cmd: "copilot update".into(),
+                ahead: false,
             },
         );
         let mut step = brew_step("copilot-cli", Some("self"));

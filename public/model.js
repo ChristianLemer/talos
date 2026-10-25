@@ -102,6 +102,9 @@ export function loadPlan(model, steps, profiles = []) {
       pin: s.pin || null,
       installedVersion: "",
       available: "", // the newer version the machine-wide scan found (unpinned only)
+      // What the manager itself records as installed, from the same scan — "" when it is not
+      // outdated. Behind what runs when the tool updated itself, or another copy comes first.
+      current: "",
       status: "waiting",
       log: "",
       // Bundle-driven: steps come from the flat catalog (bundle=""), so identity
@@ -382,10 +385,12 @@ function unmovedHold(model, i) {
 // A version change that exited ok and moved nothing (the server's `unmoved` message:
 // `found`, `target`, `reason`). Off an exact pin, the row is outdated again toward what it ran
 // for, shown greyed: the row says what it did not reach.
-export function setUnmoved(model, i, { found, target, reason } = {}) {
+export function setUnmoved(model, i, { found, target, reason, ahead } = {}) {
   const p = model.pkgs.get(i);
   if (!p) return;
-  p.unmoved = { found: found || "", target: target || "", reason: reason || "" };
+  // `ahead`: not a failure — the tool is past what its manager offers, and forcing the manager
+  // would take it back (the server's `ahead_of_manager`).
+  p.unmoved = { found: found || "", target: target || "", reason: reason || "", ahead: !!ahead };
   if (targetOf({ pin: p.pin, available: "" }) === "") {
     p.outdated = true;
     p.available = target || "";
@@ -448,13 +453,8 @@ function summary(model, i) {
       }
       return { from: inst, to: null, pinned: null, muted: false, held: false };
     }
-    if (chasing) {
-      // Same display as declaring nothing: an ordinary push when something is newer.
-      if (p.outdated && p.available) {
-        return { from: inst, to: p.available, pinned: null, muted: false, held: false };
-      }
-      return { from: inst, to: null, pinned: null, muted: false, held: false };
-    }
+    // Same display as declaring nothing.
+    if (chasing) return unpinned(p, inst);
     const cmp = compareToPin(inst, p.pin);
     if (cmp !== 0) {
       // Off the pin → migration TO the pin, in either direction: BELOW (cmp<0) is an
@@ -470,7 +470,17 @@ function summary(model, i) {
     }
     return { from: inst, to: null, pinned: "from", muted: false, held: false };
   }
-  // Unpinned: show the machine-wide available only when actually outdated.
+  return unpinned(p, inst);
+}
+// Unpinned (or `latest`): show the machine-wide available only when actually outdated — and
+// only when it is AHEAD of what runs. At or past it, the manager's own record is what lags
+// (the tool updated itself, or another copy comes first): the Apply's upgrade realigns that
+// record, so the row shows the one version there is and the record behind it, never a push
+// from a version to itself.
+function unpinned(p, inst) {
+  if (p.outdated && p.available && compareVersions(inst, p.available) >= 0) {
+    return { from: inst, to: null, pinned: null, muted: false, held: false, record: p.current || "" };
+  }
   if (p.outdated && p.available) {
     return { from: inst, to: p.available, pinned: null, muted: false, held: false };
   }
@@ -514,6 +524,16 @@ export function holdReason(model, i) {
   if (unmoved) return unmoved;
   if (actionOf(model, i) !== "downgrade") return null;
   return model.pkgs.get(i)?.canDowngrade ? null : "above its pin — this route cannot go down to it";
+}
+// The one word a held row shows beside its reason: `unchanged` (it ran and moved nothing),
+// `ahead` (the tool is past what its manager offers), `held` (a pin this route cannot reach),
+// or "" when nothing holds the row.
+export function holdWord(model, i) {
+  const why = holdReason(model, i);
+  if (!why) return "";
+  const u = model.pkgs.get(i)?.unmoved;
+  if (u && u.reason === why) return u.ahead ? "ahead" : "unchanged";
+  return "held";
 }
 // The rows the Apply leaves at a gap it cannot close, in index order. The empty state asks,
 // so it never says "already matches" while one is held.
@@ -661,11 +681,12 @@ export function setStatusData(model, i, status) {
 // Mark a present package stale, carrying the version the scan found available so
 // the display can show cur→avail without a second event. `available` optional
 // (kept for older callers / the boolean-only case).
-export function setOutdated(model, i, on, available = "") {
+export function setOutdated(model, i, on, available = "", current = "") {
   const p = model.pkgs.get(i);
   if (!p) return;
   p.outdated = !!on;
   p.available = on ? (available || "") : "";
+  p.current = on ? (current || "") : "";
 }
 export function appendLog(model, i, text) {
   const p = model.pkgs.get(i);
