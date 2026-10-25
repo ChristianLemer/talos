@@ -2251,8 +2251,9 @@ fn brew_plan(
     };
     match verdict {
         Some(BrewPin::Current) => {
+            // `install` for an upgrade too, as the stored `id@ver` form: it upgrades an outdated
+            // formula, and `brew upgrade` refuses one brew did not install itself.
             let cmd = match action {
-                Action::Upgrade => mgr.upgrade(id, false),
                 Action::Downgrade => format!("{} && {}", mgr.uninstall(id), mgr.install(id)),
                 _ => mgr.install(id),
             };
@@ -2291,6 +2292,37 @@ async fn ask_brew(
     })
     .await
     .ok()?
+}
+
+/// Rows held absent at plan time (brew cannot serve the pin) will not be there after the
+/// Apply, so what requires them cannot run either: it leaves the plan, saying what it waits
+/// for, and a chain goes with it. `nodes` was built before any hold was known. A removal stays:
+/// it never needs its requirement.
+fn drop_requiring_held(
+    plan: &mut Vec<(usize, crate::decision::Action)>,
+    nodes: &mut [crate::deps::DepNode],
+    idx: &std::collections::HashMap<String, usize>,
+    held_absent: &[usize],
+) -> Vec<(usize, String)> {
+    for &h in held_absent {
+        nodes[h].will_be_present = false;
+    }
+    let mut dropped = Vec::new();
+    loop {
+        let blocked = plan.iter().position(|&(i, a)| {
+            a != crate::decision::Action::Uninstall
+                && crate::deps::requires_blocked(&nodes[i], nodes, idx).is_some()
+        });
+        let Some(at) = blocked else { break };
+        let (i, _) = plan.remove(at);
+        let why = crate::deps::requires_blocked(&nodes[i], nodes, idx).unwrap_or_default();
+        if !nodes[i].present_now {
+            nodes[i].will_be_present = false;
+        }
+        dropped.push((i, why));
+    }
+    dropped.sort();
+    dropped
 }
 
 /// Tells the front that the Apply leaves row `i` and why. The front keeps it as the row's hold
@@ -2734,7 +2766,7 @@ async fn apply_diff(
     let presences = merge_presences(steps.len(), &probed, &state.last_seen.lock().await);
 
     // Future state per package: present now OR wanted-on, never if wanted-off.
-    let nodes: Vec<DepNode> = steps
+    let mut nodes: Vec<DepNode> = steps
         .iter()
         .enumerate()
         .map(|(i, s)| DepNode {
@@ -2780,6 +2812,7 @@ async fn apply_diff(
     let mut visual_plan: Vec<(usize, Action)> = Vec::new();
     // What brew offered belongs to this Apply: an answer left by a stopped one is not reused.
     state.brew_pins.lock().await.clear();
+    let mut held_absent: Vec<usize> = Vec::new();
     let sel = read_selection(&state.data_dir);
     for (i, step) in steps.iter().enumerate() {
         // Out of scope → never an action. TWO sources, deliberately, because they
@@ -2841,6 +2874,9 @@ async fn apply_diff(
                 if let Err(why) = brew_plan(a, step, verdict.as_ref()) {
                     println!("[apply] {} held: {why}", step.name);
                     send_held(socket, i, &why).await;
+                    if !nodes[i].present_now {
+                        held_absent.push(i);
+                    }
                     continue;
                 }
                 if let Some(v) = verdict {
@@ -2853,6 +2889,10 @@ async fn apply_diff(
             // trace here is the log line — the row is not acted on, and it says why.
             Err(why) => println!("[apply] {} held: {why}", step.name),
         }
+    }
+    for (i, why) in drop_requiring_held(&mut visual_plan, &mut nodes, &idx, &held_absent) {
+        println!("[apply] {} held: {why}", steps[i].name);
+        send_held(socket, i, &why).await;
     }
     // Order by dependencies (required before dependents; visual order = tie-break).
     let plan = topo_sort(&visual_plan, &nodes, &idx);
@@ -3929,7 +3969,11 @@ async fn do_step(
             match brew_plan(action, step, verdict.as_ref()) {
                 Ok(r) => r,
                 Err(why) => {
+                    // Reached from a retry or a repair only: the row's terminal says why, and
+                    // the notes queued for a run that will not happen go with it.
                     println!("[{}] {} held: {why}", action.as_str(), step.name);
+                    state.notes.lock().await.remove(&i);
+                    say(socket, i, &format!("[{}] held: {why}", action.as_str())).await;
                     send_held(socket, i, &why).await;
                     return StepOutcome::default();
                 }
@@ -5060,7 +5104,10 @@ mod tests {
         let cur = Some(&BrewPin::Current);
         let cmd = |a| super::brew_plan(a, &s, cur).unwrap().map(|(c, _)| c);
         assert_eq!(cmd(Install).as_deref(), Some("brew install --yes nushell"));
-        assert_eq!(cmd(Upgrade).as_deref(), Some("brew upgrade --yes nushell"));
+        // `install`, as the stored `id@ver` form was: `brew upgrade` exits 1 when the plain
+        // formula is not brew's own (a row `detect:` finds through `node@24`, MEASURED "not
+        // installed"), where `brew install` upgrades an outdated one.
+        assert_eq!(cmd(Upgrade).as_deref(), Some("brew install --yes nushell"));
         assert_eq!(
             cmd(Downgrade).as_deref(),
             Some("brew uninstall nushell && brew install --yes nushell")
@@ -5068,6 +5115,41 @@ mod tests {
         let (_, note) = super::brew_plan(Upgrade, &s, cur).unwrap().unwrap();
         assert!(note.contains("0.116.1"), "the row says why: {note}");
         assert_eq!(super::brew_plan(Uninstall, &s, cur), Ok(None));
+    }
+
+    #[test]
+    fn a_held_absent_row_takes_the_rows_that_require_it_out_of_the_plan() {
+        // Found at the review: nushell absent and held (brew cannot serve its pin) still read
+        // "will be present", so its plugin ran in the same Apply and landed orphaned.
+        use crate::decision::Action::*;
+        use crate::deps::{make_index, DepNode};
+        let node = |name: &str, requires: &[&str], present: bool| DepNode {
+            name: name.into(),
+            requires: requires.iter().map(|r| r.to_string()).collect(),
+            will_be_present: true,
+            present_now: present,
+            reachable: true,
+        };
+        let mut nodes = vec![
+            node("plugin", &["nushell"], false),
+            node("nushell", &[], false),
+            node("config", &["plugin"], false),
+            node("old-tool", &["nushell"], true),
+            node("jq", &[], false),
+        ];
+        let idx = make_index(&nodes);
+        let mut plan = vec![(0, Install), (2, Install), (3, Uninstall), (4, Install)];
+        let dropped = super::drop_requiring_held(&mut plan, &mut nodes, &idx, &[1]);
+        assert_eq!(
+            dropped,
+            vec![
+                (0, "requires nushell".to_string()),
+                (2, "requires plugin".to_string())
+            ],
+            "a chain goes with it, each row saying what it waits for"
+        );
+        // A removal never needs its requirement; an unrelated row stays.
+        assert_eq!(plan, vec![(3, Uninstall), (4, Install)]);
     }
 
     #[test]
@@ -6496,6 +6578,25 @@ mod tests {
     /// text-level guard that reads comments proves nothing about behaviour, and this repo
     /// has been burned by exactly that before (an exposure audit that counted comments as
     /// assertions). Read code, never prose.
+    #[test]
+    fn a_brew_pin_is_asked_at_plan_time_and_again_at_the_step() {
+        // The brew tests above are pure: removing the wiring would leave them green.
+        let plan = fn_body("apply_diff");
+        let at = |b: &str, s: &str| b.find(s).unwrap_or_else(|| panic!("no `{s}`"));
+        let asked = at(&plan, "ask_brew(a, step, os)");
+        assert!(asked < at(&plan, "brew_plan(a, step, verdict.as_ref())"));
+        let held = at(&plan, "send_held(socket, i, &why)");
+        assert!(asked < held && held < at(&plan, "visual_plan.push((i, a))"));
+        assert!(
+            at(&plan, "drop_requiring_held(") < at(&plan, "topo_sort("),
+            "what requires a held row leaves the plan before it is ordered"
+        );
+        let step = fn_body("do_step");
+        let rebuilt = at(&step, "brew_plan(action, step, verdict.as_ref())");
+        assert!(at(&step, "winget_in_place(") < rebuilt);
+        assert!(rebuilt < at(&step, "run_in_pty("));
+    }
+
     fn fn_body(name: &str) -> String {
         let src = include_str!("server.rs");
         let start = src

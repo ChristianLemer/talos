@@ -197,7 +197,7 @@ pub fn scope_from_arp(output: &str, name: &str, version: &str) -> Option<Install
 /// current version failed too (Nushell 0.116.1: no `nushell@0.116.1` exists anywhere).
 #[derive(Debug, Clone, PartialEq)]
 pub enum BrewPin {
-    /// brew's current version is the pin, at the pin's precision: plain `brew install/upgrade`.
+    /// brew's current version is the pin, at the pin's precision: plain `brew install`.
     Current,
     /// A versioned formula `id@pin` exists (`node@24`): the stored command stands.
     Versioned,
@@ -245,19 +245,44 @@ pub fn brew_pin_check(
     let (_, out) = probe(&brew_info_command(id));
     let stable = parse_brew_stable(&out)?;
     let version = stable.split('_').next().unwrap_or(&stable);
-    if crate::decision::compare_to_pin(version, pin) == 0 {
-        return Some(BrewPin::Current);
-    }
-    let (ok, out) = probe(&brew_info_command(&format!("{id}@{pin}")));
-    if ok && parse_brew_stable(&out).is_some() {
-        return Some(BrewPin::Versioned);
-    }
-    // MEASURED: a name brew does not know exits 1 with exactly this line. Anything else is a
-    // failure to answer, not an answer.
-    out.contains("No available formula")
-        .then(|| BrewPin::Unreachable {
+    let verdict = if crate::decision::compare_to_pin(version, pin) == 0 {
+        BrewPin::Current
+    } else {
+        let (ok, out) = probe(&brew_info_command(&format!("{id}@{pin}")));
+        if ok && parse_brew_stable(&out).is_some() {
+            return Some(BrewPin::Versioned);
+        }
+        // MEASURED: a name brew does not know exits 1 with exactly this line. Anything else is
+        // a failure to answer, not an answer.
+        if !out.contains("No available formula") {
+            return None;
+        }
+        BrewPin::Unreachable {
             offered: version.to_string(),
-        })
+        }
+    };
+    // Only a verdict that changes what runs pays this probe. A name that is a cask as well
+    // (`wireshark`) was judged on the formula: unknown, so the stored command stands.
+    let (ok, out) = probe(&brew_cask_info_command(id));
+    (!(ok && is_brew_cask(&out))).then_some(verdict)
+}
+
+/// The same name, as a cask. NOT measured: cask loading crashes on Linuxbrew, the only brew
+/// at hand; a failure of any kind reads as "no cask", which keeps the formula's verdict.
+pub fn brew_cask_info_command(name: &str) -> String {
+    format!("brew info --json=v2 --cask {name}")
+}
+
+/// Does `brew info --json=v2` name a cask? Read like `parse_brew_stable`, from the first `{`.
+fn is_brew_cask(output: &str) -> bool {
+    let Some(start) = output.find('{') else {
+        return false;
+    };
+    serde_json::Deserializer::from_str(&output[start..])
+        .into_iter::<serde_json::Value>()
+        .next()
+        .and_then(Result::ok)
+        .is_some_and(|j| j.get("casks").and_then(|c| c.get(0)).is_some())
 }
 
 pub struct SystemManager {
@@ -802,6 +827,12 @@ mod tests {
     ) -> impl Fn(&str) -> (bool, String) {
         move |cmd: &str| {
             let name = cmd.rsplit(' ').next().unwrap_or("");
+            if cmd.contains("--cask") {
+                return (
+                    false,
+                    format!("Error: Cask '{name}' is unavailable: No Cask with this name exists."),
+                );
+            }
             match known.iter().find(|(n, _)| *n == name) {
                 Some((n, v)) => (
                     true,
@@ -877,6 +908,33 @@ mod tests {
             }
         };
         assert_eq!(brew_pin_check("nushell", "0.113.1", &half), None);
+    }
+
+    #[test]
+    fn a_name_that_is_also_a_cask_is_unknown() {
+        // Found at the review: `wireshark`, `ollama`, `julia` are a formula AND a cask. A row
+        // nobody classified yet (absent) would be judged on the formula, and plain
+        // `brew install wireshark` installs the CLI, not the app. Ambiguous = unknown, so the
+        // stored command stands, as before this check.
+        let both = |cmd: &str| {
+            if cmd.contains("--cask") {
+                (
+                    true,
+                    r#"{"formulae":[],"casks":[{"token":"wireshark","version":"4.4.0"}]}"#
+                        .to_string(),
+                )
+            } else {
+                fake_brew(&[("wireshark", "4.4.0")])(cmd)
+            }
+        };
+        assert_eq!(brew_pin_check("wireshark", "4.4.0", &both), None);
+        assert_eq!(brew_pin_check("wireshark", "4.3.0", &both), None);
+        // A formula alone is unaffected (the fake answers every `--cask` with "no cask").
+        let alone = fake_brew(&[("nushell", "0.116.1")]);
+        assert_eq!(
+            brew_pin_check("nushell", "0.116.1", &alone),
+            Some(BrewPin::Current)
+        );
     }
 
     #[test]

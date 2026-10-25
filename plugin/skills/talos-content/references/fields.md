@@ -294,20 +294,21 @@ Apply first asks brew (`brew info`, for pinned brew rows only, never in the scan
 
 | brew offers | What the Apply does |
 |---|---|
-| the pin is its current version, at the pin's precision | plain `brew install` / `brew upgrade` |
+| the pin is its current version, at the pin's precision | plain `brew install` (it upgrades an outdated formula too) |
 | a versioned formula `id@version` (e.g. `node@24` for `version: "24"`) | installs that formula |
 | neither | **nothing** — the row is `held` and says *brew offers X, not Y* |
+| a name that is a cask as well (`wireshark`), or no readable answer | the command it always ran |
 
 brew's revision suffix is not a version: `0.116.1_1` (a rebuild) **is** the pin `0.116.1`.
 Only an exact pin asks brew: a `self` row is never upgraded by brew, whatever brew offers.
-A plain brew upgrade is judged like any other change: exit 0 with the pin still not
+A plain brew change is judged like any other: exit 0 with the pin still not
 installed reads *unchanged*, and the Apply leaves the row until the version or the pin moves.
-A held row is not a failure and is not retried on every Apply; the next Refresh asks brew
-again. While you sit *at* the pin, nothing runs and brew is not asked, so a newer brew
+A held row is not a failure, and the Apply button stops offering it; a Refresh lifts the hold
+and the next Apply asks brew again. While you sit *at* the pin, nothing runs and brew is not asked, so a newer brew
 release is harmless until you actually drift. An exact pin that brew cannot serve also
 holds an **absent** package — it is not installed at another version — so a package
 pinned for winget's cadence and `brew:` on the side stays off the Mac until brew reaches
-the pin. ⚠️ A versioned formula is another name to brew: with `node@24` installed,
+the pin — and what `requires:` it stays off with it, saying so. ⚠️ A versioned formula is another name to brew: with `node@24` installed,
 `brew list --versions node` answers *not installed*. Declare a `detect:` (`node --version`),
 which finds the binary whatever formula put it there.
 

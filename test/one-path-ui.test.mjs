@@ -120,6 +120,9 @@ test("a row the server holds at Apply keeps the hold and shows it, even with not
   assert.match(body, /M\.setHold\(model, msg\.i, msg\.reason\)/);
   assert.match(body, /paintVersion\(msg\.i\)/);
   assert.match(body, /refreshLiveness\(\)/);
+  // A retry from the firewall banner can be held too (it asks brew again): the hold is the
+  // retry's verdict, so it settles the banner, or its controls stay inert for good.
+  assert.match(body, /clearForbidden\(msg\.i\)/);
   const pv = appjs.slice(appjs.indexOf("function paintVersion("), appjs.indexOf("\n}\n", appjs.indexOf("function paintVersion(")));
   assert.match(pv, /if \(!v\.from\) \{[^}]*why/, "an absent held row shows why");
 });

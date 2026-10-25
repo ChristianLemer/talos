@@ -2406,6 +2406,7 @@ ws.onmessage = (ev) => {
       break;
     }
     case "held": // the Apply left this row: brew cannot serve its pin (server::send_held)
+      clearForbidden(msg.i); // a held retry is that retry's verdict
       M.setHold(model, msg.i, msg.reason);
       paintVersion(msg.i);
       refreshLiveness();
