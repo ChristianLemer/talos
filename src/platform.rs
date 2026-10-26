@@ -418,8 +418,8 @@ pub fn exe_sibling() -> PathBuf {
     )
 }
 
-/// Where `catalog/` and `bundles/` are read from — ONE rule, two callers: the server at
-/// boot, and `--check` from the command line. Three steps, in order, per folder:
+/// Where LOOSE `catalog/` and `bundles/` are read from, for a kit without a content archive
+/// (`content::resolve` decides first; an archive wins). Three steps, in order, per folder:
 ///
 ///   1. **Beside the exe** (`sibling`, outside the `.app` on macOS) — the flat kit, and
 ///      what every kit deployed before the OS folders looks like. Unchanged, and first,
@@ -470,9 +470,11 @@ pub fn content_dirs_in(sibling: &std::path::Path) -> (PathBuf, PathBuf) {
     (pick("catalog"), pick("bundles"))
 }
 
-/// `content_dirs_in` for the running exe.
+/// The running kit's two content folders — through its archive when it has one
+/// (`content::resolve`), else `content_dirs_in` beside the exe.
 pub fn content_dirs() -> (PathBuf, PathBuf) {
-    content_dirs_in(&exe_sibling())
+    let c = crate::content::resolve();
+    (c.catalog, c.bundles)
 }
 
 // Windows PATH refresh: an install writes the registry but does NOT propagate the PATH

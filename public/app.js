@@ -2256,6 +2256,13 @@ ws.onmessage = (ev) => {
       if (msg.build) showBuild(msg.build, msg.distribution); // stamp the UI: content name + exact source snapshot
       appmgmtStatus = msg.appmgmt || "na";
       renderAppmgmt();
+      // The kit's content archive unusable or gone: the engine's sentence, as text. Cleared by
+      // a plan without one — the archive synced and a Refresh re-resolved it.
+      const contentWarn = document.getElementById("content-warn");
+      if (contentWarn) {
+        contentWarn.textContent = msg.contentProblem || "";
+        contentWarn.classList.toggle("show", !!msg.contentProblem);
+      }
       // The Doctor tab exists only when the catalogue declares a rescue candidate. The
       // engine decides (`doctor`, declared not installed); the CSS hides the tab on the
       // body class. A reload can take the Doctor away from under an open tab, so fall

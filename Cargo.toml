@@ -28,6 +28,11 @@ sysinfo = { version = "0.39.6", default-features = false, features = ["system", 
 # through tauri; 0.10 is the line the lock carries.
 sha2 = "0.10"
 vt100 = "0.16"
+# The kit's content archive (content.rs): READ only, stored or deflated entries — no
+# compressor, no other codec. `flate2` is named so its pure-Rust backend is on: through zip
+# alone it comes with no backend at all, and miniz_oxide is already in the tree.
+zip = { version = "9.1.1", default-features = false, features = ["deflate-flate2"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [[bin]]
 name = "pty-smoke"

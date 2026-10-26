@@ -822,19 +822,30 @@ pub struct Plan {
 /// profiles.rs as the top cards). Nothing is wanted by default; a package becomes
 /// "in" only when an active bundle pulls it or the user toggles it. `{dir}`
 /// resolves to the catalog dir (where sidecar files like starship.nu live).
-/// `_bundles_dir` is unused here (bundles feed the cards, not the steps).
-pub fn load_from_catalog(
-    catalog_dir: &str,
-    _bundles_dir: &str,
-    os: Os,
-    log: &dyn Fn(&str),
-) -> Plan {
+///
+/// `{kit}` resolves to `kit_dir`, the kit's root (content.rs): where files that stay loose
+/// on the share live, beside the content. With a content archive the catalog dir is a LOCAL
+/// extraction, so `{dir}/..` no longer reaches the share — `{kit}` does. Empty = the catalog
+/// dir's parent, which is exactly what `{kit}` is in every kit without an archive.
+pub fn load_from_catalog(catalog_dir: &str, kit_dir: &str, os: Os, log: &dyn Fn(&str)) -> Plan {
     let catalog = crate::catalog::load_catalog(catalog_dir);
     log(&format!(
         "catalog: {} packages from {catalog_dir}",
         catalog.len()
     ));
-    let sub = |s: Option<String>| -> Option<String> { s.map(|v| v.replace("{dir}", catalog_dir)) };
+    let parent;
+    let kit_dir = if kit_dir.is_empty() {
+        parent = std::path::Path::new(catalog_dir)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        parent.as_str()
+    } else {
+        kit_dir
+    };
+    let sub = |s: Option<String>| -> Option<String> {
+        s.map(|v| v.replace("{dir}", catalog_dir).replace("{kit}", kit_dir))
+    };
     let mut steps: Vec<Step> = Vec::new();
     for cp in catalog.values() {
         let p = &cp.pkg;
@@ -1367,10 +1378,6 @@ mod tests {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/content/catalog"
     );
-    const FIXTURE_BUNDLES: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/content/bundles"
-    );
 
     #[test]
     fn an_extension_route_carries_no_pin_because_it_cannot_honour_one() {
@@ -1382,8 +1389,8 @@ mod tests {
         // Measured for the vscode route: `code --install-extension id@<version>` exits 1 once
         // the gallery drops that version, so the pin is not merely unsupported — it is
         // unmeanable.
-        for (tree, catalog, bundles) in content_trees() {
-            let plan = load_from_catalog(catalog, bundles, Os::Darwin, &|_| {});
+        for (tree, catalog, _) in content_trees() {
+            let plan = load_from_catalog(catalog, "", Os::Darwin, &|_| {});
             for s in &plan.steps {
                 if s.is_extension {
                     assert!(
@@ -1444,7 +1451,7 @@ mod tests {
 
     #[test]
     fn the_fixture_vscode_extension_detects_by_its_id_without_declaring_one() {
-        let plan = load_from_catalog(FIXTURE_CATALOG, FIXTURE_BUNDLES, Os::Darwin, &|_| {});
+        let plan = load_from_catalog(FIXTURE_CATALOG, "", Os::Darwin, &|_| {});
         let s = plan
             .steps
             .iter()
@@ -1946,6 +1953,41 @@ mod tests {
         assert!(c.route.is_none() && c.install.is_none());
     }
 
+    /// `{kit}` is the kit root, given — with a content archive the catalog is a local
+    /// extraction, and `{dir}/..` would name the extraction cache, not the share. Without a
+    /// kit given it is the catalog's parent, which is what `{dir}/..` always reached.
+    #[test]
+    fn kit_names_the_kit_root_and_defaults_to_the_catalog_parent() {
+        use std::fs;
+        let root = std::env::temp_dir().join(format!("talos-test-kit-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("catalog")).unwrap();
+        fs::write(
+            root.join("catalog/atom.yaml"),
+            "name: Atom\nrun: nu '{dir}/atom.nu' apply '{kit}'\ncheck: nu '{dir}/atom.nu' check '{kit}'\n",
+        )
+        .unwrap();
+        let catalog = root.join("catalog");
+        let run = |kit: &str| {
+            load_from_catalog(catalog.to_str().unwrap(), kit, Os::Darwin, &|_| {}).steps[0]
+                .install
+                .clone()
+                .unwrap()
+        };
+        let given = run("/share/Kit");
+        assert!(given.ends_with("apply '/share/Kit'"), "{given}");
+        assert!(
+            given.contains(&format!("'{}/atom.nu'", catalog.display())),
+            "{given}"
+        );
+        let default = run("");
+        assert!(
+            default.ends_with(&format!("apply '{}'", root.display())),
+            "{default}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn emits_every_catalog_package_with_empty_bundle() {
         use std::fs;
@@ -1963,10 +2005,10 @@ mod tests {
         )
         .unwrap();
         // Bundle-driven: EVERY catalog package emits once, bundle="" (bundles no
-        // longer own packages). bundles_dir is unused now.
+        // longer own packages).
         let plan = load_from_catalog(
             root.join("catalog").to_str().unwrap(),
-            "unused",
+            "",
             Os::Darwin,
             &|_| {},
         );
@@ -2216,7 +2258,7 @@ mod tests {
         }
     }
 
-    /// A `{dir}` path is SINGLE-quoted, never double-quoted.
+    /// A `{dir}` (or `{kit}`) path is SINGLE-quoted, never double-quoted.
     ///
     /// ⚠️ THE DEFECT THIS CLOSES, and it was invisible from macOS. On Windows `run:` and
     /// `check:` go through PowerShell (`platform::shell_probe`), which INTERPOLATES inside
@@ -2258,6 +2300,11 @@ mod tests {
                     ("check", cp.pkg.check.as_deref()),
                 ] {
                     let Some(cmd) = cmd else { continue };
+                    // `{kit}` is a path into the same share, under the same rule.
+                    assert!(
+                        !cmd.contains("\"{kit}"),
+                        "{tree} {id} {what}: `{{kit}}` is DOUBLE-quoted — use single quotes: {cmd}"
+                    );
                     if !cmd.contains("{dir}") {
                         continue;
                     }
@@ -2399,7 +2446,7 @@ slow: true
         .unwrap();
         let plan = load_from_catalog(
             root.join("catalog").to_str().unwrap(),
-            "unused",
+            "",
             Os::Darwin,
             &|_| {},
         );

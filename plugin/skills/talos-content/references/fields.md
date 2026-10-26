@@ -494,6 +494,11 @@ converges a file instead of installing software. The pattern (see `terminal/`):
   it ships beside the manifest — quotes never have to survive the shell command line.
   ⚠️ **Quote it SINGLY.** PowerShell interpolates inside double quotes, so a `$` anywhere
   in the expanded path would vanish before the script is called.
+- `{kit}` expands to the **kit root** (absolute, quote it singly too): the folder holding
+  `.talos/`, where files that stay loose on the share live beside the content — a large
+  payload an atom deposits. Use it, never `{dir}/..`: when the kit carries its content as
+  `.talos/content.zip`, `{dir}` is a local extraction and its parent is a cache, not the
+  share. In a kit without an archive `{kit}` IS `{dir}/..`, so switching costs nothing.
 - `check:` is the apply *replayed in memory without saving*, so detection can't drift
   from application. "Would applying change something?" → non-zero → the row reads absent
   → Apply reconverges. No sentinel, no state DB.

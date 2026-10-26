@@ -25,7 +25,7 @@
 #     Windows/   Talos.exe
 #     Linux/     Talos
 #     catalog/   bundles/   distribution.yaml (when the content names itself)
-#     .talos/    VERSION · KIT.txt · MANIFEST.sha256
+#     .talos/    content.zip · VERSION · KIT.txt · MANIFEST.sha256
 #
 # One folder per OS, so every launcher keeps its own standard name — `Talos` next to
 # `Talos.exe` in one folder would show as two identical rows in an Explorer that hides
@@ -37,6 +37,15 @@
 # made it. What each OS ships is only HOW the `.app` is unpacked (`ditto` on macOS, plain
 # `unzip` elsewhere — the bundle holds four files and no symlink, so both are faithful)
 # and WHICH launcher runs the check below.
+#
+# ⭐ THE CONTENT TRAVELS TWICE, AS ONE FILE AND LOOSE. `.talos/content.zip` holds
+# `catalog/`, `bundles/` and `distribution.yaml`, and an engine that finds it reads ONLY it,
+# from a local extraction: a synced replica has the old archive or the new one, never half
+# of the content, which loose files on a share cannot promise. The loose copy beside it is
+# for engines older than the archive, which read nothing else; it can go once no machine
+# runs one. Without `--content` the archive IS the release's `talos-content.zip`, copied;
+# with it, it is built here from the folders just placed (`zip`, else `ditto` on macOS,
+# else `python3`), so the two copies are the same content.
 #
 # ⭐ THE KIT IS CHECKED BY THE ENGINE IT SHIPS, in the position it will be read from.
 # After composing, the script runs `--check` with NO arguments on the launcher it has just
@@ -157,7 +166,7 @@ mkdir -p "$DEST"
 DEST="$(cd "$DEST" && pwd)"   # absolute: the check below runs from another directory
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-if [ "$(cat "$DEST/.talos/VERSION" 2>/dev/null || true)" = "$TAG" ] && [ -f "$DEST/.talos/MANIFEST.sha256" ] && [ -z "$CONTENT" ] && [ -d "$DEST/catalog" ]; then
+if [ "$(cat "$DEST/.talos/VERSION" 2>/dev/null || true)" = "$TAG" ] && [ -f "$DEST/.talos/MANIFEST.sha256" ] && [ -f "$DEST/.talos/content.zip" ] && [ -z "$CONTENT" ] && [ -d "$DEST/catalog" ]; then
     echo "kit already at $TAG (run with --verify to check the replica)"
     exit 0
 fi
@@ -223,9 +232,31 @@ else
     echo "content: the socle of $TAG"
 fi
 
+# The same content as one file, where the engine looks first (see THE CONTENT TRAVELS
+# TWICE). Built from a staging copy so the archive's root holds exactly the three entries.
+rm -f "$DEST/.talos/content.zip"
+if [ -n "$CONTENT" ]; then
+    mkdir -p "$TMP/content"
+    cp -R "$DEST/catalog" "$DEST/bundles" "$TMP/content/"
+    [ -f "$DEST/distribution.yaml" ] && cp "$DEST/distribution.yaml" "$TMP/content/"
+    if command -v zip >/dev/null; then
+        ( cd "$TMP/content" && zip -q -r -X "$TMP/content.zip" . )
+    elif command -v ditto >/dev/null; then
+        ditto -c -k --norsrc --noextattr "$TMP/content" "$TMP/content.zip"
+    elif command -v python3 >/dev/null; then
+        ( cd "$TMP/content" && python3 -m zipfile -c "$TMP/content.zip" $(ls -A) )
+    else
+        echo "zip, ditto or python3 is required to pack the content" >&2; exit 1
+    fi
+    mv "$TMP/content.zip" "$DEST/.talos/content.zip"
+else
+    mv "$TMP/$CONTENT_ASSET" "$DEST/.talos/content.zip"
+fi
+
 # Checked by the engine it ships, from where it will be read. NO arguments on purpose:
-# the engine resolves the content itself — beside the exe, then one level up, which is
-# what this layout is — so a wrong layout fails HERE and not on a colleague's machine.
+# the engine resolves the content itself — the archive in `.talos/`, beside the exe or one
+# level up, which is what this layout is — so a wrong layout, or an archive the engine
+# cannot open, fails HERE and not on a colleague's machine.
 case "$HOST_OS" in
     MacOS) CHECKER="$DEST/MacOS/Talos.app/Contents/MacOS/Talos" ;;
     Linux) CHECKER="$DEST/Linux/Talos" ;;
@@ -235,12 +266,18 @@ esac
 # check from the repo and that fallback quietly answers with the REPO's catalog: the kit
 # is never read, and a broken layout reports "0 errors". Measured, on the first run of
 # this script. An empty cwd leaves the engine only the kit to find.
-if ! ( cd "$TMP" && "$CHECKER" --check ); then
-    # Two very different causes, and the fix is not the same. Ask the same engine the
-    # same question with the paths SPELLED OUT: if it passes that way, the content is
-    # sound and what it cannot do is FIND it — an engine older than the OS folders, which
-    # only ever looked beside itself. Say which, rather than blame the content.
-    if ( cd "$TMP" && "$CHECKER" --check "$DEST/catalog" "$DEST/bundles" ) >/dev/null 2>&1; then
+if ( cd "$TMP" && "$CHECKER" --check ) > "$TMP/check.txt" 2>&1; then
+    cat "$TMP/check.txt"
+else
+    cat "$TMP/check.txt"
+    # Three causes, and the fix is not the same. The engine names an archive it cannot use
+    # in its own words (`error: This kit's content archive …`). Otherwise ask the same
+    # engine the same question with the paths SPELLED OUT: if it passes that way, the
+    # content is sound and what it cannot do is FIND it — an engine older than the OS
+    # folders, which only ever looked beside itself. Say which, rather than blame the content.
+    if grep -q "content archive" "$TMP/check.txt"; then
+        echo "the engine cannot use the kit's .talos/content.zip (the line above) — kit NOT published" >&2
+    elif ( cd "$TMP" && "$CHECKER" --check "$DEST/catalog" "$DEST/bundles" ) >/dev/null 2>&1; then
         echo "$TAG ships an engine that predates the kit's OS folders: it reads the content" >&2
         echo "only from beside itself, so it cannot find catalog/ one level up. Compose with a" >&2
         echo "newer --version, or pin one in .talos-version. Kit NOT published." >&2
@@ -252,11 +289,12 @@ if ! ( cd "$TMP" && "$CHECKER" --check ); then
 fi
 
 # What is on disk now, file by file, in the format `-c` reads back — relative to the kit,
-# so the manifest travels with the replica. The launchers and the content — the two folders
-# and the one file that names them; never `.talos/` itself, which is this bookkeeping.
+# so the manifest travels with the replica. The launchers and the content — the two folders,
+# the one file that names them, and the archive that carries them; never the rest of
+# `.talos/`, which is this bookkeeping.
 ( cd "$DEST" && { for d in MacOS Windows Linux catalog bundles distribution.yaml; do
         [ -e "$d" ] && find "$d" -type f
-    done; } | LC_ALL=C sort | while IFS= read -r f; do $SHA "$f"; done ) > "$TMP/MANIFEST.sha256"
+    done; echo .talos/content.zip; } | LC_ALL=C sort | while IFS= read -r f; do $SHA "$f"; done ) > "$TMP/MANIFEST.sha256"
 mv "$TMP/MANIFEST.sha256" "$DEST/.talos/MANIFEST.sha256"
 
 printf '%s\n' "$TAG" > "$DEST/.talos/VERSION"
@@ -273,5 +311,5 @@ printf '%s\n' "$TAG" > "$DEST/.talos/VERSION"
     echo
     echo "files as placed: MANIFEST.sha256 — check any replica with: get-talos.sh <kit> --verify"
 } > "$DEST/.talos/KIT.txt"
-echo "kit at $TAG: MacOS/ + Windows/ + Linux/ + content, checked in place, manifest written"
+echo "kit at $TAG: MacOS/ + Windows/ + Linux/ + content (archive + loose), checked in place, manifest written"
 echo "kit ready in $DEST"

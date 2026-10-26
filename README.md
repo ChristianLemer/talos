@@ -150,8 +150,13 @@ Talos/
   Windows/   Talos.exe
   Linux/     Talos
   catalog/   bundles/   distribution.yaml (when the content names itself)
-  .talos/    VERSION · KIT.txt · MANIFEST.sha256
+  .talos/    content.zip · VERSION · KIT.txt · MANIFEST.sha256
 ```
+
+`.talos/content.zip` carries the same content as one file. A synced share is often
+partial; a single file arrives whole or not at all, so the engine reads the archive (once
+per version, from a local extraction) and says so when it is unusable or missing, rather
+than opening half a catalogue. The loose folders serve engines older than the archive.
 
 Without `--content` the kit gets the **socle** of the same release. With it, your
 `.talos-version` picks the release and your content replaces the socle. Either way

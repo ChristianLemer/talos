@@ -120,6 +120,14 @@ pub struct Kit {
     /// `local` | `network` | `onedrive` | `synced` — a synced or network kit is read
     /// through a slower path than a local disk.
     pub location: String,
+    /// Which content this launch read (`content::Content::summary`): the kit's archive and
+    /// its hash, loose folders, or an earlier copy and why. Set by the server, which knows;
+    /// empty in a profile written before the field existed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub content: String,
+    /// The content is NOT the kit's current archive: an earlier copy, or none.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub content_stale: bool,
 }
 
 /// A package manager or tool the plan relies on, and where the probes' shell finds it.
@@ -543,6 +551,7 @@ pub fn collect(os: Os, kit_dir: &Path, routes: &[&str]) -> Profile {
         kit: Kit {
             path: tilde(&kit_path, &home),
             location: kit_location(&kit_path, on_local_disk).into(),
+            ..Kit::default()
         },
         shell_ms,
         tools: report.tools,

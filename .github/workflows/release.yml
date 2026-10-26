@@ -119,7 +119,9 @@ jobs:
           cp target/release/Talos Talos-linux-x86_64
 
       # The socle, read the strict way by the binary just built, then zipped as it sits
-      # at the root — catalog/ and bundles/ side by side. The field reference itself lives in
+      # at the root — catalog/ and bundles/ side by side. This zip is ALSO what a kit
+      # carries as `.talos/content.zip` (get-talos copies it there as is), so its root must
+      # keep holding catalog/, bundles/ and distribution.yaml (content.rs). The field reference itself lives in
       # the `talos` plugin now; `bundles/README.md` ships as the pointer to it.
       - name: Check and zip the socle (Linux)
         if: runner.os == 'Linux'

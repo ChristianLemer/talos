@@ -12,6 +12,7 @@ mod bundles;
 mod catalog;
 mod check;
 mod consent;
+mod content;
 mod decision;
 mod deps;
 mod detect;
@@ -49,9 +50,20 @@ fn main() {
     }
     let args = launch.rest.clone();
     if args.first().map(String::as_str) == Some("--check") {
+        // With no folders named, the kit's own content — through its archive when it has one
+        // (content.rs). An archive that is unusable or missing FAILS the check rather than
+        // checking the previous extraction: after composing a kit, this is what proves the
+        // archive, and passing on stale content would prove nothing.
         let (catalog_dir, bundles_dir) = match (args.get(1), args.get(2)) {
             (Some(c), Some(b)) => (std::path::PathBuf::from(c), std::path::PathBuf::from(b)),
-            _ => platform::content_dirs(),
+            _ => {
+                let content = content::resolve();
+                if let Some(problem) = content.problem() {
+                    println!("error: {problem}");
+                    std::process::exit(1);
+                }
+                (content.catalog, content.bundles)
+            }
         };
         let report = check::run(&catalog_dir, &bundles_dir);
         print!("{}", report.render());

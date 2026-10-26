@@ -12,10 +12,11 @@ description: Compose and distribute a Talos kit — the released launchers plus 
 ├── MacOS/Talos.app     ← macOS launcher (a folder of files)
 ├── Windows/Talos.exe   ← Windows launcher
 ├── Linux/Talos         ← Linux launcher
-├── catalog/            ← YOUR content
-├── bundles/            ← YOUR content
+├── catalog/            ← YOUR content, loose — for engines older than the archive
+├── bundles/            ← YOUR content, loose
 ├── distribution.yaml   ← YOUR content's name (and edition), when it has one — leads the window title
 └── .talos/
+    ├── content.zip     ← the same content as ONE file: what an engine reads when it finds it
     ├── VERSION         ← the tag this kit was composed from
     ├── KIT.txt         ← provenance: tag, date, per-asset size and published digest
     └── MANIFEST.sha256 ← every file as it sits here, in `shasum -c` format
@@ -31,6 +32,26 @@ the scripts and by nobody else, so they sit out of the way under `.talos/`.
 the current directory (a dev fallback). One level, never a search upward. That is why a
 kit composed flat — every kit made before the OS folders — still resolves unchanged and
 needs no re-composing.
+
+⭐ **The content travels as one file, `.talos/content.zip`.** A synced share is often
+partial — files deleted in series, conflict copies `name (1).ext` — and loose YAML on it
+used to open as a partial catalogue that looked whole. A sync client moves a single file
+whole, so an engine that finds the archive reads ONLY it: extracted once per version into
+the machine's local data folder (`<data dir>/content/<sha256[..12]>/`, finished by a
+`.complete` marker and a rename, never rewritten), the share's file read in one go and
+released. An archive that cannot be read, or that vanished from a kit that had one, is
+SAID — a banner above the list, the `Content` row of the Machine tab — and the last
+extraction this machine read from that kit is shown instead, never the loose folders. The
+loose copy stays beside it for engines older than the archive; drop it once none runs.
+
+- `{dir}` is the extraction — the catalog folder actually read. Files that stay loose on the
+  share beside the content (a large payload) are reached with **`{kit}`**, the kit root,
+  never `{dir}/..`, which now names the local cache.
+- `get-talos` writes `.talos/content.zip` (the release's `talos-content.zip` as is, or yours
+  packed). An integrator composing with their own tooling writes the same file: a zip
+  whose root holds `catalog/`, `bundles/` and, optionally, `distribution.yaml`.
+- A stray `talos-content.zip` at the kit root is NOT the kit's archive — only `.talos/`
+  counts, so a release download left on a share can never swap a kit's content.
 
 ⚠️ **A release is TWO halves.** Ship a launcher without `catalog/` + `bundles/` and Talos
 opens **inert** — it does not crash, it simply has nothing to propose. Any handoff says
@@ -199,11 +220,11 @@ Run `--verify` on the machine that is behaving strangely, not on the one that co
 ## Living on a shared drive
 
 The kit is built to sit on a shared OneDrive and be launched by many machines from the
-same copy. The content is **never copied per machine**: `catalog/`, `bundles/`,
-`behaviour/` and `logs/` are read and written on the share.
+same copy. What people WRITE — `behaviour/` and `logs/` — is read and written on the
+share. The content is read from the share's ONE archive, extracted per machine (see above).
 
-- **It extracts nothing beside itself** — that folder is shared. The native bits it needs
-  go to each machine's own `%LOCALAPPDATA%\Talos` on first run, idempotently.
+- **It extracts nothing beside itself** — that folder is shared. The native bits it needs,
+  and the content's extraction, go to each machine's own `%LOCALAPPDATA%\Talos`.
 - ⚠️ **A second launch does not replace a Talos already open.** The first one keeps its
   port and serves the new window, so "I relaunched and still see the old version" means
   Talos was never closed on that machine. Close it, then open it again.

@@ -43,6 +43,9 @@ export function machineRows(m) {
   const disk = (d) => `${formatMb(d.free_mb)} free of ${formatMb(d.total_mb)} on ${d.mount}`;
   if (m.system_disk) row("System disk", disk(m.system_disk));
   if (m.kit) row("Kit", `${m.kit.path} (${m.kit.location})`, m.kit.location !== "local");
+  // Which content this launch read: the kit's archive, loose folders, or an earlier copy
+  // because the archive was unusable or gone (content.rs) — the one to flag.
+  if (m.kit?.content) row("Content", m.kit.content, !!m.kit.content_stale);
   row("One shell", formatMs(m.shell_ms), m.shell_ms >= SLOW_SHELL_MS);
   for (const t of m.tools || []) row(t.name, t.path || "not found", !t.path);
   if (m.winget) {

@@ -87,10 +87,10 @@ publish.
 Run all four before claiming anything works. These are exactly what CI enforces:
 
 ```bash
-cargo test --all-targets                      # 543 + 8 tests (2026-10-26)
+cargo test --all-targets                      # 562 + 8 tests (2026-10-26)
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings     # any lint fails the build
-node --test "test/*.test.mjs"                 # 213 tests
+node --test "test/*.test.mjs"                 # 214 tests
 ```
 
 A fifth, for content rather than code: `cargo run -- --check catalog bundles` reads
@@ -127,8 +127,15 @@ compose the SAME one:
 
 ```
 Talos/  MacOS/Talos.app · Windows/Talos.exe · Linux/Talos · catalog/ · bundles/
-        .talos/  VERSION · KIT.txt · MANIFEST.sha256
+        .talos/  content.zip · VERSION · KIT.txt · MANIFEST.sha256
 ```
+
+`.talos/content.zip` is the content again, as ONE file (`src/content.rs`): an engine that
+finds it — beside the exe or one level up, like `catalog/` — reads only it, from a local
+extraction named after its sha256 (`<data dir>/content/<hash12>/`), so a half-synced share
+can never open as a partial catalogue. Unusable or vanished, it is said (a banner, the
+Machine tab) and the last extraction of that kit is read. The loose folders are for engines
+older than the archive. `{kit}` names the kit root for files that stay loose on the share.
 
 One folder per OS so each launcher keeps its standard name; `platform::content_dirs_in`
 therefore looks **beside the exe, then exactly one level up**, then the cwd (the dev

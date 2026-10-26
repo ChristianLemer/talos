@@ -781,6 +781,7 @@
                      font-size:13px; line-height:1.5;
                      background:#2a2418; border:1px solid #5c4a24; color:#e3c88a; }
       .warn-banner.show { display:block; }
+      #content-warn { margin:0 12px 8px; }
       .warn-banner b { color:#f0dcae; }
       .warn-banner code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px;
                           color:#f0dcae; word-break:break-all; }
@@ -1237,6 +1238,11 @@
         <span>Some app updates need macOS <b>App Management</b> permission.</span>
         <button id="appmgmt-banner-open" class="linklike">Open Settings</button>
       </div>
+      <!-- Content-archive banner: the kit's `.talos/content.zip` is unusable or gone, so the
+           catalogue below is an earlier copy, or empty. Shown only when the plan carries a
+           `contentProblem`; every Refresh re-resolves it. Above everything that reads the
+           catalogue, because it says how far to trust all of it. -->
+      <div id="content-warn" class="warn-banner"></div>
       <!-- Waiting-window banner: an installer opened a window behind the panel. -->
       <div id="waitbar" hidden></div>
       <!-- Profile bar: one-click additive selections. Populated by app.js from the

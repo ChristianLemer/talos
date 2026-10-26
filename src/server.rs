@@ -305,11 +305,11 @@ struct AppState {
     /// connection are handled one at a time, so `rescan` cannot interleave with `apply`.
     /// The front also disables Refresh while `applyRunning || scanning`.
     plan: tokio::sync::RwLock<Plan>,
-    /// Where the plan came from, kept so a Refresh can read the same two folders again.
-    /// Resolved once at startup (beside the exe, or the cwd in dev) — the LOCATION is
-    /// not re-derived, only its contents are re-read.
-    catalog_dir: PathBuf,
-    bundles_dir: PathBuf,
+    /// Where the plan came from (content.rs): the two folders, the kit root, and whether the
+    /// kit's archive is the one being read. Re-resolved on Refresh, because with an archive
+    /// the LOCATION changes when a new version lands — a new extraction folder — not only
+    /// the contents. Without an archive it resolves to the same loose folders every time.
+    content: std::sync::Mutex<crate::content::Content>,
     profiles: Profiles,
     os: Os,
     /// macOS App Management permission status, probed ONCE at startup. Not
@@ -565,18 +565,16 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
         "--- appmgmt: {}",
         crate::platform::app_management_status(os).as_str()
     );
-    // Where the content is read from: next to the exe, else the cwd (DEV). One rule for
-    // the server and for `--check` — see platform::content_dirs.
+    // Where the content is read from: the kit's archive, extracted locally, when it has one;
+    // else loose folders next to the exe, else the cwd (DEV). One rule for the server, the
+    // title and `--check` — see content::resolve.
     let sibling_dir = crate::platform::exe_sibling();
-    let (catalog_dir, bundles_dir) = crate::platform::content_dirs_in(&sibling_dir);
-    println!("[bundles] dir: {}", bundles_dir.display());
-    println!("[catalog] dir: {}", catalog_dir.display());
-    let plan = load_from_catalog(
-        catalog_dir.to_str().unwrap_or("catalog"),
-        bundles_dir.to_str().unwrap_or("bundles"),
-        os,
-        &|m| println!("[bundles] {m}"),
-    );
+    let content = crate::content::resolve();
+    println!("{}", content.log_line());
+    println!("[bundles] dir: {}", content.bundles.display());
+    println!("[catalog] dir: {}", content.catalog.display());
+    let plan = plan_from(&content, os);
+    let bundles_dir = content.bundles.clone();
     println!("[plan] {} steps", plan.steps.len());
     // The fleet's behaviour facts, read ONCE here beside the catalogue — and never again,
     // so a behaviour file landing mid-session is not seen until the next launch. That is
@@ -648,10 +646,7 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
     let last_seen = tokio::sync::Mutex::new(vec![None; plan.steps.len()]);
     let state = Arc::new(AppState {
         plan: tokio::sync::RwLock::new(plan),
-        // Kept so Refresh can re-read the SAME two folders. The location is resolved once
-        // (beside the exe, or the cwd in dev); only its contents are re-read.
-        catalog_dir,
-        bundles_dir,
+        content: std::sync::Mutex::new(content),
         profiles,
         os,
         last_seen,
@@ -1225,6 +1220,17 @@ fn step_json(
     })
 }
 
+/// The plan for a resolved content: `{dir}` is the catalog folder actually read (a local
+/// extraction when the kit has an archive), `{kit}` the kit root on the share.
+fn plan_from(content: &crate::content::Content, os: Os) -> Plan {
+    load_from_catalog(
+        content.catalog.to_str().unwrap_or("catalog"),
+        content.kit.to_str().unwrap_or(""),
+        os,
+        &|m| println!("[bundles] {m}"),
+    )
+}
+
 /// The `plan` message: the whole catalogue as the front needs it.
 ///
 /// ONE builder for both the connect send and the Refresh reload. Duplicating it is how the
@@ -1270,6 +1276,10 @@ fn plan_message(state: &AppState, steps: &[crate::bundles::Step]) -> Value {
     // between two reads keeps whatever the user had already decided about the others. That
     // property is why reloading the catalogue is safe at all — an index-keyed selection
     // would shift under every insertion.
+    let (catalog_dir, content_problem) = match state.content.lock() {
+        Ok(c) => (c.catalog.clone(), c.problem()),
+        Err(_) => (PathBuf::new(), None),
+    };
     json!({
         "type": "plan",
         "steps": steps_json,
@@ -1283,7 +1293,10 @@ fn plan_message(state: &AppState, steps: &[crate::bundles::Step]) -> Value {
         // The content's own name, read beside the catalog on every build of this message —
         // the catalogue is re-read on Refresh, and the file that names it must not lag it.
         // `null` when the content has none: the front then shows the title it always did.
-        "distribution": crate::distribution::read_beside(&state.catalog_dir).map(|d| d.json()),
+        "distribution": crate::distribution::read_beside(&catalog_dir).map(|d| d.json()),
+        // Set when the kit's content archive is unusable or gone (content.rs): the sentence the
+        // front shows above the list. `null` when the content is what the kit says it is.
+        "contentProblem": content_problem,
         "appmgmt": appmgmt_wire(state.appmgmt),
         // Whether the Doctor tab exists at all. The dropdown's contents travel on the
         // Doctor's own socket, which opens only when the tab is clicked — too late to
@@ -1438,12 +1451,15 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 // The reload comes FIRST and the scan after, in one gesture: scanning the
                 // old plan and then swapping it would paint verdicts for rows that are
                 // about to be replaced.
-                let reloaded = load_from_catalog(
-                    state.catalog_dir.to_str().unwrap_or("catalog"),
-                    state.bundles_dir.to_str().unwrap_or("bundles"),
-                    state.os,
-                    &|m| println!("[bundles] {m}"),
-                );
+                // The content is RE-RESOLVED, not just re-read: an archive that changed during
+                // the session is a new extraction folder. ⚠️ Only the catalogue follows it —
+                // the bundle cards (profiles) are read once at startup, as they always were.
+                let content = crate::content::resolve();
+                println!("{}", content.log_line());
+                let reloaded = plan_from(&content, state.os);
+                if let Ok(mut c) = state.content.lock() {
+                    *c = content;
+                }
                 let n = reloaded.steps.len();
                 let before = {
                     let mut plan = state.plan.write().await;
@@ -1856,7 +1872,7 @@ fn start_machine_profile(state: &Arc<AppState>, steps: &[crate::bundles::Step]) 
             let routes: Vec<&str> = routes.iter().map(String::as_str).collect();
             crate::machine::collect(os, &kit, &routes)
         });
-        let profile = match tokio::time::timeout(MACHINE_PROFILE_LIMIT, job).await {
+        let mut profile = match tokio::time::timeout(MACHINE_PROFILE_LIMIT, job).await {
             Ok(Ok(p)) => p,
             // `~` here too: a panic message may carry a path, and this line may be shared.
             Ok(Err(e)) => crate::machine::Profile::failed(&crate::machine::tilde_all(
@@ -1869,6 +1885,15 @@ fn start_machine_profile(state: &Arc<AppState>, steps: &[crate::bundles::Step]) 
             )),
         };
         state.machine_running.store(false, Ordering::SeqCst);
+        // Which content this machine reads, journalled with its profile — so the fleet's
+        // logs show which machine runs an earlier copy because its archive did not sync.
+        if let Ok(c) = state.content.lock() {
+            profile.kit.content = crate::machine::tilde_all(
+                &c.summary(),
+                &crate::detect::user_home().to_string_lossy(),
+            );
+            profile.kit.content_stale = c.problem().is_some();
+        }
         println!(
             "[machine] {} cores, {} MB free of {} MB, one shell {} ms, collected in {} ms{}",
             profile.cores,
@@ -6195,8 +6220,12 @@ mod tests {
             plan: tokio::sync::RwLock::new(crate::bundles::Plan { steps: Vec::new() }),
             // Pointed at the share's own folder: nothing here reloads, and a bogus path
             // would only surface if something did.
-            catalog_dir: share.join("catalog"),
-            bundles_dir: share.join("bundles"),
+            content: std::sync::Mutex::new(crate::content::Content {
+                catalog: share.join("catalog"),
+                bundles: share.join("bundles"),
+                kit: share.to_path_buf(),
+                source: crate::content::Source::Loose,
+            }),
             profiles: crate::profiles::Profiles::default(),
             os: Os::Darwin,
             appmgmt: crate::platform::AppMgmtStatus::NotApplicable,

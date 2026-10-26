@@ -81,6 +81,15 @@ test("a quiet local machine raises no flag", () => {
   assert.deepEqual(rows.filter((r) => r.warn), []);
 });
 
+test("the content a machine reads is a row, flagged when it is not the kit's archive", () => {
+  const kit = { path: "C:\\Tools\\Talos", location: "local" };
+  const content = (c) => Object.fromEntries(machineRows({ ...windows, kit: { ...kit, ...c } }).map((r) => [r.label, r])).Content;
+  assert.equal(content({ content: "archive 0123456789ab" }).value, "archive 0123456789ab");
+  assert.ok(!content({ content: "archive 0123456789ab" }).warn);
+  assert.ok(content({ content: "an earlier copy, 0123456789ab: the archive is missing", content_stale: true }).warn);
+  assert.equal(content({}), undefined, "a profile from before the field has no row");
+});
+
 test("the scan line names its total, its slowest probe and what was unavailable", () => {
   const line = scanSummary({
     total_ms: 42000,

@@ -38,7 +38,7 @@
 #     Windows\   Talos.exe
 #     Linux\     Talos
 #     catalog\   bundles\   distribution.yaml (when the content names itself)
-#     .talos\    VERSION, KIT.txt, MANIFEST.sha256
+#     .talos\    content.zip, VERSION, KIT.txt, MANIFEST.sha256
 #
 # One folder per OS, so every launcher keeps its own standard name -- `Talos` next to
 # `Talos.exe` in one folder would show as two identical rows in an Explorer that hides
@@ -63,6 +63,15 @@
 # leading BOM becomes a stray character in front of the first token. ASCII is the one
 # encoding that is unambiguous down both paths. The rest of the repo keeps its glyphs;
 # this file pays for being executable straight off the wire.
+#
+# *** THE CONTENT TRAVELS TWICE, AS ONE FILE AND LOOSE. `.talos\content.zip` holds
+# `catalog\`, `bundles\` and `distribution.yaml`, and an engine that finds it reads ONLY it,
+# from a local extraction: a synced replica has the old archive or the new one, never half
+# of the content, which loose files on a share cannot promise. The loose copy beside it is
+# for engines older than the archive, which read nothing else; it can go once no machine
+# runs one. Without -Content the archive IS the release's `talos-content.zip`, copied; with
+# it, it is built here from the folders just placed (Compress-Archive -- 5.1 writes
+# backslash entry names, which the engine reads as separators).
 #
 # *** THE KIT IS CHECKED BY THE ENGINE IT SHIPS, in the position it will be read from:
 # `--check` with NO arguments on the launcher just placed, so the engine resolves
@@ -133,9 +142,9 @@ function Get-KitRelativePath([string]$Root, [string]$Full) {
     return [IO.Path]::GetFullPath($Full).Substring($prefix.Length).Replace('\', '/')
 }
 
-# The kit's own artefacts, in the manifest's order: every launcher, every content file.
-# Never `.talos\` -- that folder IS the bookkeeping, and a manifest that covered itself
-# could not be written.
+# The kit's own artefacts, in the manifest's order: every launcher, every content file,
+# the archive that carries the content. Never the rest of `.talos\` -- that folder IS the
+# bookkeeping, and a manifest that covered itself could not be written.
 function Get-KitFileList([string]$Root) {
     $rels = New-Object System.Collections.ArrayList
     foreach ($n in @('MacOS', 'Windows', 'Linux', 'catalog', 'bundles', 'distribution.yaml')) {
@@ -145,6 +154,9 @@ function Get-KitFileList([string]$Root) {
         foreach ($f in Get-ChildItem -LiteralPath $dir -Recurse -File -Force) {
             [void]$rels.Add((Get-KitRelativePath $Root $f.FullName))
         }
+    }
+    if (Test-Path -LiteralPath (Join-Path (Join-Path $Root '.talos') 'content.zip')) {
+        [void]$rels.Add('.talos/content.zip')
     }
     $arr = $rels.ToArray([string])
     # Ordinal, to agree with `LC_ALL=C sort` on the other side. PowerShell's default sort is
@@ -257,6 +269,7 @@ try {
     $versionFile = Join-Path $dotTalos 'VERSION'
     $manifestFile = Join-Path $dotTalos 'MANIFEST.sha256'
     if ((Test-Path -LiteralPath $versionFile) -and (Test-Path -LiteralPath $manifestFile) -and
+        (Test-Path -LiteralPath (Join-Path $dotTalos 'content.zip')) -and
         (-not $Content) -and (Test-Path -LiteralPath (Join-Path $KitFull 'catalog')) -and
         ((Get-Content -LiteralPath $versionFile -TotalCount 1).Trim() -eq $Version)) {
         Write-Host "kit already at $Version (run with -Verify to check the replica)"
@@ -337,6 +350,20 @@ try {
         Write-Host "content: the socle of $Version"
     }
 
+    # The same content as one file, where the engine looks first (see THE CONTENT TRAVELS
+    # TWICE). Each path given to Compress-Archive lands at the archive's root.
+    $archive = Join-Path $dotTalos 'content.zip'
+    if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive -Force }
+    if ($Content) {
+        $packed = @((Join-Path $KitFull 'catalog'), (Join-Path $KitFull 'bundles'))
+        $kitDist = Join-Path $KitFull 'distribution.yaml'
+        if (Test-Path -LiteralPath $kitDist) { $packed += $kitDist }
+        Compress-Archive -LiteralPath $packed -DestinationPath $archive
+    }
+    else {
+        Move-Item -LiteralPath (Join-Path $Tmp $ContentAsset) -Destination $archive
+    }
+
     # -- Checked by the engine it ships, from where it will be read --------------------
     # Two Windows facts decide the shape of this call, and both are load-bearing:
     #
@@ -358,10 +385,17 @@ try {
         -NoNewWindow -Wait -PassThru -RedirectStandardOutput $checkOut
     if (Test-Path -LiteralPath $checkOut) { Get-Content -LiteralPath $checkOut | Write-Host }
     if ($p.ExitCode -ne 0) {
-        # Two very different causes, and the fix is not the same. Ask the same engine the
-        # same question with the paths SPELLED OUT: if it passes that way, the content is
-        # sound and what it cannot do is FIND it -- an engine older than the OS folders,
-        # which only ever looked beside itself. Say which, rather than blame the content.
+        # Three causes, and the fix is not the same. The engine names an archive it cannot
+        # use in its own words (`error: This kit's content archive ...`). Otherwise ask the
+        # same engine the same question with the paths SPELLED OUT: if it passes that way,
+        # the content is sound and what it cannot do is FIND it -- an engine older than the
+        # OS folders, which only ever looked beside itself. Say which, rather than blame the
+        # content.
+        if ((Test-Path -LiteralPath $checkOut) -and
+            (Select-String -LiteralPath $checkOut -SimpleMatch 'content archive' -Quiet)) {
+            Remove-Item -LiteralPath $dotTalos -Recurse -Force -ErrorAction SilentlyContinue
+            Fail "the engine cannot use the kit's .talos\content.zip (the line above) - kit NOT published"
+        }
         $p2 = Start-Process -FilePath $checker `
             -ArgumentList '--check', (Join-Path $KitFull 'catalog'), (Join-Path $KitFull 'bundles') `
             -WorkingDirectory $checkCwd -NoNewWindow -Wait -PassThru `
