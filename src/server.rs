@@ -569,7 +569,12 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
     // else loose folders next to the exe, else the cwd (DEV). One rule for the server, the
     // title and `--check` — see content::resolve.
     let sibling_dir = crate::platform::exe_sibling();
-    let content = crate::content::resolve();
+    // Off the async runtime: a resolve reads the share (a placeholder may hydrate over a slow
+    // link), hashes, and may extract.
+    let content = tokio::task::spawn_blocking(crate::content::resolve)
+        .await
+        .expect("the content resolve does not panic");
+    crate::content::publish(&content);
     println!("{}", content.log_line());
     println!("[bundles] dir: {}", content.bundles.display());
     println!("[catalog] dir: {}", content.catalog.display());
@@ -1454,9 +1459,22 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 // The content is RE-RESOLVED, not just re-read: an archive that changed during
                 // the session is a new extraction folder. ⚠️ Only the catalogue follows it —
                 // the bundle cards (profiles) are read once at startup, as they always were.
-                let content = crate::content::resolve();
+                let content = tokio::task::spawn_blocking(crate::content::resolve)
+                    .await
+                    .expect("the content resolve does not panic");
+                crate::content::publish(&content);
                 println!("{}", content.log_line());
                 let reloaded = plan_from(&content, state.os);
+                // The Machine tab follows the content a Refresh moved to (the journal keeps the
+                // line it wrote at collection: one profile per launch).
+                if let Some(p) = state
+                    .machine
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_mut()
+                {
+                    set_profile_content(p, &content);
+                }
                 if let Ok(mut c) = state.content.lock() {
                     *c = content;
                 }
@@ -1888,11 +1906,7 @@ fn start_machine_profile(state: &Arc<AppState>, steps: &[crate::bundles::Step]) 
         // Which content this machine reads, journalled with its profile — so the fleet's
         // logs show which machine runs an earlier copy because its archive did not sync.
         if let Ok(c) = state.content.lock() {
-            profile.kit.content = crate::machine::tilde_all(
-                &c.summary(),
-                &crate::detect::user_home().to_string_lossy(),
-            );
-            profile.kit.content_stale = c.problem().is_some();
+            set_profile_content(&mut profile, &c);
         }
         println!(
             "[machine] {} cores, {} MB free of {} MB, one shell {} ms, collected in {} ms{}",
@@ -1913,6 +1927,15 @@ fn start_machine_profile(state: &Arc<AppState>, steps: &[crate::bundles::Step]) 
         }
         *state.machine.lock().unwrap_or_else(|e| e.into_inner()) = Some(profile);
     });
+}
+
+/// The machine profile's account of which content this launch reads (content.rs).
+fn set_profile_content(profile: &mut crate::machine::Profile, content: &crate::content::Content) {
+    profile.kit.content = crate::machine::tilde_all(
+        &content.summary(),
+        &crate::detect::user_home().to_string_lossy(),
+    );
+    profile.kit.content_stale = content.problem().is_some();
 }
 
 /// Records the share choice. Turning sharing ON mid-session also copies this launch's

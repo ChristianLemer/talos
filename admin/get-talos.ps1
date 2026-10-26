@@ -386,13 +386,13 @@ try {
     if (Test-Path -LiteralPath $checkOut) { Get-Content -LiteralPath $checkOut | Write-Host }
     if ($p.ExitCode -ne 0) {
         # Three causes, and the fix is not the same. The engine names an archive it cannot
-        # use in its own words (`error: This kit's content archive ...`). Otherwise ask the
+        # use behind a stable prefix (`error: content archive: ...`). Otherwise ask the
         # same engine the same question with the paths SPELLED OUT: if it passes that way,
         # the content is sound and what it cannot do is FIND it -- an engine older than the
         # OS folders, which only ever looked beside itself. Say which, rather than blame the
         # content.
         if ((Test-Path -LiteralPath $checkOut) -and
-            (Select-String -LiteralPath $checkOut -SimpleMatch 'content archive' -Quiet)) {
+            (Select-String -LiteralPath $checkOut -Pattern '^error: content archive:' -Quiet)) {
             Remove-Item -LiteralPath $dotTalos -Recurse -Force -ErrorAction SilentlyContinue
             Fail "the engine cannot use the kit's .talos\content.zip (the line above) - kit NOT published"
         }

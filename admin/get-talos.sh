@@ -271,11 +271,11 @@ if ( cd "$TMP" && "$CHECKER" --check ) > "$TMP/check.txt" 2>&1; then
 else
     cat "$TMP/check.txt"
     # Three causes, and the fix is not the same. The engine names an archive it cannot use
-    # in its own words (`error: This kit's content archive …`). Otherwise ask the same
+    # behind a stable prefix (`error: content archive: …`). Otherwise ask the same
     # engine the same question with the paths SPELLED OUT: if it passes that way, the
     # content is sound and what it cannot do is FIND it — an engine older than the OS
     # folders, which only ever looked beside itself. Say which, rather than blame the content.
-    if grep -q "content archive" "$TMP/check.txt"; then
+    if grep -q "^error: content archive:" "$TMP/check.txt"; then
         echo "the engine cannot use the kit's .talos/content.zip (the line above) — kit NOT published" >&2
     elif ( cd "$TMP" && "$CHECKER" --check "$DEST/catalog" "$DEST/bundles" ) >/dev/null 2>&1; then
         echo "$TAG ships an engine that predates the kit's OS folders: it reads the content" >&2

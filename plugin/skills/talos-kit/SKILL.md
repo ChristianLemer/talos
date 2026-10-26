@@ -52,6 +52,12 @@ loose copy stays beside it for engines older than the archive; drop it once none
   whose root holds `catalog/`, `bundles/` and, optionally, `distribution.yaml`.
 - A stray `talos-content.zip` at the kit root is NOT the kit's archive — only `.talos/`
   counts, so a release download left on a share can never swap a kit's content.
+- ⚠️ **Going back to loose folders is not silent.** A machine that once read a kit's archive
+  keeps a record of it (`<data dir>/content/kits/`), and a kit whose archive disappears says
+  "the content archive is missing" and shows the last extraction — on purpose, because a
+  sync client deleting the archive looks exactly the same. To retire the archive for good,
+  keep publishing one (with the new content), or delete `content/kits/` on each machine.
+  A kit reached by two spellings (a mapped drive and its UNC path) has two records.
 
 ⚠️ **A release is TWO halves.** Ship a launcher without `catalog/` + `bundles/` and Talos
 opens **inert** — it does not crash, it simply has nothing to propose. Any handoff says

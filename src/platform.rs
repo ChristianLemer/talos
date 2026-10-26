@@ -470,10 +470,11 @@ pub fn content_dirs_in(sibling: &std::path::Path) -> (PathBuf, PathBuf) {
     (pick("catalog"), pick("bundles"))
 }
 
-/// The running kit's two content folders — through its archive when it has one
-/// (`content::resolve`), else `content_dirs_in` beside the exe.
+/// The running kit's two content folders — through its archive when it has one — as the
+/// server resolved them (`content::current`), so a second caller (the window title) never
+/// reads the share's archive again.
 pub fn content_dirs() -> (PathBuf, PathBuf) {
-    let c = crate::content::resolve();
+    let c = crate::content::current();
     (c.catalog, c.bundles)
 }
 

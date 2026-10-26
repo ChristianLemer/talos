@@ -499,6 +499,9 @@ converges a file instead of installing software. The pattern (see `terminal/`):
   payload an atom deposits. Use it, never `{dir}/..`: when the kit carries its content as
   `.talos/content.zip`, `{dir}` is a local extraction and its parent is a cache, not the
   share. In a kit without an archive `{kit}` IS `{dir}/..`, so switching costs nothing.
+- ⚠️ **Treat `{dir}` as read-only.** An extraction is shared by every kit carrying the same
+  archive and is never rewritten; a sidecar that writes beside itself would change a cache,
+  not the kit. Write to the machine (or under `{kit}`) instead.
 - `check:` is the apply *replayed in memory without saving*, so detection can't drift
   from application. "Would applying change something?" → non-zero → the row reads absent
   → Apply reconverges. No sentinel, no state DB.

@@ -59,7 +59,9 @@ fn main() {
             _ => {
                 let content = content::resolve();
                 if let Some(problem) = content.problem() {
-                    println!("error: {problem}");
+                    // `error: content archive:` is a STABLE prefix: get-talos tells this cause
+                    // from the others by it, whatever the sentence after says.
+                    println!("error: content archive: {problem}");
                     std::process::exit(1);
                 }
                 (content.catalog, content.bundles)

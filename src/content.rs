@@ -18,7 +18,7 @@
 //!    come from those same bytes — a publication landing between two reads cannot pair one
 //!    version's hash with another's files.
 //! 2. `content/<sha256[..12]>/` holding `.complete` (the full sha256) is used as is: a launch
-//!    after the first writes nothing.
+//!    after the first extracts nothing (it only touches the marker's mtime, for pruning).
 //! 3. Otherwise the archive is extracted into a per-launch `.partial` folder, `.complete` is
 //!    written LAST, and the folder is renamed into place. A folder without `.complete` is
 //!    never read; one that lost the rename to another launch is as good (same hash).
@@ -44,6 +44,14 @@ use std::time::{Duration, SystemTime};
 
 /// Where a kit carries its archive, relative to the kit root.
 pub const ARCHIVE: &str = ".talos/content.zip";
+
+/// The most a content archive may weigh on the share, checked from metadata BEFORE it is
+/// read: an archive that holds a payload by mistake must not be read into memory and hashed
+/// on every launch only to be refused afterwards.
+const MAX_ARCHIVE: u64 = 64 * 1024 * 1024;
+
+/// The most entries an archive may hold — the socle has a few dozen.
+const MAX_ENTRIES: usize = 20_000;
 
 /// The most an archive may unpack to. The socle is a few hundred KB; the large loose files a
 /// kit may carry (an integrator's payload) are not content and stay out of the archive. Past
@@ -151,6 +159,27 @@ pub fn resolve() -> Content {
     resolve_in(&crate::platform::exe_sibling(), cache_root(os).as_deref())
 }
 
+/// What the server last resolved — so the window title reads the SAME content instead of
+/// reading and hashing the share's archive a second time (a publication landing between the
+/// two reads would put the title and the catalogue on different versions).
+static CURRENT: std::sync::Mutex<Option<Content>> = std::sync::Mutex::new(None);
+
+/// Record what this process reads now (the server, at boot and on every Refresh).
+pub fn publish(content: &Content) {
+    if let Ok(mut c) = CURRENT.lock() {
+        *c = Some(content.clone());
+    }
+}
+
+/// What the server resolved, or a resolve of our own when it has not yet (the title thread
+/// gives up waiting for the server after 5 s; the two extractions then use distinct folders).
+pub fn current() -> Content {
+    if let Some(c) = CURRENT.lock().ok().and_then(|c| c.clone()) {
+        return c;
+    }
+    resolve()
+}
+
 /// The kit roots a sibling folder can belong to, in the order `content_dirs_in` looks for
 /// `catalog/`: the folder itself (a flat kit), then exactly one level up (an OS folder in a
 /// composed kit). Never further.
@@ -164,47 +193,42 @@ fn kit_candidates(sibling: &Path) -> Vec<PathBuf> {
     v
 }
 
-/// The kit's archive, beside the sibling folder or one level up.
-pub fn find_archive(sibling: &Path) -> Option<PathBuf> {
-    kit_candidates(sibling)
-        .into_iter()
-        .map(|k| k.join(ARCHIVE))
-        .find(|a| a.is_file())
-}
-
 /// `resolve` with its inputs named, for the tests: the sibling folder and the cache root.
+///
+/// Level by level — beside the sibling, then one level up — and at each level: the kit's
+/// archive; else, for a kit that HAD one, the fact that it vanished (said, and its last
+/// extraction read); else a loose `catalog/` at that level stops the search, so a loose kit
+/// beside the exe still wins over an archive kit one level up, as `content_dirs_in` always
+/// preferred beside over above. Nothing found → the loose rule, unchanged.
 pub fn resolve_in(sibling: &Path, cache: Option<&Path>) -> Content {
-    if let Some(archive) = find_archive(sibling) {
-        // `<kit>/.talos/content.zip` → `<kit>`.
-        let kit = archive
-            .parent()
-            .and_then(Path::parent)
-            .unwrap_or(sibling)
-            .to_path_buf();
-        let Some(cache) = cache else {
-            return missing(
-                &kit,
-                "cannot be extracted: this machine names no local data folder",
-            );
-        };
-        let content = match unpack(&archive, cache) {
-            Ok((dir, hash, extracted)) => {
-                remember(cache, &kit, &hash);
-                in_extraction(&kit, &dir, Source::Archive { hash, extracted })
-            }
-            Err(problem) => previous(cache, &kit, &format!("is unusable ({problem})")),
-        };
-        prune(cache);
-        return content;
-    }
-    // No archive. A kit that HAD one lost it — said, and its last extraction read.
-    if let Some(cache) = cache {
-        for kit in kit_candidates(sibling) {
+    for kit in kit_candidates(sibling) {
+        let archive = kit.join(ARCHIVE);
+        if archive.is_file() {
+            let Some(cache) = cache else {
+                return missing(
+                    &kit,
+                    "cannot be extracted: this machine names no local data folder",
+                );
+            };
+            let content = match unpack(&archive, cache) {
+                Ok((dir, hash, extracted)) => {
+                    remember(cache, &kit, &hash);
+                    in_extraction(&kit, &dir, Source::Archive { hash, extracted })
+                }
+                Err(problem) => previous(cache, &kit, &format!("is unusable ({problem})")),
+            };
+            prune(cache);
+            return content;
+        }
+        if let Some(cache) = cache {
             if remembered(cache, &kit).is_some() {
                 let content = previous(cache, &kit, &format!("is missing ({ARCHIVE})"));
                 prune(cache);
                 return content;
             }
+        }
+        if kit.join("catalog").is_dir() {
+            break;
         }
     }
     let (catalog, bundles) = crate::platform::content_dirs_in(sibling);
@@ -272,8 +296,37 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn is_complete(dir: &Path, hash: &str) -> bool {
-    std::fs::read_to_string(dir.join(COMPLETE)).is_ok_and(|h| h.trim() == hash)
+    marker(dir, hash) == Marker::Matches
 }
+
+/// What an extraction's `.complete` says. `Unreadable` is NOT `Missing`: a transient read
+/// failure must never get a valid extraction — perhaps a running session's `{dir}` — deleted.
+#[derive(Debug, PartialEq, Eq)]
+enum Marker {
+    Matches,
+    Missing,
+    Differs,
+    Unreadable,
+}
+
+fn marker(dir: &Path, hash: &str) -> Marker {
+    match std::fs::read_to_string(dir.join(COMPLETE)) {
+        Ok(h) if h.trim() == hash => Marker::Matches,
+        Ok(_) => Marker::Differs,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Marker::Missing,
+        Err(_) => Marker::Unreadable,
+    }
+}
+
+/// Distinguishes two extractions in ONE process (the title thread and the server, two
+/// windows clicking Refresh): a pid alone would hand them the same `.partial` folder.
+static EXTRACTION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many times a rename into place is tried, the pause doubling from 50 ms (capped at
+/// 1 s). On Windows a directory cannot be renamed while anything holds a file inside it
+/// without sharing delete — an antivirus scanning the files just written is the classic
+/// case, and it lets go within a second or two.
+const RENAME_TRIES: u32 = 10;
 
 /// Mark an extraction as used now — what keeps it from being pruned. Best-effort.
 fn touch(dir: &Path) {
@@ -287,6 +340,14 @@ fn touch(dir: &Path) {
 
 /// The archive's local extraction: `(folder, sha256, extracted now)`, or why it cannot be.
 fn unpack(archive: &Path, cache: &Path) -> Result<(PathBuf, String, bool), String> {
+    let len = std::fs::metadata(archive)
+        .map_err(|e| format!("cannot be read: {e}"))?
+        .len();
+    if len > MAX_ARCHIVE {
+        return Err(format!(
+            "weighs {len} bytes, more than the {MAX_ARCHIVE} a content archive may"
+        ));
+    }
     let bytes = std::fs::read(archive).map_err(|e| format!("cannot be read: {e}"))?;
     let hash = sha256_hex(&bytes);
     let target = cache.join(&hash[..12]);
@@ -295,7 +356,12 @@ fn unpack(archive: &Path, cache: &Path) -> Result<(PathBuf, String, bool), Strin
         return Ok((target, hash, false));
     }
     std::fs::create_dir_all(cache).map_err(|e| format!("cannot be extracted: {e}"))?;
-    let partial = cache.join(format!("{}.{}.partial", &hash[..12], std::process::id()));
+    let n = EXTRACTION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let partial = cache.join(format!(
+        "{}.{}-{n}.partial",
+        &hash[..12],
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&partial);
     let written = extract(&bytes, &partial).and_then(|_| {
         std::fs::write(partial.join(COMPLETE), &hash)
@@ -305,23 +371,32 @@ fn unpack(archive: &Path, cache: &Path) -> Result<(PathBuf, String, bool), Strin
         let _ = std::fs::remove_dir_all(&partial);
         return Err(e);
     }
-    // A folder under the target name without `.complete` is never valid (an extraction only
-    // gets that name by a rename AFTER its marker is written): it is in the way, not in use.
-    if target.exists() && !is_complete(&target, &hash) {
-        let _ = std::fs::remove_dir_all(&target);
-    }
-    if std::fs::rename(&partial, &target).is_err() {
-        let _ = std::fs::remove_dir_all(&partial);
+    let mut pause = std::time::Duration::from_millis(50);
+    for attempt in 1..=RENAME_TRIES {
+        // A folder under the target name whose marker is MISSING or names another archive is
+        // never valid (an extraction only gets that name by a rename AFTER its marker is
+        // written): it is in the way, not in use. An unreadable marker is left alone.
+        if target.exists() && matches!(marker(&target, &hash), Marker::Missing | Marker::Differs) {
+            let _ = std::fs::remove_dir_all(&target);
+        }
+        if std::fs::rename(&partial, &target).is_ok() {
+            return Ok((target, hash, true));
+        }
         // Another launch got there first: same name, same hash, as good as ours.
         if is_complete(&target, &hash) {
+            let _ = std::fs::remove_dir_all(&partial);
             return Ok((target, hash, false));
         }
-        return Err(format!(
-            "cannot be extracted: {} could not be put in place",
-            target.display()
-        ));
+        if attempt < RENAME_TRIES {
+            std::thread::sleep(pause);
+            pause = (pause * 2).min(std::time::Duration::from_secs(1));
+        }
     }
-    Ok((target, hash, true))
+    let _ = std::fs::remove_dir_all(&partial);
+    Err(format!(
+        "cannot be extracted: {} could not be put in place",
+        target.display()
+    ))
 }
 
 /// An entry name as a relative path inside the extraction, or why the archive is refused.
@@ -350,6 +425,12 @@ fn entry_path(raw: &str) -> Result<Option<PathBuf>, String> {
 fn extract(bytes: &[u8], dest: &Path) -> Result<(), String> {
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))
         .map_err(|e| format!("is not a readable zip: {e}"))?;
+    if zip.len() > MAX_ENTRIES {
+        return Err(format!(
+            "holds {} entries, more than the {MAX_ENTRIES} a content archive may",
+            zip.len()
+        ));
+    }
     let mut declared: u64 = 0;
     let mut has_catalog = false;
     for i in 0..zip.len() {
@@ -360,11 +441,14 @@ fn extract(bytes: &[u8], dest: &Path) -> Result<(), String> {
             .name()
             .map_err(|e| format!("is not a readable zip: {e}"))?
             .into_owned();
+        // A FILE under `catalog/` — an empty `catalog/` entry, or a file named `catalog`, is
+        // not a catalogue.
         if let Some(p) = entry_path(&name)? {
-            has_catalog |= p
-                .components()
-                .next()
-                .is_some_and(|c| c.as_os_str() == "catalog");
+            has_catalog |= !entry.is_dir()
+                && p.components().count() > 1
+                && p.components()
+                    .next()
+                    .is_some_and(|c| c.as_os_str() == "catalog");
         }
         declared = declared.saturating_add(entry.size());
     }
@@ -411,6 +495,15 @@ fn extract(bytes: &[u8], dest: &Path) -> Result<(), String> {
         std::fs::File::create(&out)
             .and_then(|mut f| f.write_all(&data))
             .map_err(|e| format!("cannot be extracted: {e}"))?;
+        // The exec bit, where the notion exists: a content command that runs `'{dir}/x.sh'`
+        // directly worked from a loose folder and must work from the extraction.
+        #[cfg(unix)]
+        if let Some(mode) = entry.unix_mode() {
+            use std::os::unix::fs::PermissionsExt;
+            if mode & 0o111 != 0 {
+                let _ = std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o755));
+            }
+        }
     }
     Ok(())
 }
@@ -614,7 +707,8 @@ mod tests {
         let c = resolve_in(&kit.join("Windows"), Some(&cache));
         assert!(matches!(c.source, Source::Archive { .. }), "{c:?}");
         assert_eq!(c.kit, kit);
-        assert_eq!(find_archive(&kit.join("a/b")), None);
+        let deep = resolve_in(&kit.join("a/b"), Some(&cache));
+        assert_eq!(deep.source, Source::Loose, "{deep:?}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -835,6 +929,120 @@ mod tests {
         assert!(!orphan.exists());
         assert!(!litter.exists());
         assert!(named.catalog.is_dir());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A loose kit beside the exe still wins over an archive kit one level up — the old
+    /// "beside over above" precedence, kept.
+    #[test]
+    fn a_loose_catalog_beside_wins_over_an_archive_above() {
+        let root = tmp("beside");
+        let (outer, cache) = (root.join("outer"), root.join("cache"));
+        put_archive(&outer, &zip_of(SOCLE));
+        let inner = outer.join("Old");
+        std::fs::create_dir_all(inner.join("catalog")).unwrap();
+        let c = resolve_in(&inner, Some(&cache));
+        assert_eq!(c.source, Source::Loose);
+        assert_eq!(c.catalog, inner.join("catalog"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An archive too heavy for content is refused from its SIZE, before it is read.
+    #[test]
+    fn an_oversized_archive_is_refused_unread() {
+        let root = tmp("heavy");
+        let (kit, cache) = (root.join("kit"), root.join("cache"));
+        std::fs::create_dir_all(kit.join(".talos")).unwrap();
+        // Sparse: the length is there, the bytes are not.
+        std::fs::File::create(kit.join(ARCHIVE))
+            .unwrap()
+            .set_len(MAX_ARCHIVE + 1)
+            .unwrap();
+        let c = resolve_in(&kit, Some(&cache));
+        let Source::Missing { problem } = &c.source else {
+            panic!("{c:?}")
+        };
+        assert!(problem.contains("weighs"), "{problem}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An empty `catalog/` entry is not a catalogue.
+    #[test]
+    fn an_empty_catalog_entry_is_not_a_catalogue() {
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        w.add_directory("catalog/", SimpleFileOptions::default())
+            .unwrap();
+        let bytes = w.finish().unwrap().into_inner();
+        let root = tmp("emptycat");
+        let (kit, cache) = (root.join("kit"), root.join("cache"));
+        put_archive(&kit, &bytes);
+        let c = resolve_in(&kit, Some(&cache));
+        assert!(matches!(c.source, Source::Missing { .. }), "{c:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The exec bit survives the extraction where the notion exists.
+    #[cfg(unix)]
+    #[test]
+    fn the_exec_bit_survives() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        w.start_file("catalog/git.yaml", SimpleFileOptions::default())
+            .unwrap();
+        w.write_all(b"name: Git\n").unwrap();
+        w.start_file(
+            "catalog/run.sh",
+            SimpleFileOptions::default().unix_permissions(0o755),
+        )
+        .unwrap();
+        w.write_all(b"#!/bin/sh\n").unwrap();
+        let bytes = w.finish().unwrap().into_inner();
+        let root = tmp("exec");
+        let (kit, cache) = (root.join("kit"), root.join("cache"));
+        put_archive(&kit, &bytes);
+        let c = resolve_in(&kit, Some(&cache));
+        let mode = std::fs::metadata(c.catalog.join("run.sh"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_ne!(mode & 0o111, 0, "{mode:o}");
+        let yaml = std::fs::metadata(c.catalog.join("git.yaml"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(yaml & 0o111, 0, "{yaml:o}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An old extraction a kit's record still names is kept, however old — it is that
+    /// kit's fallback.
+    #[test]
+    fn prune_keeps_an_old_extraction_a_kit_names() {
+        let root = tmp("prune-named");
+        let (kit, cache) = (root.join("kit"), root.join("cache"));
+        put_archive(&kit, &zip_of(SOCLE));
+        let c = resolve_in(&kit, Some(&cache));
+        let later = SystemTime::now() + Duration::from_secs(365 * 24 * 3600);
+        prune_at(&cache, later);
+        assert!(c.catalog.is_dir());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Two extractions in one process never share a `.partial` folder.
+    #[test]
+    fn two_extractions_in_one_process_do_not_collide() {
+        let root = tmp("samepid");
+        let (kit, cache) = (root.join("kit"), root.join("cache"));
+        put_archive(&kit, &zip_of(SOCLE));
+        let (a, b) = std::thread::scope(|s| {
+            let a = s.spawn(|| resolve_in(&kit, Some(&cache)));
+            let b = s.spawn(|| resolve_in(&kit, Some(&cache)));
+            (a.join().unwrap(), b.join().unwrap())
+        });
+        assert!(matches!(a.source, Source::Archive { .. }), "{a:?}");
+        assert!(matches!(b.source, Source::Archive { .. }), "{b:?}");
+        assert_eq!(a.catalog, b.catalog);
+        assert!(a.catalog.join("git.yaml").is_file());
         let _ = std::fs::remove_dir_all(&root);
     }
 
