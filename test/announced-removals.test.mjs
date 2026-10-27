@@ -78,8 +78,14 @@ test("a scan verdict always reaches the model — no label leaves before the pre
   assert.doesNotMatch(body.slice(0, record), /\bbreak;/, "nothing may leave before setStatus");
 });
 
-test("a diff's `self` settles the row on its presence, not on a word that hides the removal", () => {
-  assert.match(arm("step"), /msg\.status === "self" \? M\.presenceStatus\(model, msg\.i\)/);
+test("a diff's `self` settles the row on its presence, and changes nothing else", () => {
+  const body = arm("step");
+  assert.match(body, /setStatus\(msg\.i, M\.presenceStatus\(model, msg\.i\)\)/);
+  assert.doesNotMatch(body, /setStatus\(msg\.i, "self"\)/);
+  // Found at the review: "ok" folds the row the operator opened to read the diff, and clears
+  // what it is behind on.
+  assert.match(body, /rows\[msg\.i\]\.details\.open = open/);
+  assert.match(body, /Object\.assign\(p, \{ outdated, available \}\)/);
 });
 
 test("the Apply sends the removals the button announced", () => {
@@ -88,8 +94,18 @@ test("the Apply sends the removals the button announced", () => {
   assert.match(body, /removals: M\.announcedRemovals\(model\)/);
 });
 
-test("a held row always says why, even present with nothing for the version to show", () => {
-  // The server's hold of an unannounced removal lands on a PRESENT row with an uninstall, which
-  // no version display carries; the label is then the only place it can be read.
-  assert.match(arm("held"), /M\.holdReason\(model, msg\.i\) !== msg\.reason/);
+test("an unannounced removal is said on the row and never kept as a hold", () => {
+  // Found at the review: sent as `held`, it was stored until a Refresh — a pinned row's
+  // reinstall then stayed out of the count forever, and every Apply held it again.
+  const body = arm("unannounced");
+  assert.match(body, /statusLabel\.textContent = msg\.reason/);
+  assert.doesNotMatch(body, /setHold/);
+  assert.match(body, /refreshLiveness\(\)/, "the button counts the removal at once");
+});
+
+test("a removal said once is announced at the next click: nothing in the model holds it", () => {
+  // The model half of the review's finding: what the server left, the button counts next.
+  const m = reloaded();
+  Object.assign(m.pkgs.get(0), { pin: "1.0", installedVersion: "2.0", canDowngrade: true });
+  assert.deepEqual(announcedRemovals(m), [0, 2, 3]);
 });

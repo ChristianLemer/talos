@@ -2522,14 +2522,17 @@ ws.onmessage = (ev) => {
           const { outdated, available } = p;
           setStatus(msg.i, present === true ? "ok" : present === false ? "waiting" : "unknown");
           Object.assign(p, { outdated, available });
-          // The version display carries a hold it explains (holdReason); any other — a removal
-          // the button did not announce — is said here, or nowhere.
-          if (rows[msg.i] && (present !== true || M.holdReason(model, msg.i) !== msg.reason)) {
-            rows[msg.i].statusLabel.textContent = msg.reason;
-          }
+          if (present !== true && rows[msg.i]) rows[msg.i].statusLabel.textContent = msg.reason;
         }
       }
       paintVersion(msg.i);
+      refreshLiveness();
+      break;
+    case "unannounced": // the Apply left a removal the button did not name (server::drop_unannounced)
+      // Said on the row, and NOT kept as a hold: the facts the server acted on were repainted
+      // before its plan, so the button now counts the removal and the next click runs it. A kept
+      // hold would take the row out of that count until a Refresh.
+      if (rows[msg.i]) rows[msg.i].statusLabel.textContent = msg.reason;
       refreshLiveness();
       break;
     case "self-updated": { // done for the session, or forgotten by a removal (server: arms_session_done)
@@ -2541,8 +2544,21 @@ ws.onmessage = (ev) => {
     }
     case "step":
       // A diff settles with `self`: it changed nothing, so the row reads its presence again. As a
-      // status of its own it read "yours" on an atom the next Apply removes.
-      setStatus(msg.i, msg.status === "self" ? M.presenceStatus(model, msg.i) : msg.status);
+      // status of its own it read "yours" on an atom the next Apply removes. Changed nothing means
+      // nothing else either: the row stays open on its output, and keeps what it is behind on
+      // ("ok" folds the row and clears both, as `held` knows).
+      if (msg.status === "self" && rows[msg.i]) {
+        const p = model.pkgs.get(msg.i);
+        const { outdated, available } = p ?? {};
+        const open = rows[msg.i].details.open;
+        setStatus(msg.i, M.presenceStatus(model, msg.i));
+        if (p) Object.assign(p, { outdated, available });
+        rows[msg.i].details.open = open;
+        paintVersion(msg.i);
+        refreshLiveness();
+        break;
+      }
+      setStatus(msg.i, msg.status);
       // A step that settled ok clears any lingering firewall recovery UI (the
       // 403 was transient — the exit code is truth). Retry / new run also reset it.
       if (msg.status === "ok" || msg.status === "absent") clearForbidden(msg.i);

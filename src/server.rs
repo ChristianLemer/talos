@@ -2470,6 +2470,17 @@ fn drop_unannounced(
     dropped
 }
 
+/// Tells the front that the Apply left a removal its button did not name. Not a `held`: the
+/// front keeps a hold until the next plan, and this one answers ONE click — the repaint before
+/// the plan already gave the front the facts, so its next count names the removal.
+async fn send_unannounced(socket: &mut WebSocket, i: usize) {
+    let _ = socket
+        .send(Message::Text(
+            json!({ "type": "unannounced", "i": i, "reason": UNANNOUNCED_REMOVAL }).to_string(),
+        ))
+        .await;
+}
+
 /// Tells the front that the Apply leaves row `i` and why. The front keeps it as the row's hold
 /// until the next plan (a Refresh), so the Apply button stops offering a change brew cannot
 /// make. The server keeps nothing: every Apply that wants the row asks brew again.
@@ -3044,7 +3055,7 @@ async fn apply_diff(
     for i in drop_unannounced(&mut visual_plan, announced.as_ref()) {
         state.brew_pins.lock().await.remove(&steps[i].id);
         println!("[apply] {} held: {UNANNOUNCED_REMOVAL}", steps[i].name);
-        send_held(socket, i, UNANNOUNCED_REMOVAL).await;
+        send_unannounced(socket, i).await;
     }
     for (i, why) in drop_requiring_held(&mut visual_plan, &mut nodes, &idx, &held_absent) {
         state.brew_pins.lock().await.remove(&steps[i].id);
@@ -5391,7 +5402,10 @@ mod tests {
         );
         assert!(at(&plan, "visual_plan.push((i, a))") < cut);
         assert!(cut < at(&plan, "topo_sort("));
-        assert!(plan.contains("send_held(socket, i, UNANNOUNCED_REMOVAL)"));
+        // Not `held`: the front keeps a hold until a Refresh, and this one must not outlive the
+        // click it answers, or the next Apply could never announce the removal (review, 2026-10-27).
+        assert!(plan.contains("send_unannounced(socket, i)"));
+        assert!(fn_body("send_unannounced").contains("\"type\": \"unannounced\""));
         let wire = fn_body("handle_socket");
         assert!(
             wire.contains("json_indices_opt(&parsed, \"removals\")"),
