@@ -581,6 +581,18 @@ export function isActionable(model, i) {
 export function planActions(model) {
   return applyPlan(model).map((i) => actionOf(model, i));
 }
+// The rows whose removal the button announces — an uninstall, or a reinstall at the pin, which
+// removes first. The Apply sends them, and the server runs no removal outside them
+// (`server::drop_unannounced`): the label and the act cannot part on a destructive step.
+export function announcedRemovals(model) {
+  return applyPlan(model).filter((i) => ["uninstall", "downgrade"].includes(actionOf(model, i)));
+}
+// The settled status a row's presence reads as — what a `state` paints, for a message that
+// settles a row without a verdict of its own (a diff's `self`).
+export function presenceStatus(model, i) {
+  const present = model.pkgs.get(i)?.present;
+  return present === true ? "ok" : present === false ? "waiting" : "unknown";
+}
 // What each row the Apply would run took HERE last time, in plan order; 0 = never measured.
 // The button's estimate sums them, and counts the zeros as unknown instead of free.
 export function planSeconds(model) {

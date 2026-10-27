@@ -1366,9 +1366,12 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 // indistinguishable from `auto` (see the desire match in
                 // apply_diff), so the server would have no way to know.
                 let unmanaged = json_indices(&parsed, "unmanaged");
+                // The rows whose removal the button announced; the Apply runs no other
+                // (`drop_unannounced`).
+                let announced = json_indices_opt(&parsed, "removals");
                 // An Apply converges the WHOLE desire. A front from before 2026-10-10 still
                 // sends a `rung` (the ladder that filtered by kind); it is ignored, not parsed.
-                apply_diff(&mut socket, &state, on, off, unmanaged).await;
+                apply_diff(&mut socket, &state, on, off, unmanaged, announced).await;
             }
             // The per-row action verbs RETIRED on 2026-10-10: the Apply is the one path that
             // acts. A stale front may still send one after locking its UI, so it is answered
@@ -1638,9 +1641,9 @@ async fn diff_step(socket: &mut WebSocket, state: &AppState, i: usize) {
             ))
             .await;
     }
-    // Settle the row back to a TRUE state: the atom is self-managed either way — a diff
-    // never changes presence, so re-emit what we now observe rather than inventing a
-    // verdict. `self` is the row state that means "you own this".
+    // Settle the row: a diff never changes presence, so `self` carries no verdict — the front
+    // reads it as "back to the presence you had" (`presenceStatus`). It is not a label: an atom
+    // with a way back, wanted absent, is still the next Apply's removal.
     let _ = socket
         .send(Message::Text(
             json!({ "type": "step", "i": i, "status": "self" }).to_string(),
@@ -2029,6 +2032,13 @@ fn json_indices(v: &serde_json::Value, key: &str) -> Vec<usize> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// `json_indices`, but a missing key is `None` rather than an empty list: "nothing announced"
+/// and "no list sent" are different answers.
+fn json_indices_opt(v: &serde_json::Value, key: &str) -> Option<Vec<usize>> {
+    v.get(key)?;
+    Some(json_indices(v, key))
 }
 
 /// Is this row IMPOSSIBLE here because a `requires:` can never hold — the retry
@@ -2427,6 +2437,39 @@ fn drop_requiring_held(
     dropped
 }
 
+/// The reason a removal the Apply button did not name stays undone (`drop_unannounced`).
+const UNANNOUNCED_REMOVAL: &str = "not announced before the click — Apply again to run it";
+
+/// The removals the button did not announce leave the plan, and are returned for their trace.
+/// A removal is a destructive act, and the doctrine is that it is named on the button before
+/// the click; the front sends the rows whose uninstall or reinstall it counted (`removals`).
+/// The two sides decide with one rule but from facts read at two moments: the scan the button
+/// counted from, and the re-probe here. When they disagree on a removal, the button's count is
+/// what the user consented to, so the plan is cut down to it. The row's facts are repainted
+/// before the plan, so the next click counts the removal and runs it.
+///
+/// `None` (a front that sends no list) keeps the plan whole. Installs and updates are never
+/// cut: nothing is lost if one was not counted.
+fn drop_unannounced(
+    plan: &mut Vec<(usize, crate::decision::Action)>,
+    announced: Option<&std::collections::HashSet<usize>>,
+) -> Vec<usize> {
+    use crate::decision::Action;
+    let Some(announced) = announced else {
+        return Vec::new();
+    };
+    let mut dropped = Vec::new();
+    plan.retain(|&(i, a)| {
+        let removal = matches!(a, Action::Uninstall | Action::Downgrade);
+        if removal && !announced.contains(&i) {
+            dropped.push(i);
+            return false;
+        }
+        true
+    });
+    dropped
+}
+
 /// Tells the front that the Apply leaves row `i` and why. The front keeps it as the row's hold
 /// until the next plan (a Refresh), so the Apply button stops offering a change brew cannot
 /// make. The server keeps nothing: every Apply that wants the row asks brew again.
@@ -2653,6 +2696,7 @@ async fn apply_diff(
     on: Vec<usize>,
     off: Vec<usize>,
     unmanaged: Vec<usize>,
+    announced: Option<Vec<usize>>,
 ) {
     use crate::decision::{action_for, Action, Desired, MachineFacts};
     use crate::deps::{
@@ -2670,6 +2714,7 @@ async fn apply_diff(
     let want_on: HashSet<usize> = on.iter().copied().collect();
     let want_off: HashSet<usize> = off.iter().copied().collect();
     let out_of_scope: HashSet<usize> = unmanaged.iter().copied().collect();
+    let announced: Option<HashSet<usize>> = announced.map(|v| v.into_iter().collect());
 
     // The batched outdated scan runs FIRST, because the seed selection needs it: a
     // row that is present and wanted present is still an ACTION when it is behind.
@@ -2995,6 +3040,11 @@ async fn apply_diff(
             // trace here is the log line — the row is not acted on, and it says why.
             Err(why) => println!("[apply] {} held: {why}", step.name),
         }
+    }
+    for i in drop_unannounced(&mut visual_plan, announced.as_ref()) {
+        state.brew_pins.lock().await.remove(&steps[i].id);
+        println!("[apply] {} held: {UNANNOUNCED_REMOVAL}", steps[i].name);
+        send_held(socket, i, UNANNOUNCED_REMOVAL).await;
     }
     for (i, why) in drop_requiring_held(&mut visual_plan, &mut nodes, &idx, &held_absent) {
         state.brew_pins.lock().await.remove(&steps[i].id);
@@ -5298,6 +5348,55 @@ mod tests {
         );
         // A removal never needs its requirement; an unrelated row stays.
         assert_eq!(plan, vec![(3, Uninstall), (4, Install)]);
+    }
+
+    #[test]
+    fn a_removal_the_button_did_not_announce_leaves_the_plan() {
+        // Measured 2026-10-27: after a reload with a bundle off, the button said "2 installs"
+        // and the plan uninstalled two more rows. The button's count is what was consented to.
+        use crate::decision::Action::*;
+        use std::collections::HashSet;
+        let full = vec![
+            (0, Install),
+            (1, Uninstall),
+            (2, Downgrade),
+            (3, Upgrade),
+            (4, Uninstall),
+        ];
+        let mut plan = full.clone();
+        let announced: HashSet<usize> = [4].into();
+        assert_eq!(
+            super::drop_unannounced(&mut plan, Some(&announced)),
+            vec![1, 2]
+        );
+        assert_eq!(
+            plan,
+            vec![(0, Install), (3, Upgrade), (4, Uninstall)],
+            "installs and updates stay"
+        );
+        // A front that sends no list keeps the plan whole.
+        let mut plan = full.clone();
+        assert!(super::drop_unannounced(&mut plan, None).is_empty());
+        assert_eq!(plan, full);
+    }
+
+    #[test]
+    fn the_apply_cuts_unannounced_removals_and_says_why_before_ordering() {
+        // The pure test above stays green if the wiring is removed.
+        let plan = fn_body("apply_diff");
+        let at = |b: &str, s: &str| b.find(s).unwrap_or_else(|| panic!("no `{s}`"));
+        let cut = at(
+            &plan,
+            "drop_unannounced(&mut visual_plan, announced.as_ref())",
+        );
+        assert!(at(&plan, "visual_plan.push((i, a))") < cut);
+        assert!(cut < at(&plan, "topo_sort("));
+        assert!(plan.contains("send_held(socket, i, UNANNOUNCED_REMOVAL)"));
+        let wire = fn_body("handle_socket");
+        assert!(
+            wire.contains("json_indices_opt(&parsed, \"removals\")"),
+            "the front's list must reach the Apply"
+        );
     }
 
     #[test]

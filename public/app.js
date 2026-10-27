@@ -962,6 +962,8 @@ function applyAll() {
     on,
     off,
     unmanaged: M.unmanagedIndices(model),
+    // The removals the button named: the server runs no other (`drop_unannounced`).
+    removals: M.announcedRemovals(model),
   }));
 }
 
@@ -2394,13 +2396,11 @@ ws.onmessage = (ev) => {
         // comparison in actionOf sees it when liveness refreshes.
         // "" when the probe found no version (absent, or a route with no version).
         M.setInstalledVersion(model, msg.i, msg.version || "");
-        // A config-atom the user turned OFF is out of scope: neutral, not
-        // "absent". Talos won't touch the file, so we don't judge it — the row
-        // says "yours" and its button offers a diff (see rowGesture).
-        if (model.pkgs.get(msg.i)?.isConfig && M.desiredOf(model, msg.i) === "absent") {
-          setStatus(msg.i, "self");
-          break;
-        }
+        // ⚠️ The presence ALWAYS reaches the model, whatever the row will read. A config-atom
+        // wanted absent used to be labelled `self` here and left before it: after a reload its
+        // presence never landed, `actionOf` announced nothing, and the Apply removed it through
+        // its `runUninstall` (measured 2026-10-27). An atom Talos will not touch is out of scope,
+        // and paintPkg already says so ("yours", "available") from scopeReason.
         setStatus(
           msg.i,
           msg.present === true
@@ -2522,7 +2522,11 @@ ws.onmessage = (ev) => {
           const { outdated, available } = p;
           setStatus(msg.i, present === true ? "ok" : present === false ? "waiting" : "unknown");
           Object.assign(p, { outdated, available });
-          if (present !== true && rows[msg.i]) rows[msg.i].statusLabel.textContent = msg.reason;
+          // The version display carries a hold it explains (holdReason); any other — a removal
+          // the button did not announce — is said here, or nowhere.
+          if (rows[msg.i] && (present !== true || M.holdReason(model, msg.i) !== msg.reason)) {
+            rows[msg.i].statusLabel.textContent = msg.reason;
+          }
         }
       }
       paintVersion(msg.i);
@@ -2536,7 +2540,9 @@ ws.onmessage = (ev) => {
       break;
     }
     case "step":
-      setStatus(msg.i, msg.status);
+      // A diff settles with `self`: it changed nothing, so the row reads its presence again. As a
+      // status of its own it read "yours" on an atom the next Apply removes.
+      setStatus(msg.i, msg.status === "self" ? M.presenceStatus(model, msg.i) : msg.status);
       // A step that settled ok clears any lingering firewall recovery UI (the
       // 403 was transient — the exit code is truth). Retry / new run also reset it.
       if (msg.status === "ok" || msg.status === "absent") clearForbidden(msg.i);

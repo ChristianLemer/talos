@@ -129,7 +129,9 @@ test("a row the server holds at Apply keeps the hold and shows it, even with not
   // "requires nushell", no pin of its own — says why in its status, as a state with a reason does.
   // The status follows presence exactly as a `state` does: unknown stays unknown.
   assert.match(body, /present === true \? "ok" : present === false \? "waiting" : "unknown"/);
-  assert.match(body, /if \(present !== true && rows\[msg\.i\]\) rows\[msg\.i\]\.statusLabel\.textContent = msg\.reason/);
+  // Since 2026-10-27 a PRESENT row says it too when its version display does not carry the hold
+  // (a removal the button did not announce, announced-removals.test.mjs).
+  assert.match(body, /if \(rows\[msg\.i\] && \(present !== true \|\| M\.holdReason\(model, msg\.i\) !== msg\.reason\)\) \{\s*rows\[msg\.i\]\.statusLabel\.textContent = msg\.reason/);
   // Third review: "ok" clears `outdated`/`available` (setStatusData) and no `outdated` message
   // follows a `held`, so a present dependent's upgrade — and with it its hold — vanished.
   assert.match(body, /const \{ outdated, available \} = p/, "a held row keeps what it was behind on");
