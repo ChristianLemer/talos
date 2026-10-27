@@ -280,23 +280,36 @@ export function unmanagedIndices(model) {
 // content, not the active bundles: the question it answers is "does this kit fit this
 // machine?", asked by whoever composes or checks a kit, and that question is about every
 // row the kit ships. It is also the set the Catalog tab lists under it, so the line can
-// be checked against the rows by eye. The active bundles change with each click; what
-// the machine can reach does not.
+// be checked against the rows by eye there (the Bundles tab filters its list; the line
+// says "of 19" either way).
+//
+// It is not independent of the choices: a requirement holds when it is present OR wanted
+// and reachable (requiresReason), so wanting Visual Studio Code takes its extension off
+// `requires Visual Studio Code` — the row moves the same way, and the line with it.
 //
 // NO new categories: a row is out of reach for exactly the reasons the rows already
 // show, in scopeReason's order — a requirement that does not hold (the verbatim
-// `requires X`), else no practicable route (`no-route`, the row's `—`). Two departures
-// from scopeReason, both because fit is a fact of the MACHINE, not of the user's choices:
-// a manual scope or an `external` provenance does not take a row out of reach, and a row
-// that is PRESENT is within reach whatever its routes — the OS package (detect-only, no
-// route anywhere) is simply there on its own OS.
+// `requires X`), else no practicable route (`no-route`, the row's `—`).
+export function fitReason(model, i) {
+  const p = model.pkgs.get(i);
+  if (!p) return null;
+  return requiresReason(model, i) ??
+    (p.present !== true && !p.canUninstall && !p.isConfig ? "no-route" : null);
+}
+// Three departures from scopeReason, all because fit is a fact of the MACHINE, not of the
+// user's scope:
+//   - a manual "out" or an `external` provenance does not take a row out of reach;
+//   - a manual "in" does not bring a blocked row INTO reach: its row label goes back to
+//     the presence word, but the Apply still drops it with the same `requires X`
+//     (server.rs, the requirement gate runs whatever the scope), so the line keeps it;
+//   - a PRESENT row with no route is within reach — the OS package (detect-only) is
+//     simply there on its own OS. A present row whose requirement fails still counts
+//     under that requirement, as its row shows.
 export function fitSummary(model) {
   const groups = new Map(); // reason → count, insertion order = catalogue order
   let reachable = 0;
   for (const i of [...model.pkgs.keys()].sort((a, b) => a - b)) {
-    const p = model.pkgs.get(i);
-    const why = requiresReason(model, i) ??
-      (p.present !== true && !p.canUninstall && !p.isConfig ? "no-route" : null);
+    const why = fitReason(model, i);
     if (why == null) reachable++;
     else groups.set(why, (groups.get(why) ?? 0) + 1);
   }

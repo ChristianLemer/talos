@@ -644,11 +644,12 @@
       .list-sep-toggle .sep-toggle-label { font-size:12px; color:var(--dim); }
       body.tab-catalog #list-sep { display:none; }
       body.applying #list-sep { display:none; }
-      /* The fit line, above the list: advanced mode only, and not in the Arbitration view,
-         which lists versions held, not rows to get. */
+      /* The fit line, above the list: advanced mode only, not in the Arbitration view
+         (versions held, not rows to get), not during an Apply (focus mode, like #list-sep). */
       #fit-line { padding:6px 12px; font-size:12px; color:var(--dim); }
       body:not(.advanced) #fit-line { display:none; }
       body.tab-arbitration #fit-line { display:none; }
+      body.applying #fit-line { display:none; }
       /* Advanced-only tabs: hidden entirely in simple mode. */
       body:not(.advanced) .tab-adv-only { display:none; }
       /* The Doctor tab exists only when the catalogue declares a rescue candidate

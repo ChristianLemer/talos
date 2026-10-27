@@ -6,7 +6,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { createModel, fitLine, fitSummary, loadPlan, setDecision, setPresence } from "../public/model.js";
+import {
+  createModel,
+  fitLine,
+  fitReason,
+  fitSummary,
+  loadPlan,
+  scopeReason,
+  setDecision,
+  setExternal,
+  setPresence,
+  setScope,
+} from "../public/model.js";
 
 // A Linux-like machine: the OS package is detect-only and absent, two rows need it, one
 // row needs an editor nobody wants, a winget-only row has no route, a config-atom has no
@@ -83,6 +94,52 @@ test("fitSummary: it follows the live facts — wanting the editor unblocks its 
     { reason: "requires Windows", count: 2 },
     { reason: "no-route", count: 1 },
   ]);
+});
+
+test("fitReason: for every row the user left alone, it is the row's own out-of-reach reason", () => {
+  // THE property the line promises: read against the rows, it says what they say. Where a
+  // row shows a requirement or `no-route`, the line counts that; where it shows anything
+  // else (in scope, `yours`, `available`, external), the row is within reach.
+  const m = linuxBox();
+  setExternal(m, 7, true); // Git installed elsewhere
+  for (const i of m.pkgs.keys()) {
+    const row = scopeReason(m, i);
+    const expected = row === "no-route" || row?.startsWith("requires ") ? row : null;
+    assert.equal(fitReason(m, i), expected, `row ${m.pkgs.get(i).name}: row says ${row}`);
+  }
+});
+
+test("fitReason: the user's scope does not move what the machine can reach", () => {
+  // Out by hand: still within reach. In by hand on a blocked row: the row's label goes back
+  // to presence, but the Apply still drops it with the same `requires Windows`.
+  const m = linuxBox();
+  setScope(m, 6, "out");
+  assert.equal(fitReason(m, 6), null);
+  setScope(m, 1, "in");
+  assert.equal(scopeReason(m, 1), null);
+  assert.equal(fitReason(m, 1), "requires Windows");
+});
+
+test("fitReason: a config-atom is within reach unless its requirement fails", () => {
+  const m = createModel();
+  loadPlan(m, [
+    { i: 0, name: "Git", bundle: "", posture: "opt-in", canUninstall: true },
+    { i: 1, name: "Git default branch", bundle: "", posture: "opt-in", canUninstall: false, isConfig: true, requires: ["Git"] },
+  ], []);
+  setPresence(m, 0, false);
+  setPresence(m, 1, false);
+  assert.equal(fitReason(m, 1), "requires Git");
+  setPresence(m, 0, true);
+  assert.equal(fitReason(m, 1), null);
+});
+
+test("fitLine: a dangling requirement is counted under its own words, conjugated", () => {
+  const m = createModel();
+  loadPlan(m, [
+    { i: 0, name: "A", bundle: "", posture: "opt-in", canUninstall: true, requires: ["Gone"] },
+    { i: 1, name: "B", bundle: "", posture: "opt-in", canUninstall: true, requires: ["Gone"] },
+  ], []);
+  assert.equal(fitLine(fitSummary(m)), "0 of 2 within reach here · 2 require Gone (unknown)");
 });
 
 test("the fit line is painted from refreshLiveness, never mid-scan, and only in advanced mode", () => {
