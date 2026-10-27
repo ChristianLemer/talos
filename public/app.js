@@ -26,11 +26,13 @@ const rows = {}; // i → { details, badge, statusLabel, host, term }
 //
 // The splash lives STRICTLY for the duration of the scan: it appears at load and
 // is dismissed when `state-done` fires (hideSplash). No floor, no padding — a fast
-// scan means it only flashes, and that honesty is the point. The safety-net timer
-// must outlast a realistic slow scan, else it lifts mid-scan and exposes the
-// half-painted accordion (the "second wait" people reported). The fade-out (~450ms)
+// scan means it only flashes, and that honesty is the point. The fade-out (~450ms)
 // is the disappearance itself, not added wait.
-const SPLASH_SAFETY_MS = 120000; // never fires if state-done answers first
+// ⚠️ The safety net is a STALL detector, not a deadline. A fixed 2 minutes lifted the
+// splash in the middle of a slow Windows scan (serial on purpose) and left the rows
+// saying "checking…" with nothing to say why. Now only a scan that stops ANSWERING —
+// no verdict for SPLASH_STALL_MS — lifts it, and then #scan-warn says so.
+const SPLASH_STALL_MS = 300000; // re-armed by every verdict (splashProgress)
 const splash = document.getElementById("splash");
 const splashNow = document.getElementById("splash-now");
 const splashCount = document.getElementById("splash-count");
@@ -42,6 +44,8 @@ let scanSeen = 0; // verdicts received so far
 // Announce the package about to be probed. `n` is the 1-based position.
 function splashProgress(name, n) {
   if (splashDone) return;
+  clearTimeout(splashStall);
+  splashStall = setTimeout(splashStalled, SPLASH_STALL_MS);
   splashNow.textContent = name ? `checking ${name}…` : "checking…";
   if (scanTotal > 0) {
     splashCount.textContent = `${n} of ${scanTotal}`;
@@ -93,7 +97,18 @@ function hideSplash() {
   splash.classList.add("hide");
   setTimeout(() => splash.remove(), 450);
 }
-setTimeout(hideSplash, SPLASH_SAFETY_MS); // safety net only — state-done normally hides it first
+// The engine stopped answering mid-scan: lift the splash so the rows can be looked at,
+// and say that what still reads "checking…" is not known. state-done clears the line.
+function splashStalled() {
+  if (splashDone) return;
+  const warn = document.getElementById("scan-warn");
+  warn.textContent =
+    `The scan stopped answering (${scanSeen} of ${scanTotal || "?"} checked, nothing for ` +
+    `${SPLASH_STALL_MS / 60000} minutes). Rows still "checking…" are not known — restart Talos.`;
+  warn.classList.add("show");
+  hideSplash();
+}
+let splashStall = setTimeout(splashStalled, SPLASH_STALL_MS);
 
 // Shorter terminals (10 rows) — they scroll, and tall fixed boxes waste
 // vertical space on small screens. Smaller font on short viewports.
@@ -2456,6 +2471,7 @@ ws.onmessage = (ev) => {
       hideRescanVeil(); // no-op at boot (the splash covers that), clears a Refresh
       refreshLiveness();
       paintProfiles();
+      document.getElementById("scan-warn")?.classList.remove("show"); // it answered after all
       hideSplash();
       break;
     // ⬜ `ready` + `starting` REMOVED 2026-08-23 — one mechanism, so both or neither. They
