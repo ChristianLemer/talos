@@ -61,16 +61,18 @@ function countKinds(actions) {
 //   conn      "connecting" | "open" | "closed"
 //   scanning  the machine is being read; `scan` = { seen, total } when the count is known
 //   running   null, or what holds the session: { kind: "apply" | "diff" | "retry",
+//             row: the row a diff or a retry acts on (no plan names it),
 //             word?: a transient word that overrides the progress ("stopping…"),
 //             paused?: the Apply waits for an answer on a blocked row,
 //             done, total: rows started / rows in the plan (0 before the plan is known),
 //             current: { name, status } of the row running now, or null }
 //   actions   the plan's actions, one per row the Apply would run
 //   estimate  the duration phrase for that plan ("" when there is none)
+//   note      a one-off sentence from the last run's end, said before the rest of the line
 //
 // Returns { label, sub, live, disabled, hint: [{ text, tone }], quitPrimary }. `tone` is
 // "strong", "remove" or undefined (the line's ordinary dim).
-export function barView({ conn, scanning, scan, running, actions = [], estimate = "" }) {
+export function barView({ conn, scanning, scan, running, actions = [], estimate = "", note = "" }) {
   const view = { label: "Apply", sub: "", live: false, disabled: true, hint: [], quitPrimary: false };
   if (conn !== "open") {
     view.sub = conn === "closed" ? "disconnected" : "connecting…";
@@ -86,7 +88,7 @@ export function barView({ conn, scanning, scan, running, actions = [], estimate 
   }
   if (actions.length === 0) {
     view.sub = "nothing to do";
-    view.hint = [{ text: IDLE_HINT }];
+    view.hint = [{ text: note || IDLE_HINT }];
     view.quitPrimary = true;
     return view;
   }
@@ -99,6 +101,7 @@ export function barView({ conn, scanning, scan, running, actions = [], estimate 
     tone: KINDS[k].destructive ? "remove" : "strong",
   }));
   if (estimate) view.hint.push({ text: estimate });
+  if (note) view.hint.unshift({ text: note });
   return view;
 }
 
@@ -111,15 +114,18 @@ function runningView(view, run) {
   }
   view.label = run.kind === "diff" ? "Diffing" : run.kind === "retry" ? "Retrying" : "Applying";
   const progress = run.total > 0 ? `${Math.max(1, Math.min(run.done, run.total))} of ${run.total}` : "";
-  view.sub = run.word || progress || "starting…";
+  // A diff or a retry has no plan to count: its row is what it is working on.
+  view.sub = run.word || progress || run.row || "starting…";
   const cur = run.current;
   if (cur && DOING[cur.status]) {
     view.hint = [{ text: `${DOING[cur.status]} ${cur.name}`, tone: "strong" }];
     if (progress) view.hint.push({ text: progress });
     // The one interruption there is lives on the row itself: say where.
     view.hint.push({ text: "Stop is on its row" });
+  } else if (run.kind === "apply") {
+    view.hint = [{ text: progress ? "Working…" : "Checking this machine before acting…" }];
   } else {
-    view.hint = [{ text: run.kind === "apply" && !progress ? "Checking this machine before acting…" : "Working…" }];
+    view.hint = [{ text: run.row ? `${view.label} ${run.row}…` : "Working…" }];
   }
   return view;
 }

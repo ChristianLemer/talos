@@ -72,7 +72,7 @@
       .hero-text { flex:1; min-width:0; }
       /* Apply is the action bar at the TOP of the Setup view (not the header): it
          acts on the list below it. Sticky so it stays reachable while the bundle
-         list scrolls. Hint on the left, buttons + status on the right. */
+         list scrolls. The plan's sentence on the left, the buttons on the right. */
       .hero-apply { position:sticky; top:0; z-index:10; display:flex; align-items:center;
                     gap:12px; padding:14px 12px 13px; background:var(--bg);
                     border-bottom:1px solid var(--line); }
@@ -307,7 +307,7 @@
          probe answers (setStatus clears its own row), so the panel fills in live
          instead of flashing wrong states. No overlay — the structure shows. */
       #steps.scanning { pointer-events:none; }
-      #steps.scanning .toggle, #steps.scanning .applybtn { opacity:.5; }
+      #steps.scanning .toggle { opacity:.5; }
       /* A row whose desired state is "absent" (won't be installed) reads dimmer —
          its name fades toward the muted tone. Wanted rows stay bright. */
       details.row-out .name { color:var(--dim); }
@@ -392,13 +392,15 @@
          width. Disabled during an Apply: a running installer is our child process and
          would die with us; the user deserves to be told, not to lose a half-done install.
          PRIMARY (.primary, set by bar.js) when there is nothing left to send: Apply goes
-         ghost and Quit is the filled one — the session's natural end. Never both filled. */
+         ghost and Quit is the filled one — the session's natural end. Never both filled.
+         It keeps Quit's alignment: below 560 px the header is a column, and a primary that
+         re-aligned itself jumped from left to centre each time the plan emptied. */
       .quitbtn { flex:none; align-self:flex-start; background:none; color:var(--dim);
                  border:1px solid transparent; padding:5px 11px; border-radius:7px;
                  cursor:pointer; font-size:12px; transition:color .15s, border-color .15s; }
       .quitbtn:hover { color:var(--fg); border-color:var(--line); }
       .quitbtn:disabled { opacity:.4; cursor:default; }
-      .quitbtn.primary { align-self:center; background:#3d59a1; color:var(--fg); border-color:#3d59a1;
+      .quitbtn.primary { background:#3d59a1; color:var(--fg); border-color:#3d59a1;
                          padding:9px 22px; font-size:14px; font-weight:700; border-radius:9px; }
       .quitbtn.primary:hover { filter:brightness(1.15); }
       /* Bundle panel — TWO columns (spec §24): the dependency CHAIN on the left
@@ -1241,7 +1243,7 @@
           <button id="refresh-all" class="resetbtn" title="Re-scan the machine — re-check what's installed right now (your choices are kept)">Refresh</button>
           <button id="reset-all" class="resetbtn" title="Reset every toggle to the author's default">Reset</button>
           <!-- The ONE door: Apply converges the whole desire, and no other control runs
-               anything. Its label counts what it would do. -->
+               anything. Its two lines say what it would do; the line beside it says it in full. -->
           <button id="install-all" class="applybtn" disabled><span>Apply</span><small>connecting…</small></button>
         </div>
         <span id="globalhint">Connecting to the engine…</span>

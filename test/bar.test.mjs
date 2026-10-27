@@ -112,6 +112,27 @@ test("a diff and a retry are named for what they are, not as an Apply", () => {
   assert.equal(barView({ ...open, running: { kind: "retry", done: 0, total: 0 } }).label, "Retrying");
 });
 
+test("a diff and a retry have no plan: their row is what the bar names, never 'starting…'", () => {
+  // Found by the in-branch review: neither sends an `apply-plan`, so "starting…" stayed on the
+  // button from start to end.
+  const d = barView({ ...open, running: { kind: "diff", row: "Delta", done: 0, total: 0, current: null } });
+  assert.equal(d.sub, "Delta");
+  assert.equal(text(d), "Diffing Delta…");
+  const r = barView({
+    ...open,
+    running: { kind: "retry", row: "Gamma", done: 0, total: 0, current: { name: "Gamma", status: "installing" } },
+  });
+  assert.equal(r.sub, "Gamma");
+  assert.equal(text(r), "Installing Gamma · Stop is on its row");
+});
+
+test("an Apply the engine found nothing for says so once, before the rest of the line", () => {
+  const empty = barView({ ...open, actions: [], note: "The engine found nothing to do." });
+  assert.equal(text(empty), "The engine found nothing to do.");
+  const stale = barView({ ...open, actions: ["install"], note: "The engine found nothing to do." });
+  assert.equal(text(stale), "The engine found nothing to do. · 1 to install");
+});
+
 // --- the wiring -----------------------------------------------------------------
 
 test("app.js paints the bar from bar.js, and the old status word is gone", () => {
@@ -119,6 +140,12 @@ test("app.js paints the bar from bar.js, and the old status word is gone", () =>
   const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
   assert.match(appjs, /import \{ barView \} from "\.\/bar\.js";/);
   assert.match(appjs, /classList\.toggle\("primary", v\.quitPrimary\)/);
+  // A row that starts clears the transient word ("retrying…"), or it masks the progress for
+  // the rest of the run; and the plan's arrival repaints, or "starting…" outlives it.
+  const setStatus = appjs.slice(appjs.indexOf("function setStatus("), appjs.indexOf("\n}\n", appjs.indexOf("function setStatus(")));
+  assert.match(setStatus, /barWord = "";/);
+  const planCase = appjs.slice(appjs.indexOf('case "apply-plan":'), appjs.indexOf('case "apply-plan-add":'));
+  assert.match(planCase, /paintBar\(\)/);
   // `#overall` said "ready" / "applying…" beside a button that now says more; a write to it
   // that survived would be a TypeError on the first click.
   assert.doesNotMatch(appjs, /\boverall\b/);

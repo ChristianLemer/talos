@@ -706,6 +706,11 @@ let conn = "connecting";
 let planSeen = false;
 let runKind = null;
 let barWord = "";
+// The row a diff or a retry acts on: neither sends an `apply-plan`, so there is no plan to find
+// it in. `doneNote`: the server answered `done {nothing:true}` to an Apply the front thought had
+// work — said once in the line, until the next gesture, rather than ending in silence.
+let runRow = null;
+let doneNote = "";
 // ⭐ WHAT A ROW WILL DO TO YOU — always shown, for every row that carries a fact. These three
 // words used to appear ONLY when a slider hid the row, because its rungs sorted by exactly
 // these facts. The slider is gone (2026-10-10); the words stayed and live here.
@@ -826,12 +831,13 @@ function paintBar() {
     // Progress follows the plan the server announced: rows that have STARTED, so the row
     // running now counts ("1 of 3" while the first one runs).
     let current = null;
-    for (const i of focusPlan || []) {
+    for (const i of focusPlan || (runRow !== null ? [runRow] : [])) {
       const st = model.pkgs.get(i)?.status;
       if (RUNNING.has(st)) current = { name: model.pkgs.get(i)?.name || "", status: st };
     }
     running = {
       kind: runKind || "apply",
+      row: runRow !== null ? model.pkgs.get(runRow)?.name || "" : "",
       word: barWord,
       paused: fbPaused,
       done: focusStarted ? focusStarted.size : 0,
@@ -845,6 +851,7 @@ function paintBar() {
     scanning: scanning || !planSeen,
     scan: rescanTotal > 0 ? { seen: rescanSeen, total: rescanTotal } : { seen: scanSeen, total: scanTotal },
     running,
+    note: doneNote,
     actions,
     estimate: busy ? "" : formatEstimate(estimate(M.planSeconds(model))),
   });
@@ -932,6 +939,7 @@ function applyAll() {
   persistSelection();
   applyRunning = true;
   runKind = "apply";
+  doneNote = "";
   refreshLiveness(); // lock every Apply button during the run
   // The server re-scans presence before it replies with the plan. No longer a
   // SILENT gap: it narrates each re-probed package (`rescan-progress`). The veil
@@ -1127,6 +1135,8 @@ function render(steps, profiles = [], columns = 2) {
       if (!rowGesture(s.i)) return; // the only non-running gesture is a diff
       applyRunning = true;
       runKind = "diff";
+      runRow = s.i;
+      doneNote = "";
       refreshLiveness();
       ws.send(JSON.stringify({ type: "diff", i: s.i }));
     };
@@ -1607,6 +1617,8 @@ function retryStep(i) {
   clearForbidden(i);
   applyRunning = true;
   runKind = "retry";
+  runRow = i;
+  doneNote = "";
   refreshLiveness();
   ws.send(JSON.stringify({ type: "retry-step", i, action }));
 }
@@ -1666,6 +1678,9 @@ function setStatus(i, status) {
     M.resetLog(model, i);
     if (r.term) r.term.reset();
     if (focusPlan?.has(i)) focusStarted.add(i);
+    // A row that starts IS the answer the transient word waited for ("retrying…"): left
+    // set, it would hide the progress for the rest of the run.
+    barWord = "";
   } // fresh run
   r.badge.className = "badge " + status;
   r.badge.textContent = GLYPH[status] || "·";
@@ -1774,6 +1789,7 @@ document.getElementById("arb-copy").onclick = async () => {
 document.getElementById("refresh-all").onclick = () => {
   if (applyRunning || scanning) return; // don't stack a scan on a run or a scan
   scanning = true;
+  doneNote = "";
   // Counted from here, before the first repaint: the bar reads this count, and set after
   // `refreshLiveness` it opened on the boot scan's "5 of 5".
   rescanSeen = 0;
@@ -2562,15 +2578,19 @@ ws.onmessage = (ev) => {
       // list shows and progress follows down it.
       hideRescanVeil(); // scan done, plan is here
       enterFocusMode((msg.plan || []).map((p) => p.i));
+      paintBar(); // "1 of N" from now, not "starting…" until the first step lands
       break;
     case "apply-plan-add":
       // One more step in the running plan — see addToFocusMode.
       addToFocusMode(msg.i);
+      paintBar();
       break;
     case "done":
       applyRunning = false;
       runKind = null;
+      runRow = null;
       barWord = "";
+      doneNote = msg.nothing ? "The engine found nothing to do — this machine already matches." : "";
       fbPaused = false; // the loop is over — no pause left to release
       hideRescanVeil(); // net: scan found nothing → no apply-plan
       exitFocusMode(); // everything reappears — failures already open, stand out
@@ -2614,6 +2634,9 @@ ws.onmessage = (ev) => {
       // The user tried to update an app in /Applications but the permission is
       // missing — the step did NOT run. Raise the gate sheet.
       document.getElementById("appmgmt-sheet")?.classList.add("show");
+      // The plan's count passed it: counted, or the bar would stop at "2 of 3".
+      focusStarted?.add(msg.i);
+      paintBar();
       break;
     }
   }
