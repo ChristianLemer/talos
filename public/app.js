@@ -2549,6 +2549,9 @@ ws.onmessage = (ev) => {
       // Said on the row, and NOT kept as a hold: the facts the server acted on were repainted
       // before its plan, so the button now counts the removal and the next click runs it. A kept
       // hold would take the row out of that count until a Refresh.
+      // A brew hold kept from an earlier Apply would keep the row out of that count: the server
+      // just judged the change servable, so it is stale (pre-tag review).
+      M.setHold(model, msg.i, "");
       if (rows[msg.i]) rows[msg.i].statusLabel.textContent = msg.reason;
       refreshLiveness();
       break;

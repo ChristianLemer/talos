@@ -99,7 +99,9 @@ test("an unannounced removal is said on the row and never kept as a hold", () =>
   // reinstall then stayed out of the count forever, and every Apply held it again.
   const body = arm("unannounced");
   assert.match(body, /statusLabel\.textContent = msg\.reason/);
-  assert.doesNotMatch(body, /setHold/);
+  assert.doesNotMatch(body, /setHold\(model, msg\.i, msg\.reason\)/);
+  // And it clears a hold kept from an earlier Apply, which the server just judged stale.
+  assert.match(body, /M\.setHold\(model, msg\.i, ""\)/);
   assert.match(body, /refreshLiveness\(\)/, "the button counts the removal at once");
 });
 

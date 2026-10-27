@@ -2453,30 +2453,52 @@ const UNANNOUNCED_REMOVAL: &str = "not announced before the click — Apply agai
 fn drop_unannounced(
     plan: &mut Vec<(usize, crate::decision::Action)>,
     announced: Option<&std::collections::HashSet<usize>>,
-) -> Vec<usize> {
+    nodes: &[crate::deps::DepNode],
+    idx: &std::collections::HashMap<String, usize>,
+) -> Vec<(usize, String)> {
     use crate::decision::Action;
     let Some(announced) = announced else {
         return Vec::new();
     };
-    let mut dropped = Vec::new();
+    let mut dropped: Vec<(usize, String)> = Vec::new();
     plan.retain(|&(i, a)| {
         let removal = matches!(a, Action::Uninstall | Action::Downgrade);
         if removal && !announced.contains(&i) {
-            dropped.push(i);
+            dropped.push((i, UNANNOUNCED_REMOVAL.to_string()));
             return false;
         }
         true
     });
+    // A row left in place keeps what it requires: removing it would orphan the row, and its own
+    // removal may need it later (`plugin rm` needs `nu`). A chain goes with it. (Pre-tag review.)
+    loop {
+        let kept_for = plan.iter().find_map(|&(r, a)| {
+            (a == Action::Uninstall)
+                .then(|| {
+                    dropped.iter().find(|(d, _)| {
+                        nodes[*d]
+                            .requires
+                            .iter()
+                            .any(|req| idx.get(req) == Some(&r))
+                    })
+                })
+                .flatten()
+                .map(|(d, _)| (r, nodes[*d].name.clone()))
+        });
+        let Some((r, by)) = kept_for else { break };
+        plan.retain(|&(i, _)| i != r);
+        dropped.push((r, format!("kept: {by} requires it and stays")));
+    }
     dropped
 }
 
 /// Tells the front that the Apply left a removal its button did not name. Not a `held`: the
 /// front keeps a hold until the next plan, and this one answers ONE click — the repaint before
 /// the plan already gave the front the facts, so its next count names the removal.
-async fn send_unannounced(socket: &mut WebSocket, i: usize) {
+async fn send_unannounced(socket: &mut WebSocket, i: usize, why: &str) {
     let _ = socket
         .send(Message::Text(
-            json!({ "type": "unannounced", "i": i, "reason": UNANNOUNCED_REMOVAL }).to_string(),
+            json!({ "type": "unannounced", "i": i, "reason": why }).to_string(),
         ))
         .await;
 }
@@ -3052,10 +3074,10 @@ async fn apply_diff(
             Err(why) => println!("[apply] {} held: {why}", step.name),
         }
     }
-    for i in drop_unannounced(&mut visual_plan, announced.as_ref()) {
+    for (i, why) in drop_unannounced(&mut visual_plan, announced.as_ref(), &nodes, &idx) {
         state.brew_pins.lock().await.remove(&steps[i].id);
-        println!("[apply] {} held: {UNANNOUNCED_REMOVAL}", steps[i].name);
-        send_unannounced(socket, i).await;
+        println!("[apply] {} held: {why}", steps[i].name);
+        send_unannounced(socket, i, &why).await;
     }
     for (i, why) in drop_requiring_held(&mut visual_plan, &mut nodes, &idx, &held_absent) {
         state.brew_pins.lock().await.remove(&steps[i].id);
@@ -5374,11 +5396,17 @@ mod tests {
             (3, Upgrade),
             (4, Uninstall),
         ];
+        let nodes: Vec<_> = ["a", "b", "c", "d", "e"]
+            .iter()
+            .map(|n| node(n, &[]))
+            .collect();
+        let idx = crate::deps::make_index(&nodes);
         let mut plan = full.clone();
         let announced: HashSet<usize> = [4].into();
+        let why = |i: usize| (i, super::UNANNOUNCED_REMOVAL.to_string());
         assert_eq!(
-            super::drop_unannounced(&mut plan, Some(&announced)),
-            vec![1, 2]
+            super::drop_unannounced(&mut plan, Some(&announced), &nodes, &idx),
+            vec![why(1), why(2)]
         );
         assert_eq!(
             plan,
@@ -5387,8 +5415,49 @@ mod tests {
         );
         // A front that sends no list keeps the plan whole.
         let mut plan = full.clone();
-        assert!(super::drop_unannounced(&mut plan, None).is_empty());
+        assert!(super::drop_unannounced(&mut plan, None, &nodes, &idx).is_empty());
         assert_eq!(plan, full);
+    }
+
+    #[test]
+    fn a_row_left_in_place_keeps_what_it_requires() {
+        // Pre-tag review: the plugin's removal held, nushell's announced one would orphan it —
+        // and the plugin's own removal (`plugin rm`) needs nushell. A chain goes with it.
+        use crate::decision::Action::*;
+        use std::collections::HashSet;
+        let nodes = vec![
+            node("plugin", &["nushell"]),
+            node("nushell", &["base"]),
+            node("base", &[]),
+            node("other", &[]),
+        ];
+        let idx = crate::deps::make_index(&nodes);
+        let mut plan = vec![
+            (0, Uninstall),
+            (1, Uninstall),
+            (2, Uninstall),
+            (3, Uninstall),
+        ];
+        let announced: HashSet<usize> = [1, 2, 3].into();
+        assert_eq!(
+            super::drop_unannounced(&mut plan, Some(&announced), &nodes, &idx),
+            vec![
+                (0, super::UNANNOUNCED_REMOVAL.to_string()),
+                (1, "kept: plugin requires it and stays".to_string()),
+                (2, "kept: nushell requires it and stays".to_string()),
+            ]
+        );
+        assert_eq!(plan, vec![(3, Uninstall)]);
+    }
+
+    fn node(name: &str, requires: &[&str]) -> crate::deps::DepNode {
+        crate::deps::DepNode {
+            name: name.into(),
+            requires: requires.iter().map(|r| r.to_string()).collect(),
+            will_be_present: true,
+            present_now: true,
+            reachable: true,
+        }
     }
 
     #[test]
@@ -5398,13 +5467,13 @@ mod tests {
         let at = |b: &str, s: &str| b.find(s).unwrap_or_else(|| panic!("no `{s}`"));
         let cut = at(
             &plan,
-            "drop_unannounced(&mut visual_plan, announced.as_ref())",
+            "drop_unannounced(&mut visual_plan, announced.as_ref(), &nodes, &idx)",
         );
         assert!(at(&plan, "visual_plan.push((i, a))") < cut);
         assert!(cut < at(&plan, "topo_sort("));
         // Not `held`: the front keeps a hold until a Refresh, and this one must not outlive the
         // click it answers, or the next Apply could never announce the removal (review, 2026-10-27).
-        assert!(plan.contains("send_unannounced(socket, i)"));
+        assert!(plan.contains("send_unannounced(socket, i, &why)"));
         assert!(fn_body("send_unannounced").contains("\"type\": \"unannounced\""));
         let wire = fn_body("handle_socket");
         assert!(
