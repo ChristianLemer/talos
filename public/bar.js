@@ -68,18 +68,20 @@ function countKinds(actions) {
 //             current: { name, status } of the row running now, or null }
 //   actions   the plan's actions, one per row the Apply would run
 //   estimate  the duration phrase for that plan ("" when there is none)
-//   note      a one-off sentence from the last run's end, said before the rest of the line
+//   note      a one-off sentence from the last run's end, said only while the plan is empty
+//   advanced  advanced mode: the rows carry their own button (Stop while running); simple
+//             mode hides it, so the line must not send anyone to look for it
 //
 // Returns { label, sub, live, disabled, hint: [{ text, tone }], quitPrimary }. `tone` is
 // "strong", "remove" or undefined (the line's ordinary dim).
-export function barView({ conn, scanning, scan, running, actions = [], estimate = "", note = "" }) {
+export function barView({ conn, scanning, scan, running, actions = [], estimate = "", note = "", advanced = false }) {
   const view = { label: "Apply", sub: "", live: false, disabled: true, hint: [], quitPrimary: false };
   if (conn !== "open") {
     view.sub = conn === "closed" ? "disconnected" : "connecting…";
     view.hint = [{ text: conn === "closed" ? "Lost the connection to the engine." : "Connecting to the engine…" }];
     return view;
   }
-  if (running) return runningView(view, running);
+  if (running) return runningView(view, running, advanced);
   if (scanning) {
     view.sub = "scanning…";
     const count = scan && scan.total > 0 ? ` — ${Math.min(scan.seen, scan.total)} of ${scan.total} packages` : "";
@@ -100,12 +102,13 @@ export function barView({ conn, scanning, scan, running, actions = [], estimate 
     text: `${n[k]} ${KINDS[k].line}`,
     tone: KINDS[k].destructive ? "remove" : "strong",
   }));
+  // No `note` here: it says the engine found nothing to do, and beside a plan it would
+  // contradict the button.
   if (estimate) view.hint.push({ text: estimate });
-  if (note) view.hint.unshift({ text: note });
   return view;
 }
 
-function runningView(view, run) {
+function runningView(view, run, advanced) {
   if (run.paused) {
     view.label = "Paused";
     view.sub = "waiting for you";
@@ -120,8 +123,9 @@ function runningView(view, run) {
   if (cur && DOING[cur.status]) {
     view.hint = [{ text: `${DOING[cur.status]} ${cur.name}`, tone: "strong" }];
     if (progress) view.hint.push({ text: progress });
-    // The one interruption there is lives on the row itself: say where.
-    view.hint.push({ text: "Stop is on its row" });
+    // The one interruption there is lives on the row itself: say where — in advanced mode
+    // only, the one that shows the row's button (simple mode hides it, Stop included).
+    if (advanced) view.hint.push({ text: "Stop is on its row" });
   } else if (run.kind === "apply") {
     view.hint = [{ text: progress ? "Working…" : "Checking this machine before acting…" }];
   } else {

@@ -208,6 +208,7 @@ const ICON_OK =
 let planRestored = false;
 function persistSelection() {
   if (!planRestored) return;
+  doneNote = ""; // a changed selection is a new question; the last answer no longer applies
   ws.send(JSON.stringify({
     type: "set-selection",
     selection: {
@@ -852,6 +853,7 @@ function paintBar() {
     scan: rescanTotal > 0 ? { seen: rescanSeen, total: rescanTotal } : { seen: scanSeen, total: scanTotal },
     running,
     note: doneNote,
+    advanced: document.body.classList.contains("advanced"),
     actions,
     estimate: busy ? "" : formatEstimate(estimate(M.planSeconds(model))),
   });
@@ -2121,8 +2123,8 @@ document.querySelectorAll(".tab").forEach((tab) => {
 // Default scope: the Bundles tab (only wanted rows) is the active tab at load.
 document.body.classList.add("tab-bundles");
 
-// --- advanced mode: a UI preference (per-package toggles, postures, per-bundle
-// Apply). Default OFF → simple. Persisted in selection.json's `ui` (one config
+// --- advanced mode: a UI preference (per-package toggles, postures, the row's own
+// button). Default OFF → simple. Persisted in selection.json's `ui` (one config
 // file for all), sent via persistSelection on change; restored by
 // applySavedSelection from the plan. Boots OFF until the plan arrives.
 const advToggle = document.getElementById("advanced-toggle");

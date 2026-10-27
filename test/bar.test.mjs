@@ -79,6 +79,7 @@ test("before the socket opens and after it drops, nothing is offered either", ()
 test("an Apply: how far on the button, the row running now in the line", () => {
   const v = barView({
     ...open,
+    advanced: true,
     running: { kind: "apply", done: 1, total: 3, current: { name: "Gamma", status: "installing" } },
   });
   assert.equal(v.label, "Applying");
@@ -88,6 +89,15 @@ test("an Apply: how far on the button, the row running now in the line", () => {
   assert.equal(text(v), "Installing Gamma · 1 of 3 · Stop is on its row");
   const rm = barView({ ...open, running: { kind: "apply", done: 2, total: 2, current: { name: "Delta", status: "uninstalling" } } });
   assert.equal(rm.hint[0].text, "Removing Delta");
+});
+
+test("simple mode does not send anyone to a Stop it hides", () => {
+  // Found by the pre-tag review: the row's button (Stop while running) is advanced-only.
+  const v = barView({
+    ...open,
+    running: { kind: "apply", done: 1, total: 3, current: { name: "Gamma", status: "installing" } },
+  });
+  assert.equal(text(v), "Installing Gamma · 1 of 3");
 });
 
 test("an Apply before its plan is known says it is checking, not 0 of 0", () => {
@@ -121,16 +131,17 @@ test("a diff and a retry have no plan: their row is what the bar names, never 's
   const r = barView({
     ...open,
     running: { kind: "retry", row: "Gamma", done: 0, total: 0, current: { name: "Gamma", status: "installing" } },
+    advanced: true,
   });
   assert.equal(r.sub, "Gamma");
   assert.equal(text(r), "Installing Gamma · Stop is on its row");
 });
 
-test("an Apply the engine found nothing for says so once, before the rest of the line", () => {
-  const empty = barView({ ...open, actions: [], note: "The engine found nothing to do." });
-  assert.equal(text(empty), "The engine found nothing to do.");
-  const stale = barView({ ...open, actions: ["install"], note: "The engine found nothing to do." });
-  assert.equal(text(stale), "The engine found nothing to do. · 1 to install");
+test("an Apply the engine found nothing for says so — only while the plan is empty", () => {
+  const note = "The engine found nothing to do — this machine already matches.";
+  assert.equal(text(barView({ ...open, actions: [], note })), note);
+  // Beside a plan it would contradict the lit button ("already matches · 1 to remove").
+  assert.equal(text(barView({ ...open, actions: ["uninstall"], note })), "1 to remove");
 });
 
 // --- the wiring -----------------------------------------------------------------
@@ -146,6 +157,9 @@ test("app.js paints the bar from bar.js, and the old status word is gone", () =>
   assert.match(setStatus, /barWord = "";/);
   const planCase = appjs.slice(appjs.indexOf('case "apply-plan":'), appjs.indexOf('case "apply-plan-add":'));
   assert.match(planCase, /paintBar\(\)/);
+  // A changed selection is a new question: the last run's note goes.
+  const persist = appjs.slice(appjs.indexOf("function persistSelection("), appjs.indexOf("\n}\n", appjs.indexOf("function persistSelection(")));
+  assert.match(persist, /doneNote = ""/);
   // `#overall` said "ready" / "applying…" beside a button that now says more; a write to it
   // that survived would be a TypeError on the first click.
   assert.doesNotMatch(appjs, /\boverall\b/);

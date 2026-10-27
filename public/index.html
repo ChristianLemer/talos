@@ -542,6 +542,9 @@
         header { flex-direction:column; gap:12px; }
         .hero-apply { flex-wrap:wrap; }
         .hero-apply #globalhint { flex-basis:100%; order:3; }
+        /* A long plan ("3 changes · 1 reinstall · 1 removal") widens the button past what
+           Refresh + Reset leave: wrap the buttons rather than scroll the page sideways. */
+        .hero-apply .hero-buttons { flex-wrap:wrap; }
       }
       /* Very short: hide the tagline entirely — the title + button are enough. */
       @media (max-height: 560px) {
