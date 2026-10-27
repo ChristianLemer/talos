@@ -38,3 +38,8 @@ test("a stall says so before the splash lifts, and state-done takes the line bac
   assert.match(done.slice(0, done.indexOf("break;")), /"scan-warn"\)\?\.classList\.remove\("show"\)/);
   assert.match(html, /<div id="scan-warn" class="warn-banner"><\/div>/);
 });
+
+test("an engine that closes the socket mid-scan lifts the splash with the same line, at once", () => {
+  const close = appjs.slice(appjs.indexOf("ws.onclose = () => {"));
+  assert.match(close.slice(0, close.indexOf("\n};")), /splashStalled\("the engine closed the connection"\);/);
+});

@@ -314,7 +314,7 @@ which finds the binary whatever formula put it there.
 
 A downgrade first asks the manager whether it serves the pin (`winget show --version`,
 `brew info --formula id@version`); when it does not, the step fails with the package
-untouched, and its terminal says why (`No version found matching: …`).
+untouched, and its terminal says why (winget: `No version found matching: …`).
 
 ⚠️ **A downgrade can still end with the package removed**: its uninstall succeeded and the
 reinstall then failed — a 403 on a corporate network, a download that broke. The row says

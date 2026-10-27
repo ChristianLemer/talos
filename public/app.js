@@ -97,14 +97,15 @@ function hideSplash() {
   splash.classList.add("hide");
   setTimeout(() => splash.remove(), 450);
 }
-// The engine stopped answering mid-scan: lift the splash so the rows can be looked at,
-// and say that what still reads "checking…" is not known. state-done clears the line.
-function splashStalled() {
+// The engine stopped answering mid-scan (or its socket closed): lift the splash so the rows
+// can be looked at, and say that what still reads "checking…" is not known. state-done
+// clears the line.
+function splashStalled(why = `nothing for ${SPLASH_STALL_MS / 60000} minutes`) {
   if (splashDone) return;
   const warn = document.getElementById("scan-warn");
   warn.textContent =
-    `The scan stopped answering (${scanSeen} of ${scanTotal || "?"} checked, nothing for ` +
-    `${SPLASH_STALL_MS / 60000} minutes). Rows still "checking…" are not known — restart Talos.`;
+    `The scan stopped answering (${scanSeen} of ${scanTotal || "?"} checked, ${why}). ` +
+    `Rows still "checking…" are not known — restart Talos.`;
   warn.classList.add("show");
   hideSplash();
 }
@@ -2689,4 +2690,5 @@ ws.onclose = () => {
   paintBar();
   hideRescanVeil(); // don't leave the veil stuck on
   hideWait(); // don't leave the banner stuck on
+  splashStalled("the engine closed the connection"); // no-op once the scan is done
 };
