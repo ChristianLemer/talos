@@ -25,7 +25,7 @@ import {
   applyPlan,
   holdReason,
   heldRows,
-  planCounts,
+  planActions,
   planSeconds,
   loadPlan,
   PERSONAL_BUNDLE,
@@ -444,14 +444,14 @@ test("update-on apply: once the update succeeded, the end of the run already mat
   const m = seedPinned({ pin: "self", selfUpdate: true, updateEachApply: true });
   setStatusData(m, 0, "ok");
   setInstalledVersion(m, 0, "2.1.308");
-  assert.equal(planCounts(m).total, 1, "before the run: the update is offered");
+  assert.deepEqual(planActions(m), ["upgrade"], "before the run: the update is offered");
   assert.equal(isUpdatedThisSession(m, 0), false);
   // The server's `self-updated` after an exit 0.
   setUpdatedThisSession(m, 0);
   assert.equal(actionOf(m, 0), null);
   assert.equal(isActionable(m, 0), false);
   assert.deepEqual(applyPlan(m), [], "the end of the run: nothing to send");
-  assert.equal(planCounts(m).total, 0);
+  assert.deepEqual(planActions(m), []);
   assert.deepEqual(heldRows(m), [], "already matches, not held");
   // The row says it ran rather than looking untouched, and no longer claims the next Apply.
   assert.equal(isUpdatedThisSession(m, 0), true);
@@ -1416,15 +1416,15 @@ test("profileProgress: an out-of-scope member is not counted as missing", () => 
   );
 });
 
-test("planCounts names the reinstalls apart — a downgrade is an uninstall first", () => {
+test("planActions keeps the reinstalls apart — a downgrade is an uninstall first", () => {
   // Spec: the row and the button say "reinstall" BEFORE the click. A downgrade counted
   // under "to apply" would hide that the package is removed first.
   const m = seedPinned({ canDowngrade: true }); // pin 1.8
   setStatusData(m, 0, "ok");
   setInstalledVersion(m, 0, "2.0");
-  assert.deepEqual(planCounts(m), { applies: 0, reinstalls: 1, removes: 0, total: 1 });
+  assert.deepEqual(planActions(m), ["downgrade"]);
   setInstalledVersion(m, 0, "1.5");
-  assert.deepEqual(planCounts(m), { applies: 1, reinstalls: 0, removes: 0, total: 1 });
+  assert.deepEqual(planActions(m), ["upgrade"]);
 });
 
 test("planSeconds: what each row the Apply would run took here, 0 when never measured", () => {

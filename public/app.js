@@ -6,11 +6,11 @@ import {
 } from "./decision.js";
 import * as M from "./model.js";
 import { estimate, formatEstimate } from "./estimate.js";
+import { barView } from "./bar.js";
 import { changeText, failureText, machineRows, machineText, scanSummary, shareLine } from "./machine.js";
 const model = M.createModel();
 
 const stepsEl = document.getElementById("steps");
-const overall = document.getElementById("overall");
 const b64dec = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 const dec = new TextDecoder();
 const rows = {}; // i → { details, badge, statusLabel, host, term }
@@ -696,6 +696,16 @@ let appmgmtStatus = "na";
 // a reality the user never saw. Freeze every action (general, bundle, row) until
 // the scan settles, exactly like applyRunning freezes them during a run.
 let scanning = false;
+// What the action bar reads beyond those two flags (bar.js turns them into words).
+// `conn`: the socket — nothing can be sent before it opens or after it drops. `planSeen`: the
+// first `plan` arrived; before it the machine is being read even though `scanning` is not set
+// yet, and an empty plan must not read "nothing to do" with Quit lit. `runKind`: what holds the
+// session while `applyRunning` is true. `barWord`: a transient word the server's answer will
+// replace ("stopping…").
+let conn = "connecting";
+let planSeen = false;
+let runKind = null;
+let barWord = "";
 // ⭐ WHAT A ROW WILL DO TO YOU — always shown, for every row that carries a fact. These three
 // words used to appear ONLY when a slider hid the row, because its rungs sorted by exactly
 // these facts. The slider is gone (2026-10-10); the words stayed and live here.
@@ -760,36 +770,8 @@ function refreshLiveness() {
     // only on state/outdated messages. Without this the number stayed stale
     // (e.g. "→ 15.2.0 update") while the button already said uninstall.
   }
-  // Global button: live if anything anywhere would act. One path, the whole desire.
-  //
-  // ⚠️ It must refuse an empty plan: a button that promises an action with nothing to do is the
-  // dishonesty this app already paid for once, at the 403 retry card that offered a download
-  // and did nothing. It also costs a full server round-trip — re-scan, full-window veil — to be
-  // told `done {nothing:true}`.
-  //
-  // The removals are named on the button because Apply honours the rows you unchecked, and a
-  // count that hid them would be the label lying.
-  // A reinstall (a downgrade to a pin) is counted apart: it removes the package first.
+  paintBar();
   const plan = M.applyPlan(model);
-  const g = document.getElementById("install-all");
-  if (g) {
-    const n = M.planCounts(model);
-    g.classList.toggle("live", n.total > 0 && !busy);
-    g.disabled = busy || n.total === 0;
-    const parts = [];
-    if (n.applies) parts.push(`${n.applies} to apply`);
-    if (n.reinstalls) parts.push(`${n.reinstalls} to reinstall`);
-    if (n.removes) parts.push(`${n.removes} to remove`);
-    // How long, from what these rows took on THIS machine last time. The never-measured rows
-    // are counted and shown ("2 unknown"), so a short total never reads as a promise.
-    const est = formatEstimate(estimate(M.planSeconds(model)));
-    if (est) parts.push(est);
-    g.textContent = n.total === 0 ? "Apply" : `Apply — ${parts.join(" · ")}`;
-    g.title = n.total === 0
-      ? "Nothing to do — this machine already matches"
-      : "The time is what these rows took on this machine last time; " +
-        "\"unknown\" rows have never run here.";
-  }
   // ⭐ THE EMPTY STATE LIVES IN THE LIST — C asked for the panel below, not a note above it,
   // to say there is nothing to send: the LIST is what is empty. And NOT
   // during the scan: an un-probed row must never count as absent.
@@ -826,6 +808,70 @@ function refreshLiveness() {
   }
   refreshArbitration();
   paintFit();
+}
+
+// The action bar: Apply's two lines, the line on its left, and which of Apply and Quit is the
+// filled one. bar.js decides every word; this only gathers the session's state and paints.
+//
+// ⚠️ It must refuse an empty plan: a button that promises an action with nothing to do is the
+// dishonesty this app already paid for once, at the 403 retry card that offered a download
+// and did nothing. It also costs a full server round-trip — re-scan, full-window veil — to be
+// told `done {nothing:true}`.
+function paintBar() {
+  const g = document.getElementById("install-all");
+  if (!g) return;
+  const busy = applyRunning || scanning;
+  let running = null;
+  if (applyRunning) {
+    // Progress follows the plan the server announced: rows that have STARTED, so the row
+    // running now counts ("1 of 3" while the first one runs).
+    let current = null;
+    for (const i of focusPlan || []) {
+      const st = model.pkgs.get(i)?.status;
+      if (RUNNING.has(st)) current = { name: model.pkgs.get(i)?.name || "", status: st };
+    }
+    running = {
+      kind: runKind || "apply",
+      word: barWord,
+      paused: fbPaused,
+      done: focusStarted ? focusStarted.size : 0,
+      total: focusPlan ? focusPlan.size : 0,
+      current,
+    };
+  }
+  const actions = busy ? [] : M.planActions(model);
+  const v = barView({
+    conn,
+    scanning: scanning || !planSeen,
+    scan: rescanTotal > 0 ? { seen: rescanSeen, total: rescanTotal } : { seen: scanSeen, total: scanTotal },
+    running,
+    actions,
+    estimate: busy ? "" : formatEstimate(estimate(M.planSeconds(model))),
+  });
+  const label = document.createElement("span");
+  label.textContent = v.label;
+  const sub = document.createElement("small");
+  sub.textContent = v.sub;
+  g.replaceChildren(label, sub);
+  g.classList.toggle("live", v.live);
+  g.classList.toggle("running", !!running && !running.paused);
+  g.disabled = v.disabled;
+  g.title = v.live
+    ? "The time is what these rows took on this machine last time; rows never timed here have no duration yet."
+    : "";
+  const hint = document.getElementById("globalhint");
+  if (hint) {
+    const parts = [];
+    v.hint.forEach((h, k) => {
+      if (k) parts.push(document.createTextNode(" · "));
+      const span = document.createElement(h.tone ? "b" : "span");
+      if (h.tone === "remove") span.className = "rm";
+      span.textContent = h.text;
+      parts.push(span);
+    });
+    hint.replaceChildren(...parts);
+  }
+  document.getElementById("quit-all")?.classList.toggle("primary", v.quitPrimary);
 }
 
 // Mark the rows the Arbitration tab shows, and put the count in the tab's own label.
@@ -885,8 +931,8 @@ function applyAll() {
   // would turn what this Apply installs into "wanted absent".
   persistSelection();
   applyRunning = true;
+  runKind = "apply";
   refreshLiveness(); // lock every Apply button during the run
-  overall.textContent = "applying…";
   // The server re-scans presence before it replies with the plan. No longer a
   // SILENT gap: it narrates each re-probed package (`rescan-progress`). The veil
   // covers the WHOLE window so nothing crisp invites a click we can't honour.
@@ -1080,8 +1126,8 @@ function render(steps, profiles = [], columns = 2) {
       if (applyRunning) return;
       if (!rowGesture(s.i)) return; // the only non-running gesture is a diff
       applyRunning = true;
+      runKind = "diff";
       refreshLiveness();
-      overall.textContent = "diffing…";
       ws.send(JSON.stringify({ type: "diff", i: s.i }));
     };
     // Wanting is now the ✓ cell of the segmented toggle (spec §20) — no separate
@@ -1266,9 +1312,15 @@ let planOrigin = null;
 // the planned rows have been re-appended, so its index among siblings is no longer a fact
 // about the resting list.
 let restingSlots = null;
+// The plan as the server announced it, and the rows of it that have started: the bar's
+// "1 of 3". Null outside focus mode.
+let focusPlan = null;
+let focusStarted = null;
 function enterFocusMode(planIndices) {
   document.body.classList.add("applying");
   const inPlan = new Set(planIndices);
+  focusPlan = new Set(planIndices);
+  focusStarted = new Set();
   restingSlots = new Map();
   for (const i of Object.keys(rows).map(Number)) {
     // focus-show = this row is part of the plan → stays visible throughout.
@@ -1301,6 +1353,7 @@ function addToFocusMode(i) {
   const el = rows[i]?.details;
   if (!el || !planOrigin || !restingSlots) return;
   el.classList.add("focus-show");
+  focusPlan?.add(i);
   if (!planOrigin.some((o) => o.el === el)) planOrigin.push(restingSlots.get(el));
   el.parentNode.appendChild(el);
 }
@@ -1311,6 +1364,8 @@ function indexOfChild(el) {
 }
 function exitFocusMode() {
   document.body.classList.remove("applying");
+  focusPlan = null;
+  focusStarted = null;
   // Put the moved rows back in their catalogue slots, LOWEST INDEX FIRST: inserting
   // at index k is only correct once every earlier slot is already filled, so the
   // ascending sweep rebuilds the list from the top down and each `at` lands exactly.
@@ -1521,8 +1576,8 @@ function decideForbidden(gesture) {
   if (!type) return false;
   fbPaused = false;
   ws.send(JSON.stringify({ type }));
-  overall.textContent =
-    gesture === "retry" ? "retrying…" : gesture === "stop" ? "stopping…" : "applying…";
+  barWord = gesture === "retry" ? "retrying…" : gesture === "stop" ? "stopping…" : "";
+  paintBar();
   return true;
 }
 
@@ -1551,8 +1606,8 @@ function retryStep(i) {
   if (!action) return;
   clearForbidden(i);
   applyRunning = true;
+  runKind = "retry";
   refreshLiveness();
-  overall.textContent = "retrying…";
   ws.send(JSON.stringify({ type: "retry-step", i, action }));
 }
 
@@ -1610,6 +1665,7 @@ function setStatus(i, status) {
   if (RUNNING.has(status)) {
     M.resetLog(model, i);
     if (r.term) r.term.reset();
+    if (focusPlan?.has(i)) focusStarted.add(i);
   } // fresh run
   r.badge.className = "badge " + status;
   r.badge.textContent = GLYPH[status] || "·";
@@ -1718,19 +1774,20 @@ document.getElementById("arb-copy").onclick = async () => {
 document.getElementById("refresh-all").onclick = () => {
   if (applyRunning || scanning) return; // don't stack a scan on a run or a scan
   scanning = true;
+  // Counted from here, before the first repaint: the bar reads this count, and set after
+  // `refreshLiveness` it opened on the boot scan's "5 of 5".
+  rescanSeen = 0;
+  rescanTotal = Object.keys(rows).length;
   stepsEl.classList.add("scanning");
   for (const i of Object.keys(rows).map(Number)) setStatus(i, "checking");
   refreshLiveness();
   paintProfiles();
-  overall.textContent = "checking…";
   // Refresh is the LONGEST wait in the app — it re-probes everything (the Apply
   // re-scan is scoped, this is not, on purpose: it is the mitigation for what the
   // scoping gives up). It used to get only a dim over #steps while the Apply got a
   // narrated full-window veil, so the slower path was the less explained one. Same
   // veil, same narration: the server emits one `state` per row in order, which
-  // rescanProgress counts (no new wire message needed).
-  rescanSeen = 0;
-  rescanTotal = Object.keys(rows).length;
+  // rescanProgress counts (no new wire message needed); the count was set above.
   resetRefreshProgress();
   // Name the batched `outdated` step too. It runs BEFORE the first probe and costs
   // ~1-2 s, so without this the veil opens on a frozen phrase for exactly as long as
@@ -2249,7 +2306,7 @@ function renderLog(consent, history, sharedTo) {
   }
 }
 
-ws.onopen = () => overall.textContent = "checking…";
+ws.onopen = () => { conn = "open"; paintBar(); };
 ws.onmessage = (ev) => {
   const msg = JSON.parse(ev.data);
   switch (msg.type) {
@@ -2258,6 +2315,7 @@ ws.onmessage = (ev) => {
       // know how many packages there are, so the bar shuttles.
       scanTotal = (msg.steps || []).length;
       scanSeen = 0;
+      planSeen = true;
       // A fresh scan re-answers the upgrade question, so last run's warning must
       // not survive into it — a stale caution is its own kind of lie.
       document.getElementById("outdated-warn")?.classList.remove("show");
@@ -2377,7 +2435,6 @@ ws.onmessage = (ev) => {
       hideRescanVeil(); // no-op at boot (the splash covers that), clears a Refresh
       refreshLiveness();
       paintProfiles();
-      overall.textContent = "ready";
       hideSplash();
       break;
     // ⬜ `ready` + `starting` REMOVED 2026-08-23 — one mechanism, so both or neither. They
@@ -2479,7 +2536,7 @@ ws.onmessage = (ev) => {
       // A second identical banner reads as "nothing happened" — name the attempt,
       // and when the server stops offering retries, stop offering the button.
       paintFbAttempt(msg.i, msg.attempt || 1, fbCanRetry);
-      overall.textContent = "waiting for you";
+      paintBar();
       break;
     case "sudo-prompt":
       // A step hit a sudo "Password:" prompt (e.g. removing a GUI app). Show the
@@ -2511,8 +2568,9 @@ ws.onmessage = (ev) => {
       addToFocusMode(msg.i);
       break;
     case "done":
-      overall.textContent = msg.nothing ? "nothing to do" : "done";
       applyRunning = false;
+      runKind = null;
+      barWord = "";
       fbPaused = false; // the loop is over — no pause left to release
       hideRescanVeil(); // net: scan found nothing → no apply-plan
       exitFocusMode(); // everything reappears — failures already open, stand out
@@ -2561,7 +2619,8 @@ ws.onmessage = (ev) => {
   }
 };
 ws.onclose = () => {
-  overall.textContent = "disconnected";
+  conn = "closed";
+  paintBar();
   hideRescanVeil(); // don't leave the veil stuck on
   hideWait(); // don't leave the banner stuck on
 };

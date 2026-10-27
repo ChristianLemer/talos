@@ -575,17 +575,11 @@ export function isActionable(model, i) {
   if (holdReason(model, i) !== null) return false;
   return AUTO_ACTS.includes(actionOf(model, i));
 }
-// What the Apply button counts, by what each row ends up as. A downgrade is apart: it is an
-// uninstall first, and the spec wants that said before the click.
-export function planCounts(model) {
-  const plan = applyPlan(model);
-  let reinstalls = 0, removes = 0;
-  for (const i of plan) {
-    const a = actionOf(model, i);
-    if (a === "downgrade") reinstalls++;
-    else if (a === "uninstall") removes++;
-  }
-  return { applies: plan.length - reinstalls - removes, reinstalls, removes, total: plan.length };
+// What the Apply would do, one action per row, in plan order — what the bar counts (bar.js).
+// The actions stay apart, not summed: a downgrade is an uninstall first and an uninstall is a
+// removal, and the spec wants both said before the click.
+export function planActions(model) {
+  return applyPlan(model).map((i) => actionOf(model, i));
 }
 // What each row the Apply would run took HERE last time, in plan order; 0 = never measured.
 // The button's estimate sums them, and counts the zeros as unknown instead of free.

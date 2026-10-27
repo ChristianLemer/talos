@@ -48,7 +48,9 @@ export function estimate(secsPerRow) {
   return { secs, known, unknown };
 }
 
-// C's shape: "~N min for X and Y unknown".
+// C's shape: "~N min for X, Y never timed here". Until 2026-10-27 it read "X and Y unknown",
+// which on the old one-line button sat after the row counts and read as "Y unknown rows";
+// in the bar's line it is said for what it is — rows with no duration on THIS machine.
 //
 // ⚠️ NOT "at most ~N min". The spec's worst-case framing was right for a total summed from
 // the SHARED slow_secs, which is a max over the fleet. These minutes come from the LOCAL
@@ -58,14 +60,14 @@ export function estimate(secsPerRow) {
 //
 // The four readings, and why each is worded the way it is:
 //
-//   known>0, unknown>0 → "~4 min for 6 and 3 unknown". The minutes cover the 6 ONLY; the
-//                        3 are named so the number is never mistaken for a total.
+//   known>0, unknown>0 → "~4 min for 6, 3 never timed here". The minutes cover the 6 ONLY;
+//                        the 3 are named so the number is never mistaken for a total.
 //   known>0, unknown=0 → "~4 min for all 4". "all" is said EXPLICITLY rather than dropping
 //                        the clause: a reader must never have to wonder whether an unknown
 //                        count was omitted or was zero. It is mildly redundant beside the
 //                        row count and that redundancy is the price of the guarantee.
-//   known=0, unknown>0 → "3 unknown". NO invented minutes — this is the ordinary reading on
-//                        a machine that has not applied anything yet, and the honest answer
+//   known=0, unknown>0 → "3 never timed here". NO invented minutes — this is the ordinary
+//                        reading on a machine that has not applied anything yet, and the honest answer
 //                        is that we know what we would do and not how long it takes.
 //   nothing at all      → "" (see below).
 //
@@ -74,8 +76,8 @@ export function estimate(secsPerRow) {
 // wrong: with no rows there is no duration and no unknown to report.
 export function formatEstimate({ secs, known, unknown }) {
   if (known === 0 && unknown === 0) return "";
-  if (known === 0) return `${unknown} unknown`;
-  return `${duration(secs)} for ${unknown === 0 ? `all ${known}` : `${known} and ${unknown} unknown`}`;
+  if (known === 0) return `${unknown} never timed here`;
+  return `${duration(secs)} for ${unknown === 0 ? `all ${known}` : `${known}, ${unknown} never timed here`}`;
 }
 
 // Seconds → the coarsest reading that is still true.

@@ -74,18 +74,21 @@
          acts on the list below it. Sticky so it stays reachable while the bundle
          list scrolls. Hint on the left, buttons + status on the right. */
       .hero-apply { position:sticky; top:0; z-index:10; display:flex; align-items:center;
-                    gap:12px; padding:12px 12px 10px; background:var(--bg);
+                    gap:12px; padding:14px 12px 13px; background:var(--bg);
                     border-bottom:1px solid var(--line); }
-      /* Left→right: hint fills the space, then status, then Reset, then Apply last. */
+      /* Left→right: the line fills the space, then Refresh, Reset, and Apply last. The line
+         is the rest of Apply's sentence (bar.js): the plan in full, the scan's count, the
+         row running now. It replaced a separate status word ("ready", "applying…") that
+         said less than the button beside it. */
       .hero-apply #globalhint { flex:1; order:0; text-align:left; max-width:none; }
-      .hero-apply #overall { order:1; }
-      .hero-apply .hero-buttons { order:2; }
+      .hero-apply .hero-buttons { order:1; }
       h1 { font-size:17px; margin:0 0 2px; font-weight:700; letter-spacing:-0.2px; }
       h1 .accent { background:linear-gradient(90deg,#7aa2f7,#bb9af7); -webkit-background-clip:text; background-clip:text; color:transparent; }
       .tagline { font-size:12.5px; color:#a9b1d6; margin:0; max-width:80ch; line-height:1.4; }
       .tagline b { color:var(--fg); font-weight:600; }
       #globalhint { font-size:12px; color:var(--dim); max-width:28ch; line-height:1.4; }
-      #overall { font-size:12px; color:var(--dim); }
+      #globalhint b { font-weight:600; color:#c0caf5; }
+      #globalhint b.rm { color:#f7768e; }
       /* The list's own empty state. Sits INSIDE the list's space, so nothing above it moves — the
          message replaces rows rather than displacing them. Centred and quiet: an empty plan is
          ordinary, not an error. */
@@ -250,12 +253,11 @@
       .toggle.dead:hover { filter:none; }
 
       /* --- SIMPLE vs ADVANCED: only GRANULARITY differs, not the switch's meaning.
-         Simple = one switch per bundle. Advanced adds per-package toggles, per-
-         bundle & per-row Apply, and the default-side dot. The colour rule above is
-         identical in both. */
+         Simple = one switch per bundle. Advanced adds per-package toggles, the
+         row's own button (Stop while it runs, diff on a config you own), and the
+         default-side dot. The colour rule above is identical in both. */
       body:not(.advanced) .bundle-body .toggle { display:none; }   /* no per-package toggles */
-      body:not(.advanced) .bundle-head .applybtn,
-      body:not(.advanced) .rerun { display:none; }                 /* only the hero Apply */
+      body:not(.advanced) .rerun { display:none; }                 /* only the bar's Apply */
       /* The SCOPE switch and the two state words are ADVANCED-ONLY. Measured on this
          machine: 25 of 31 rows are in scope, so a switch on every row announces "yes,
          mine" 25 times to say "no" 6 times — the majority state must stay silent (the
@@ -355,14 +357,24 @@
          knows, they pressed the button. Red would say "something broke, look at it",
          which is exactly the confusion a distinct state exists to prevent. */
       .cancelled    { color:var(--dim); }
-      /* Apply buttons — one in the hero, one per bundle. Two visual states:
-         GHOST (default): dim outline, no fill — nothing useful to do right now.
-         LIVE (.live): filled blue, it WOULD act if pressed. Only useful buttons
-         light up, so the eye lands on what matters. `disabled` while a run is on. */
+      /* The Apply button — the one door. Three looks:
+         GHOST (default): dim outline, no fill — nothing to send right now.
+         LIVE (.live): filled blue, it WOULD act if pressed.
+         RUNNING (.running): blue outline, not filled — it is acting, not offering.
+         TWO LINES (bar.js writes both): one word, and under it what it would do or how far
+         it is. A floor width the common plans fit in, so toggling a row changes its words
+         and not its place; a rare long plan ("3 changes · 1 reinstall · 1 removal") may
+         still widen it rather than be cut. */
       .applybtn { background:none; color:var(--dim); border:1px solid var(--line);
-                  padding:7px 14px; border-radius:7px; cursor:pointer; font-size:13px; font-weight:600;
+                  display:inline-flex; flex-direction:column; align-items:center; justify-content:center;
+                  min-width:168px; min-height:46px; padding:4px 14px; border-radius:9px; cursor:pointer;
+                  font-size:15px; font-weight:700; line-height:1.15;
                   transition:background .15s, color .15s, border-color .15s, box-shadow .15s; }
-      .applybtn:hover { color:var(--fg); border-color:var(--dim); }
+      .applybtn small { font-size:11px; font-weight:500; opacity:.85; margin-top:2px; white-space:nowrap; }
+      .applybtn.running { color:#7aa2f7; border-color:#3d59a1; }
+      .applybtn.running:disabled { opacity:1; }
+      .applybtn.running small { color:var(--dim); opacity:1; }
+      .applybtn:not(:disabled):hover { color:var(--fg); border-color:var(--dim); }
       .applybtn.live { background:#3d59a1; color:var(--fg); border-color:#3d59a1; }
       .applybtn.live:hover { filter:brightness(1.15); }
       .applybtn:disabled { opacity:.5; cursor:default; filter:none; }
@@ -378,12 +390,17 @@
          not something to reach for — and only borderless-to-outlined on hover, so it
          does not compete with Apply for the eye. `flex:none` so the tagline keeps the
          width. Disabled during an Apply: a running installer is our child process and
-         would die with us; the user deserves to be told, not to lose a half-done install. */
+         would die with us; the user deserves to be told, not to lose a half-done install.
+         PRIMARY (.primary, set by bar.js) when there is nothing left to send: Apply goes
+         ghost and Quit is the filled one — the session's natural end. Never both filled. */
       .quitbtn { flex:none; align-self:flex-start; background:none; color:var(--dim);
                  border:1px solid transparent; padding:5px 11px; border-radius:7px;
                  cursor:pointer; font-size:12px; transition:color .15s, border-color .15s; }
       .quitbtn:hover { color:var(--fg); border-color:var(--line); }
       .quitbtn:disabled { opacity:.4; cursor:default; }
+      .quitbtn.primary { align-self:center; background:#3d59a1; color:var(--fg); border-color:#3d59a1;
+                         padding:9px 22px; font-size:14px; font-weight:700; border-radius:9px; }
+      .quitbtn.primary:hover { filter:brightness(1.15); }
       /* Bundle panel — TWO columns (spec §24): the dependency CHAIN on the left
          (Base→Documents→Data→Development, each needs the one above), STANDALONE
          bundles on the right (Terminal tools, Legacy, My setup). */
@@ -460,13 +477,6 @@
       /* Profile-membership emojis shown next to a package name — a quiet hint of
          which profiles include this package. */
       .pkg-profiles { font-size:11px; opacity:.75; margin-left:2px; letter-spacing:1px; }
-      /* The smaller per-bundle Apply, sitting at the right of the bundle header. */
-      .bundle-head .applybtn { padding:4px 12px; font-size:12px; margin-left:6px; }
-      /* Hierarchy: the HERO Apply is the primary action — filled/inverted, most
-         visible. Per-bundle Apply is secondary: active (blue) but only OUTLINED,
-         so it never competes with the top button. */
-      .bundle-head .applybtn.live { background:none; color:#7aa2f7; border-color:#3d59a1; }
-      .bundle-head .applybtn.live:hover { background:#3d59a1; color:var(--fg); filter:none; }
       .globalbtn { background:#3d59a1; color:var(--fg); border:0; padding:7px 14px; border-radius:7px; cursor:pointer; font-size:13px; font-weight:600; }
       .globalbtn:hover { filter:brightness(1.15); }
       /* Danger zone — uninstall lives far from install, dim, off to the right. */
@@ -1232,10 +1242,9 @@
           <button id="reset-all" class="resetbtn" title="Reset every toggle to the author's default">Reset</button>
           <!-- The ONE door: Apply converges the whole desire, and no other control runs
                anything. Its label counts what it would do. -->
-          <button id="install-all" class="applybtn">Apply</button>
+          <button id="install-all" class="applybtn" disabled><span>Apply</span><small>connecting…</small></button>
         </div>
-        <span id="globalhint">Installs what you checked, updates what's outdated, removes what you unchecked.</span>
-        <span id="overall">connecting…</span>
+        <span id="globalhint">Connecting to the engine…</span>
       </div>
       <!-- App Management banner: some app updates need the macOS permission and
            it's missing. Shown only when appmgmtStatus === "missing". -->

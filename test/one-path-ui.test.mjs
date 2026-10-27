@@ -82,10 +82,11 @@ test("every running status the server emits is one the row treats as running", (
 });
 
 test("the button and the row both say a downgrade reinstalls", () => {
-  const at = appjs.indexOf("function refreshLiveness()");
+  const at = appjs.indexOf("function paintBar()");
   const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
-  assert.match(body, /M\.planCounts\(model\)/, "the button counts through the shared helper");
-  assert.match(body, /to reinstall/);
+  assert.match(body, /M\.planActions\(model\)/, "the button counts through the shared helper");
+  const bar = readFileSync(new URL("../public/bar.js", import.meta.url), "utf8");
+  assert.match(bar, /to reinstall/);
   const pv = appjs.slice(appjs.indexOf("function paintVersion("), appjs.indexOf("\n}\n", appjs.indexOf("function paintVersion(")));
   assert.match(pv, />reinstall</, "the row names the reinstall beside its target");
 });
@@ -140,8 +141,8 @@ test("a row the server holds at Apply keeps the hold and shows it, even with not
 
 test("the Apply button says how long, from what these rows took here", () => {
   // The estimate used to sit beside the ladder's rungs; the ladder left and took the only
-  // display with it. It belongs on the one button that runs the plan.
-  const at = appjs.indexOf("function refreshLiveness()");
+  // display with it. It belongs with the one button that runs the plan: the bar's line.
+  const at = appjs.indexOf("function paintBar()");
   const body = appjs.slice(at, appjs.indexOf("\n}\n", at));
   assert.match(body, /formatEstimate\(estimate\(M\.planSeconds\(model\)\)\)/);
   assert.match(appjs, /from "\.\/estimate\.js"/);

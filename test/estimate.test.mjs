@@ -36,18 +36,18 @@ test("the estimate counts the unknowns instead of hiding them", () => {
 });
 
 test("formatEstimate: C's shape, and never a bare ~N min", () => {
-  // C's wording: "~N min for X and Y unknown". The spec's "at most ~N min" belonged to a
+  // C's wording: "~N min for X, Y never timed here" (was "X and Y unknown" until 2026-10-27). The spec's "at most ~N min" belonged to a
   // total summed from the SHARED slow_secs, which is a max over the fleet; these minutes come
   // from a LOCAL last-seen cache, which is neither a worst case nor an average — it is what it
   // took here last time. So "at most" would be a false claim and is deliberately absent.
-  assert.equal(formatEstimate({ secs: 240, known: 6, unknown: 3 }), "~4 min for 6 and 3 unknown");
+  assert.equal(formatEstimate({ secs: 240, known: 6, unknown: 3 }), "~4 min for 6, 3 never timed here");
   // Every item measured: say so explicitly rather than dropping the clause, so the reader
   // never has to wonder whether an unknown count was omitted or was zero.
   assert.equal(formatEstimate({ secs: 240, known: 4, unknown: 0 }), "~4 min for all 4");
   // Nothing measured yet: no invented minutes. THE ORDINARY STATE on a fresh machine, and
   // the one this whole shape exists for — the row count is still shown beside it, so the
-  // reading is "19 items · 19 unknown": we know what we would do, not how long it takes.
-  assert.equal(formatEstimate({ secs: 0, known: 0, unknown: 3 }), "3 unknown");
+  // reading is "19 to install · 19 never timed here": we know what we would do, not how long it takes.
+  assert.equal(formatEstimate({ secs: 0, known: 0, unknown: 3 }), "3 never timed here");
   // Sub-minute must not round to "~0 min" — a total of 30s with `Math.round(30/60)` is 1,
   // but 45s is 1 too and 29s would be 0, i.e. "instant" for something that is not.
   assert.equal(formatEstimate({ secs: 30, known: 1, unknown: 0 }), "<1 min for all 1");
@@ -59,7 +59,7 @@ test("formatEstimate: C's shape, and never a bare ~N min", () => {
   // minutes in their head to answer it. a fresh corporate machine with Xcode CLT in the plan is
   // exactly this case, so it is not hypothetical.
   assert.equal(formatEstimate({ secs: 3600, known: 3, unknown: 0 }), "~1 h for all 3");
-  assert.equal(formatEstimate({ secs: 7620, known: 8, unknown: 2 }), "~2 h 7 min for 8 and 2 unknown");
+  assert.equal(formatEstimate({ secs: 7620, known: 8, unknown: 2 }), "~2 h 7 min for 8, 2 never timed here");
   // …and the minutes must never round UP into a 60th minute: 7199s is 120 whole minutes.
   assert.equal(formatEstimate({ secs: 7199, known: 3, unknown: 0 }), "~2 h for all 3");
   // Nothing at all: the estimate says NOTHING. The list's own empty state already says there is
