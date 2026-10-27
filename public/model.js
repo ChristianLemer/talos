@@ -302,6 +302,7 @@ export function fitReason(model, i) {
 //   - a manual "in" does not bring a blocked row INTO reach: its row label goes back to
 //     the presence word, but the Apply still drops it with the same `requires X`
 //     (server.rs, the requirement gate runs whatever the scope), so the line keeps it;
+//     likewise a row with no route forced in drops its `—` but still has no route;
 //   - a PRESENT row with no route is within reach — the OS package (detect-only) is
 //     simply there on its own OS. A present row whose requirement fails still counts
 //     under that requirement, as its row shows.

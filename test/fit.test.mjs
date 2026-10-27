@@ -2,7 +2,9 @@
 // cannot. Run: node --test "test/*.test.mjs"   (from talos/)
 //
 // What is pinned here is that the line is a COUNT of the rows' own reasons — the same
-// strings the rows show, never a new category — so it cannot read false against them.
+// strings the rows show, never a new category. Where it departs from a row, the
+// departure is the machine's truth and is pinned by name below (a present OS package,
+// a scope the user forced): model.js fitSummary lists them.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -97,9 +99,10 @@ test("fitSummary: it follows the live facts — wanting the editor unblocks its 
 });
 
 test("fitReason: for every row the user left alone, it is the row's own out-of-reach reason", () => {
-  // THE property the line promises: read against the rows, it says what they say. Where a
-  // row shows a requirement or `no-route`, the line counts that; where it shows anything
-  // else (in scope, `yours`, `available`, external), the row is within reach.
+  // THE property the line promises, for rows that are absent or have a route: read against
+  // the rows, it says what they say. Where a row shows a requirement or `no-route`, the line
+  // counts that; anything else (in scope, `yours`, `available`, external) is within reach.
+  // The one documented exception — a PRESENT row with no route — has its own test.
   const m = linuxBox();
   setExternal(m, 7, true); // Git installed elsewhere
   for (const i of m.pkgs.keys()) {
@@ -107,6 +110,15 @@ test("fitReason: for every row the user left alone, it is the row's own out-of-r
     const expected = row === "no-route" || row?.startsWith("requires ") ? row : null;
     assert.equal(fitReason(m, i), expected, `row ${m.pkgs.get(i).name}: row says ${row}`);
   }
+});
+
+test("fitReason: a present row with no route reads `—` but is within reach — it is there", () => {
+  // The exception to the property above, on the very machine a Windows kit is written for:
+  // the OS package is detect-only, so its row says `no-route`, yet the machine has it.
+  const m = linuxBox();
+  setPresence(m, 0, true);
+  assert.equal(scopeReason(m, 0), "no-route");
+  assert.equal(fitReason(m, 0), null);
 });
 
 test("fitReason: the user's scope does not move what the machine can reach", () => {
@@ -118,6 +130,10 @@ test("fitReason: the user's scope does not move what the machine can reach", () 
   setScope(m, 1, "in");
   assert.equal(scopeReason(m, 1), null);
   assert.equal(fitReason(m, 1), "requires Windows");
+  // The same for a row with no route forced in: the row drops its `—`, the route is still missing.
+  setScope(m, 0, "in");
+  assert.equal(scopeReason(m, 0), null);
+  assert.equal(fitReason(m, 0), "no-route");
 });
 
 test("fitReason: a config-atom is within reach unless its requirement fails", () => {
