@@ -208,7 +208,9 @@ const ICON_OK =
 let planRestored = false;
 function persistSelection() {
   if (!planRestored) return;
-  doneNote = ""; // a changed selection is a new question; the last answer no longer applies
+  // Any saved change (a toggle, or only a display preference) drops the last run's note: a
+  // changed selection is a new question, and a stale "nothing to do" outliving it would mislead.
+  doneNote = "";
   ws.send(JSON.stringify({
     type: "set-selection",
     selection: {
@@ -2131,6 +2133,7 @@ const advToggle = document.getElementById("advanced-toggle");
 function applyAdvanced(on) {
   document.body.classList.toggle("advanced", on);
   advToggle.checked = on;
+  paintBar(); // the line names the row's Stop in advanced mode only — say it, or stop saying it, now
   // If turning off advanced while on the Arbitration tab, return to the default Bundles tab.
   // Otherwise the operator is stranded on an invisible view until relaunch.
   if (!on && document.body.classList.contains("tab-arbitration")) {
