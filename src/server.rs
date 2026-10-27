@@ -7244,7 +7244,7 @@ mod tests {
         let (cmd, _) =
             super::winget_plan(Action::Downgrade, &free, listed, Some(Machine), None).unwrap();
         assert!(
-            cmd.starts_with("winget uninstall") && cmd.ends_with("--scope machine"),
+            cmd.starts_with("winget show") && cmd.ends_with("--scope machine"),
             "{cmd}"
         );
         let (cmd, note) = super::winget_plan(Action::Downgrade, &free, listed, None, None).unwrap();

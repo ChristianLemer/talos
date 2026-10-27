@@ -312,10 +312,14 @@ the pin — and what `requires:` it stays off with it, saying so. ⚠️ A versi
 `brew list --versions node` answers *not installed*. Declare a `detect:` (`node --version`),
 which finds the binary whatever formula put it there.
 
+A downgrade first asks the manager whether it serves the pin (`winget show --version`,
+`brew info --formula id@version`); when it does not, the step fails with the package
+untouched, and its terminal says why (`No version found matching: …`).
+
 ⚠️ **A downgrade can still end with the package removed**: its uninstall succeeded and the
-reinstall then failed — a 403 on a corporate network, a winget source that no longer
-serves that version. The row says *failed*; **Retry** (or the next Apply) installs it at
-the pin, since the machine now reads absent.
+reinstall then failed — a 403 on a corporate network, a download that broke. The row says
+*failed*; **Retry** (or the next Apply) installs it at the pin, since the machine now reads
+absent.
 
 There's no "floor" mode — an exact pin is exact, **at the precision you write**: the
 installed version is compared on as many segments as the pin has, so `2.50.1.windows.1`

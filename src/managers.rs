@@ -322,10 +322,14 @@ impl SystemManager {
             _ => format!("brew install --yes {id}@{version}"),
         }
     }
-    /// Down to a pin: an uninstall, then the pinned install. ⚠️ For brew the pin is the
-    /// versioned formula `id@version`, which exists only if the tap ships it — so it is
-    /// CHECKED first: without that, a missing formula failed AFTER the uninstall and left
-    /// the package removed. winget pins with a flag on the same id, so its chain is plain.
+    /// Down to a pin: an uninstall, then the pinned install. ⚠️ Whether the manager SERVES
+    /// the pin is CHECKED first, so a pin it cannot install fails with the package still in
+    /// place: without that, the uninstall ran and the reinstall was refused, leaving the
+    /// machine without it (winget, Nushell, twice on one machine; and Retry repeats the
+    /// refusal). brew: the versioned formula `id@version`, which exists only if the tap
+    /// ships it. winget: `show --version`, MEASURED in the VM (winget 1.29.380) to exit 0 for
+    /// a version it serves and non-zero, saying `No version found matching: <v>`, for one it
+    /// does not.
     /// The same chain, reinstalling in a known scope. Only winget has one to give: the
     /// uninstall removes every copy (`--all-versions`), and a pinned install with no
     /// `--scope` lands in winget's default, which is not where a machine-wide copy was —
@@ -334,7 +338,7 @@ impl SystemManager {
         let install = self.install_pinned_in(id, version, scope);
         let chain = format!("{} && {install}", self.uninstall(id));
         match self.route {
-            "winget" => chain,
+            "winget" => format!("winget show --id {id} -e --version {version} --source winget --accept-source-agreements --disable-interactivity && {chain}"),
             _ => format!("brew info --formula {id}@{version} >/dev/null && {chain}"),
         }
     }
@@ -1042,11 +1046,29 @@ mod tests {
             .expect("then it uninstalls");
         assert!(check < removes, "{cmd}");
         assert!(cmd.ends_with("brew install --yes nushell@0.113.1"), "{cmd}");
-        // winget pins with a flag on the same id; its chain is the plain one.
+    }
+
+    #[test]
+    fn a_winget_downgrade_checks_the_pin_is_served_before_removing_anything() {
+        // Field: on one machine, twice, the uninstall took Nushell away and winget then refused
+        // the pinned version — no `nu` left. `show --version` exits non-zero for a version winget
+        // does not serve (measured, see `downgrade_in`), so the chain stops before the uninstall.
         let winget = native_manager(Os::Windows).unwrap();
-        assert!(winget
-            .downgrade_in("Git.Git", "2.50.1", None)
-            .starts_with("winget uninstall"));
+        let cmd = winget.downgrade_in("Nushell.Nushell", "0.113.1", None);
+        let parts: Vec<&str> = cmd.split(" && ").collect();
+        assert_eq!(parts.len(), 3, "{cmd}");
+        assert_eq!(
+            parts[0],
+            "winget show --id Nushell.Nushell -e --version 0.113.1 --source winget --accept-source-agreements --disable-interactivity"
+        );
+        assert!(
+            parts[1].starts_with("winget uninstall --id Nushell.Nushell"),
+            "{cmd}"
+        );
+        assert_eq!(
+            parts[2],
+            winget.install_pinned("Nushell.Nushell", "0.113.1")
+        );
     }
 
     // ---- a winget downgrade reinstalls where the package WAS ---------------------------
@@ -1251,7 +1273,13 @@ mod tests {
     fn a_scoped_downgrade_passes_the_scope_to_the_reinstall_only() {
         let winget = native_manager(Os::Windows).unwrap();
         let cmd = winget.downgrade_in("Nushell.Nushell", "0.113.1", Some(InstallScope::Machine));
-        let (uninstall, install) = cmd.split_once(" && ").expect("a chain of two");
+        let [check, uninstall, install] = cmd.split(" && ").collect::<Vec<_>>()[..] else {
+            panic!("a chain of three: {cmd}")
+        };
+        assert!(
+            !check.contains("--scope"),
+            "the check asks for the version only: {cmd}"
+        );
         assert!(
             !uninstall.contains("--scope"),
             "the uninstall removes every copy: {cmd}"
