@@ -246,6 +246,22 @@ function repaintAll() {
   refreshLiveness();
 }
 
+// The fit line (advanced mode only, CSS): how many rows of the content this machine can
+// get, and the rows' own reasons for the rest — model.fitSummary owns the count and says
+// which set it counts. Painted from refreshLiveness, which every scan event, step and
+// gesture reaches, so it moves with the rows under it and cannot go stale.
+//
+// ⚠️ NOT during a scan: an un-probed row is not absent, and counted as absent its
+// dependants all read `requires …` — a Refresh walked the line through `8 of 19`, `11 of
+// 19` before settling on 14. The line keeps its last settled count until `state-done`
+// (no layout shift under the veil), and stays hidden until the first scan settles.
+function paintFit() {
+  const el = document.getElementById("fit-line");
+  if (!el || scanning) return;
+  el.textContent = M.fitLine(M.fitSummary(model));
+  el.hidden = !el.textContent;
+}
+
 // --- profiles: a bar of one-click additive selections -----------------------
 const profileEls = {}; // name → card element
 function makeProfileCard(p) {
@@ -809,6 +825,7 @@ function refreshLiveness() {
       : "Close Talos";
   }
   refreshArbitration();
+  paintFit();
 }
 
 // Mark the rows the Arbitration tab shows, and put the count in the tab's own label.

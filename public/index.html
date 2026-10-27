@@ -644,6 +644,11 @@
       .list-sep-toggle .sep-toggle-label { font-size:12px; color:var(--dim); }
       body.tab-catalog #list-sep { display:none; }
       body.applying #list-sep { display:none; }
+      /* The fit line, above the list: advanced mode only, and not in the Arbitration view,
+         which lists versions held, not rows to get. */
+      #fit-line { padding:6px 12px; font-size:12px; color:var(--dim); }
+      body:not(.advanced) #fit-line { display:none; }
+      body.tab-arbitration #fit-line { display:none; }
       /* Advanced-only tabs: hidden entirely in simple mode. */
       body:not(.advanced) .tab-adv-only { display:none; }
       /* The Doctor tab exists only when the catalogue declares a rescue candidate
@@ -1268,6 +1273,10 @@
            asked for the selection panel itself to say so. A note above the list PUSHED the whole panel down when it appeared — a layout that moves
            under you as you choose. And it was in the wrong place besides: the list is what is
            empty, so the list is what should say so. -->
+      <!-- The fit line: what this machine can get out of the content, counted from the rows'
+           own reasons (model.fitSummary). Advanced mode only — the integrator's question,
+           never shown to the colleague the kit was composed for. -->
+      <div id="fit-line" hidden></div>
       <div id="steps-empty" class="steps-empty" hidden></div>
       <!-- ⚠️ "as seen on this machine" is NOT a footnote. This tab lists what the CATALOGUE
            declares held (complete, reliable), but the GAP it shows is this machine's. Without

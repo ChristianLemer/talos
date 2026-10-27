@@ -275,6 +275,52 @@ export function unmanagedIndices(model) {
   }
   return out;
 }
+// --- fit: what THIS machine can get out of the content ------------------------
+// The advanced-mode summary line above the list (app.js paintFit). It counts the WHOLE
+// content, not the active bundles: the question it answers is "does this kit fit this
+// machine?", asked by whoever composes or checks a kit, and that question is about every
+// row the kit ships. It is also the set the Catalog tab lists under it, so the line can
+// be checked against the rows by eye. The active bundles change with each click; what
+// the machine can reach does not.
+//
+// NO new categories: a row is out of reach for exactly the reasons the rows already
+// show, in scopeReason's order — a requirement that does not hold (the verbatim
+// `requires X`), else no practicable route (`no-route`, the row's `—`). Two departures
+// from scopeReason, both because fit is a fact of the MACHINE, not of the user's choices:
+// a manual scope or an `external` provenance does not take a row out of reach, and a row
+// that is PRESENT is within reach whatever its routes — the OS package (detect-only, no
+// route anywhere) is simply there on its own OS.
+export function fitSummary(model) {
+  const groups = new Map(); // reason → count, insertion order = catalogue order
+  let reachable = 0;
+  for (const i of [...model.pkgs.keys()].sort((a, b) => a - b)) {
+    const p = model.pkgs.get(i);
+    const why = requiresReason(model, i) ??
+      (p.present !== true && !p.canUninstall && !p.isConfig ? "no-route" : null);
+    if (why == null) reachable++;
+    else groups.set(why, (groups.get(why) ?? 0) + 1);
+  }
+  // Largest requirement first (ties keep catalogue order: sort is stable); `no-route`
+  // last, because it is the only reason that names nothing a machine could acquire.
+  const list = [...groups].map(([reason, count]) => ({ reason, count }));
+  list.sort((a, b) => (a.reason === "no-route") - (b.reason === "no-route") || b.count - a.count);
+  return { total: model.pkgs.size, reachable, groups: list };
+}
+// The line itself: `12 of 19 within reach here · 3 require Windows · 1 has no route here`.
+// A requirement keeps the row's words, only conjugated (`requires X` → `require X` for
+// more than one row). No advice: the reasons say what is missing, the line only counts.
+// Empty content → "" (the caller hides the line).
+export function fitLine({ total, reachable, groups }) {
+  if (!total) return "";
+  const parts = [`${reachable} of ${total} within reach here`];
+  for (const { reason, count } of groups) {
+    const words = reason === "no-route"
+      ? (count === 1 ? "has no route here" : "have no route here")
+      : count === 1 ? reason : reason.replace(/^requires /, "require ");
+    parts.push(`${count} ${words}`);
+  }
+  return parts.join(" · ");
+}
 // A package REFUSES to be wanted if the author forbade it or the user vetoed it by
 // hand. Such a package never installs, so it also can't propagate its `requires`.
 function refuses(model, i) {
