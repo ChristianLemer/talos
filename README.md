@@ -120,12 +120,12 @@ what the OS already ships:
 
 ```bash
 # macOS or Linux
-curl -fsSL https://github.com/ChristianLemer/talos/releases/download/v0.0.1-beta.43/get-talos.sh | sh -s -- ./Talos
+curl -fsSL https://github.com/ChristianLemer/talos/releases/download/v0.0.1-beta.67/get-talos.sh | sh -s -- ./Talos
 ```
 
 ```powershell
 # Windows (Windows PowerShell 5.1 is enough - no pwsh 7 needed)
-irm https://github.com/ChristianLemer/talos/releases/download/v0.0.1-beta.43/get-talos.ps1 | iex
+irm https://github.com/ChristianLemer/talos/releases/download/v0.0.1-beta.67/get-talos.ps1 | iex
 ```
 
 ⚠️ **The tag is spelled out on purpose, and it moves with each release.** GitHub's

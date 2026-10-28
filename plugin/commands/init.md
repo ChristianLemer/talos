@@ -32,7 +32,7 @@ cp -R "${CLAUDE_PLUGIN_ROOT}/template/." .
 cp "${CLAUDE_PLUGIN_ROOT}/skills/talos-content/references/fields.md" REFERENCE.md
 ```
 
-That is `catalog/` (4 packages), `bundles/base.yaml`, `distribution.yaml`, `AGENTS.md`,
+That is `catalog/` (a few starter packages), `bundles/base.yaml`, `distribution.yaml`, `AGENTS.md`,
 `README.md`, `.github/workflows/talos-check.yml`, and the field reference.
 
 Then name the content: set `name:` in `distribution.yaml` to what the team calls it — the

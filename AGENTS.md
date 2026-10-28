@@ -37,14 +37,16 @@ Rules that stay:
   produces an EMPTY commit.
 - **A change made with an AI assistant says so in a trailer.**
 
-## Repo shape (as of 2026-09-06)
+## Repo shape
 
-| ref | what |
-|---|---|
-| `beta` | **the living branch**, ~385 commits, linear (0 merges) |
-| `main` | the primordial empty commit — deliberately, work is on `beta` |
-| tags | 19 (`v0.0.1-beta.20` … `beta.38`), all on `beta`; beta.1–19 were retired on 2026-09-06 with their releases |
-| visibility | **public** since 2026-09-06, after a history audit the same day |
+What stays true; the counts are one command away.
+
+| ref | what | ask git |
+|---|---|---|
+| `beta` | **the living branch**, and the GitHub default; linear, no merge commits | `git rev-list --merges --count beta` → 0 |
+| `main` | the primordial empty commit — deliberately, work is on `beta` | |
+| tags | `v*`, all on `beta`, one per release; beta.1–19 were retired on 2026-09-06 with their releases | `git tag --sort=v:refname` |
+| visibility | **public** since 2026-09-06, after a history audit the same day | `gh repo view --json visibility` |
 
 ⚠️ **The living branch was called `tauri` until 2026-08-09.** It was renamed because the name
 described the *framework* — and the framework had already been replaced once (Deno →
@@ -74,8 +76,8 @@ having to say it.
 directory only; a symlink is a file to git, so the old pattern stopped ignoring it and the link
 was staged for commit on the first try. Do not put the slash back.
 
-Still local and deliberately not documents: `_bundles-test/` (a test fixture), `_chiron-logo/`
-(graphics) and `_spike-font.ps1`.
+Anything else local and not a document carries the leading underscore (`_*`, gitignored): a
+spike, a draft, a graphics folder. What is there varies per checkout; `ls -d _*` says.
 
 History was purged of every employer identification on 2026-08-09. When writing a comment about
 a firewall or a corporate constraint, say **"a corporate network" / "a corporate firewall"** —
@@ -87,16 +89,20 @@ publish.
 Run all four before claiming anything works. These are exactly what CI enforces:
 
 ```bash
-cargo test --all-targets                      # 572 + 8 + 1 tests (2026-10-27)
+cargo test --all-targets                      # every target: both binaries AND tests/
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings     # any lint fails the build
-node --test "test/*.test.mjs"                 # 253 tests
+node --test "test/*.test.mjs"
 ```
+
+Each runner prints its own count; this file does not keep one. A count that DROPS between two
+runs, with no test deleted on purpose, is a file that stopped being picked up — say so.
 
 A fifth, for content rather than code: `cargo run -- --check catalog bundles` reads
 the shipped examples the strict way (`src/check.rs`) and must say `0 errors`.
 
-⚠️ **Not `cargo test --bins`** — it runs only 2 tests and looks green while proving nothing.
+⚠️ **Not `cargo test --bins`** — it skips `tests/`, the suite that runs the built engine against
+a real kit, and looks just as green. (It once ran 2 tests in all; the trap is the same.)
 ⚠️ **Quote the node glob.** `node --test test/` treats the path as a directory and misses files;
 pass `"test/*.test.mjs"`.
 
@@ -127,6 +133,7 @@ compose the SAME one:
 
 ```
 Talos/  MacOS/Talos.app · Windows/Talos.exe · Linux/Talos · catalog/ · bundles/
+        distribution.yaml (when the content names itself)
         .talos/  content.zip · VERSION · KIT.txt · MANIFEST.sha256
 ```
 
@@ -167,7 +174,8 @@ releases that carried them (beta.1–19) were retired on 2026-09-06.
 
 ## Architecture
 
-- **`src/`** — 26 Rust modules. `server.rs` (axum + WS), `catalog.rs` / `bundles.rs` (read YAML
+- **`src/`** — the Rust engine, one module per concern (`ls src/*.rs`). The ones to know first:
+  `server.rs` (axum + WS), `catalog.rs` / `bundles.rs` (read YAML
   from disk), `detect.rs` / `outdated.rs` (real machine state), `machine.rs` (the machine profile and scan timings the journal records), `pty.rs` (portable-pty),
   `decision.rs`, `plan_facts.rs`, `behaviour.rs`, `platform.rs`.
 - **`public/`** — the front, plain ES modules, no framework, no bundler, no CDN. `decision.js`
@@ -175,11 +183,13 @@ releases that carried them (beta.1–19) were retired on 2026-09-06.
   tested.
 - **`catalog/`** + **`bundles/`** + **`distribution.yaml`** — the SOCLE: what a release
   publishes as content and what a stranger receives. The YAML file beside the two folders
-  names the content (`name:`, optional `version:`); the window title leads with it. One YAML per package (**19 packages / 21 files**: the rest are `.nu`
-  sidecars, `nu-plugin-fetch.nu` and `wt-default.nu`), four bundles — Base ← Manuals, Plus,
-  Terminal. Every file is written as a lesson. Never count the sidecars as packages.
+  names the content (`name:`, optional `version:`); the window title leads with it. One YAML
+  per package in `catalog/`; any other file there (`*.nu`) is a sidecar a package's command
+  runs, never a package. One YAML per bundle in `bundles/`. Every file is written as a lesson.
+  `cargo run -- --check catalog bundles` prints how many packages and bundles there are —
+  never count the files.
 - **`tests/fixtures/content/`** — the FIXTURE: one file per form the engine knows, synthetic
-  ids, for the tests. The shipped-content guards walk both trees; a test that names a file
+  ids, for the tests. The shipped-content guards walk it beside the socle (and the template, below); a test that names a file
   names the fixture. Keep the two apart: the socle is real, the fixture is complete.
 - **`.claude-plugin/marketplace.json`** + **`plugin/`** — the repo is also a Claude Code
   marketplace serving one plugin, `talos` (`claude plugin install talos@talos`; the GitHub
@@ -200,9 +210,9 @@ fails when a key is added to `RawPkg::KNOWN_KEYS` and not mentioned under
 it, or link it.
 
 **The core knows no client.** Anything client- or flavour-specific enters by extension, never
-into the core. `catalog/chiron.yaml` still carries a site-specific marketplace path — a known
-residue, and the open design question is that `load_catalog(dir)` reads exactly ONE directory
-while the old engine scanned two (core + integrator).
+into the core — and never into the socle either: a site's packages belong in its own content
+repo (`/talos:init`). The open design question: `load_catalog(dir)` reads exactly ONE
+directory, while the old engine scanned two (core + integrator).
 
 ## Doctrine that keeps being re-learned
 
