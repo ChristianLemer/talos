@@ -982,6 +982,8 @@ function applyAll() {
     unmanaged: M.unmanagedIndices(model),
     // The removals the button named: the server runs no other (`drop_unannounced`).
     removals: M.announcedRemovals(model),
+    // Of those, the ones the override removes (`replaces:`): each waits for its replacement.
+    replaced: M.replacedIndices(model),
   }));
 }
 
@@ -2530,7 +2532,9 @@ ws.onmessage = (ev) => {
     case "held": // the Apply left this row: brew cannot serve its pin, or winget cannot say where
       // the copy to upgrade is (server::send_held)
       clearForbidden(msg.i); // a held retry is that retry's verdict
-      M.setHold(model, msg.i, msg.reason);
+      // A removal kept because its replacement is not there (server::send_kept) is held apart.
+      if (msg.removal) M.setRemovalHold(model, msg.i, msg.reason);
+      else M.setHold(model, msg.i, msg.reason);
       // A winget hold arrives mid-batch, for a row the plan counted: or the bar stops at "2 of 3".
       focusStarted?.add(msg.i);
       paintBar();

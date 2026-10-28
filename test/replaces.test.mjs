@@ -26,7 +26,9 @@ import {
   removeProfile,
   profileStateOf,
   setHold,
+  setRemovalHold,
   holdReason,
+  replacedIndices,
 } from "../public/model.js";
 
 const appjs = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
@@ -131,13 +133,42 @@ test("a replacement that cannot land replaces nothing", () => {
   }
 });
 
-test("a removal kept because the replacement did not install is not counted again", () => {
+test("a removal kept because the replacement is not there is not counted again", () => {
   const m = channels();
   setDecision(m, 1, "in");
+  assert.deepEqual(replacedIndices(m), [0], "sent so the server makes it wait");
   setStatusData(m, 1, "failed");
-  setHold(m, 0, "kept: Beta replaces it and did not install — nothing would be left");
-  assert.match(holdReason(m, 0), /did not install/);
+  setRemovalHold(m, 0, "kept: Beta replaces it and is not installed — nothing would be left");
+  assert.match(holdReason(m, 0), /is not installed/);
   assert.ok(!announcedRemovals(m).includes(0), "the button no longer offers it");
+  // The replacement lands (a retry, the next Apply): the hold has nothing left to say.
+  setStatusData(m, 1, "ok");
+  assert.equal(holdReason(m, 0), null);
+  assert.ok(announcedRemovals(m).includes(0));
+});
+
+test("an install's hold never blocks a removal the user asks for, nor the reverse", () => {
+  // Review B: a brew-pin hold on a row the user then refuses stopped its removal.
+  const m = channels();
+  setHold(m, 0, "brew offers 2.0, not 1.0");
+  setDecision(m, 0, "out");
+  assert.equal(actionOf(m, 0), "uninstall");
+  assert.equal(holdReason(m, 0), null);
+  assert.ok(announcedRemovals(m).includes(0));
+  assert.deepEqual(replacedIndices(m), [], "the user's own refusal waits for nothing");
+  // A kept removal outlives the override only as text: refused by hand, the row goes.
+  setRemovalHold(m, 0, "kept: …");
+  setDecision(m, 1, "in");
+  assert.equal(holdReason(m, 0), null);
+});
+
+test("a replacement the server holds replaces nothing", () => {
+  // Review A: Beta's brew pin held at plan time, and Stable went alone.
+  const m = channels();
+  setDecision(m, 1, "in");
+  setHold(m, 1, "brew offers 2.0, not 1.0");
+  assert.equal(replacedBy(m, 0), null);
+  assert.equal(actionOf(m, 0), null);
 });
 
 test("a bundle whose member is replaced still reads full", () => {

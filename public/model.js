@@ -370,8 +370,11 @@ function pull(model) {
     if (!p.replaces?.length || !first.has(p.name) || !landsHere(model, j, first, nameToId)) continue;
     for (const r of p.replaces ?? []) {
       const k = nameToId.get(r);
-      // A row out of scope is never touched, nor are its requirements pulled out under it.
-      if (r === p.name || k == null || replaced.has(r) || !inScopeAtRest(model, k)) continue;
+      // Only a row that would be wanted without the override is replaced: one the user refused,
+      // or nothing pulls, goes on its own account. A row out of scope is never touched, nor
+      // are its requirements pulled out under it.
+      if (r === p.name || k == null || replaced.has(r) || !first.has(r)) continue;
+      if (!inScopeAtRest(model, k)) continue;
       replaced.set(r, p.name);
     }
   }
@@ -387,6 +390,7 @@ function landsHere(model, j, first, nameToId) {
   if (!p || !inScopeAtRest(model, j)) return false;
   if (p.present === true) return true;
   if (!p.canUninstall) return false; // no route here
+  if (p.hold) return false; // the server holds its install (a brew pin it cannot serve)
   return (p.requires ?? []).every((r) => {
     const k = nameToId.get(r);
     const q = k == null ? null : model.pkgs.get(k);
@@ -675,15 +679,19 @@ export function planSeconds(model) {
 //
 // The brew hold is kept on the row until the next plan rebuilds the model, and it explains only
 // a change the Apply would still make — once the row reaches its pin, there is nothing to hold.
-// An uninstall too, since `replaces:`: a replaced row whose replacement did not install is kept
-// (`server::replacement_missing`), or the user would be left with neither.
-const HELD_ACTIONS = ["install", "upgrade", "downgrade", "uninstall"];
+const HELD_ACTIONS = ["install", "upgrade", "downgrade"];
 export function holdReason(model, i) {
   const unmoved = unmovedHold(model, i);
   if (unmoved) return unmoved;
   const a = actionOf(model, i);
   const p = model.pkgs.get(i);
   if (p?.hold && HELD_ACTIONS.includes(a)) return p.hold;
+  // A removal kept because its replacement is not there (`server::send_kept`): only while the
+  // override is what removes the row — never against the user's own refusal — and only until
+  // the replacement is installed.
+  if (a === "uninstall" && p?.holdRemoval && replacedBy(model, i) != null && !replacementHere(model, p.name)) {
+    return p.holdRemoval;
+  }
   if (a !== "downgrade") return null;
   return p?.canDowngrade ? null : "above its pin — this route cannot go down to it";
 }
@@ -691,6 +699,23 @@ export function holdReason(model, i) {
 export function setHold(model, i, reason) {
   const p = model.pkgs.get(i);
   if (p) p.hold = reason || "";
+}
+// The server kept a row the override would have removed (`server::send_kept`). Apart from
+// `hold`: a removal's hold must never stop an install, nor an install's hold a removal.
+export function setRemovalHold(model, i, reason) {
+  const p = model.pkgs.get(i);
+  if (p) p.holdRemoval = reason || "";
+}
+function replacementHere(model, name) {
+  for (const q of model.pkgs.values()) {
+    if (q.present === true && (q.replaces ?? []).includes(name)) return true;
+  }
+  return false;
+}
+// The rows the Apply removes through the override, not by the user's own refusal: the server
+// makes their removal wait for the replacement (`server::replacement_missing`).
+export function replacedIndices(model) {
+  return applyPlan(model).filter((i) => actionOf(model, i) === "uninstall" && replacedBy(model, i) != null);
 }
 // The one word a held row shows beside its reason: `unchanged` (it ran and moved nothing),
 // `ahead` (the tool is past what its manager offers), `current` (at it, with a manager record

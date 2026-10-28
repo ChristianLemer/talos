@@ -1372,9 +1372,12 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 // The rows whose removal the button announced; the Apply runs no other
                 // (`drop_unannounced`).
                 let announced = json_indices_opt(&parsed, "removals");
+                // The rows the front removes through `replaces:`, not by the user's own refusal:
+                // their removal waits for what replaces them.
+                let replaced = json_indices(&parsed, "replaced");
                 // An Apply converges the WHOLE desire. A front from before 2026-10-10 still
                 // sends a `rung` (the ladder that filtered by kind); it is ignored, not parsed.
-                apply_diff(&mut socket, &state, on, off, unmanaged, announced).await;
+                apply_diff(&mut socket, &state, on, off, unmanaged, announced, replaced).await;
             }
             // The per-row action verbs RETIRED on 2026-10-10: the Apply is the one path that
             // acts. A stale front may still send one after locking its UI, so it is answered
@@ -2464,21 +2467,37 @@ fn replaced_after_replacer(
     out
 }
 
-/// Why a replaced row's removal waits: its replacement was in this plan and its step did not
-/// leave it present (failed, cancelled, skipped). None when nothing replaces it here.
+/// Why a replaced row's removal waits: the wanted replacement is not installed at this point
+/// of the Apply — held out of the plan, failed, skipped. `present` holds every wanted
+/// replacement. None when one of them is there, or none replaces this row.
 fn replacement_missing(
     step: &crate::bundles::Step,
     steps: &[crate::bundles::Step],
-    landed: &std::collections::HashMap<usize, bool>,
+    present: &std::collections::HashMap<usize, bool>,
 ) -> Option<String> {
-    landed.iter().find_map(|(&j, &ok)| {
-        (!ok && steps[j].replaces.contains(&step.name)).then(|| {
-            format!(
-                "kept: {} replaces it and did not install — nothing would be left",
-                steps[j].name
-            )
-        })
-    })
+    let mut by = present
+        .iter()
+        .filter(|(&j, _)| steps[j].replaces.contains(&step.name))
+        .peekable();
+    let (&first, _) = *by.peek()?;
+    if by.any(|(_, &here)| here) {
+        return None;
+    }
+    Some(format!(
+        "kept: {} replaces it and is not installed — nothing would be left",
+        steps[first].name
+    ))
+}
+
+/// Tells the front that the Apply kept a row it would have removed (`replacement_missing`). A
+/// `held` marked as a removal's: the front keeps it apart from an install's hold, so it never
+/// blocks a removal the user asks for, and drops it once the replacement is there.
+async fn send_kept(socket: &mut WebSocket, i: usize, why: &str) {
+    let _ = socket
+        .send(Message::Text(
+            json!({ "type": "held", "i": i, "reason": why, "removal": true }).to_string(),
+        ))
+        .await;
 }
 
 /// Rows held absent at plan time (brew cannot serve the pin) will not be there after the
@@ -2823,6 +2842,7 @@ async fn apply_diff(
     off: Vec<usize>,
     unmanaged: Vec<usize>,
     announced: Option<Vec<usize>>,
+    replaced: Vec<usize>,
 ) {
     use crate::decision::{action_for, Action, Desired, MachineFacts};
     use crate::deps::{
@@ -3180,11 +3200,13 @@ async fn apply_diff(
     // Order by dependencies (required before dependents; visual order = tie-break), then a
     // replaced row's removal after the step of what replaces it.
     let plan = replaced_after_replacer(topo_sort(&visual_plan, &nodes, &idx), steps);
-    // A replacement in the plan whose step did not leave it present: what it replaces stays.
-    let mut replacer_landed: std::collections::HashMap<usize, bool> = plan
-        .iter()
-        .filter(|(j, a)| *a != Action::Uninstall && !steps[*j].replaces.is_empty())
-        .map(|(j, _)| (*j, false))
+    // Each wanted replacement's presence as the Apply goes: as re-probed, then as its own step
+    // left it. Held out of the plan, failed, skipped: it stays as it was, so what it replaces
+    // stays too (`replacement_missing`).
+    let replaced: HashSet<usize> = replaced.into_iter().collect();
+    let mut replacer_present: std::collections::HashMap<usize, bool> = (0..steps.len())
+        .filter(|j| want_on.contains(j) && !steps[*j].replaces.is_empty())
+        .map(|j| (j, presences[j].present == Some(true)))
         .collect();
     if plan.is_empty() {
         let _ = socket
@@ -3210,10 +3232,10 @@ async fn apply_diff(
     // change: half of the bound (`dependents_of` being direct is the other half).
     let mut rechecked: HashSet<usize> = HashSet::new();
     'plan: for (pos, (i, action)) in plan.iter().enumerate() {
-        if *action == Action::Uninstall {
-            if let Some(why) = replacement_missing(&steps[*i], steps, &replacer_landed) {
+        if *action == Action::Uninstall && replaced.contains(i) {
+            if let Some(why) = replacement_missing(&steps[*i], steps, &replacer_present) {
                 println!("[apply] {} held: {why}", steps[*i].name);
-                send_held(socket, *i, &why).await;
+                send_kept(socket, *i, &why).await;
                 continue;
             }
         }
@@ -3241,8 +3263,9 @@ async fn apply_diff(
         };
         let (outcome, stop_all) =
             step_with_forbidden_pause(socket, state, *i, *action, &steps[*i], is_cask, aim).await;
-        if let Some(landed) = replacer_landed.get_mut(i) {
-            *landed = outcome.after.as_ref().and_then(|p| p.present) == Some(true);
+        // Only a step that succeeded re-probes; a failed one leaves the presence as it was.
+        if let (Some(now), Some(after)) = (replacer_present.get_mut(i), outcome.after.as_ref()) {
+            *now = after.present == Some(true);
         }
         if stop_all {
             break; // "stop everything" → abandon the rest of the plan
@@ -7300,20 +7323,27 @@ mod tests {
         let plan = vec![(0, Action::Uninstall), (2, Action::Install)];
         assert_eq!(super::replaced_after_replacer(plan.clone(), &steps), plan);
 
-        let landed = std::collections::HashMap::from([(1, false)]);
-        let why = super::replacement_missing(&steps[0], &steps, &landed).expect("kept");
+        let absent = std::collections::HashMap::from([(1, false)]);
+        let why = super::replacement_missing(&steps[0], &steps, &absent).expect("kept");
         assert!(
-            why.contains("Tool Beta replaces it and did not install"),
+            why.contains("Tool Beta replaces it and is not installed"),
             "{why}"
         );
-        let landed = std::collections::HashMap::from([(1, true)]);
-        assert_eq!(super::replacement_missing(&steps[0], &steps, &landed), None);
+        let present = std::collections::HashMap::from([(1, true)]);
+        assert_eq!(
+            super::replacement_missing(&steps[0], &steps, &present),
+            None
+        );
+        // No wanted replacement in view (none wanted, or the user refused the row): nothing kept.
+        let none = std::collections::HashMap::new();
+        assert_eq!(super::replacement_missing(&steps[0], &steps, &none), None);
         // Wired: the plan is reordered, the check runs before the step, the outcome is recorded.
         let body = fn_body("apply_diff");
         let at = |s: &str| body.find(s).unwrap_or_else(|| panic!("no `{s}`"));
         assert!(at("replaced_after_replacer(topo_sort(") < at("replacement_missing("));
+        assert!(body.contains("*action == Action::Uninstall && replaced.contains(i)"));
         assert!(at("replacement_missing(") < at("step_with_forbidden_pause("));
-        assert!(at("step_with_forbidden_pause(") < at("replacer_landed.get_mut(i)"));
+        assert!(at("step_with_forbidden_pause(") < at("replacer_present.get_mut(i)"));
         assert_eq!(
             super::replacement_missing(
                 &steps[2],
