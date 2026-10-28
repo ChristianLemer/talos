@@ -1,0 +1,12 @@
+# FORM: a beta channel standing in for its stable package. Wanted, it makes `Claude Plugin`
+# wanted absent whatever that row's own intention says; not wanted, that intention is back.
+name: Claude Plugin Beta
+description: The same plugin's beta channel, from a marketplace of its own
+claude-plugin: plug-beta@market-beta
+marketplace: vendor/market-beta
+detect: plug-beta
+category: [automation]
+requires:
+  - Npm Agent
+replaces:
+  - Claude Plugin

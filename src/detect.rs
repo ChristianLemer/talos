@@ -697,6 +697,7 @@ mod tests {
             pin: None,
             scope: None,
             requires: vec![],
+            replaces: vec![],
             posture: Posture::OptIn,
             categories: vec!["misc".into()],
             overrides: Overrides::default(),

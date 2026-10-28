@@ -125,6 +125,7 @@ mod tests {
             pin: None,
             scope: None,
             requires: Vec::new(),
+            replaces: Vec::new(),
             posture: Posture::OptIn,
             categories: Vec::new(),
             overrides: ov,

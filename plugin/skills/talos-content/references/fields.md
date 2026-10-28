@@ -262,6 +262,35 @@ that `requires:` it directly are probed again, and those the user wants present 
 read absent are installed in that same Apply. Rows left on Auto are repainted, never
 acted on; a repaired row does not re-check its own dependents.
 
+**`replaces:`** — names packages this one stands in for: a beta channel for its stable
+package, a fork for its original. While this package is wanted (On, or pulled by an active
+bundle), the packages it replaces are wanted **absent**, whatever their own row says, and
+the Apply removes them — named on the button like any removal. It is an override, never a
+write: the replaced row keeps its intention (its toggle still reads `on`, and the row says
+`replaced by <name>`), so turning this package off brings the replaced one back on the next
+Apply. A row on Manual is never touched, replaced or not.
+
+```yaml
+# catalog/tool-beta.yaml — the stable row is `Tool`, `claude-plugin: tool@vendor`,
+# and it detects `tool@vendor` too
+name: Tool Beta
+claude-plugin: tool@vendor-beta
+marketplace: vendor/tool-beta
+detect: tool@vendor-beta        # the FULL id — see the ⚠️ below
+replaces: [Tool]
+```
+
+A replaced package pulls none of its requirements while it is replaced: what was wanted only
+through it goes too, unless the replacement `requires:` it as well. `--check` refuses a name
+the catalog does not declare, a package that replaces itself, one that replaces what it
+`requires:`, and a chain — a package that replaces others cannot itself be replaced, so which
+one wins never depends on an order.
+
+⚠️ The replaced row must read **absent** once only the replacement is installed, or every
+Apply removes it again. Two rows with the same `detect:` read as one; and a plugin record
+answers a bare name (`detect: tool`) for **any** marketplace, so a stable channel and its beta
+of one plugin must each detect their full `plugin@marketplace` id. `--check` refuses both cases.
+
 ## Pinning a version — `version:`
 
 Add `version:` to make an **exact** version the reference. Talos then compares what's

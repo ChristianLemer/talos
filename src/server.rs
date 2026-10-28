@@ -1209,6 +1209,9 @@ fn step_json(
         "updateEachApply": is_self_updating(s) && s.upgrade.is_some() && s.update_each_apply,
         "pin": s.pin, "categories": s.categories,
         "requires": s.requires, // package names this one needs (B5 transitive pull, §8)
+        // Package names this one stands in for: wanted, it makes them wanted absent
+        // (model.js `replacedBy`). The front resolves it; the removal is announced like any.
+        "replaces": s.replaces,
         "uac": f.uac, "forbidden": f.forbidden, "slow": crate::plan_facts::is_slow(&f),
         // How long this took HERE last time, for the estimate's minutes. 0 = no local
         // measurement, which the widget must COUNT and SHOW as unknown rather than silently
@@ -5361,6 +5364,7 @@ mod tests {
             pin: pin.map(|p| p.into()),
             scope: None,
             requires: Vec::new(),
+            replaces: Vec::new(),
             posture: Posture::OptIn,
             categories: Vec::new(),
             overrides: Overrides::default(),

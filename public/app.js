@@ -525,7 +525,9 @@ function paintPkg(i) {
   // even when nobody had ever asked for the row. paintPkg/refreshLiveness never
   // touch statusLabel otherwise (only setStatus does, on scan/step messages), so
   // without this the label would stay stale until the next scan.
-  const reason = M.scopeReason(model, i);
+  // In scope, a replaced row says so too (`replaces:`): its toggle still reads `on`, and the
+  // Apply removes it — the label is what makes that not a contradiction.
+  const reason = M.scopeReason(model, i) ?? M.replacedReason(model, i);
   if (reason && reason !== "external") {
     // `external` is NOT written here: setStatus already appends " · external"
     // beside the real presence, and presence is the more useful fact.

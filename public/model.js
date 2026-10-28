@@ -87,6 +87,7 @@ export function loadPlan(model, steps, profiles = []) {
       // scan flips it. A switch that pre-guessed would be the bug.
       external: false,
       requires: s.requires ?? [], // package names this one needs (transitive pull, §8)
+      replaces: s.replaces ?? [], // package names this one stands in for (`replacedBy`)
       // The three behaviour facts the row labels show, resolved SERVER-side (fleet observation with the
       // catalogue's declaration laid over it) and sent with the plan. The front does not
       // compute them and does not hold the durations behind them — it is told the verdict.
@@ -347,11 +348,42 @@ function refuses(model, i) {
 // its deps). Cycle-safe: the set only grows, so the walk terminates. This is the
 // live transitive pull, computed in the model (deps.rs only ORDERS the install).
 export function wantedNames(model) {
+  const replaced = replacedNames(model, pulledNames(model, new Set()));
+  return pulledNames(model, new Set(replaced.keys()));
+}
+// The OVERRIDE (`replaces:`): what a wanted package stands in for is not wanted, whatever its
+// own intention says. Name → the replacing package's name. Derived, never stored: the
+// replaced row keeps its intention, and gets it back the moment its replacement is not wanted.
+// One level only (`--check` refuses a replacer that is itself replaced), so the replacers are
+// read from the pull WITHOUT the override, and the pull is then taken again without what they
+// replace — a replaced package pulls none of its requirements.
+function replacedNames(model, wanted) {
+  const out = new Map();
+  for (const p of model.pkgs.values()) {
+    if (!wanted.has(p.name)) continue;
+    for (const r of p.replaces ?? []) if (r !== p.name && !out.has(r)) out.set(r, p.name);
+  }
+  return out;
+}
+// The name of the wanted package that stands in for row i, or null.
+export function replacedBy(model, i) {
+  const name = model.pkgs.get(i)?.name;
+  if (name == null) return null;
+  return replacedNames(model, pulledNames(model, new Set())).get(name) ?? null;
+}
+// The row's word for the override, or null: `replaced by Beta`. Verbatim on the right of the
+// row, like a requirement reason — the toggle keeps saying what the user chose.
+export function replacedReason(model, i) {
+  const by = replacedBy(model, i);
+  return by == null ? null : `replaced by ${by}`;
+}
+// The pull: seeds, then the closure over `requires`, never through a name in `skip`.
+function pulledNames(model, skip) {
   const nameToId = new Map();
   for (const [i, p] of model.pkgs) nameToId.set(p.name, i);
   const wanted = new Set();
   for (const [i, p] of model.pkgs) {
-    if (refuses(model, i)) continue;
+    if (refuses(model, i) || skip.has(p.name)) continue;
     if (manualToggle(model, i) === "in" || inActiveProfile(model, i)) wanted.add(p.name);
   }
   let changed = true;
@@ -361,7 +393,7 @@ export function wantedNames(model) {
       const p = model.pkgs.get(nameToId.get(name));
       for (const req of p?.requires ?? []) {
         const j = nameToId.get(req);
-        if (j == null || refuses(model, j) || wanted.has(req)) continue;
+        if (j == null || refuses(model, j) || skip.has(req) || wanted.has(req)) continue;
         wanted.add(req);
         changed = true;
       }
@@ -383,7 +415,10 @@ export function isPulled(model, i) {
 export function toggleOf(model, i) {
   return toggleState(postureOf(model, i), manualToggle(model, i), isPulled(model, i));
 }
+// A replaced row is wanted absent even when its toggle says "in": the override wins over the
+// intention without writing it (`replacedBy`). Manual rows are out of scope, so never touched.
 export function desiredOf(model, i) {
+  if (replacedBy(model, i) != null) return "absent";
   return desiredState(postureOf(model, i), manualToggle(model, i), isPulled(model, i));
 }
 export function isDeviated(model, i) {

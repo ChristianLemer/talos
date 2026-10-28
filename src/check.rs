@@ -117,6 +117,11 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
     let mut names: BTreeMap<String, String> = BTreeMap::new();
     // (file, requires) — resolved after every name is known, so order on disk is irrelevant.
     let mut requires: Vec<(String, Vec<String>)> = Vec::new();
+    // (file, name, replaces, requires) — the same, for `replaces:`.
+    let mut replaces: Vec<(String, String, Vec<String>, Vec<String>)> = Vec::new();
+    // name → what its presence is read from: (`detect:`, or the plugin id, and whether it is
+    // an agent plugin, read from a record that answers a bare name for ANY marketplace).
+    let mut reads: BTreeMap<String, (String, bool)> = BTreeMap::new();
     for path in yaml_files(catalog_dir) {
         let label = file_label(catalog_dir, &path);
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
@@ -311,6 +316,26 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
                  category never decides a behaviour"
             ));
         }
+        let plugin = cp
+            .pkg
+            .claude_plugin
+            .as_ref()
+            .or(cp.pkg.copilot_plugin.as_ref());
+        let read = cp.pkg.detect.clone().or_else(|| plugin.cloned());
+        if let Some(read) = read {
+            reads.insert(
+                cp.pkg.name.clone(),
+                (read.trim().to_string(), plugin.is_some()),
+            );
+        }
+        if !cp.pkg.replaces.is_empty() {
+            replaces.push((
+                label.clone(),
+                cp.pkg.name.clone(),
+                cp.pkg.replaces.clone(),
+                cp.pkg.requires.clone(),
+            ));
+        }
         requires.push((label, cp.pkg.requires.clone()));
     }
     for (label, reqs) in requires {
@@ -320,6 +345,54 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
                     "{label}: requires `{req}` — no package with that name in the catalog"
                 ));
             }
+        }
+    }
+
+    // `replaces:` is ONE level: a package that stands in for another cannot itself be stood in
+    // for, so which one wins never depends on an order. And it cannot need what it removes.
+    let replaced_by_someone: std::collections::BTreeSet<&str> = replaces
+        .iter()
+        .flat_map(|(_, _, reps, _)| reps.iter().map(String::as_str))
+        .collect();
+    for (label, name, reps, reqs) in &replaces {
+        for rep in reps {
+            if rep == name {
+                r.errors.push(format!("{label}: replaces itself"));
+            } else if !names.contains_key(rep) {
+                r.errors.push(format!(
+                    "{label}: replaces `{rep}` — no package with that name in the catalog"
+                ));
+            } else if reqs.contains(rep) {
+                r.errors.push(format!(
+                    "{label}: replaces `{rep}` and requires it — wanting this one would remove \
+                     what it needs"
+                ));
+            } else if let (Some((mine, mine_plugin)), Some((theirs, their_plugin))) =
+                (reads.get(name), reads.get(rep))
+            {
+                // The replaced row must read ABSENT once the replacement is all that is
+                // installed, or every Apply removes it again. A plugin record answers a bare
+                // name for any marketplace (`agent_content::plugin_state`).
+                let bare = |d: &str| d.split('@').next().unwrap_or("").to_string();
+                let same = mine == theirs
+                    || (*mine_plugin
+                        && *their_plugin
+                        && bare(mine) == bare(theirs)
+                        && !(mine.contains('@') && theirs.contains('@')));
+                if same {
+                    r.errors.push(format!(
+                        "{label}: replaces `{rep}`, and both read their presence from `{theirs}` \
+                         — one install would read as both; detect each by its own id \
+                         (`plugin@marketplace` for a plugin)"
+                    ));
+                }
+            }
+        }
+        if replaced_by_someone.contains(name.as_str()) {
+            r.errors.push(format!(
+                "{label}: replaces other packages and is itself replaced — `replaces:` is one \
+                 level, so which one wins never depends on an order"
+            ));
         }
     }
 
@@ -813,6 +886,73 @@ mod tests {
         assert!(text.contains("bundles/x.yaml: needs `Y`"), "{text}");
         assert!(
             text.contains("bundles/nameless.yaml: no `bundle:` name"),
+            "{text}"
+        );
+        assert!(!r.ok());
+    }
+
+    #[test]
+    fn replaces_is_cross_checked_and_one_level() {
+        let d = tmp("replaces");
+        write(
+            &d,
+            "catalog/beta.yaml",
+            "name: Beta\nbrew: b\nreplaces:\n  - Stable\n",
+        );
+        write(&d, "catalog/stable.yaml", "name: Stable\nbrew: s\n");
+        write(&d, "bundles/x.yaml", "bundle: X\n");
+        assert!(run(&d.join("catalog"), &d.join("bundles")).ok());
+
+        write(
+            &d,
+            "catalog/nightly.yaml",
+            "name: Nightly\nbrew: n\nreplaces:\n  - Beta\n  - Nightly\n  - Nobody\n",
+        );
+        write(
+            &d,
+            "catalog/fork.yaml",
+            "name: Fork\nbrew: f\nreplaces:\n  - Stable\nrequires:\n  - Stable\n",
+        );
+        write(
+            &d,
+            "catalog/plug.yaml",
+            "name: Plug\nclaude-plugin: plug@stable\nmarketplace: v/stable\ndetect: plug\n",
+        );
+        write(
+            &d,
+            "catalog/plug-beta.yaml",
+            "name: Plug Beta\nclaude-plugin: plug@beta\nmarketplace: v/beta\n\
+             detect: plug@beta\nreplaces:\n  - Plug\n",
+        );
+        let r = run(&d.join("catalog"), &d.join("bundles"));
+        let text = r.render();
+        assert!(
+            text.contains("catalog/plug-beta.yaml: replaces `Plug`, and both read"),
+            "a bare `plug` reads the beta's install too: {text}"
+        );
+        assert!(
+            text.contains("catalog/nightly.yaml: replaces itself"),
+            "{text}"
+        );
+        // Each by its own id: the stable row reads absent once only the beta is installed.
+        write(
+            &d,
+            "catalog/plug.yaml",
+            "name: Plug\nclaude-plugin: plug@stable\nmarketplace: v/stable\n\
+             detect: plug@stable\n",
+        );
+        let text = run(&d.join("catalog"), &d.join("bundles")).render();
+        assert!(!text.contains("plug-beta.yaml"), "{text}");
+        assert!(
+            text.contains("catalog/nightly.yaml: replaces `Nobody`"),
+            "{text}"
+        );
+        assert!(
+            text.contains("catalog/beta.yaml: replaces other packages and is itself replaced"),
+            "{text}"
+        );
+        assert!(
+            text.contains("catalog/fork.yaml: replaces `Stable` and requires it"),
             "{text}"
         );
         assert!(!r.ok());

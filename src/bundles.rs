@@ -98,6 +98,7 @@ impl RawPkg {
         "update",
         "update-on",
         "requires",
+        "replaces",
         "category",
         "uac",
         "403",
@@ -179,6 +180,11 @@ pub struct RawPkg {
     pub update_on: Option<String>,
     #[serde(default)]
     pub requires: Vec<String>,
+    /// The packages this one stands in for — a beta for its stable channel. While this one is
+    /// wanted, they are wanted absent, whatever their own intention says (the front's
+    /// `replacedBy`); the intention is kept, and comes back when this one is not wanted.
+    #[serde(default)]
+    pub replaces: Vec<String>,
     #[serde(default)]
     pub category: Vec<String>,
     /// Behaviour OVERRIDES — an author's statement that beats what the fleet observed.
@@ -350,6 +356,8 @@ pub struct Step {
     pub scope: Option<crate::managers::InstallScope>,
     #[allow(dead_code)]
     pub requires: Vec<String>,
+    /// `replaces:` as declared — sent to the front, which resolves the override.
+    pub replaces: Vec<String>,
     pub posture: Posture,
     pub categories: Vec<String>,
     /// What this package DECLARES about its behaviour, carried from the catalogue so a
@@ -944,6 +952,7 @@ pub fn load_from_catalog(catalog_dir: &str, kit_dir: &str, os: Os, log: &dyn Fn(
                 .as_deref()
                 .and_then(crate::managers::InstallScope::from_word),
             requires: p.requires.clone(),
+            replaces: p.replaces.clone(),
             posture: Posture::OptIn, // catalog default: free + out-by-default
             // (bundle-driven: the bundle pull decides "in", not the posture).
             // per-package posture declared in YAML is a later add.
@@ -1096,7 +1105,7 @@ mod tests {
         let yaml: String = RawPkg::KNOWN_KEYS
             .iter()
             .map(|k| match *k {
-                "requires" | "category" => format!("{k}: []\n"),
+                "requires" | "replaces" | "category" => format!("{k}: []\n"),
                 "uac" | "403" | "slow" => format!("\"{k}\": true\n"),
                 "doctor" => "doctor: {}\n".to_string(),
                 _ => format!("{k}: x\n"),
