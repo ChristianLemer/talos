@@ -622,7 +622,8 @@ export function setHold(model, i, reason) {
 }
 // The one word a held row shows beside its reason: `unchanged` (it ran and moved nothing),
 // `ahead` (the tool is past what its manager offers), `current` (at it, with a manager record
-// the upgrade would not move), `held` (a pin this route cannot reach),
+// the upgrade would not move), `held` (a pin this route cannot reach, or a winget copy that
+// could not be located),
 // or "" when nothing holds the row.
 export function holdWord(model, i) {
   const why = holdReason(model, i);

@@ -347,8 +347,8 @@ the button names it as such.
 
 ⚠️ "Cannot be read" has a price: as long as the copy's location stays unreadable (an empty
 InstallLocation is common for MSI packages), **every** upgrade of a package with `scope:` is
-held. A listing winget could not produce changes nothing: the stored command runs, as
-without `scope:` probing.
+held. So is one whose winget listing could not be produced; a downgrade then runs its
+stored command, as without `scope:` probing.
 
 Why not `winget upgrade`, and why the upgrade names the copy's scope rather than the declared
 one — all MEASURED on Nushell's MSI: `winget upgrade` on a per-user copy put the new version

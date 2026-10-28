@@ -2526,7 +2526,8 @@ async fn send_unannounced(socket: &mut WebSocket, i: usize, why: &str) {
 
 /// Tells the front that the Apply leaves row `i` and why. The front keeps it as the row's hold
 /// until the next plan (a Refresh), so the Apply button stops offering a change brew cannot
-/// make, or a winget upgrade whose copy could not be located. The server keeps nothing: every Apply that wants the row asks brew again.
+/// make, or a winget upgrade whose copy could not be located. The server keeps nothing: every
+/// Apply that wants the row asks brew, or probes winget, again.
 async fn send_held(socket: &mut WebSocket, i: usize, why: &str) {
     let _ = socket
         .send(Message::Text(
@@ -2566,8 +2567,8 @@ async fn winget_in_place(
             let probe = |cmd: &str| {
                 crate::detect::run_probe_detailed(&crate::platform::shell_probe(os, cmd))
             };
-            // Absent only when winget SAYS so: a failed or unreadable listing is unknown,
-            // and unknown leaves the stored command alone (outer None).
+            // Absent only when winget SAYS so: a failed or unreadable listing is unknown
+            // (outer None): a downgrade's stored command stands, an upgrade is held below.
             let (name, installed) =
                 match winget_listing(&id, &probe(&mgr.presence_command(&id)).output) {
                     Listing::Installed { name, version } => (name, version),
@@ -2586,7 +2587,16 @@ async fn winget_in_place(
         .ok()
         .flatten();
         let Some(probed) = probed else {
-            return Ok(None);
+            // A scoped upgrade's stored command installs in the declared scope, which puts a
+            // second copy beside one in the other scope: unknown holds it, as `winget_plan` does.
+            return match action {
+                Action::Upgrade => Err(format!(
+                    "winget could not list {}; not upgraded, rather than install a second copy \
+                     beside it",
+                    step.name
+                )),
+                _ => Ok(None),
+            };
         };
         probed
     } else {
@@ -7021,6 +7031,11 @@ mod tests {
             "cleared when the Apply ends"
         );
         let step = fn_body("do_step");
+        // A winget hold reaches the front before anything runs: an `Err` mapped to `Ok(None)`
+        // would run the stored command, a second copy beside one in the other scope.
+        let held = at(&step, "send_held(socket, i, &why)");
+        assert!(at(&step, "winget_in_place(") < at(&step, "Err(why) =>"));
+        assert!(at(&step, "Err(why) =>") < held && held < at(&step, "run_in_pty("));
         let rebuilt = at(&step, "brew_plan(action, step, verdict.as_ref())");
         assert!(at(&step, "winget_in_place(") < rebuilt);
         assert!(rebuilt < at(&step, "run_in_pty("));

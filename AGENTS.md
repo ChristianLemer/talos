@@ -185,12 +185,12 @@ releases that carried them (beta.1–19) were retired on 2026-09-06.
   publishes as content and what a stranger receives. The YAML file beside the two folders
   names the content (`name:`, optional `version:`); the window title leads with it. One YAML
   per package in `catalog/`; any other file there (`*.nu`) is a sidecar a package's command
-  runs, never a package. One YAML per bundle in `bundles/`. Every file is written as a lesson.
-  `cargo run -- --check catalog bundles` prints how many packages and bundles there are —
-  never count the files.
+  runs, never a package. One YAML per bundle in `bundles/`; a bundle's `needs:` names the
+  bundles it stands on. Every file is written as a lesson. `cargo run -- --check catalog
+  bundles` prints how many packages and bundles there are — never count the files.
 - **`tests/fixtures/content/`** — the FIXTURE: one file per form the engine knows, synthetic
-  ids, for the tests. The shipped-content guards walk it beside the socle (and the template, below); a test that names a file
-  names the fixture. Keep the two apart: the socle is real, the fixture is complete.
+  ids, for the tests. The shipped-content guards walk it beside the socle (one of them walks
+  the template too, below); a test that names a file names the fixture. Keep the two apart: the socle is real, the fixture is complete.
 - **`.claude-plugin/marketplace.json`** + **`plugin/`** — the repo is also a Claude Code
   marketplace serving one plugin, `talos` (`claude plugin install talos@talos`; the GitHub
   default branch is `beta`, so `github:ChristianLemer/talos` resolves to the living

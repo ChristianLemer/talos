@@ -2529,6 +2529,9 @@ ws.onmessage = (ev) => {
       // the copy to upgrade is (server::send_held)
       clearForbidden(msg.i); // a held retry is that retry's verdict
       M.setHold(model, msg.i, msg.reason);
+      // A winget hold arrives mid-batch, for a row the plan counted: or the bar stops at "2 of 3".
+      focusStarted?.add(msg.i);
+      paintBar();
       {
         // The hold replaces a retry's "failed" or "blocked", and the status follows presence as
         // a `state` does; a row not known present says why in it — it may have no pin to show
