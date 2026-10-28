@@ -2215,18 +2215,22 @@ async fn take_notes(state: &AppState, i: usize) -> Vec<String> {
     state.notes.lock().await.remove(&i).unwrap_or_default()
 }
 
-/// A winget version change, rebuilt for where the package must live — or None, and the
-/// stored command stands. PURE: `listed` is (name, version) from `winget list` (None = not
-/// installed), `found` the scope the uninstall entries show (None = unreadable), `remembered`
-/// the scope an earlier probe of this session found. Returns the command and the row's line.
+/// A winget version change, rebuilt for where the package must live — `Ok(None)`, and the
+/// stored command stands, or `Err(reason)`, and nothing runs. PURE: `listed` is (name,
+/// version) from `winget list` (None = not installed), `found` the scope the uninstall
+/// entries show (None = unreadable), `remembered` the scope an earlier probe of this session
+/// found. Returns the command and the row's line.
 ///
 /// - Downgrade: the uninstall removes every copy; the reinstall goes to the declared scope,
 ///   else the one found. Already gone (a retried reinstall half) → only the install: an
 ///   uninstall of an absent package exits -1978335212, which `benign_code` accepts, and the
 ///   chain would stop there reading ok with nothing reinstalled (MEASURED).
-/// - Upgrade, scope declared: in place only when the copy is already there; otherwise it is
-///   removed first. MEASURED: `winget install --scope user` over a machine-wide copy added a
-///   per-user one beside it.
+/// - Upgrade, scope declared: the copy is upgraded WHERE IT IS, and the row says when that is
+///   not the declared scope. An Upgrade never removes: the button counts it as an update, and
+///   a removal must be named before the click (`drop_unannounced`). Moving the copy to its
+///   declared scope is the user's act. Where it is cannot be read → held: the stored command
+///   would put a second copy beside it (MEASURED: `winget install --scope user` over a
+///   machine-wide copy added a per-user one).
 /// - Install, nothing declared: the scope remembered from the downgrade that removed it.
 fn winget_plan(
     action: crate::decision::Action,
@@ -2234,14 +2238,18 @@ fn winget_plan(
     listed: Option<(&str, &str)>,
     found: Option<crate::managers::InstallScope>,
     remembered: Option<crate::managers::InstallScope>,
-) -> Option<(String, String)> {
+) -> Result<Option<(String, String)>, String> {
     use crate::decision::Action;
     use crate::managers::InstallScope;
     if step.route.as_deref() != Some("winget") {
-        return None;
+        return Ok(None);
     }
-    let mgr = crate::managers::native_manager(Os::Windows)?;
-    let id = step.system_id.as_deref()?;
+    let (Some(mgr), Some(id)) = (
+        crate::managers::native_manager(Os::Windows),
+        step.system_id.as_deref(),
+    ) else {
+        return Ok(None);
+    };
     let declared = step.scope;
     let who = |sc: InstallScope| match sc {
         InstallScope::User => "for this user",
@@ -2251,18 +2259,20 @@ fn winget_plan(
         Some(sc) => format!(" (--scope {})", sc.as_str()),
         None => " in winget's default scope".to_string(),
     };
-    match action {
+    let rebuilt = match action {
         Action::Downgrade => {
-            let pin = step.pin.as_deref()?;
+            let Some(pin) = step.pin.as_deref() else {
+                return Ok(None);
+            };
             let Some((name, installed)) = listed else {
                 let sc = declared.or(remembered);
-                return Some((
+                return Ok(Some((
                     mgr.install_pinned_in(id, pin, sc),
                     format!(
                         "{id} is not installed any more; {pin} is installed{}",
                         flag(sc)
                     ),
-                ));
+                )));
             };
             let note = match (declared, found) {
                 (Some(sc), _) => format!(
@@ -2284,34 +2294,44 @@ fn winget_plan(
         Action::Upgrade => {
             // `self`: the upgrade is the tool's own command, never a winget reinstall.
             if is_self_updating(step) {
-                return None;
+                return Ok(None);
             }
-            let sc = declared?;
-            let (name, installed) = listed?;
-            if found == Some(sc) {
-                return None;
-            }
-            let up = step.upgrade.as_deref()?;
-            let note = match found {
-                Some(f) => format!(
-                    "{name} {installed} is installed {}; it is moved to --scope {} as it is \
-                     upgraded",
-                    who(f),
-                    sc.as_str()
-                ),
-                None => format!(
-                    "where {name} {installed} is installed could not be read; it is removed \
-                     and installed with --scope {} rather than risk a second copy",
-                    sc.as_str()
-                ),
+            let (Some(sc), Some((name, installed))) = (declared, listed) else {
+                return Ok(None);
             };
-            Some((format!("{} && {up}", mgr.uninstall(id)), note))
+            match found {
+                Some(f) if f == sc => None,
+                Some(f) => {
+                    // The stored upgrade, aimed at the copy's scope instead of the declared one.
+                    let cmd = match crate::bundles::classify_pin(step.pin.as_deref()) {
+                        Some(crate::bundles::PinKind::Exact(p)) => {
+                            mgr.install_pinned_in(id, &p, Some(f))
+                        }
+                        _ => mgr.install_in(id, Some(f)),
+                    };
+                    Some((
+                        cmd,
+                        format!(
+                            "{name} {installed} is installed {}, not in the declared --scope {}; \
+                             it is upgraded where it is (--scope {})",
+                            who(f),
+                            sc.as_str(),
+                            f.as_str()
+                        ),
+                    ))
+                }
+                None => {
+                    return Err(format!(
+                        "where {name} {installed} is installed could not be read; not upgraded, \
+                         rather than install a second copy beside it"
+                    ))
+                }
+            }
         }
         Action::Install => {
-            if declared.is_some() {
-                return None;
-            }
-            let sc = remembered?;
+            let (None, Some(sc)) = (declared, remembered) else {
+                return Ok(None);
+            };
             let cmd = match crate::bundles::classify_pin(step.pin.as_deref()) {
                 Some(crate::bundles::PinKind::Exact(p)) => mgr.install_pinned_in(id, &p, Some(sc)),
                 _ => mgr.install_in(id, Some(sc)),
@@ -2326,7 +2346,8 @@ fn winget_plan(
             ))
         }
         Action::Uninstall => None,
-    }
+    };
+    Ok(rebuilt)
 }
 
 /// A brew version change against an exact pin, decided from what brew offers — PURE: the
@@ -2505,7 +2526,7 @@ async fn send_unannounced(socket: &mut WebSocket, i: usize, why: &str) {
 
 /// Tells the front that the Apply leaves row `i` and why. The front keeps it as the row's hold
 /// until the next plan (a Refresh), so the Apply button stops offering a change brew cannot
-/// make. The server keeps nothing: every Apply that wants the row asks brew again.
+/// make, or a winget upgrade whose copy could not be located. The server keeps nothing: every Apply that wants the row asks brew again.
 async fn send_held(socket: &mut WebSocket, i: usize, why: &str) {
     let _ = socket
         .send(Message::Text(
@@ -2517,16 +2538,17 @@ async fn send_held(socket: &mut WebSocket, i: usize, why: &str) {
 /// The probes behind `winget_plan`, run just before acting: where the installed copy is is a
 /// fact of the machine, which the command stored at load cannot hold. Off winget, or when no
 /// decision needs them, nothing runs. The scope found is remembered for the row.
+/// `Err(reason)`: the row is held (`winget_plan`).
 async fn winget_in_place(
     state: &AppState,
     action: crate::decision::Action,
     step: &crate::bundles::Step,
     os: Os,
-) -> Option<(String, String)> {
+) -> Result<Option<(String, String)>, String> {
     use crate::decision::Action;
     use crate::managers::{arp_probe_command, scope_from_arp, winget_listing, Listing};
     if os != Os::Windows || step.route.as_deref() != Some("winget") {
-        return None;
+        return Ok(None);
     }
     let remembered = state.found_scope.lock().await.get(&step.id).copied();
     let probes = match action {
@@ -2536,9 +2558,11 @@ async fn winget_in_place(
         _ => false,
     };
     let (listed, found) = if probes {
-        let id = step.system_id.clone()?;
-        let mgr = crate::managers::native_manager(os)?;
-        tokio::task::spawn_blocking(move || {
+        let (Some(id), Some(mgr)) = (step.system_id.clone(), crate::managers::native_manager(os))
+        else {
+            return Ok(None);
+        };
+        let probed = tokio::task::spawn_blocking(move || {
             let probe = |cmd: &str| {
                 crate::detect::run_probe_detailed(&crate::platform::shell_probe(os, cmd))
             };
@@ -2559,7 +2583,12 @@ async fn winget_in_place(
             Some((Some((name, installed)), found))
         })
         .await
-        .ok()??
+        .ok()
+        .flatten();
+        let Some(probed) = probed else {
+            return Ok(None);
+        };
+        probed
     } else {
         (None, None)
     };
@@ -4147,28 +4176,30 @@ async fn do_step(
     // A winget version change is rebuilt HERE, for where the package must live — a fact of
     // the machine, read just before acting, that the command stored at load cannot hold.
     let rebuilt = match winget_in_place(state, action, step, os).await {
-        Some(r) => Some(r),
         // A brew pin, the same way: plain brew when the pin is brew's current version, and
         // nothing at all when brew cannot serve it. The plan's answer is taken when there is
         // one; a retry or a repair asks brew itself.
-        None => {
+        Ok(None) => {
             let planned = state.brew_pins.lock().await.remove(&step.id);
             let verdict = match planned {
                 Some(answer) => answer,
                 None => ask_brew(action, step, os).await,
             };
-            match brew_plan(action, step, verdict.as_ref()) {
-                Ok(r) => r,
-                Err(why) => {
-                    // Reached from a retry or a repair only: the row's terminal says why, and
-                    // the notes queued for a run that will not happen go with it.
-                    println!("[{}] {} held: {why}", action.as_str(), step.name);
-                    state.notes.lock().await.remove(&i);
-                    say(socket, i, &format!("[{}] held: {why}", action.as_str())).await;
-                    send_held(socket, i, &why).await;
-                    return StepOutcome::default();
-                }
-            }
+            brew_plan(action, step, verdict.as_ref())
+        }
+        other => other,
+    };
+    let rebuilt = match rebuilt {
+        Ok(r) => r,
+        Err(why) => {
+            // Held: a brew pin brew cannot serve (from a retry or a repair — the batch holds
+            // those at plan time), or a winget copy whose scope could not be read. The row's
+            // terminal says why, and the notes queued for a run that will not happen go with it.
+            println!("[{}] {} held: {why}", action.as_str(), step.name);
+            state.notes.lock().await.remove(&i);
+            say(socket, i, &format!("[{}] held: {why}", action.as_str())).await;
+            send_held(socket, i, &why).await;
+            return StepOutcome::default();
         }
     };
     if let Some((_, note)) = &rebuilt {
@@ -7153,32 +7184,56 @@ mod tests {
     use crate::managers::InstallScope::{Machine, User};
 
     #[test]
-    fn a_declared_scope_upgrades_in_place_only_when_the_copy_is_already_there() {
+    fn a_declared_scope_upgrades_the_copy_where_it_is_and_never_removes_it() {
         // MEASURED (Windows VM, 2026-10-21): `winget install --scope user` over a machine-wide
-        // 0.113.1 installed 0.116.1 per-user BESIDE it — two nu. So the in-place install runs
-        // only when the copy already lives in the declared scope; otherwise the copy is removed
-        // first, like a downgrade, and the new version lands where it was declared.
+        // 0.113.1 installed 0.116.1 per-user BESIDE it — two nu. The fix was once to uninstall
+        // first, but the button counts an Upgrade as an update: that was a removal it never
+        // named (beta.67 pre-tag review). So the copy is upgraded in its own scope, the row says
+        // it differs from the declared one, and an unreadable scope holds the row. MEASURED
+        // (VM, winget 1.29.380, 2026-10-28): `winget install --scope machine` over a machine-wide
+        // 0.113.1 upgraded it in place to 0.116.1 — one entry, still under Program Files.
         let step = winget_step(None, Some(User));
         let listed = Some(("Nushell", "0.113.1"));
         assert_eq!(
             super::winget_plan(Action::Upgrade, &step, listed, Some(User), None),
-            None
+            Ok(None)
         );
-        for found in [Some(Machine), None] {
-            let (cmd, note) =
-                super::winget_plan(Action::Upgrade, &step, listed, found, None).expect("rebuilt");
-            assert!(
-                cmd.starts_with("winget uninstall --id Nushell.Nushell"),
-                "{cmd}"
-            );
-            assert!(cmd.ends_with(step.upgrade.as_deref().unwrap()), "{cmd}");
-            assert!(note.contains("--scope user"), "{note}");
-        }
+        let (cmd, note) = super::winget_plan(Action::Upgrade, &step, listed, Some(Machine), None)
+            .unwrap()
+            .expect("rebuilt");
+        assert!(!cmd.contains("uninstall"), "{cmd}");
+        assert_eq!(
+            cmd,
+            step.install
+                .as_deref()
+                .unwrap()
+                .replace("--scope user", "--scope machine")
+        );
+        assert!(
+            note.contains("not in the declared --scope user") && note.contains("--scope machine"),
+            "{note}"
+        );
+        // An exact pin keeps its version, in the copy's scope.
+        let pinned = winget_step(Some("0.116.1"), Some(User));
+        let (cmd, _) = super::winget_plan(Action::Upgrade, &pinned, listed, Some(Machine), None)
+            .unwrap()
+            .expect("rebuilt");
+        assert!(
+            cmd.starts_with("winget install") && cmd.contains("--version 0.116.1"),
+            "{cmd}"
+        );
+        assert!(
+            cmd.ends_with("--scope machine") && !cmd.contains("uninstall"),
+            "{cmd}"
+        );
+        // Unknown: neither a removal nor a second copy — the row is held and says why.
+        let why = super::winget_plan(Action::Upgrade, &step, listed, None, None).unwrap_err();
+        assert!(why.contains("could not be read"), "{why}");
         // No declared scope: `winget upgrade` keeps doing what it did.
         let plain = winget_step(None, None);
         assert_eq!(
             super::winget_plan(Action::Upgrade, &plain, listed, Some(Machine), None),
-            None
+            Ok(None)
         );
     }
 
@@ -7293,7 +7348,7 @@ mod tests {
         for found in [Some(Machine), Some(User), None] {
             assert_eq!(
                 super::winget_plan(Action::Upgrade, &step, listed, found, None),
-                None,
+                Ok(None),
                 "found {found:?}"
             );
         }
@@ -7304,19 +7359,24 @@ mod tests {
         let listed = Some(("Nushell", "0.116.1"));
         let declared = winget_step(Some("0.113.1"), Some(User));
         let (cmd, _) =
-            super::winget_plan(Action::Downgrade, &declared, listed, Some(Machine), None).unwrap();
+            super::winget_plan(Action::Downgrade, &declared, listed, Some(Machine), None)
+                .unwrap()
+                .unwrap();
         assert!(
             cmd.ends_with("--scope user"),
             "the catalogue wins over the copy: {cmd}"
         );
         let free = winget_step(Some("0.113.1"), None);
-        let (cmd, _) =
-            super::winget_plan(Action::Downgrade, &free, listed, Some(Machine), None).unwrap();
+        let (cmd, _) = super::winget_plan(Action::Downgrade, &free, listed, Some(Machine), None)
+            .unwrap()
+            .unwrap();
         assert!(
             cmd.starts_with("winget show") && cmd.ends_with("--scope machine"),
             "{cmd}"
         );
-        let (cmd, note) = super::winget_plan(Action::Downgrade, &free, listed, None, None).unwrap();
+        let (cmd, note) = super::winget_plan(Action::Downgrade, &free, listed, None, None)
+            .unwrap()
+            .unwrap();
         assert!(!cmd.contains("--scope"), "{cmd}");
         assert!(note.contains("could not be read"), "{note}");
     }
@@ -7349,8 +7409,9 @@ mod tests {
         // `benign_code` accepts — so the chain stopped there and the step read ok with
         // nothing reinstalled (a 403 Retry of the reinstall half). Gone → install, nothing else.
         let free = winget_step(Some("0.113.1"), None);
-        let (cmd, note) =
-            super::winget_plan(Action::Downgrade, &free, None, None, Some(Machine)).unwrap();
+        let (cmd, note) = super::winget_plan(Action::Downgrade, &free, None, None, Some(Machine))
+            .unwrap()
+            .unwrap();
         assert!(
             cmd.starts_with("winget install") && !cmd.contains("uninstall"),
             "{cmd}"
@@ -7367,18 +7428,19 @@ mod tests {
         // A retry that finds the package gone turns into Install (`retry_action`); the scope
         // the downgrade's probe found minutes earlier must survive it.
         let free = winget_step(Some("0.113.1"), None);
-        let (cmd, _) =
-            super::winget_plan(Action::Install, &free, None, None, Some(Machine)).unwrap();
+        let (cmd, _) = super::winget_plan(Action::Install, &free, None, None, Some(Machine))
+            .unwrap()
+            .unwrap();
         assert!(cmd.ends_with("--version 0.113.1 --source winget --accept-source-agreements --accept-package-agreements --scope machine"), "{cmd}");
         assert_eq!(
             super::winget_plan(Action::Install, &free, None, None, None),
-            None
+            Ok(None)
         );
         // Declared: the stored install already carries it.
         let declared = winget_step(Some("0.113.1"), Some(User));
         assert_eq!(
             super::winget_plan(Action::Install, &declared, None, None, Some(Machine)),
-            None
+            Ok(None)
         );
         // Off winget nothing changes.
         assert_eq!(
@@ -7389,7 +7451,7 @@ mod tests {
                 None,
                 None
             ),
-            None
+            Ok(None)
         );
     }
 

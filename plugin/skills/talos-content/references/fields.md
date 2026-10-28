@@ -329,25 +329,33 @@ pin tighter.
 ### Where a winget package lives — `scope:`
 
 `scope: user` or `scope: machine` (winget only) decides where the package is installed:
-every install, upgrade, pinned install and downgrade reinstall passes `--scope`, and a copy
-found elsewhere is **moved**, never duplicated. Just before an upgrade or a downgrade, Talos
-reads where the installed copy is, and the row's terminal says what it found:
+every install, pinned install and downgrade reinstall passes `--scope`. Just before an
+upgrade or a downgrade, Talos reads where the installed copy is, and the row's terminal says
+what it found:
 
 | the copy is… | upgrade | downgrade |
 |---|---|---|
 | already in the declared scope | `winget install --scope` — in place | uninstall, then reinstall at the pin there |
-| elsewhere, or where cannot be read | uninstall, then install there | the same |
+| in the other scope | `winget install --scope <its scope>` — in place, and the row says it is not where declared | uninstall, then reinstall at the pin in the declared scope |
+| where cannot be read | **held**: nothing runs, the row says why | uninstall, then reinstall at the pin in the declared scope |
 | not installed any more | — | install at the pin there (nothing to uninstall) |
 
-⚠️ "Cannot be read" has a price: as long as the copy's location stays unreadable (an empty
-InstallLocation is common for MSI packages), **every** upgrade of a package with `scope:`
-uninstalls before it installs. A listing winget could not produce changes nothing: the
-stored command runs, as without `scope:` probing.
+An upgrade **never removes**: the Apply button counts it as an update, and a removal must be
+named on the button before the click. Moving a copy to its declared scope is the user's act
+(uninstall it; the next Apply installs it where declared). A downgrade removes by nature, and
+the button names it as such.
 
-Why not `winget upgrade`, and why not always install in place — all MEASURED on Nushell's
-MSI: `winget upgrade` on a per-user copy put the new version machine-wide beside it;
-`winget upgrade --scope user` did not even find it (winget files that copy as machine); and
-`winget install --scope user` over a **machine-wide** copy added a per-user one beside it.
+⚠️ "Cannot be read" has a price: as long as the copy's location stays unreadable (an empty
+InstallLocation is common for MSI packages), **every** upgrade of a package with `scope:` is
+held. A listing winget could not produce changes nothing: the stored command runs, as
+without `scope:` probing.
+
+Why not `winget upgrade`, and why the upgrade names the copy's scope rather than the declared
+one — all MEASURED on Nushell's MSI: `winget upgrade` on a per-user copy put the new version
+machine-wide beside it; `winget upgrade --scope user` did not even find it (winget files that
+copy as machine); `winget install --scope user` over a **machine-wide** copy added a per-user
+one beside it; and `winget install --scope` naming the copy's own scope upgraded it in place,
+per-user and machine-wide alike.
 
 Without `scope:`, a downgrade reinstalls where the installed copy was, read from the
 InstallLocation of its uninstall entry: under the profile, LOCALAPPDATA or APPDATA →

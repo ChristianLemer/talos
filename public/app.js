@@ -2525,7 +2525,8 @@ ws.onmessage = (ev) => {
       refreshLiveness(); // the Apply no longer counts this row while the target is the same
       break;
     }
-    case "held": // the Apply left this row: brew cannot serve its pin (server::send_held)
+    case "held": // the Apply left this row: brew cannot serve its pin, or winget cannot say where
+      // the copy to upgrade is (server::send_held)
       clearForbidden(msg.i); // a held retry is that retry's verdict
       M.setHold(model, msg.i, msg.reason);
       {
