@@ -119,9 +119,11 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
     let mut requires: Vec<(String, Vec<String>)> = Vec::new();
     // (file, name, replaces, requires) — the same, for `replaces:`.
     let mut replaces: Vec<(String, String, Vec<String>, Vec<String>)> = Vec::new();
-    // name → what its presence is read from: (`detect:`, or the plugin id, and whether it is
-    // an agent plugin, read from a record that answers a bare name for ANY marketplace).
-    let mut reads: BTreeMap<String, (String, bool)> = BTreeMap::new();
+    // name → what its presence is read from: (`detect:` as the engine fills it, and the route
+    // that reads it — a plugin record answers a bare name for ANY marketplace).
+    let mut reads: BTreeMap<String, (String, &'static str)> = BTreeMap::new();
+    // name → `requires:`, to walk chains.
+    let mut requires_of: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for path in yaml_files(catalog_dir) {
         let label = file_label(catalog_dir, &path);
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
@@ -316,18 +318,20 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
                  category never decides a behaviour"
             ));
         }
-        let plugin = cp
-            .pkg
-            .claude_plugin
-            .as_ref()
-            .or(cp.pkg.copilot_plugin.as_ref());
-        let read = cp.pkg.detect.clone().or_else(|| plugin.cloned());
+        // As `bundles::step` fills `detect:`: only a marketplace copilot plugin defaults to its
+        // id; a claude plugin without one is never read present at all.
+        let (read, route) = if cp.pkg.claude_plugin.is_some() {
+            (cp.pkg.detect.clone(), "claude-plugin")
+        } else if let Some(c) = &cp.pkg.copilot_plugin {
+            let id = Some(c.clone()).filter(|c| !crate::bundles::is_direct_copilot_source(c));
+            (cp.pkg.detect.clone().or(id), "copilot-plugin")
+        } else {
+            (cp.pkg.detect.clone(), "")
+        };
         if let Some(read) = read {
-            reads.insert(
-                cp.pkg.name.clone(),
-                (read.trim().to_string(), plugin.is_some()),
-            );
+            reads.insert(cp.pkg.name.clone(), (read.trim().to_string(), route));
         }
+        requires_of.insert(cp.pkg.name.clone(), cp.pkg.requires.clone());
         if !cp.pkg.replaces.is_empty() {
             replaces.push((
                 label.clone(),
@@ -338,9 +342,9 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
         }
         requires.push((label, cp.pkg.requires.clone()));
     }
-    for (label, reqs) in requires {
+    for (label, reqs) in &requires {
         for req in reqs {
-            if !names.contains_key(&req) {
+            if !names.contains_key(req) {
                 r.errors.push(format!(
                     "{label}: requires `{req}` — no package with that name in the catalog"
                 ));
@@ -350,11 +354,38 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
 
     // `replaces:` is ONE level: a package that stands in for another cannot itself be stood in
     // for, so which one wins never depends on an order. And it cannot need what it removes.
-    let replaced_by_someone: std::collections::BTreeSet<&str> = replaces
+    // replaced name → the package that replaces it.
+    let replaced_by_someone: BTreeMap<&str, &str> = replaces
         .iter()
-        .flat_map(|(_, _, reps, _)| reps.iter().map(String::as_str))
+        .flat_map(|(_, by, reps, _)| reps.iter().map(move |r| (r.as_str(), by.as_str())))
         .collect();
-    for (label, name, reps, reqs) in &replaces {
+    // Everything `name` requires, through any chain.
+    let reach = |name: &str| {
+        let mut seen: std::collections::BTreeSet<String> = Default::default();
+        let mut todo = vec![name.to_string()];
+        while let Some(n) = todo.pop() {
+            for req in requires_of.get(&n).into_iter().flatten() {
+                if seen.insert(req.clone()) {
+                    todo.push(req.clone());
+                }
+            }
+        }
+        seen
+    };
+    // Nothing may require a replaced package: while its replacement is wanted it is removed,
+    // and a row needing it would be installed onto a requirement on its way out — then left
+    // out of scope, unable even to be removed. (The replacement does not stand in for it.)
+    for (label, reqs) in &requires {
+        for req in reqs {
+            if let Some(by) = replaced_by_someone.get(req.as_str()) {
+                r.errors.push(format!(
+                    "{label}: requires `{req}`, which `{by}` replaces — while `{by}` is wanted, \
+                     `{req}` is removed and this package is left without it"
+                ));
+            }
+        }
+    }
+    for (label, name, reps, _) in &replaces {
         for rep in reps {
             if rep == name {
                 r.errors.push(format!("{label}: replaces itself"));
@@ -362,23 +393,24 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
                 r.errors.push(format!(
                     "{label}: replaces `{rep}` — no package with that name in the catalog"
                 ));
-            } else if reqs.contains(rep) {
+            } else if reach(rep).contains(name) {
                 r.errors.push(format!(
-                    "{label}: replaces `{rep}` and requires it — wanting this one would remove \
-                     what it needs"
+                    "{label}: replaces `{rep}`, which requires it — wanting `{rep}` would pull \
+                     this package in, which then removes `{rep}`"
                 ));
-            } else if let (Some((mine, mine_plugin)), Some((theirs, their_plugin))) =
+            } else if let (Some((mine, mine_route)), Some((theirs, their_route))) =
                 (reads.get(name), reads.get(rep))
             {
                 // The replaced row must read ABSENT once the replacement is all that is
-                // installed, or every Apply removes it again. A plugin record answers a bare
-                // name for any marketplace (`agent_content::plugin_state`).
+                // installed, or every Apply removes it again. Two routes read two records; a
+                // plugin record answers a bare name for any marketplace
+                // (`agent_content::plugin_state`).
                 let bare = |d: &str| d.split('@').next().unwrap_or("").to_string();
-                let same = mine == theirs
-                    || (*mine_plugin
-                        && *their_plugin
-                        && bare(mine) == bare(theirs)
-                        && !(mine.contains('@') && theirs.contains('@')));
+                let same = mine_route == their_route
+                    && (mine == theirs
+                        || (!mine_route.is_empty()
+                            && bare(mine) == bare(theirs)
+                            && !(mine.contains('@') && theirs.contains('@'))));
                 if same {
                     r.errors.push(format!(
                         "{label}: replaces `{rep}`, and both read their presence from `{theirs}` \
@@ -388,7 +420,7 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
                 }
             }
         }
-        if replaced_by_someone.contains(name.as_str()) {
+        if replaced_by_someone.contains_key(name.as_str()) {
             r.errors.push(format!(
                 "{label}: replaces other packages and is itself replaced — `replaces:` is one \
                  level, so which one wins never depends on an order"
@@ -934,6 +966,26 @@ mod tests {
             text.contains("catalog/nightly.yaml: replaces itself"),
             "{text}"
         );
+        // A replaced package that needs its replacement: wanting it pulls in what removes it.
+        let e = tmp("replaces-loop");
+        write(&e, "catalog/a.yaml", "name: A\nbrew: a\nreplaces:\n  - B\n");
+        write(&e, "catalog/b.yaml", "name: B\nbrew: b\nrequires:\n  - L\n");
+        write(&e, "catalog/l.yaml", "name: L\nbrew: l\nrequires:\n  - A\n");
+        // Two routes read two records: a claude and a copilot plugin of one name do not collide.
+        write(
+            &e,
+            "catalog/c.yaml",
+            "name: C\nclaude-plugin: plug@m\nmarketplace: v/m\ndetect: plug\nreplaces:\n  - D\n",
+        );
+        write(&e, "catalog/d.yaml", "name: D\ncopilot-plugin: plug@m\n");
+        write(&e, "bundles/x.yaml", "bundle: X\n");
+        let text = run(&e.join("catalog"), &e.join("bundles")).render();
+        assert!(
+            text.contains("catalog/a.yaml: replaces `B`, which requires it"),
+            "{text}"
+        );
+        assert!(!text.contains("catalog/c.yaml"), "{text}");
+
         // Each by its own id: the stable row reads absent once only the beta is installed.
         write(
             &d,
@@ -952,8 +1004,8 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("catalog/fork.yaml: replaces `Stable` and requires it"),
-            "{text}"
+            text.contains("catalog/fork.yaml: requires `Stable`, which"),
+            "a requirement on a replaced package: {text}"
         );
         assert!(!r.ok());
     }

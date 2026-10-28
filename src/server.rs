@@ -2430,6 +2430,57 @@ async fn ask_brew(
     .ok()?
 }
 
+/// A replaced row's removal (`replaces:`) moves after the step of its replacement, when both
+/// are in the plan: the stable channel leaves only once the beta has landed. PURE.
+fn replaced_after_replacer(
+    plan: Vec<(usize, crate::decision::Action)>,
+    steps: &[crate::bundles::Step],
+) -> Vec<(usize, crate::decision::Action)> {
+    use crate::decision::Action;
+    let replacer_of = |i: usize| {
+        plan.iter().rposition(|&(j, a)| {
+            a != Action::Uninstall && steps[j].replaces.contains(&steps[i].name)
+        })
+    };
+    let waiting: Vec<(usize, usize)> = plan
+        .iter()
+        .enumerate()
+        .filter(|(_, &(_, a))| a == Action::Uninstall)
+        .filter_map(|(at, &(i, _))| replacer_of(i).filter(|&r| r > at).map(|r| (at, r)))
+        .collect();
+    let mut out = Vec::with_capacity(plan.len());
+    for (at, item) in plan.iter().enumerate() {
+        if waiting.iter().any(|&(w, _)| w == at) {
+            continue;
+        }
+        out.push(*item);
+        out.extend(
+            waiting
+                .iter()
+                .filter(|&&(_, r)| r == at)
+                .map(|&(w, _)| plan[w]),
+        );
+    }
+    out
+}
+
+/// Why a replaced row's removal waits: its replacement was in this plan and its step did not
+/// leave it present (failed, cancelled, skipped). None when nothing replaces it here.
+fn replacement_missing(
+    step: &crate::bundles::Step,
+    steps: &[crate::bundles::Step],
+    landed: &std::collections::HashMap<usize, bool>,
+) -> Option<String> {
+    landed.iter().find_map(|(&j, &ok)| {
+        (!ok && steps[j].replaces.contains(&step.name)).then(|| {
+            format!(
+                "kept: {} replaces it and did not install — nothing would be left",
+                steps[j].name
+            )
+        })
+    })
+}
+
 /// Rows held absent at plan time (brew cannot serve the pin) will not be there after the
 /// Apply, so what requires them cannot run either: it leaves the plan, saying what it waits
 /// for, and a chain goes with it. `nodes` was built before any hold was known. A removal stays:
@@ -3126,8 +3177,15 @@ async fn apply_diff(
         println!("[apply] {} held: {why}", steps[i].name);
         send_held(socket, i, &why).await;
     }
-    // Order by dependencies (required before dependents; visual order = tie-break).
-    let plan = topo_sort(&visual_plan, &nodes, &idx);
+    // Order by dependencies (required before dependents; visual order = tie-break), then a
+    // replaced row's removal after the step of what replaces it.
+    let plan = replaced_after_replacer(topo_sort(&visual_plan, &nodes, &idx), steps);
+    // A replacement in the plan whose step did not leave it present: what it replaces stays.
+    let mut replacer_landed: std::collections::HashMap<usize, bool> = plan
+        .iter()
+        .filter(|(j, a)| *a != Action::Uninstall && !steps[*j].replaces.is_empty())
+        .map(|(j, _)| (*j, false))
+        .collect();
     if plan.is_empty() {
         let _ = socket
             .send(Message::Text(
@@ -3152,6 +3210,13 @@ async fn apply_diff(
     // change: half of the bound (`dependents_of` being direct is the other half).
     let mut rechecked: HashSet<usize> = HashSet::new();
     'plan: for (pos, (i, action)) in plan.iter().enumerate() {
+        if *action == Action::Uninstall {
+            if let Some(why) = replacement_missing(&steps[*i], steps, &replacer_landed) {
+                println!("[apply] {} held: {why}", steps[*i].name);
+                send_held(socket, *i, &why).await;
+                continue;
+            }
+        }
         // is_cask from the scan we already have → do_step re-issues the forced
         // --cask --force command for cask upgrades (single resolution point).
         // A `self` row's upgrade is the tool's own command, never brew's: no cask upgrade, so
@@ -3176,6 +3241,9 @@ async fn apply_diff(
         };
         let (outcome, stop_all) =
             step_with_forbidden_pause(socket, state, *i, *action, &steps[*i], is_cask, aim).await;
+        if let Some(landed) = replacer_landed.get_mut(i) {
+            *landed = outcome.after.as_ref().and_then(|p| p.present) == Some(true);
+        }
         if stop_all {
             break; // "stop everything" → abandon the rest of the plan
         }
@@ -7201,6 +7269,60 @@ mod tests {
 
     use crate::decision::Action;
     use crate::managers::InstallScope::{Machine, User};
+
+    #[test]
+    fn a_replaced_row_leaves_only_after_its_replacement_has_landed() {
+        // `replaces:`: the stable channel's removal waits for the beta's step, and is kept when
+        // that step did not leave the beta present — or the user would end with neither.
+        let mut stable = brew_step("tool", None);
+        stable.name = "Tool".into();
+        let mut beta = brew_step("tool-beta", None);
+        beta.name = "Tool Beta".into();
+        beta.replaces = vec!["Tool".into()];
+        let other = brew_step("jq", None);
+        let steps = vec![stable, beta, other];
+        let plan = vec![
+            (0, Action::Uninstall),
+            (2, Action::Install),
+            (1, Action::Install),
+        ];
+        assert_eq!(
+            super::replaced_after_replacer(plan, &steps),
+            vec![
+                (2, Action::Install),
+                (1, Action::Install),
+                (0, Action::Uninstall)
+            ]
+        );
+        // Already after it, or nothing replacing it in the plan: unchanged.
+        let plan = vec![(1, Action::Install), (0, Action::Uninstall)];
+        assert_eq!(super::replaced_after_replacer(plan.clone(), &steps), plan);
+        let plan = vec![(0, Action::Uninstall), (2, Action::Install)];
+        assert_eq!(super::replaced_after_replacer(plan.clone(), &steps), plan);
+
+        let landed = std::collections::HashMap::from([(1, false)]);
+        let why = super::replacement_missing(&steps[0], &steps, &landed).expect("kept");
+        assert!(
+            why.contains("Tool Beta replaces it and did not install"),
+            "{why}"
+        );
+        let landed = std::collections::HashMap::from([(1, true)]);
+        assert_eq!(super::replacement_missing(&steps[0], &steps, &landed), None);
+        // Wired: the plan is reordered, the check runs before the step, the outcome is recorded.
+        let body = fn_body("apply_diff");
+        let at = |s: &str| body.find(s).unwrap_or_else(|| panic!("no `{s}`"));
+        assert!(at("replaced_after_replacer(topo_sort(") < at("replacement_missing("));
+        assert!(at("replacement_missing(") < at("step_with_forbidden_pause("));
+        assert!(at("step_with_forbidden_pause(") < at("replacer_landed.get_mut(i)"));
+        assert_eq!(
+            super::replacement_missing(
+                &steps[2],
+                &steps,
+                &std::collections::HashMap::from([(1, false)])
+            ),
+            None
+        );
+    }
 
     #[test]
     fn a_declared_scope_upgrades_the_copy_where_it_is_and_never_removes_it() {

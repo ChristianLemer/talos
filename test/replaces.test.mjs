@@ -24,6 +24,9 @@ import {
   wantedNames,
   applySavedActiveBundles,
   removeProfile,
+  profileStateOf,
+  setHold,
+  holdReason,
 } from "../public/model.js";
 
 const appjs = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
@@ -93,13 +96,61 @@ test("a bundle pulling both: the replacement still wins", () => {
   assert.equal(actionOf(m, 0), null, "Preview off: Stable is simply kept");
 });
 
-test("a Manual row is never touched, replaced or not", () => {
+test("a Manual row is never touched, nor what it requires", () => {
+  // Review finding 3: out of scope, the row was spared but its requirements were pulled out.
   const m = channels();
   setDecision(m, 1, "in");
   setScope(m, 0, "out");
-  assert.equal(replacedBy(m, 0), "Beta");
+  assert.equal(replacedBy(m, 0), null);
   assert.equal(actionOf(m, 0), null);
-  assert.ok(!announcedRemovals(m).includes(0));
+  assert.ok(wantedNames(m).has("Lib"), "Stable is kept, so what it needs is kept");
+  assert.deepEqual(announcedRemovals(m), []);
+});
+
+test("a replacement that cannot land replaces nothing", () => {
+  // Review finding 1: the plan was [uninstall Stable] and no install — neither left.
+  const cases = {
+    "no route here": (m) => { m.pkgs.get(1).canUninstall = false; },
+    "a requirement it cannot get": (m) => { m.pkgs.get(1).requires = ["Windows"]; },
+    "parked on Manual": (m) => { setScope(m, 1, "out"); },
+  };
+  for (const [why, cut] of Object.entries(cases)) {
+    const m = channels();
+    loadPlan(m, [
+      { i: 0, name: "Stable", canUninstall: true, requires: ["Lib"] },
+      { i: 1, name: "Beta", canUninstall: true, replaces: ["Stable"] },
+      { i: 2, name: "Lib", canUninstall: true },
+      { i: 3, name: "Windows", canUninstall: false },
+    ], []);
+    setDecision(m, 0, "in");
+    setDecision(m, 1, "in");
+    for (const [i, status] of [[0, "ok"], [1, "waiting"], [2, "ok"], [3, "waiting"]]) setStatusData(m, i, status);
+    cut(m);
+    assert.equal(replacedBy(m, 0), null, why);
+    assert.equal(actionOf(m, 0), null, why);
+  }
+});
+
+test("a removal kept because the replacement did not install is not counted again", () => {
+  const m = channels();
+  setDecision(m, 1, "in");
+  setStatusData(m, 1, "failed");
+  setHold(m, 0, "kept: Beta replaces it and did not install — nothing would be left");
+  assert.match(holdReason(m, 0), /did not install/);
+  assert.ok(!announcedRemovals(m).includes(0), "the button no longer offers it");
+});
+
+test("a bundle whose member is replaced still reads full", () => {
+  // Review finding 6: the card read `hollow` — "you pulled one out" — when nobody had.
+  const m = createModel();
+  loadPlan(m, [
+    { i: 0, name: "Stable", canUninstall: true },
+    { i: 1, name: "Beta", canUninstall: true, replaces: ["Stable"] },
+  ], [{ name: "Main", packages: ["Stable"], needs: [] }]);
+  applySavedActiveBundles(m, ["Main"]);
+  setDecision(m, 1, "in");
+  assert.equal(replacedBy(m, 0), "Beta");
+  assert.equal(profileStateOf(m, "Main"), "full");
 });
 
 test("the row says why its toggle and its action disagree", () => {

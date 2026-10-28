@@ -348,28 +348,61 @@ function refuses(model, i) {
 // its deps). Cycle-safe: the set only grows, so the walk terminates. This is the
 // live transitive pull, computed in the model (deps.rs only ORDERS the install).
 export function wantedNames(model) {
-  const replaced = replacedNames(model, pulledNames(model, new Set()));
-  return pulledNames(model, new Set(replaced.keys()));
+  return pull(model).wanted;
 }
-// The OVERRIDE (`replaces:`): what a wanted package stands in for is not wanted, whatever its
-// own intention says. Name → the replacing package's name. Derived, never stored: the
-// replaced row keeps its intention, and gets it back the moment its replacement is not wanted.
-// One level only (`--check` refuses a replacer that is itself replaced), so the replacers are
-// read from the pull WITHOUT the override, and the pull is then taken again without what they
-// replace — a replaced package pulls none of its requirements.
-function replacedNames(model, wanted) {
-  const out = new Map();
-  for (const p of model.pkgs.values()) {
-    if (!wanted.has(p.name)) continue;
-    for (const r of p.replaces ?? []) if (r !== p.name && !out.has(r)) out.set(r, p.name);
+// The pull with the OVERRIDE (`replaces:`) applied: `wanted` (names), and `replaced` (replaced
+// name → the name of what replaces it). What a wanted package stands in for is not wanted,
+// whatever its own intention says. Derived, never stored: the replaced row keeps its intention
+// and gets it back the moment its replacement is not wanted. One level only (`--check` refuses
+// a replacer that is itself replaced), so the replacers are read from the pull WITHOUT the
+// override, and the pull is then taken again without what they replace — a replaced package
+// pulls none of its requirements.
+function pull(model) {
+  // The common case pays nothing: a catalogue with no `replaces:` takes the pull once.
+  if (![...model.pkgs.values()].some((p) => p.replaces?.length)) {
+    return { wanted: pulledNames(model, new Set()), replaced: new Map() };
   }
-  return out;
+  const nameToId = new Map();
+  for (const [i, p] of model.pkgs) nameToId.set(p.name, i);
+  const first = pulledNames(model, new Set());
+  const replaced = new Map();
+  for (const [j, p] of model.pkgs) {
+    if (!p.replaces?.length || !first.has(p.name) || !landsHere(model, j, first, nameToId)) continue;
+    for (const r of p.replaces ?? []) {
+      const k = nameToId.get(r);
+      // A row out of scope is never touched, nor are its requirements pulled out under it.
+      if (r === p.name || k == null || replaced.has(r) || !inScopeAtRest(model, k)) continue;
+      replaced.set(r, p.name);
+    }
+  }
+  if (replaced.size === 0) return { wanted: first, replaced };
+  return { wanted: pulledNames(model, new Set(replaced.keys())), replaced };
+}
+// Will row j really be there after the Apply? A replacement that cannot land replaces nothing,
+// or the user would be left with neither. Read from facts that need no desire — scope.js's rule
+// without its requirement half, then the requirements by presence or by the first pull — so it
+// never recurses through requiresReason → desiredOf → pull.
+function landsHere(model, j, first, nameToId) {
+  const p = model.pkgs.get(j);
+  if (!p || !inScopeAtRest(model, j)) return false;
+  if (p.present === true) return true;
+  if (!p.canUninstall) return false; // no route here
+  return (p.requires ?? []).every((r) => {
+    const k = nameToId.get(r);
+    const q = k == null ? null : model.pkgs.get(k);
+    return !!q && (q.present === true || (first.has(r) && !!q.canUninstall && inScopeAtRest(model, k)));
+  });
+}
+function inScopeAtRest(model, i) {
+  const m = manualScope(model, i);
+  if (m) return m === "in";
+  const p = model.pkgs.get(i);
+  return !!p?.canUninstall && p.external !== true;
 }
 // The name of the wanted package that stands in for row i, or null.
 export function replacedBy(model, i) {
   const name = model.pkgs.get(i)?.name;
-  if (name == null) return null;
-  return replacedNames(model, pulledNames(model, new Set())).get(name) ?? null;
+  return name == null ? null : pull(model).replaced.get(name) ?? null;
 }
 // The row's word for the override, or null: `replaced by Beta`. Verbatim on the right of the
 // row, like a requirement reason — the toggle keeps saying what the user chose.
@@ -418,8 +451,10 @@ export function toggleOf(model, i) {
 // A replaced row is wanted absent even when its toggle says "in": the override wins over the
 // intention without writing it (`replacedBy`). Manual rows are out of scope, so never touched.
 export function desiredOf(model, i) {
-  if (replacedBy(model, i) != null) return "absent";
-  return desiredState(postureOf(model, i), manualToggle(model, i), isPulled(model, i));
+  const name = model.pkgs.get(i)?.name;
+  const { wanted, replaced } = pull(model);
+  if (replaced.has(name)) return "absent";
+  return desiredState(postureOf(model, i), manualToggle(model, i), name != null && wanted.has(name));
 }
 export function isDeviated(model, i) {
   return isDeviation(postureOf(model, i), manualToggle(model, i));
@@ -640,7 +675,9 @@ export function planSeconds(model) {
 //
 // The brew hold is kept on the row until the next plan rebuilds the model, and it explains only
 // a change the Apply would still make — once the row reaches its pin, there is nothing to hold.
-const HELD_ACTIONS = ["install", "upgrade", "downgrade"];
+// An uninstall too, since `replaces:`: a replaced row whose replacement did not install is kept
+// (`server::replacement_missing`), or the user would be left with neither.
+const HELD_ACTIONS = ["install", "upgrade", "downgrade", "uninstall"];
 export function holdReason(model, i) {
   const unmoved = unmovedHold(model, i);
   if (unmoved) return unmoved;
@@ -917,7 +954,8 @@ export function profileStateOf(model, name) {
   for (const [i, p] of model.pkgs) byName.set(p.name, i);
   return profileState(prof, model.activeProfiles.has(name), (pkgName) => {
     const i = byName.get(pkgName);
-    return i != null && toggleOf(model, i) === "in";
+    // A replaced member is the bundle's own choice, standing in for it: not "pulled out".
+    return i != null && (toggleOf(model, i) === "in" || replacedBy(model, i) != null);
   });
 }
 

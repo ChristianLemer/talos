@@ -266,9 +266,16 @@ acted on; a repaired row does not re-check its own dependents.
 package, a fork for its original. While this package is wanted (On, or pulled by an active
 bundle), the packages it replaces are wanted **absent**, whatever their own row says, and
 the Apply removes them — named on the button like any removal. It is an override, never a
-write: the replaced row keeps its intention (its toggle still reads `on`, and the row says
-`replaced by <name>`), so turning this package off brings the replaced one back on the next
-Apply. A row on Manual is never touched, replaced or not.
+write: the replaced row keeps its intention (its toggle still reads what the user chose, and
+the row says `replaced by <name>`), so turning this package off brings the replaced one back
+on the next Apply.
+
+Three things keep a user from ending up with neither:
+- a replacement that cannot land here — no route on this OS, a requirement it cannot get,
+  or a row on Manual — replaces nothing;
+- the removal runs after the replacement's own step, and is kept (`kept: <name> replaces it
+  and did not install`) when that step did not leave it installed;
+- a row on Manual is never replaced, so neither it nor what it requires is touched.
 
 ```yaml
 # catalog/tool-beta.yaml — the stable row is `Tool`, `claude-plugin: tool@vendor`,
@@ -281,15 +288,19 @@ replaces: [Tool]
 ```
 
 A replaced package pulls none of its requirements while it is replaced: what was wanted only
-through it goes too, unless the replacement `requires:` it as well. `--check` refuses a name
-the catalog does not declare, a package that replaces itself, one that replaces what it
-`requires:`, and a chain — a package that replaces others cannot itself be replaced, so which
-one wins never depends on an order.
+through it goes too, unless the replacement `requires:` it as well. `--check` refuses:
+- a name the catalog does not declare, or a package that replaces itself;
+- **any** `requires:` naming a replaced package — the replacement does not stand in for it
+  as a requirement, so the row would be installed onto something on its way out;
+- a replaced package that requires its replacement, directly or through a chain;
+- a chain of replacements — one that replaces others cannot itself be replaced, so which one
+  wins never depends on an order.
 
 ⚠️ The replaced row must read **absent** once only the replacement is installed, or every
 Apply removes it again. Two rows with the same `detect:` read as one; and a plugin record
 answers a bare name (`detect: tool`) for **any** marketplace, so a stable channel and its beta
-of one plugin must each detect their full `plugin@marketplace` id. `--check` refuses both cases.
+of one plugin must each detect their full `plugin@marketplace` id. `--check` refuses both cases
+(between rows of the same route: a Claude and a Copilot plugin read two different records).
 
 ## Pinning a version — `version:`
 
