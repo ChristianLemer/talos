@@ -171,6 +171,24 @@ test("a replacement the server holds replaces nothing", () => {
   assert.equal(actionOf(m, 0), null);
 });
 
+test("a replacement wanted only through a replaced row replaces nothing", () => {
+  // Review round 3: Beta was pulled only by C, and D replaced C — Beta left the pull with C,
+  // and Stable was removed with nothing installed in its place.
+  const m = createModel();
+  loadPlan(m, [
+    { i: 0, name: "Stable", canUninstall: true },
+    { i: 1, name: "Beta", canUninstall: true, replaces: ["Stable"] },
+    { i: 2, name: "C", canUninstall: true, requires: ["Beta"] },
+    { i: 3, name: "D", canUninstall: true, replaces: ["C"] },
+  ], []);
+  for (const i of [0, 2, 3]) setDecision(m, i, "in");
+  for (const [i, status] of [[0, "ok"], [1, "waiting"], [2, "waiting"], [3, "waiting"]]) setStatusData(m, i, status);
+  assert.equal(replacedBy(m, 2), "D");
+  assert.equal(replacedBy(m, 0), null, "Beta is not coming, so Stable stays");
+  assert.equal(actionOf(m, 0), null);
+  assert.deepEqual(replacedIndices(m), []);
+});
+
 test("a bundle whose member is replaced still reads full", () => {
   // Review finding 6: the card read `hollow` — "you pulled one out" — when nobody had.
   const m = createModel();

@@ -379,7 +379,16 @@ function pull(model) {
     }
   }
   if (replaced.size === 0) return { wanted: first, replaced };
-  return { wanted: pulledNames(model, new Set(replaced.keys())), replaced };
+  // To a fixpoint: a replacement wanted only through a row that is itself replaced leaves the
+  // pull with it, and then replaces nothing (review round 3). Each round only drops entries,
+  // and dropping one can only grow the pull, so it ends.
+  let wanted = pulledNames(model, new Set(replaced.keys()));
+  for (;;) {
+    for (const [r, by] of replaced) if (!wanted.has(by)) replaced.delete(r);
+    const next = pulledNames(model, new Set(replaced.keys()));
+    if (next.size === wanted.size) return { wanted: next, replaced };
+    wanted = next;
+  }
 }
 // Will row j really be there after the Apply? A replacement that cannot land replaces nothing,
 // or the user would be left with neither. Read from facts that need no desire — scope.js's rule

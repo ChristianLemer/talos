@@ -2469,7 +2469,8 @@ fn replaced_after_replacer(
 
 /// Why a replaced row's removal waits: the wanted replacement is not installed at this point
 /// of the Apply — held out of the plan, failed, skipped. `present` holds every wanted
-/// replacement. None when one of them is there, or none replaces this row.
+/// replacement. None when one of them is there. Called only for a row the front removes
+/// through the override, so NO wanted replacement in view is a disagreement, and the row stays.
 fn replacement_missing(
     step: &crate::bundles::Step,
     steps: &[crate::bundles::Step],
@@ -2479,7 +2480,12 @@ fn replacement_missing(
         .iter()
         .filter(|(&j, _)| steps[j].replaces.contains(&step.name))
         .peekable();
-    let (&first, _) = *by.peek()?;
+    let Some(&(&first, _)) = by.peek() else {
+        return Some(format!(
+            "kept: nothing that replaces {} is wanted here — nothing would be left",
+            step.name
+        ));
+    };
     if by.any(|(_, &here)| here) {
         return None;
     }
@@ -7334,9 +7340,14 @@ mod tests {
             super::replacement_missing(&steps[0], &steps, &present),
             None
         );
-        // No wanted replacement in view (none wanted, or the user refused the row): nothing kept.
+        // No wanted replacement in view, for a row the front says the override removes: the
+        // two sides disagree, so the row stays (review round 3).
         let none = std::collections::HashMap::new();
-        assert_eq!(super::replacement_missing(&steps[0], &steps, &none), None);
+        let why = super::replacement_missing(&steps[0], &steps, &none).expect("kept");
+        assert!(
+            why.contains("nothing that replaces Tool is wanted"),
+            "{why}"
+        );
         // Wired: the plan is reordered, the check runs before the step, the outcome is recorded.
         let body = fn_body("apply_diff");
         let at = |s: &str| body.find(s).unwrap_or_else(|| panic!("no `{s}`"));
@@ -7344,14 +7355,6 @@ mod tests {
         assert!(body.contains("*action == Action::Uninstall && replaced.contains(i)"));
         assert!(at("replacement_missing(") < at("step_with_forbidden_pause("));
         assert!(at("step_with_forbidden_pause(") < at("replacer_present.get_mut(i)"));
-        assert_eq!(
-            super::replacement_missing(
-                &steps[2],
-                &steps,
-                &std::collections::HashMap::from([(1, false)])
-            ),
-            None
-        );
     }
 
     #[test]

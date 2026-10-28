@@ -2562,7 +2562,11 @@ ws.onmessage = (ev) => {
       // A brew hold kept from an earlier Apply would keep the row out of that count: the server
       // just judged the change servable, so it is stale (pre-tag review).
       M.setHold(model, msg.i, "");
-      if (rows[msg.i]) rows[msg.i].statusLabel.textContent = msg.reason;
+      // A removal kept until its replacement is there (`holdRemoval`) was left out of the count
+      // on purpose: its own reason stays on the row, not "Apply again".
+      if (rows[msg.i] && M.holdReason(model, msg.i) === null) {
+        rows[msg.i].statusLabel.textContent = msg.reason;
+      }
       refreshLiveness();
       break;
     case "self-updated": { // done for the session, or forgotten by a removal (server: arms_session_done)
