@@ -1485,8 +1485,12 @@ function closeBlockedPage() {
 const fbSay = document.querySelector(".fb-embed-say");
 function sayFb() {
   fbSay.textContent = fbEmbedded
-    ? "Approve the access request below — you don't need to download anything. " +
-      "Talos retries by itself once it's through."
+    ? fbEmbedRetry.hidden
+      // At the retry cap: no retry will follow, so the line does not promise one.
+      ? "No retry is left for this one — approve below if you still want it later, " +
+        "then Skip it or Stop the Apply."
+      : "Approve the access request below — you don't need to download anything. " +
+        "Talos retries by itself once it's through."
     : fbActiveUrl
       ? "Open the blocked page in your browser and approve the access request, then press Retry."
       : "Talos could not tell which page to approve. Clear the access as you usually do, " +
@@ -1502,12 +1506,18 @@ function startRetryCountdown() {
   if (!fbEmbedded || fbActive === null || fbCountdown !== null || fbEmbedRetry.hidden) return;
   const i = fbActive;
   let left = FB_COUNTDOWN;
+  // Built once: only the number changes, so a click on Cancel is never lost to a redraw.
+  fbSay.innerHTML =
+    `<b class="fb-granted">Access granted.</b> Talos retries in ` +
+    `<span class="fb-count"></span> ` +
+    `<button class="fb-linkbtn" data-fb="count-cancel">Cancel</button>`;
+  fbSay.querySelector('[data-fb="count-cancel"]').onclick = () => stopRetryCountdown(true);
+  const num = fbSay.querySelector(".fb-count");
   const paint = () => {
-    fbSay.innerHTML =
-      `<b class="fb-granted">Access granted.</b> Talos retries in ` +
-      `<span class="fb-count">${left}</span> ` +
-      `<button class="fb-linkbtn" data-fb="count-cancel">Cancel</button>`;
-    fbSay.querySelector('[data-fb="count-cancel"]').onclick = () => stopRetryCountdown(true);
+    num.textContent = left;
+    num.classList.remove("tick");
+    void num.offsetWidth; // restarts the tick animation
+    num.classList.add("tick");
   };
   paint();
   fbCountdown = setInterval(() => {
@@ -1550,6 +1560,8 @@ watchScale();
 // Shows the panel for block `i`, with the firewall's page in it at once when it can open
 // inside Talos (`inside`): approving is the one thing to do, so there is no step to click first.
 function showFbPanel(i, url, inside) {
+  // Another row's block: its page and its countdown go first.
+  if (fbActive !== i) closeBlockedPage();
   fbActive = i;
   fbActiveUrl = url;
   fbEl.classList.add("show");
@@ -1624,9 +1636,11 @@ function paintFbAttempt(i, attempt, canRetry) {
   if (fbActive === i) {
     fbAttemptEl.textContent = note;
     fbAttemptEl.hidden = !note;
-    // The panel's Retry goes at the cap, or it would offer a retry that can no longer happen.
+    // The panel's Retry goes at the cap, or it would offer a retry that can no longer happen;
+    // and its line stops promising one.
     fbEmbedRetry.hidden = !canRetry;
     fbStopBtn.hidden = false;
+    if (fbCountdown === null) sayFb();
   }
 }
 

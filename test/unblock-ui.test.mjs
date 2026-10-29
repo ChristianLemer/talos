@@ -89,3 +89,15 @@ test("at the retry cap the panel's Retry goes", () => {
   assert.match(fnBody(appjs, "paintFbAttempt"), /fbEmbedRetry\.hidden = !canRetry/);
   assert.match(fnBody(appjs, "showForbidden"), /fbEmbedRetry\.hidden = false/);
 });
+
+test("review: no countdown on a page nobody approved, none promised at the cap, none on another row", () => {
+  // At the cap the line stops saying "Talos retries by itself".
+  assert.match(fnBody(appjs, "sayFb"), /fbEmbedRetry\.hidden/);
+  assert.match(fnBody(appjs, "paintFbAttempt"), /sayFb\(\)/);
+  // Switching rows stops the other row's countdown.
+  assert.match(fnBody(appjs, "showFbPanel"), /if \(fbActive !== i\) closeBlockedPage\(\)/);
+  // Cancel is built once, not redrawn each second.
+  const count = fnBody(appjs, "startRetryCountdown");
+  const paint = count.slice(count.indexOf("const paint"), count.indexOf("paint();"));
+  assert.doesNotMatch(paint, /innerHTML/, "a redraw each tick loses a click on Cancel");
+});

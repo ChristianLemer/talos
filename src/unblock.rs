@@ -25,6 +25,7 @@
 //! The approval only helps winget if the proxy remembers it per user or per machine (the
 //! child uses the system proxy and Windows authentication, like winget). A proxy that keys
 //! it on a browser cookie would want the browser: the panel keeps "open in my browser".
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, OnceLock};
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Webview, WebviewBuilder};
 
@@ -32,6 +33,10 @@ static APP: OnceLock<AppHandle> = OnceLock::new();
 static VIEW: Mutex<Option<Webview>> = Mutex::new(None);
 /// Rung when the shown page lets its download through (`released`).
 static RELEASED: LazyLock<tokio::sync::Notify> = LazyLock::new(tokio::sync::Notify::new);
+/// The release of the page shown NOW. A Notify keeps a wake nobody awaited; this flag is what
+/// makes it count, and opening or closing a page clears it — a release left by the previous
+/// page must never start a countdown on a block nobody approved (review).
+static PENDING: AtomicBool = AtomicBool::new(false);
 
 /// The label of the one child webview. One at a time: a second block replaces the first.
 const LABEL: &str = "unblock";
@@ -81,11 +86,15 @@ pub fn available() -> bool {
     crate::platform::current_os() == crate::platform::Os::Windows && APP.get().is_some()
 }
 
-/// Resolves when the shown page lets its download through: the approval worked. One wake per
-/// release; a release nobody awaited is kept for the next wait, which the front ignores when
-/// no page is shown.
+/// Resolves when the shown page lets its download through: the approval worked. A wake whose
+/// release was cleared since (`PENDING`, by `open` or `close`) is swallowed.
 pub async fn released() {
-    RELEASED.notified().await;
+    loop {
+        RELEASED.notified().await;
+        if PENDING.swap(false, Ordering::SeqCst) {
+            return;
+        }
+    }
 }
 
 /// Called once, from Tauri's setup: the server runs on its own thread and has no other way
@@ -114,6 +123,7 @@ pub fn open(url: &str, rect: Rect) -> Result<(), String> {
                 if let Ok(done) = LET_THROUGH.parse() {
                     let _ = view.navigate(done);
                 }
+                PENDING.store(true, Ordering::SeqCst);
                 RELEASED.notify_one();
             }
             false
@@ -150,6 +160,7 @@ pub fn place(rect: Rect) {
 /// when the user decides (retry, skip, stop) and when a connection starts — a reloaded
 /// front must not find a page from the previous one still laid over it.
 pub fn close() {
+    PENDING.store(false, Ordering::SeqCst);
     if let Some(view) = VIEW.lock().unwrap_or_else(|e| e.into_inner()).take() {
         let _ = view.close();
     }
@@ -208,5 +219,26 @@ mod tests {
         assert!(open("https://example.com", rect).is_err());
         close();
         place(rect);
+    }
+
+    #[test]
+    fn a_release_left_by_a_closed_page_starts_nothing() {
+        // Review: a Notify keeps a wake nobody awaited; the next 403 would have counted down
+        // and retried a row nobody approved. Closing clears the release; only a fresh one counts.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            PENDING.store(true, Ordering::SeqCst);
+            RELEASED.notify_one();
+            close();
+            let stale = tokio::time::timeout(std::time::Duration::from_millis(50), released());
+            assert!(stale.await.is_err(), "a cleared release must not resolve");
+            PENDING.store(true, Ordering::SeqCst);
+            RELEASED.notify_one();
+            let fresh = tokio::time::timeout(std::time::Duration::from_millis(50), released());
+            assert!(fresh.await.is_ok());
+        });
     }
 }

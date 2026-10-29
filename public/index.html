@@ -757,8 +757,8 @@
          is re-drawn each second, so the animation replays with it). */
       .fb-granted { color:var(--head); }
       .fb-count { display:inline-block; min-width:1.5em; padding:0 7px; border-radius:10px;
-                  background:var(--head); color:var(--bg); font-weight:700; text-align:center;
-                  animation:fb-tick 1s ease-out; }
+                  background:var(--head); color:var(--bg); font-weight:700; text-align:center; }
+      .fb-count.tick { animation:fb-tick 1s ease-out; }
       @keyframes fb-tick { from { transform:scale(1.35); opacity:.5; } to { transform:scale(1); opacity:1; } }
       .fb-embed-actions { display:flex; gap:12px; justify-content:center; align-items:center;
                           margin:10px 0; }
