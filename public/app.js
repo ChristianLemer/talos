@@ -1472,13 +1472,16 @@ function openForbidden(url) {
 // instead, as before.
 let fbEmbedded = false;
 const fbFrame = document.getElementById("fb-frame");
+const fbEmbedRetry = document.getElementById("fb-embed-retry");
 function fbFrameRect() {
   const b = fbFrame.getBoundingClientRect();
   return { x: b.left, y: b.top, w: b.width, h: b.height };
 }
+let fbEmbeddedUrl = null; // the page actually asked for — a late fallback opens THAT one
 function openBlockedPage(url) {
   if (!url) return;
   fbEmbedded = true;
+  fbEmbeddedUrl = url;
   fbEl.classList.add("embedded");
   // After layout: the frame has its size only once the panel has grown.
   requestAnimationFrame(() => {
@@ -1493,15 +1496,26 @@ function closeBlockedPage() {
   fbEl.classList.remove("embedded");
   ws.send(JSON.stringify({ type: "unblock-close" }));
 }
-let fbResizeQueued = false;
-window.addEventListener("resize", () => {
-  if (!fbEmbedded || fbResizeQueued) return;
-  fbResizeQueued = true;
+// The page follows its frame: a window resize, the frame itself moving (a note appearing above
+// it), or a change of display scale (a monitor at another DPI), which resizes nothing in CSS.
+let fbPlaceQueued = false;
+function placeBlockedPage() {
+  if (!fbEmbedded || fbPlaceQueued) return;
+  fbPlaceQueued = true;
   requestAnimationFrame(() => {
-    fbResizeQueued = false;
+    fbPlaceQueued = false;
     if (fbEmbedded) ws.send(JSON.stringify({ type: "unblock-move", rect: fbFrameRect() }));
   });
-});
+}
+window.addEventListener("resize", placeBlockedPage);
+if (typeof ResizeObserver === "function") new ResizeObserver(placeBlockedPage).observe(fbFrame);
+function watchScale() {
+  matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener("change", () => {
+    placeBlockedPage();
+    watchScale(); // a query matches one ratio: re-armed for the new one
+  }, { once: true });
+}
+watchScale();
 
 function renderLink(el, url) {
   el.href = url || "#";
@@ -1511,6 +1525,9 @@ function renderLink(el, url) {
 function showForbidden(i, url) {
   const r = rows[i];
   if (!r) return;
+  // A page shown for another block (a row's banner clicked while a retry ran) must not stay
+  // over a panel that now speaks for this one.
+  closeBlockedPage();
   // Row banner (durable) — guidance + Retry/Give-up, built once. No raw link by
   // default (it's under "More info…" in the modal); the guidance says approve
   // access, don't download — Talos re-runs the download on Retry.
@@ -1558,6 +1575,7 @@ function showForbidden(i, url) {
   fbAttemptEl.hidden = true;
   fbAttemptEl.textContent = "";
   fbStepRetry.hidden = false;
+  fbEmbedRetry.hidden = false;
   fbStopBtn.hidden = true;
   // Reset the "More info…" disclosure each time: link hidden, prompt shown (only
   // if there's a URL to reveal).
@@ -1596,6 +1614,8 @@ function paintFbAttempt(i, attempt, canRetry) {
     fbAttemptEl.textContent = note;
     fbAttemptEl.hidden = !note;
     fbStepRetry.hidden = !canRetry;
+    // The panel's own Retry too, or the page would offer a retry that can no longer happen.
+    fbEmbedRetry.hidden = !canRetry;
     fbStopBtn.hidden = false;
     if (!canRetry) setFbStep(null); // nothing left to light — the primary action is gone
   }
@@ -1735,7 +1755,7 @@ fbStepOpen.onclick = () => {
   openBlockedPage(fbActiveUrl);
   setFbStep("retry");
 };
-document.getElementById("fb-embed-retry").onclick = () => {
+fbEmbedRetry.onclick = () => {
   if (fbActive !== null) retryStep(fbActive);
 };
 // The way out when the proxy keys its approval on a browser session: the page leaves Talos
@@ -2667,7 +2687,7 @@ ws.onmessage = (ev) => {
       if (fbEmbedded) {
         fbEmbedded = false;
         fbEl.classList.remove("embedded");
-        openForbidden(fbActiveUrl);
+        openForbidden(fbEmbeddedUrl); // the page asked for, even if the panel moved on since
       }
       break;
     case "forbidden-pause":

@@ -3837,8 +3837,6 @@ fn retry_offered(attempt: u32) -> bool {
     attempt < MAX_FORBIDDEN_RUNS
 }
 
-/// Defence in depth: a stale front could send `forbidden-retry` past the cap. Do
-/// not re-run the step then — move on rather than risk hanging the Apply.
 /// The front's messages for the blocked page shown inside Talos — served by the main loop and
 /// by the 403 pause alike, since the page is used while the Apply is held.
 const UNBLOCK_MSGS: [&str; 3] = ["unblock-open", "unblock-move", "unblock-close"];
@@ -3875,6 +3873,8 @@ async fn unblock_message(socket: &mut WebSocket, kind: &str, parsed: &serde_json
     }
 }
 
+/// Defence in depth: a stale front could send `forbidden-retry` past the cap. Do
+/// not re-run the step then — move on rather than risk hanging the Apply.
 fn honour_choice(choice: ForbiddenChoice, attempt: u32) -> ForbiddenChoice {
     if choice == ForbiddenChoice::Retry && !retry_offered(attempt) {
         return ForbiddenChoice::Continue;

@@ -47,7 +47,7 @@ test("no Talos window here: the browser opens, as before", () => {
   const at = appjs.indexOf('case "unblock-unavailable"');
   assert.notEqual(at, -1);
   const arm = appjs.slice(at, appjs.indexOf("break;", at));
-  assert.match(arm, /openForbidden\(fbActiveUrl\)/);
+  assert.match(arm, /openForbidden\(fbEmbeddedUrl\)/, "the page asked for, not whatever the panel shows now");
   assert.match(arm, /classList\.remove\("embedded"\)/);
   // And the user can always choose it.
   const browser = appjs.slice(appjs.indexOf('getElementById("fb-embed-browser")'));
@@ -58,4 +58,21 @@ test("embedded, the stepper gives way to the frame", () => {
   assert.match(html, /#forbidden\.embedded \.fb-steps/);
   assert.match(html, /#forbidden\.embedded #fb-embed \{ display:flex/);
   assert.match(html, /#fb-embed \{ display:none; \}/);
+});
+
+test("a new block takes away a page shown for another one", () => {
+  // Review: row j's page, asked while row i's retry ran, landed over row i's panel.
+  const show = fnBody(appjs, "showForbidden");
+  assert.ok(show.indexOf("closeBlockedPage()") < show.indexOf("fbActive = i"));
+});
+
+test("at the retry cap the panel's own Retry goes too", () => {
+  const paint = fnBody(appjs, "paintFbAttempt");
+  assert.match(paint, /fbEmbedRetry\.hidden = !canRetry/);
+  assert.match(fnBody(appjs, "showForbidden"), /fbEmbedRetry\.hidden = false/);
+});
+
+test("the page follows its frame, not only the window", () => {
+  assert.match(appjs, /new ResizeObserver\(placeBlockedPage\)\.observe\(fbFrame\)/);
+  assert.match(fnBody(appjs, "watchScale"), /resolution: \$\{devicePixelRatio\}dppx/);
 });

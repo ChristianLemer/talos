@@ -91,8 +91,8 @@ pub fn open(url: &str, rect: Rect) -> Result<(), String> {
         .ok_or("no Talos window in this process (a browser on the dev server?)")?;
     let window = app.get_window("main").ok_or("the main window is gone")?;
     close();
-    let builder =
-        WebviewBuilder::new(LABEL, tauri::WebviewUrl::External(url)).on_download(|view, event| {
+    let builder = WebviewBuilder::new(LABEL, tauri::WebviewUrl::External(url))
+        .on_download(|view, event| {
             if let tauri::webview::DownloadEvent::Requested { url, .. } = event {
                 println!("[unblock] the page let {url} through — not downloaded here");
                 if let Ok(done) = LET_THROUGH.parse() {
@@ -100,6 +100,15 @@ pub fn open(url: &str, rect: Rect) -> Result<(), String> {
                 }
             }
             false
+        })
+        // A link or `window.open` of the block page (an approval step, a sign-in) stays in
+        // the panel instead of opening a window Talos would never close. Found by label, not
+        // through VIEW: this runs on the main thread, which must never wait on that lock.
+        .on_new_window(|url, _| {
+            if let Some(view) = APP.get().and_then(|app| app.get_webview(LABEL)) {
+                let _ = view.navigate(url);
+            }
+            tauri::webview::NewWindowResponse::Deny
         });
     let view = window
         .add_child(
