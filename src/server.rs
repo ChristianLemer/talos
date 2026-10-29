@@ -682,10 +682,17 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
     let app = Router::new()
         .route(
             "/",
-            get(move |ws: Option<WebSocketUpgrade>| {
-                let state = state_for_root.clone();
-                async move { root_or_ws(ws, state).await }
-            }),
+            get(
+                move |headers: axum::http::HeaderMap, ws: Option<WebSocketUpgrade>| {
+                    let state = state_for_root.clone();
+                    async move {
+                        if ws.is_some() && !origin_allowed(&headers) {
+                            return refused_origin(&headers);
+                        }
+                        root_or_ws(ws, state).await
+                    }
+                },
+            ),
         )
         // The Doctor's OWN socket. See `handle_doctor_socket` for why it is a
         // second route and not a verb on `/`.
@@ -696,9 +703,14 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
                 // data dir (where a clean config dir is created — per machine, never
                 // beside a shared exe, the same rule selection and consent follow).
                 let state = state.clone();
-                move |ws: WebSocketUpgrade| {
+                move |headers: axum::http::HeaderMap, ws: WebSocketUpgrade| {
                     let state = state.clone();
-                    async move { ws.on_upgrade(move |s| handle_doctor_socket(s, state)) }
+                    async move {
+                        if !origin_allowed(&headers) {
+                            return refused_origin(&headers);
+                        }
+                        ws.on_upgrade(move |s| handle_doctor_socket(s, state))
+                    }
                 }
             }),
         )
@@ -761,6 +773,35 @@ async fn no_cache(req: axum::extract::Request, next: axum::middleware::Next) -> 
     resp.headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     resp
+}
+
+/// The origins whose pages may open the sockets: Talos's own front, as the window loads it
+/// (and as a browser on the dev machine names it).
+const FRONT_ORIGINS: [&str; 2] = ["http://127.0.0.1:1420", "http://localhost:1420"];
+
+/// May this WebSocket upgrade proceed? The sockets ACT — `apply` installs and removes, `quit`
+/// exits — and a browser lets any page open a socket to 127.0.0.1: without this, a web page
+/// in the user's browser, or the firewall page Talos itself shows (unblock.rs), could drive
+/// an Apply. A browser always sends `Origin` on an upgrade, so a page is judged by it. No
+/// `Origin` at all is a local program, not a page — it already runs as the user, and the
+/// probes used to measure the server are such programs.
+fn origin_allowed(headers: &axum::http::HeaderMap) -> bool {
+    match headers.get(axum::http::header::ORIGIN) {
+        None => true,
+        Some(origin) => origin
+            .to_str()
+            .is_ok_and(|o| FRONT_ORIGINS.contains(&o.trim_end_matches('/'))),
+    }
+}
+
+/// The answer to an upgrade from another origin: 403, and a log line naming it.
+fn refused_origin(headers: &axum::http::HeaderMap) -> Response {
+    let origin = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|o| o.to_str().ok())
+        .unwrap_or("?");
+    println!("[ws] refused a socket from {origin}: only Talos's own page may open one");
+    (axum::http::StatusCode::FORBIDDEN, "not Talos's page").into_response()
 }
 
 // app.js does `new WebSocket(ws://location.host)` → root path "/". We tell
@@ -7345,6 +7386,35 @@ mod tests {
 
     use crate::decision::Action;
     use crate::managers::InstallScope::{Machine, User};
+
+    #[test]
+    fn only_talos_own_page_may_open_a_socket() {
+        // A socket acts (`apply`, `quit`), and a browser lets any page open one to
+        // 127.0.0.1. Judged by Origin, which a browser always sends on an upgrade.
+        let with = |origin: Option<&str>| {
+            let mut h = axum::http::HeaderMap::new();
+            if let Some(o) = origin {
+                h.insert(axum::http::header::ORIGIN, o.parse().unwrap());
+            }
+            super::origin_allowed(&h)
+        };
+        assert!(with(Some("http://127.0.0.1:1420")));
+        assert!(with(Some("http://localhost:1420")));
+        assert!(with(None), "a local program, not a page");
+        for page in [
+            "https://evil.example",
+            "http://127.0.0.1:8099",
+            "http://127.0.0.1:14200",
+            "http://127.0.0.1",
+            "null",
+            "http://127.0.0.1:1420.evil.example",
+        ] {
+            assert!(!with(Some(page)), "{page}");
+        }
+        // Both sockets are guarded, before any upgrade.
+        let serve = fn_body("serve");
+        assert_eq!(serve.matches("!origin_allowed(&headers)").count(), 2);
+    }
 
     #[test]
     fn the_blocked_page_inside_talos_never_outlives_its_moment() {
