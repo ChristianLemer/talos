@@ -30,6 +30,7 @@ mod selection;
 mod server;
 mod tail;
 mod timings;
+mod unblock;
 mod vscode;
 mod watch;
 
@@ -124,6 +125,9 @@ fn main() {
         // title printed the name of the fallback instead of a version.
         .setup(|app| {
             use tauri::Manager;
+            // The server's thread reaches the window through this, to lay a blocked page over
+            // the 403 panel (unblock.rs).
+            unblock::init(app.handle());
             if let Some(win) = app.get_webview_window("main") {
                 let (catalog_dir, _) = platform::content_dirs();
                 let dist = distribution::read_beside(&catalog_dir);

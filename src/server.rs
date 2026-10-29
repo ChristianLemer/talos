@@ -1323,6 +1323,8 @@ fn doctor_declared(steps: &[crate::bundles::Step]) -> bool {
 }
 
 async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
+    // A front that connects (a reload included) starts with no blocked page laid over it.
+    crate::unblock::close();
     // A SNAPSHOT, not a borrow of the lock. Every reader below awaits repeatedly (socket
     // sends, spawn_blocking probes), and holding a read guard across those awaits would
     // block the `rescan` writer for the length of a whole scan.
@@ -1550,6 +1552,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     }
                 }
             }
+            // The blocked page INSIDE Talos's window, over the 403 panel (unblock.rs).
+            k if UNBLOCK_MSGS.contains(&k) => unblock_message(&mut socket, k, &parsed).await,
             // quit: close the app from a button in the panel.
             //
             // It goes over the WEBSOCKET and not through Tauri's JS API, because the
@@ -3835,6 +3839,42 @@ fn retry_offered(attempt: u32) -> bool {
 
 /// Defence in depth: a stale front could send `forbidden-retry` past the cap. Do
 /// not re-run the step then — move on rather than risk hanging the Apply.
+/// The front's messages for the blocked page shown inside Talos — served by the main loop and
+/// by the 403 pause alike, since the page is used while the Apply is held.
+const UNBLOCK_MSGS: [&str; 3] = ["unblock-open", "unblock-move", "unblock-close"];
+
+/// `unblock-open` {url, rect} → the page over that rectangle, answered `unblock-shown`, or
+/// `unblock-unavailable` {reason} and the front opens the browser instead. `unblock-move`
+/// {rect} follows a resize; `unblock-close` takes the page away.
+async fn unblock_message(socket: &mut WebSocket, kind: &str, parsed: &serde_json::Value) {
+    match kind {
+        "unblock-open" => {
+            let url = parsed.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            let shown = match crate::unblock::rect_of(parsed) {
+                Some(rect) => crate::unblock::open(url, rect),
+                None => Err("no place to show it".to_string()),
+            };
+            let reply = match shown {
+                Ok(()) => {
+                    println!("[unblock] showing {url} inside Talos");
+                    json!({ "type": "unblock-shown" })
+                }
+                Err(reason) => {
+                    println!("[unblock] not inside Talos ({reason}) — the browser instead");
+                    json!({ "type": "unblock-unavailable", "reason": reason })
+                }
+            };
+            let _ = socket.send(Message::Text(reply.to_string())).await;
+        }
+        "unblock-move" => {
+            if let Some(rect) = crate::unblock::rect_of(parsed) {
+                crate::unblock::place(rect);
+            }
+        }
+        _ => crate::unblock::close(),
+    }
+}
+
 fn honour_choice(choice: ForbiddenChoice, attempt: u32) -> ForbiddenChoice {
     if choice == ForbiddenChoice::Retry && !retry_offered(attempt) {
         return ForbiddenChoice::Continue;
@@ -3873,7 +3913,14 @@ async fn await_forbidden_decision(
         let kind = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("");
         // The user dealt with it — retry it, skip it, or abandon the run. Their call.
         if let Some(choice) = forbidden_choice(kind) {
+            // Decided: the page has done its job, and must not stay over the run that resumes.
+            crate::unblock::close();
             return honour_choice(choice, attempt);
+        }
+        // The page inside Talos, like the browser below: the gesture the pause exists for.
+        if UNBLOCK_MSGS.contains(&kind) {
+            unblock_message(socket, kind, &parsed).await;
+            continue;
         }
         // "Open blocked page" MUST keep working while we hold: it is the very
         // gesture the pause exists for. Served here too, because the main
@@ -7298,6 +7345,29 @@ mod tests {
 
     use crate::decision::Action;
     use crate::managers::InstallScope::{Machine, User};
+
+    #[test]
+    fn the_blocked_page_inside_talos_never_outlives_its_moment() {
+        // unblock.rs lays a native webview over the 403 panel. It must go when the user
+        // decides (the run resumes under it otherwise), and a new connection starts clean.
+        let pause = fn_body("await_forbidden_decision");
+        let decided = pause.find("forbidden_choice(kind)").expect("decision");
+        let closed = pause.find("crate::unblock::close()").expect("closed");
+        let honoured = pause
+            .find("honour_choice(choice, attempt)")
+            .expect("honoured");
+        assert!(decided < closed && closed < honoured);
+        assert!(
+            pause.contains("UNBLOCK_MSGS.contains(&kind)"),
+            "the page is used while the Apply is held"
+        );
+        let socket = fn_body("handle_socket");
+        assert!(socket.contains("UNBLOCK_MSGS.contains(&k)"));
+        assert!(
+            socket.find("crate::unblock::close()").expect("at connect")
+                < socket.find("scan_and_emit(").expect("scan")
+        );
+    }
 
     #[test]
     fn a_replaced_row_leaves_only_after_its_replacement_has_landed() {

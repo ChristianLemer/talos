@@ -8,7 +8,8 @@ license = "MIT"
 default-run = "Talos"
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `unstable`: `Window::add_child`, the blocked page shown inside Talos's window (unblock.rs).
+tauri = { version = "2", features = ["unstable"] }
 # Persists window size+position on close, restores on launch, clamped to the visible
 # area (never off-screen if a monitor disappears). 960×540 is now only the very first
 # launch default. Cross-platform out of the box.

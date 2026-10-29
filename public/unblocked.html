@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Access granted</title>
+<!-- Shown INSIDE Talos's 403 panel (unblock.rs) when the firewall's page let the download
+     through: the approval worked. The installer is not downloaded here — Talos fetches it
+     itself on Retry. -->
+<style>
+  body { margin:0; height:100vh; display:flex; align-items:center; justify-content:center;
+         background:#1a1b26; color:#c0caf5; font:15px/1.5 system-ui, sans-serif; }
+  main { max-width:42ch; text-align:center; padding:24px; }
+  .mark { font-size:34px; color:#9ece6a; }
+  h1 { font-size:18px; margin:8px 0; }
+  p { color:#a9b1d6; margin:0; }
+</style>
+</head>
+<body>
+<main>
+  <div class="mark">✓</div>
+  <h1>The firewall let the download through</h1>
+  <p>Nothing was downloaded here. Press <b>Retry</b> above and Talos fetches it for you.</p>
+</main>
+</body>
+</html>

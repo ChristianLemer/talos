@@ -1466,6 +1466,43 @@ function openForbidden(url) {
   if (url) ws.send(JSON.stringify({ type: "open-forbidden", url }));
 }
 
+// The blocked page INSIDE Talos (unblock.rs): the panel grows, and the server lays a webview
+// over #fb-frame — the rectangle sent here, and again on every resize. Outside the Talos window
+// (the dev server in a browser) the server answers `unblock-unavailable` and the browser opens
+// instead, as before.
+let fbEmbedded = false;
+const fbFrame = document.getElementById("fb-frame");
+function fbFrameRect() {
+  const b = fbFrame.getBoundingClientRect();
+  return { x: b.left, y: b.top, w: b.width, h: b.height };
+}
+function openBlockedPage(url) {
+  if (!url) return;
+  fbEmbedded = true;
+  fbEl.classList.add("embedded");
+  // After layout: the frame has its size only once the panel has grown.
+  requestAnimationFrame(() => {
+    if (fbEmbedded) ws.send(JSON.stringify({ type: "unblock-open", url, rect: fbFrameRect() }));
+  });
+}
+// Takes the page away with the panel's embedded look. The server also closes it when the user
+// decides (retry, skip, stop), so a message that arrives late changes nothing.
+function closeBlockedPage() {
+  if (!fbEmbedded) return;
+  fbEmbedded = false;
+  fbEl.classList.remove("embedded");
+  ws.send(JSON.stringify({ type: "unblock-close" }));
+}
+let fbResizeQueued = false;
+window.addEventListener("resize", () => {
+  if (!fbEmbedded || fbResizeQueued) return;
+  fbResizeQueued = true;
+  requestAnimationFrame(() => {
+    fbResizeQueued = false;
+    if (fbEmbedded) ws.send(JSON.stringify({ type: "unblock-move", rect: fbFrameRect() }));
+  });
+});
+
 function renderLink(el, url) {
   el.href = url || "#";
   el.textContent = url || "";
@@ -1492,7 +1529,17 @@ function showForbidden(i, url) {
   r.fbBanner.classList.add("show");
   r.details.open = true;
   const openBtn = r.fbBanner.querySelector('[data-fb="open"]');
-  if (openBtn) openBtn.onclick = () => openForbidden(url);
+  // The row's own button brings the panel back over this block, with the page in it.
+  if (openBtn) {
+    openBtn.onclick = () => {
+      fbActive = i;
+      fbActiveUrl = url;
+      renderLink(fbLink, url);
+      fbEl.classList.add("show");
+      openBlockedPage(url);
+      setFbStep("retry");
+    };
+  }
   r.fbBanner.querySelector('[data-fb="retry"]').onclick = () => retryStep(i);
   r.fbBanner.querySelector('[data-fb="giveup"]').onclick = () => giveUp(i);
   r.fbBanner.querySelector('[data-fb="stop"]').onclick = () => stopApply(i);
@@ -1558,6 +1605,7 @@ function paintFbAttempt(i, attempt, canRetry) {
 // stays: a retry that is still running has not settled anything yet, and if it is
 // blocked again the banner is where the next attempt is reported.
 function dismissFbModal() {
+  closeBlockedPage();
   fbEl.classList.remove("show");
   fbActive = null;
   fbActiveUrl = null;
@@ -1684,8 +1732,17 @@ document.getElementById("fb-moreinfo").onclick = () => {
 // Open) is the lit primary action.
 fbStepOpen.onclick = () => {
   if (fbActive === null) return;
-  openForbidden(fbActiveUrl);
+  openBlockedPage(fbActiveUrl);
   setFbStep("retry");
+};
+document.getElementById("fb-embed-retry").onclick = () => {
+  if (fbActive !== null) retryStep(fbActive);
+};
+// The way out when the proxy keys its approval on a browser session: the page leaves Talos
+// and opens where it always did.
+document.getElementById("fb-embed-browser").onclick = () => {
+  closeBlockedPage();
+  openForbidden(fbActiveUrl);
 };
 fbStepRetry.onclick = () => {
   if (fbActive !== null) retryStep(fbActive);
@@ -2603,6 +2660,15 @@ ws.onmessage = (ev) => {
       // "Open blocked page" (the server only opens on that message). url may be
       // null (nothing extractable → link-less message).
       showForbidden(msg.i, msg.url || null);
+      break;
+    case "unblock-shown": // the page is laid over #fb-frame (server::unblock_message)
+      break;
+    case "unblock-unavailable": // no Talos window here: the browser, as before
+      if (fbEmbedded) {
+        fbEmbedded = false;
+        fbEl.classList.remove("embedded");
+        openForbidden(fbActiveUrl);
+      }
       break;
     case "forbidden-pause":
       // The Apply is HELD on this row. The blocked step already finished; nothing
