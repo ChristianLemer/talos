@@ -770,8 +770,16 @@ fn mime_for(path: &str) -> &'static str {
 /// that "didn't show" in Tauri while it worked in a freshly reloaded Chrome).
 async fn no_cache(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
     let mut resp = next.run(req).await;
-    resp.headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    let h = resp.headers_mut();
+    h.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    // Never inside another page's frame: a framed front has Talos's own origin, so its socket
+    // passes `origin_allowed`, and a page could lay it invisibly under the user's clicks
+    // (Apply, Quit). Nothing frames it legitimately — the blocked page is a child webview.
+    h.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    h.insert(
+        "content-security-policy",
+        HeaderValue::from_static("frame-ancestors 'none'"),
+    );
     resp
 }
 
@@ -7414,6 +7422,12 @@ mod tests {
         // Both sockets are guarded, before any upgrade.
         let serve = fn_body("serve");
         assert_eq!(serve.matches("!origin_allowed(&headers)").count(), 2);
+        // And no page can frame the front, whose socket would pass (review).
+        let headers = fn_body("no_cache");
+        assert!(
+            headers.contains(r#"h.insert("x-frame-options", HeaderValue::from_static("DENY"));"#)
+        );
+        assert!(headers.contains("frame-ancestors 'none'"));
     }
 
     #[test]
