@@ -27,7 +27,7 @@
               --surface:#32302f; --surface-hi:#3c3836; --head:#83a598; --on-accent:#bdd4c8; }
       /* `hidden` must WIN. The attribute's `display:none` comes from the UA
          stylesheet, so ANY author `display` rule beats it — and that is not a
-         theoretical hazard: `#fb-retry` carries `.fb-step { display:flex }`, so
+         theoretical hazard: `#fb-retry` (the old 403 stepper) carried `.fb-step { display:flex }`, so
          `fbStepRetry.hidden = true` left the "Come back and retry — Talos downloads
          it for you" card VISIBLE and CLICKABLE at the retry cap, while retryStep
          refused to act. A card that promises a download and does nothing is exactly
@@ -739,76 +739,38 @@
                  font-size:15px; border-radius:8px; border:1px solid #414868;
                  background:#1a1b26; color:#c0caf5; }
       .sudo-input:focus { outline:none; border-color:#7aa2f7; }
-      /* Firewall-403 modal — a VERTICAL GUIDED STEPPER. It's a real 3-phase
-         sequence (open → approve → retry), so numbered steps are honest here.
-         The two actionable phases ARE buttons (the whole card clicks); the amber
-         highlight marks the CURRENT step and moves down as you act, so the
-         primary action is never stale. Amber = this modal's caution accent. */
+      /* Firewall-403 panel — ONE screen. A 403 happens on Windows, where the firewall's page
+         opens INSIDE it (unblock.rs): the card grows to the window and the server lays a
+         webview over #fb-frame, the rectangle the front sends. Without the page (nothing to
+         open, or it could not be laid out) the same card stays small, the frame hidden. */
       #forbidden .overlay-card { max-width:56ch; text-align:left; }
-      #forbidden .fb-mark { font-size:28px; color:#7aa2f7; text-align:center; margin-bottom:6px; }
-      #forbidden h2 { text-align:center; font-size:17px; margin:0 0 16px; }
-      .fb-steps { display:flex; flex-direction:column; gap:9px; margin:0 0 14px; }
-      /* One step card — works as <button> (actionable) or <div> (passive). */
-      .fb-step { display:flex; align-items:center; gap:13px; width:100%; box-sizing:border-box;
-                 padding:13px 15px; border:1px solid transparent; border-radius:10px;
-                 font:inherit; color:inherit; text-align:left; background:none; }
-      .fb-marker { flex:none; width:25px; height:25px; border-radius:50%; display:flex;
-                   align-items:center; justify-content:center; font-size:13px; font-weight:700;
-                   border:1.5px solid var(--dim); color:var(--dim); transition:all .15s; }
-      .fb-step-body { flex:1; min-width:0; }
-      .fb-step-title { display:block; font-size:14px; color:var(--fg); font-weight:600; }
-      .fb-step-desc { display:block; font-size:12.5px; color:var(--dim); margin-top:3px; line-height:1.45; }
-      .fb-arrow { flex:none; font-size:17px; color:var(--dim); opacity:0; transition:opacity .13s, transform .13s; }
-      /* Actionable = a clickable card. */
-      .fb-step.actionable { cursor:pointer; background:#1e2030; border-color:var(--line);
-                            transition:border-color .13s, background .13s, transform .06s; }
-      .fb-step.actionable:hover { border-color:var(--dim); }
-      .fb-step.actionable:hover .fb-arrow { opacity:1; transform:translateX(3px); }
-      .fb-step.actionable:active { transform:translateY(1px); }
-      .fb-step.actionable:focus-visible { outline:2px solid #7aa2f7; outline-offset:2px; }
-      /* Active = the current step. Vivid blue ring + tint — THE primary action
-         now. Blue (not amber): a 403 is a routine hurdle, not an alarm. */
-      .fb-step.active { background:#20283f; border-color:#7aa2f7; }
-      .fb-step.active .fb-marker { border-color:#7aa2f7; background:#7aa2f7; color:#16161e; }
-      .fb-step.active .fb-step-title { color:#a9c2fb; }
-      .fb-step.active .fb-arrow { opacity:1; color:#7aa2f7; }
-      /* Done = a completed action, green check, receded. */
-      .fb-step.done { opacity:.55; }
-      .fb-step.done .fb-marker { border-color:#9ece6a; color:#9ece6a; }
-      .fb-step.done .fb-arrow { opacity:0; }
-      /* Disabled actionable (no URL to open) — dim, not clickable. */
-      .fb-step:disabled { opacity:.4; cursor:default; }
-      .fb-step:disabled .fb-arrow { display:none; }
-      /* Footer: quiet secondary escapes, side by side, well below the steps. */
-      /* Repeat-block note (modal + row banner): amber, because it reports a fact
-         that changes what to do next, not a decoration. */
-      .fb-attempt { margin:0 0 10px; font-size:12.5px; line-height:1.45; color:#e0af68; text-align:center; }
-      .fb-banner .fb-attempt { text-align:left; margin:8px 0 0; }
-      .fb-footer { text-align:center; margin-top:4px; }
-      /* EMBEDDED: the blocked page shown inside Talos (unblock.rs). The card grows to the
-         window, the stepper goes, and the server lays a webview over #fb-frame — its box
-         is the rectangle the front sends, so the page sits inside Talos's own panel. */
-      #fb-embed { display:none; }
+      #forbidden h2 { text-align:center; font-size:17px; margin:0 0 8px; }
       #forbidden.embedded .overlay-card { max-width:none; width:calc(100vw - 32px);
                                           height:calc(100vh - 32px); box-sizing:border-box;
                                           display:flex; flex-direction:column; }
-      #forbidden.embedded .fb-steps, #forbidden.embedded .fb-mark,
-      #forbidden.embedded #fb-moreinfo, #forbidden.embedded .fb-moreinfo-sep { display:none; }
-      #forbidden.embedded h2 { margin-bottom:6px; }
-      #forbidden.embedded #fb-embed { display:flex; flex-direction:column; flex:1; min-height:0; }
+      #fb-frame { display:none; }
+      #forbidden.embedded #fb-frame { display:flex; flex:1; min-height:120px;
+                  border:1px solid var(--line); border-radius:8px; background:#fff; color:#555;
+                  align-items:center; justify-content:center; font-size:13px; }
       .fb-embed-say { text-align:center; font-size:13.5px; }
+      /* The count before the automatic retry — Talos's blue, one tick a second (the number
+         is re-drawn each second, so the animation replays with it). */
+      .fb-granted { color:var(--head); }
+      .fb-count { display:inline-block; min-width:1.5em; padding:0 7px; border-radius:10px;
+                  background:var(--head); color:var(--bg); font-weight:700; text-align:center;
+                  animation:fb-tick 1s ease-out; }
+      @keyframes fb-tick { from { transform:scale(1.35); opacity:.5; } to { transform:scale(1); opacity:1; } }
       .fb-embed-actions { display:flex; gap:12px; justify-content:center; align-items:center;
                           margin:10px 0; }
-      #fb-frame { flex:1; min-height:120px; border:1px solid var(--line); border-radius:8px;
-                  background:#fff; color:#555; display:flex; align-items:center;
-                  justify-content:center; font-size:13px; }
+      /* Repeat-block note (panel + row banner): amber, because it reports a fact that
+         changes what to do next, not a decoration. */
+      .fb-attempt { margin:0 0 6px; font-size:12.5px; line-height:1.45; color:#e0af68; text-align:center; }
+      .fb-banner .fb-attempt { text-align:left; margin:8px 0 0; }
+      .fb-footer { text-align:center; margin-top:8px; }
       .fb-linkbtn { background:none; border:none; color:var(--dim); font-size:12px;
                     cursor:pointer; text-decoration:underline; padding:2px 4px; }
       .fb-linkbtn:hover { color:#7aa2f7; }
       .fb-sep { color:var(--line); }
-      .fb-linkbtn.empty { display:none; } /* no URL → nothing to reveal */
-      .fb-link-wrap { word-break:break-all; text-align:center; }
-      .fb-link-wrap a { color:#7aa2f7; }
       /* Row-level firewall banner — the DURABLE recovery UI (the modal is transient).
          Lives at the top of a forbidden row's panel; blue like the modal (a 403
          is a routine hurdle, not an alarm). */
@@ -1088,64 +1050,29 @@
     </div></div>
 
     <!-- Firewall-403 recovery — a download was blocked by the corporate firewall.
-         Transient: the ROW carries the durable banner + buttons (source of truth);
-         this modal just grabs attention for the active block. Populated + shown by
-         showForbidden() on a `forbidden` event, dismissed on Retry/Give-up/success. -->
+         Transient: the ROW carries the durable banner + buttons (source of truth); this
+         panel is where the block is dealt with. Shown by showForbidden() on a `forbidden`
+         event, with the firewall's page inside it at once (unblock.rs); dismissed on
+         Retry/Skip/success. -->
     <div id="forbidden"><div class="overlay-card consent-card">
-      <div class="fb-mark">⚠</div>
       <h2>A download was blocked by the corporate firewall (403)</h2>
-      <!-- A guided stepper: steps 1 & 3 are clickable cards; step 2 is passive
-           (nothing to do in Talos). The `active` class rides the current step. -->
-      <div class="fb-steps">
-        <button id="fb-open" class="fb-step actionable active" data-step="open">
-          <span class="fb-marker">1</span>
-          <span class="fb-step-body">
-            <span class="fb-step-title">Open the blocked page</span>
-            <span class="fb-step-desc">Opens the firewall's page — inside Talos on Windows.</span>
-          </span>
-          <span class="fb-arrow">→</span>
-        </button>
-        <div class="fb-step" data-step="approve">
-          <span class="fb-marker">2</span>
-          <span class="fb-step-body">
-            <span class="fb-step-title">Approve the access request there</span>
-            <span class="fb-step-desc">Just approve it — you don't download or open anything yourself.</span>
-          </span>
-        </div>
-        <button id="fb-retry" class="fb-step actionable" data-step="retry">
-          <span class="fb-marker">3</span>
-          <span class="fb-step-body">
-            <span class="fb-step-title">Come back and retry</span>
-            <span class="fb-step-desc">Talos downloads it for you.</span>
-          </span>
-          <span class="fb-arrow">→</span>
-        </button>
-      </div>
-      <!-- The blocked page INSIDE Talos (unblock.rs): shown in place of the steps once
-           step 1 is clicked; the server lays a webview over #fb-frame. -->
-      <div id="fb-embed">
-        <p class="fb-embed-say">Approve the access request below — you don't need to download
-          anything. Then press Retry and Talos fetches it for you.</p>
-        <div class="fb-embed-actions">
-          <button id="fb-embed-retry" class="primary">Retry</button>
-          <button id="fb-embed-browser" class="fb-linkbtn">Open it in my browser instead</button>
-        </div>
-        <div id="fb-frame">Loading the blocked page…</div>
-      </div>
-      <!-- Named by paintFbAttempt on a repeat block: a second identical modal with
-           no count reads as "my click did nothing". -->
+      <p class="fb-embed-say"></p>
+      <!-- Named by paintFbAttempt on a repeat block: a second identical panel with no
+           count reads as "my click did nothing". -->
       <p id="fb-attempt" class="fb-attempt" hidden></p>
-      <!-- Three outcomes, three controls: retry (step 3 above), skip this one, stop
-           the whole run. `fb-stop` was the missing third — the server always
-           implemented it, nothing could reach it. -->
+      <div class="fb-embed-actions">
+        <button id="fb-embed-retry" class="primary">Retry</button>
+        <button id="fb-embed-browser" class="fb-linkbtn">Open it in my browser instead</button>
+      </div>
+      <div id="fb-frame">Loading the blocked page…</div>
+      <!-- Three outcomes, three controls: retry (above), skip this one, stop the whole
+           run. `fb-stop` was the missing third — the server always implemented it,
+           nothing could reach it. -->
       <div class="fb-footer">
-        <button id="fb-moreinfo" class="fb-linkbtn">More info…</button>
-        <span class="fb-sep fb-moreinfo-sep">·</span>
         <button id="fb-giveup" class="fb-linkbtn">Skip this one</button>
         <span class="fb-sep">·</span>
         <button id="fb-stop" class="fb-linkbtn" hidden>Stop the whole Apply</button>
       </div>
-      <p class="fb-link-wrap muted" hidden>Blocked page: <a id="fb-link" href="#" target="_blank" rel="noopener"></a></p>
     </div></div>
 
     <!-- First-boot consent dialog -->

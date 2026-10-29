@@ -1405,7 +1405,17 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     //    a 403. Not a choice: the front sends what `actionOf` derived.
     //  - `diff` and `cancel-step` inspect or stop a row; they never install anything.
     //  The per-row install/uninstall/upgrade/downgrade verbs were retired on 2026-10-10.
-    while let Some(Ok(msg)) = socket.recv().await {
+    loop {
+        // The page shown inside Talos may let its download through at any moment: the front
+        // is told, and retries on its own (unblock.rs).
+        let msg = tokio::select! {
+            m = socket.recv() => m,
+            () = crate::unblock::released() => {
+                send_released(&mut socket).await;
+                continue;
+            }
+        };
+        let Some(Ok(msg)) = msg else { break };
         let Message::Text(txt) = msg else { continue };
         let parsed: serde_json::Value = serde_json::from_str(&txt).unwrap_or_default();
         let Some(kind) = parsed.get("type").and_then(|t| t.as_str()) else {
@@ -3886,6 +3896,17 @@ fn retry_offered(attempt: u32) -> bool {
     attempt < MAX_FORBIDDEN_RUNS
 }
 
+/// The page inside Talos let its download through: the approval worked. The front counts down
+/// and retries by itself.
+async fn send_released(socket: &mut WebSocket) {
+    println!("[unblock] approval seen — the front retries");
+    let _ = socket
+        .send(Message::Text(
+            json!({ "type": "unblock-released" }).to_string(),
+        ))
+        .await;
+}
+
 /// The front's messages for the blocked page shown inside Talos — served by the main loop and
 /// by the 403 pause alike, since the page is used while the Apply is held.
 const UNBLOCK_MSGS: [&str; 3] = ["unblock-open", "unblock-move", "unblock-close"];
@@ -3956,7 +3977,16 @@ async fn await_forbidden_decision(
             .to_string(),
         ))
         .await;
-    while let Some(Ok(msg)) = socket.recv().await {
+    loop {
+        // The page may let its download through while we hold: the front retries on its own.
+        let msg = tokio::select! {
+            m = socket.recv() => m,
+            () = crate::unblock::released() => {
+                send_released(socket).await;
+                continue;
+            }
+        };
+        let Some(Ok(msg)) = msg else { break };
         let Message::Text(txt) = msg else { continue };
         let parsed: serde_json::Value = serde_json::from_str(&txt).unwrap_or_default();
         let kind = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("");
@@ -4566,7 +4596,12 @@ async fn do_step(
     if blocked {
         let _ = socket
             .send(Message::Text(
-                json!({ "type": "forbidden", "i": i, "url": url }).to_string(),
+                json!({
+                    "type": "forbidden", "i": i, "url": url,
+                    // The page can open INSIDE Talos here: the front opens it at once.
+                    "inside": crate::unblock::available()
+                })
+                .to_string(),
             ))
             .await;
     }
@@ -7428,6 +7463,23 @@ mod tests {
             headers.contains(r#"h.insert("x-frame-options", HeaderValue::from_static("DENY"));"#)
         );
         assert!(headers.contains("frame-ancestors 'none'"));
+    }
+
+    #[test]
+    fn a_block_opens_its_page_at_once_and_the_approval_brings_the_retry() {
+        // No step to click: the `forbidden` message says whether the page can open inside
+        // Talos, and the front opens it. When it lets the download through, both loops that
+        // read the socket tell the front, which counts down and retries.
+        let step = fn_body("do_step");
+        assert!(step.contains(r#""inside": crate::unblock::available()"#));
+        for loop_fn in ["handle_socket", "await_forbidden_decision"] {
+            let body = fn_body(loop_fn);
+            assert!(
+                body.contains("() = crate::unblock::released() =>"),
+                "{loop_fn} must hear the release while it waits for the front"
+            );
+        }
+        assert!(fn_body("send_released").contains(r#""type": "unblock-released""#));
     }
 
     #[test]

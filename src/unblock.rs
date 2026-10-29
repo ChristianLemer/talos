@@ -19,16 +19,19 @@
 //! GTK box instead of placing it (tauri-runtime-wry `build_gtk(vbox)`): MEASURED under Xvfb,
 //! the page took the lower half and squeezed the panel into the upper one, whatever rectangle
 //! was asked; WebKitGTK also never reported the download. macOS places it like Windows on
-//! paper, but no Mac measured it. Elsewhere `open` says no and the browser opens, as before.
+//! paper, but no Mac measured it. Elsewhere `open` says no — a 403 happens on Windows — and the
+//! panel offers the browser without opening the page inside.
 //!
 //! The approval only helps winget if the proxy remembers it per user or per machine (the
 //! child uses the system proxy and Windows authentication, like winget). A proxy that keys
 //! it on a browser cookie would want the browser: the panel keeps "open in my browser".
-use std::sync::{Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex, OnceLock};
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Webview, WebviewBuilder};
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
 static VIEW: Mutex<Option<Webview>> = Mutex::new(None);
+/// Rung when the shown page lets its download through (`released`).
+static RELEASED: LazyLock<tokio::sync::Notify> = LazyLock::new(tokio::sync::Notify::new);
 
 /// The label of the one child webview. One at a time: a second block replaces the first.
 const LABEL: &str = "unblock";
@@ -72,6 +75,19 @@ pub fn page_url(url: &str) -> Result<tauri::Url, String> {
     }
 }
 
+/// Can a page open inside Talos here? Windows, and a Talos window in this process. The front
+/// then opens it the moment a download is blocked, without a step to click first.
+pub fn available() -> bool {
+    crate::platform::current_os() == crate::platform::Os::Windows && APP.get().is_some()
+}
+
+/// Resolves when the shown page lets its download through: the approval worked. One wake per
+/// release; a release nobody awaited is kept for the next wait, which the front ignores when
+/// no page is shown.
+pub async fn released() {
+    RELEASED.notified().await;
+}
+
 /// Called once, from Tauri's setup: the server runs on its own thread and has no other way
 /// to reach the window.
 pub fn init(app: &AppHandle) {
@@ -98,6 +114,7 @@ pub fn open(url: &str, rect: Rect) -> Result<(), String> {
                 if let Ok(done) = LET_THROUGH.parse() {
                     let _ = view.navigate(done);
                 }
+                RELEASED.notify_one();
             }
             false
         })

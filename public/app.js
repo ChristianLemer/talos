@@ -1437,39 +1437,22 @@ function hideWait() {
 // holds the step index the modal currently speaks for, so its Retry/Give-up act
 // on the right row. url may be null (nothing extractable) → link-less message.
 const fbEl = document.getElementById("forbidden");
-const fbLinkWrap = document.querySelector(".fb-link-wrap");
-const fbLink = document.getElementById("fb-link");
-const fbMoreInfo = document.getElementById("fb-moreinfo");
-const fbStepOpen = document.getElementById("fb-open");
-const fbStepRetry = document.getElementById("fb-retry");
 const fbAttemptEl = document.getElementById("fb-attempt");
 const fbStopBtn = document.getElementById("fb-stop");
+const fbBrowserBtn = document.getElementById("fb-embed-browser");
 let fbActive = null;
-let fbActiveUrl = null; // url the modal's "Open blocked page" step acts on
+let fbActiveUrl = null; // the blocked page of the block the panel speaks for
 
-// The stepper's amber highlight rides the CURRENT step, so the primary action is
-// never stale. "open" → step 1 lit; "retry" → step 1 done (green ✓), step 3 lit.
-// The passive step 2 never lights (nothing to click in Talos). `null` lights
-// nothing — used when retries run out and the stepper has no action left to offer.
-function setFbStep(current) {
-  const done = current === "retry"; // step 1 is done once we've opened the page
-  fbStepOpen.classList.toggle("active", current === "open");
-  fbStepOpen.classList.toggle("done", done);
-  fbStepOpen.querySelector(".fb-marker").textContent = done ? "✓" : "1";
-  fbStepRetry.classList.toggle("active", current === "retry");
-}
-
-// Ask the server to open the blocked page in a browser beside the panel. On
-// demand (a step click), never auto — so the user reads the guidance before the
-// window covers it. Falls back to the clickable link if the server can't open.
+// Ask the server to open the blocked page in the browser — the way out when the proxy keys its
+// approval on a browser session, or when the page could not open inside Talos.
 function openForbidden(url) {
   if (url) ws.send(JSON.stringify({ type: "open-forbidden", url }));
 }
 
 // The blocked page INSIDE Talos (unblock.rs): the panel grows, and the server lays a webview
-// over #fb-frame — the rectangle sent here, and again on every resize. Outside the Talos window
-// (the dev server in a browser) the server answers `unblock-unavailable` and the browser opens
-// instead, as before.
+// over #fb-frame — the rectangle sent here, and again whenever it moves. A 403 happens on
+// Windows, where this works; when it cannot (`unblock-unavailable`), the panel stays small and
+// offers the browser.
 let fbEmbedded = false;
 const fbFrame = document.getElementById("fb-frame");
 const fbEmbedRetry = document.getElementById("fb-embed-retry");
@@ -1477,12 +1460,11 @@ function fbFrameRect() {
   const b = fbFrame.getBoundingClientRect();
   return { x: b.left, y: b.top, w: b.width, h: b.height };
 }
-let fbEmbeddedUrl = null; // the page actually asked for — a late fallback opens THAT one
 function openBlockedPage(url) {
   if (!url) return;
   fbEmbedded = true;
-  fbEmbeddedUrl = url;
   fbEl.classList.add("embedded");
+  sayFb();
   // After layout: the frame has its size only once the panel has grown.
   requestAnimationFrame(() => {
     if (fbEmbedded) ws.send(JSON.stringify({ type: "unblock-open", url, rect: fbFrameRect() }));
@@ -1491,11 +1473,59 @@ function openBlockedPage(url) {
 // Takes the page away with the panel's embedded look. The server also closes it when the user
 // decides (retry, skip, stop), so a message that arrives late changes nothing.
 function closeBlockedPage() {
+  stopRetryCountdown();
   if (!fbEmbedded) return;
   fbEmbedded = false;
   fbEl.classList.remove("embedded");
+  sayFb();
   ws.send(JSON.stringify({ type: "unblock-close" }));
 }
+
+// The panel's one line of guidance, for what it shows.
+const fbSay = document.querySelector(".fb-embed-say");
+function sayFb() {
+  fbSay.textContent = fbEmbedded
+    ? "Approve the access request below — you don't need to download anything. " +
+      "Talos retries by itself once it's through."
+    : fbActiveUrl
+      ? "Open the blocked page in your browser and approve the access request, then press Retry."
+      : "Talos could not tell which page to approve. Clear the access as you usually do, " +
+        "then press Retry.";
+  fbBrowserBtn.hidden = !fbActiveUrl;
+}
+
+// The approval worked (`unblock-released`): Talos retries by itself after a short count, which
+// the user can cut short (Retry) or cancel. Not past the retry cap: nothing to retry then.
+const FB_COUNTDOWN = 5;
+let fbCountdown = null;
+function startRetryCountdown() {
+  if (!fbEmbedded || fbActive === null || fbCountdown !== null || fbEmbedRetry.hidden) return;
+  const i = fbActive;
+  let left = FB_COUNTDOWN;
+  const paint = () => {
+    fbSay.innerHTML =
+      `<b class="fb-granted">Access granted.</b> Talos retries in ` +
+      `<span class="fb-count">${left}</span> ` +
+      `<button class="fb-linkbtn" data-fb="count-cancel">Cancel</button>`;
+    fbSay.querySelector('[data-fb="count-cancel"]').onclick = () => stopRetryCountdown(true);
+  };
+  paint();
+  fbCountdown = setInterval(() => {
+    left -= 1;
+    if (left > 0) return paint();
+    stopRetryCountdown();
+    if (fbActive === i) retryStep(i);
+  }, 1000);
+}
+// `cancelled`: the user stopped it — the line says the retry is theirs now, not "by itself".
+function stopRetryCountdown(cancelled = false) {
+  if (fbCountdown === null) return;
+  clearInterval(fbCountdown);
+  fbCountdown = null;
+  sayFb();
+  if (cancelled) fbSay.textContent = "Access granted — the automatic retry is off. Press Retry when you're ready.";
+}
+
 // The page follows its frame: a window resize, the frame itself moving (a note appearing above
 // it), or a change of display scale (a monitor at another DPI), which resizes nothing in CSS.
 let fbPlaceQueued = false;
@@ -1517,25 +1547,29 @@ function watchScale() {
 }
 watchScale();
 
-function renderLink(el, url) {
-  el.href = url || "#";
-  el.textContent = url || "";
+// Shows the panel for block `i`, with the firewall's page in it at once when it can open
+// inside Talos (`inside`): approving is the one thing to do, so there is no step to click first.
+function showFbPanel(i, url, inside) {
+  fbActive = i;
+  fbActiveUrl = url;
+  fbEl.classList.add("show");
+  if (inside && url) openBlockedPage(url);
+  else sayFb();
 }
 
-function showForbidden(i, url) {
+function showForbidden(i, url, inside = false) {
   const r = rows[i];
   if (!r) return;
   // A page shown for another block (a row's banner clicked while a retry ran) must not stay
   // over a panel that now speaks for this one.
   closeBlockedPage();
-  // Row banner (durable) — guidance + Retry/Give-up, built once. No raw link by
-  // default (it's under "More info…" in the modal); the guidance says approve
+  // Row banner (durable) — guidance + Retry/Give-up, built once. The guidance says approve
   // access, don't download — Talos re-runs the download on Retry.
   // "Stop the whole Apply" only appears while the Apply is actually held — outside
   // a run there is no plan to abandon. Three outcomes, three controls, no synonyms.
   r.fbBanner.innerHTML =
     `<b>⚠ A download was blocked by the corporate firewall (403).</b><br>` +
-    `Open the blocked page and approve the access request — you don't need to ` +
+    `Approve the access request on the blocked page — you don't need to ` +
     `download anything. Then Retry and Talos fetches it for you.` +
     `<div class="fb-attempt" data-fb="attempt" hidden></div>` +
     `<div class="fb-banner-actions">` +
@@ -1547,41 +1581,18 @@ function showForbidden(i, url) {
   r.details.open = true;
   const openBtn = r.fbBanner.querySelector('[data-fb="open"]');
   // The row's own button brings the panel back over this block, with the page in it.
-  if (openBtn) {
-    openBtn.onclick = () => {
-      fbActive = i;
-      fbActiveUrl = url;
-      renderLink(fbLink, url);
-      fbEl.classList.add("show");
-      openBlockedPage(url);
-      setFbStep("retry");
-    };
-  }
+  if (openBtn) openBtn.onclick = () => showFbPanel(i, url, inside);
   r.fbBanner.querySelector('[data-fb="retry"]').onclick = () => retryStep(i);
   r.fbBanner.querySelector('[data-fb="giveup"]').onclick = () => giveUp(i);
   r.fbBanner.querySelector('[data-fb="stop"]').onclick = () => stopApply(i);
-  // Transient modal — the guided stepper for the active block.
-  fbActive = i;
-  fbActiveUrl = url;
-  renderLink(fbLink, url);
-  // With a URL: step 1 (Open) is the live action. Without one (rare — nothing
-  // extractable): step 1 can't act, so disable it and start the highlight on
-  // Retry (the user clears access however they can, then retries).
-  fbStepOpen.disabled = !url;
-  setFbStep(url ? "open" : "retry");
   // Fresh block → fresh attempt state. `forbidden-pause` refines both a beat later
   // (it carries the count and whether retries remain); a `forbidden` outside a run
   // never pauses, so Stop stays hidden until a pause says a run is held.
   fbAttemptEl.hidden = true;
   fbAttemptEl.textContent = "";
-  fbStepRetry.hidden = false;
   fbEmbedRetry.hidden = false;
   fbStopBtn.hidden = true;
-  // Reset the "More info…" disclosure each time: link hidden, prompt shown (only
-  // if there's a URL to reveal).
-  fbLinkWrap.hidden = true;
-  fbMoreInfo.classList.toggle("empty", !url);
-  fbEl.classList.add("show");
+  showFbPanel(i, url, inside);
 }
 
 // Says WHICH attempt just failed, and withdraws Retry once the server stops
@@ -1613,11 +1624,9 @@ function paintFbAttempt(i, attempt, canRetry) {
   if (fbActive === i) {
     fbAttemptEl.textContent = note;
     fbAttemptEl.hidden = !note;
-    fbStepRetry.hidden = !canRetry;
-    // The panel's own Retry too, or the page would offer a retry that can no longer happen.
+    // The panel's Retry goes at the cap, or it would offer a retry that can no longer happen.
     fbEmbedRetry.hidden = !canRetry;
     fbStopBtn.hidden = false;
-    if (!canRetry) setFbStep(null); // nothing left to light — the primary action is gone
   }
 }
 
@@ -1740,32 +1749,14 @@ function stopApply(i) {
   clearForbidden(i);
 }
 
-// "More info…" reveals the raw blocked URL and hides its own prompt — for the
-// rare user who wants to see or copy the exact address.
-document.getElementById("fb-moreinfo").onclick = () => {
-  fbLinkWrap.hidden = false;
-  fbMoreInfo.classList.add("empty");
-};
-
-// Step cards act on the block the modal speaks for. Clicking Open opens the page
-// AND advances the highlight to Retry — so when the user comes back, Retry (not
-// Open) is the lit primary action.
-fbStepOpen.onclick = () => {
-  if (fbActive === null) return;
-  openBlockedPage(fbActiveUrl);
-  setFbStep("retry");
-};
 fbEmbedRetry.onclick = () => {
   if (fbActive !== null) retryStep(fbActive);
 };
 // The way out when the proxy keys its approval on a browser session: the page leaves Talos
 // and opens where it always did.
-document.getElementById("fb-embed-browser").onclick = () => {
+fbBrowserBtn.onclick = () => {
   closeBlockedPage();
   openForbidden(fbActiveUrl);
-};
-fbStepRetry.onclick = () => {
-  if (fbActive !== null) retryStep(fbActive);
 };
 document.getElementById("fb-giveup").onclick = () => {
   if (fbActive !== null) giveUp(fbActive);
@@ -2675,19 +2666,23 @@ ws.onmessage = (ev) => {
       if (msg.status === "ok" || msg.status === "absent") clearForbidden(msg.i);
       break;
     case "forbidden":
-      // Live: a download was blocked by the firewall. Show the row banner (durable)
-      // and the transient modal. The page is NOT opened for them — they click
-      // "Open blocked page" (the server only opens on that message). url may be
-      // null (nothing extractable → link-less message).
-      showForbidden(msg.i, msg.url || null);
+      // Live: a download was blocked by the firewall. Show the row banner (durable) and the
+      // panel. Where the page can open inside Talos (`inside`, Windows), it opens at once —
+      // the approval is the one thing to do. Elsewhere the steps stay, and the browser opens
+      // only on a click, so the guidance is read before a window covers it. url may be null
+      // (nothing extractable → link-less message).
+      showForbidden(msg.i, msg.url || null, msg.inside === true);
+      break;
+    case "unblock-released": // the page let the download through (server::send_released)
+      startRetryCountdown();
       break;
     case "unblock-shown": // the page is laid over #fb-frame (server::unblock_message)
       break;
-    case "unblock-unavailable": // no Talos window here: the browser, as before
+    case "unblock-unavailable": // the page could not open inside Talos: the panel offers the browser
       if (fbEmbedded) {
         fbEmbedded = false;
         fbEl.classList.remove("embedded");
-        openForbidden(fbEmbeddedUrl); // the page asked for, even if the panel moved on since
+        sayFb();
       }
       break;
     case "forbidden-pause":
