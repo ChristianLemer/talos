@@ -3913,12 +3913,12 @@ async fn send_unblock_event(socket: &mut WebSocket, event: crate::unblock::Event
 /// front would reset the session), so it asks here and the front is told. Talos's page only:
 /// the same Origin rule as the sockets, and only while a page is shown.
 async fn unblock_act(headers: axum::http::HeaderMap, body: String) -> Response {
-    if !origin_allowed(&headers) {
+    // Talos's page always sends an Origin on its POST; no local program needs this door.
+    if !headers.contains_key(axum::http::header::ORIGIN) || !origin_allowed(&headers) {
         return refused_origin(&headers);
     }
     match crate::unblock::Event::from_page(&body) {
-        Some(event) if crate::unblock::shown() => {
-            crate::unblock::push(event);
+        Some(event) if crate::unblock::push_if_shown(event) => {
             axum::http::StatusCode::NO_CONTENT.into_response()
         }
         Some(_) => (axum::http::StatusCode::CONFLICT, "no page is shown").into_response(),
@@ -3987,6 +3987,8 @@ async fn await_forbidden_decision(
     i: usize,
     attempt: u32,
 ) -> ForbiddenChoice {
+    // For as long as we hold: may the page let through promise a retry? Reset when we return.
+    let _retry_left = crate::unblock::RetryLeft::hold(retry_offered(attempt));
     let _ = socket
         .send(Message::Text(
             json!({
@@ -7501,8 +7503,20 @@ mod tests {
         assert!(fn_body("send_unblock_event").contains(r#""type": "unblock-event""#));
         // Talos's page acts through one guarded door, and only while it is shown.
         let act = fn_body("unblock_act");
-        assert!(act.find("!origin_allowed(&headers)") < act.find("crate::unblock::push("));
-        assert!(act.contains("if crate::unblock::shown()"));
+        let guard = act
+            .find("!origin_allowed(&headers)")
+            .expect("the Origin rule");
+        let pushed = act
+            .find("crate::unblock::push_if_shown(")
+            .expect("the push");
+        assert!(
+            guard < pushed,
+            "the Origin rule comes before anything is queued"
+        );
+        assert!(act.contains("!headers.contains_key(axum::http::header::ORIGIN)"));
+        // The pause tells the page let through whether a retry is still possible.
+        assert!(fn_body("await_forbidden_decision")
+            .contains("crate::unblock::RetryLeft::hold(retry_offered(attempt))"));
         assert!(fn_body("serve")
             .contains(r#".route("/unblock/act", axum::routing::post(unblock_act))"#));
     }

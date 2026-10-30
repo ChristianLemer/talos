@@ -66,6 +66,10 @@ test("the count lives in Talos's page inside the frame, with its own buttons", (
   assert.match(page, /fetch\("\/unblock\/act", \{ method: "POST", body: word \}\)/);
   assert.match(page, /id="now">Retry now</);
   assert.match(page, /id="cancel">Cancel</);
+  // At the retry cap the page promises nothing (review): the server sends it `?left=0`.
+  assert.match(page, /get\("left"\) === "0"/);
+  assert.match(page, /querySelector\("\.actions"\)\.hidden = true/);
+  assert.match(page, /\[hidden\] \{ display:none !important; \}/, "or the flex row ignores hidden");
   // Talos's blue and buttons, not a page of its own style.
   assert.match(page, /--head:#7aa2f7/);
   assert.match(page, /\.primary \{ background:var\(--fill\)/);

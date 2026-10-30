@@ -13,6 +13,8 @@
 <style>
   :root { --bg:#1a1b26; --fg:#c0caf5; --line:#2a2e42; --dim:#565f89; --head:#7aa2f7;
           --fill:#3d59a1; --soft:#a9b1d6; }
+  /* `hidden` must WIN over any author display rule (index.html says why: `.actions` is flex). */
+  [hidden] { display:none !important; }
   html, body { height:100%; margin:0; }
   body { display:flex; align-items:center; justify-content:center; background:var(--bg);
          color:var(--fg); font:15px/1.5 system-ui, sans-serif; -webkit-user-select:none;
@@ -57,7 +59,19 @@
 </main>
 <script>
   // The same count as the panel's (app.js FB_COUNTDOWN): it drives the retry, this one shows it.
+  // This one starts when the page has loaded, a moment after the panel's, so it may still read
+  // "1" when the panel retries and takes the page away — the panel's count is the one that acts.
   const SECONDS = 5;
+  // `?left=0`: the 403 pause has no retry left for this block (unblock.rs RETRY_LEFT). The page
+  // says so, with no count and no button — nothing would answer them.
+  if (new URLSearchParams(location.search).get("left") === "0") {
+    document.body.classList.add("off");
+    document.getElementById("n").textContent = "✓";
+    document.getElementById("say").textContent =
+      "No retry is left for this one — Skip it, or Stop the Apply, above.";
+    document.querySelector(".actions").hidden = true;
+    throw new Error("no retry left"); // nothing below applies
+  }
   const ring = document.querySelector(".ring .left");
   const n = document.getElementById("n");
   const say = document.getElementById("say");

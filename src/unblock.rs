@@ -26,6 +26,7 @@
 //! child uses the system proxy and Windows authentication, like winget). A proxy that keys
 //! it on a browser cookie would want the browser: the panel keeps "open in my browser".
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, OnceLock};
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Webview, WebviewBuilder};
 
@@ -74,6 +75,30 @@ const LABEL: &str = "unblock";
 /// Where the view goes when the page lets the download through: the approval worked, and the
 /// installer must not be downloaded by a webview — Talos fetches it itself on Retry.
 const LET_THROUGH: &str = "http://127.0.0.1:1420/unblocked.html";
+/// The same page when no retry is left for this block: it says so, with no count and no button.
+const LET_THROUGH_NO_RETRY: &str = "http://127.0.0.1:1420/unblocked.html?left=0";
+
+/// Whether the block shown may still be retried. The 403 pause knows (it caps the retries) and
+/// says so for as long as it holds (`RetryLeft`); the page let through must not promise a retry
+/// that will not come (review).
+static RETRY_LEFT: AtomicBool = AtomicBool::new(true);
+
+/// Says, for as long as it lives, whether the held block may still be retried. Dropped when the
+/// pause ends, by whichever way, and the default — a retry is possible — comes back.
+pub struct RetryLeft;
+
+impl RetryLeft {
+    pub fn hold(left: bool) -> RetryLeft {
+        RETRY_LEFT.store(left, Ordering::SeqCst);
+        RetryLeft
+    }
+}
+
+impl Drop for RetryLeft {
+    fn drop(&mut self) {
+        RETRY_LEFT.store(true, Ordering::SeqCst);
+    }
+}
 
 /// A rectangle of the main window, in CSS (= logical) pixels from its top-left corner — what
 /// `getBoundingClientRect` gives the front.
@@ -126,9 +151,15 @@ pub fn push(event: Event) {
     RING.notify_one();
 }
 
-/// Whether a page is shown inside Talos right now.
-pub fn shown() -> bool {
-    VIEW.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+/// Queues an event of Talos's page, if a page is shown: under the view's lock, so a close
+/// racing the click cannot leave the event behind it (review).
+pub fn push_if_shown(event: Event) -> bool {
+    let view = VIEW.lock().unwrap_or_else(|e| e.into_inner());
+    if view.is_none() {
+        return false;
+    }
+    push(event);
+    true
 }
 
 /// The next event of the page shown now. A ring kept from a page since closed finds the queue
@@ -165,7 +196,12 @@ pub fn open(url: &str, rect: Rect) -> Result<(), String> {
         .on_download(|view, event| {
             if let tauri::webview::DownloadEvent::Requested { url, .. } = event {
                 println!("[unblock] the page let {url} through — not downloaded here");
-                if let Ok(done) = LET_THROUGH.parse() {
+                let page = if RETRY_LEFT.load(Ordering::SeqCst) {
+                    LET_THROUGH
+                } else {
+                    LET_THROUGH_NO_RETRY
+                };
+                if let Ok(done) = page.parse() {
                     let _ = view.navigate(done);
                 }
                 push(Event::Released);
@@ -204,8 +240,9 @@ pub fn place(rect: Rect) {
 /// when the user decides (retry, skip, stop) and when a connection starts — a reloaded
 /// front must not find a page from the previous one still laid over it.
 pub fn close() {
+    let mut view = VIEW.lock().unwrap_or_else(|e| e.into_inner());
     events().clear();
-    if let Some(view) = VIEW.lock().unwrap_or_else(|e| e.into_inner()).take() {
+    if let Some(view) = view.take() {
         let _ = view.close();
     }
 }
