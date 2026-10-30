@@ -714,6 +714,7 @@ pub async fn serve(disk_root: Option<PathBuf>, ready: Option<tokio::sync::onesho
                 }
             }),
         )
+        .route("/unblock/act", axum::routing::post(unblock_act))
         .fallback(get(move |uri: Uri| {
             let state = state_for_asset.clone();
             async move { serve_asset(uri.path(), &state) }
@@ -1410,8 +1411,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
         // is told, and retries on its own (unblock.rs).
         let msg = tokio::select! {
             m = socket.recv() => m,
-            () = crate::unblock::released() => {
-                send_released(&mut socket).await;
+            event = crate::unblock::next_event() => {
+                send_unblock_event(&mut socket, event).await;
                 continue;
             }
         };
@@ -3896,15 +3897,33 @@ fn retry_offered(attempt: u32) -> bool {
     attempt < MAX_FORBIDDEN_RUNS
 }
 
-/// The page inside Talos let its download through: the approval worked. The front counts down
-/// and retries by itself.
-async fn send_released(socket: &mut WebSocket) {
-    println!("[unblock] approval seen — the front retries");
+/// What happened in the page inside Talos, for the front: the download let through (it counts
+/// down and retries), or Talos's page asking to retry now or to cancel that.
+async fn send_unblock_event(socket: &mut WebSocket, event: crate::unblock::Event) {
+    println!("[unblock] {} — told to the front", event.word());
     let _ = socket
         .send(Message::Text(
-            json!({ "type": "unblock-released" }).to_string(),
+            json!({ "type": "unblock-event", "event": event.word() }).to_string(),
         ))
         .await;
+}
+
+/// `POST /unblock/act` — the buttons of Talos's own page shown inside the panel
+/// (unblocked.html): `retry` or `cancel`, as the body. It has no socket of its own (a second
+/// front would reset the session), so it asks here and the front is told. Talos's page only:
+/// the same Origin rule as the sockets, and only while a page is shown.
+async fn unblock_act(headers: axum::http::HeaderMap, body: String) -> Response {
+    if !origin_allowed(&headers) {
+        return refused_origin(&headers);
+    }
+    match crate::unblock::Event::from_page(&body) {
+        Some(event) if crate::unblock::shown() => {
+            crate::unblock::push(event);
+            axum::http::StatusCode::NO_CONTENT.into_response()
+        }
+        Some(_) => (axum::http::StatusCode::CONFLICT, "no page is shown").into_response(),
+        None => (axum::http::StatusCode::BAD_REQUEST, "retry or cancel").into_response(),
+    }
 }
 
 /// The front's messages for the blocked page shown inside Talos — served by the main loop and
@@ -3981,8 +4000,8 @@ async fn await_forbidden_decision(
         // The page may let its download through while we hold: the front retries on its own.
         let msg = tokio::select! {
             m = socket.recv() => m,
-            () = crate::unblock::released() => {
-                send_released(socket).await;
+            event = crate::unblock::next_event() => {
+                send_unblock_event(socket, event).await;
                 continue;
             }
         };
@@ -7475,11 +7494,17 @@ mod tests {
         for loop_fn in ["handle_socket", "await_forbidden_decision"] {
             let body = fn_body(loop_fn);
             assert!(
-                body.contains("() = crate::unblock::released() =>"),
-                "{loop_fn} must hear the release while it waits for the front"
+                body.contains("event = crate::unblock::next_event() =>"),
+                "{loop_fn} must hear the page while it waits for the front"
             );
         }
-        assert!(fn_body("send_released").contains(r#""type": "unblock-released""#));
+        assert!(fn_body("send_unblock_event").contains(r#""type": "unblock-event""#));
+        // Talos's page acts through one guarded door, and only while it is shown.
+        let act = fn_body("unblock_act");
+        assert!(act.find("!origin_allowed(&headers)") < act.find("crate::unblock::push("));
+        assert!(act.contains("if crate::unblock::shown()"));
+        assert!(fn_body("serve")
+            .contains(r#".route("/unblock/act", axum::routing::post(unblock_act))"#));
     }
 
     #[test]

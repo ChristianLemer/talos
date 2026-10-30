@@ -25,18 +25,48 @@
 //! The approval only helps winget if the proxy remembers it per user or per machine (the
 //! child uses the system proxy and Windows authentication, like winget). A proxy that keys
 //! it on a browser cookie would want the browser: the panel keeps "open in my browser".
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::VecDeque;
 use std::sync::{LazyLock, Mutex, OnceLock};
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Webview, WebviewBuilder};
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
 static VIEW: Mutex<Option<Webview>> = Mutex::new(None);
-/// Rung when the shown page lets its download through (`released`).
-static RELEASED: LazyLock<tokio::sync::Notify> = LazyLock::new(tokio::sync::Notify::new);
-/// The release of the page shown NOW. A Notify keeps a wake nobody awaited; this flag is what
-/// makes it count, and opening or closing a page clears it — a release left by the previous
-/// page must never start a countdown on a block nobody approved (review).
-static PENDING: AtomicBool = AtomicBool::new(false);
+/// What happened in the page shown NOW, for the front (`next_event`). Opening or closing a page
+/// empties it: an event left by the previous page must never act on a block nobody approved.
+static EVENTS: Mutex<VecDeque<Event>> = Mutex::new(VecDeque::new());
+/// Rung on every `push`. A ring nobody awaited is kept, and only counts if EVENTS has something.
+static RING: LazyLock<tokio::sync::Notify> = LazyLock::new(tokio::sync::Notify::new);
+
+/// An event of the page inside Talos, told to the front.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Event {
+    /// The page let its download through: the approval worked, the front counts down.
+    Released,
+    /// "Retry now", pressed in Talos's page.
+    RetryNow,
+    /// "Cancel", pressed in Talos's page: no automatic retry.
+    Cancel,
+}
+
+impl Event {
+    /// The word on the wire (`unblock-event`) and on `POST /unblock/act` (the two pressable ones).
+    pub fn word(self) -> &'static str {
+        match self {
+            Event::Released => "released",
+            Event::RetryNow => "retry",
+            Event::Cancel => "cancel",
+        }
+    }
+
+    /// What Talos's page may ask for — never `released`, which only the download can say.
+    pub fn from_page(word: &str) -> Option<Event> {
+        match word.trim() {
+            "retry" => Some(Event::RetryNow),
+            "cancel" => Some(Event::Cancel),
+            _ => None,
+        }
+    }
+}
 
 /// The label of the one child webview. One at a time: a second block replaces the first.
 const LABEL: &str = "unblock";
@@ -86,14 +116,29 @@ pub fn available() -> bool {
     crate::platform::current_os() == crate::platform::Os::Windows && APP.get().is_some()
 }
 
-/// Resolves when the shown page lets its download through: the approval worked. A wake whose
-/// release was cleared since (`PENDING`, by `open` or `close`) is swallowed.
-pub async fn released() {
+fn events() -> std::sync::MutexGuard<'static, VecDeque<Event>> {
+    EVENTS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Queues an event of the page shown now. Talos's own page pushes only while one is shown.
+pub fn push(event: Event) {
+    events().push_back(event);
+    RING.notify_one();
+}
+
+/// Whether a page is shown inside Talos right now.
+pub fn shown() -> bool {
+    VIEW.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+}
+
+/// The next event of the page shown now. A ring kept from a page since closed finds the queue
+/// empty and waits again.
+pub async fn next_event() -> Event {
     loop {
-        RELEASED.notified().await;
-        if PENDING.swap(false, Ordering::SeqCst) {
-            return;
+        if let Some(event) = events().pop_front() {
+            return event;
         }
+        RING.notified().await;
     }
 }
 
@@ -123,8 +168,7 @@ pub fn open(url: &str, rect: Rect) -> Result<(), String> {
                 if let Ok(done) = LET_THROUGH.parse() {
                     let _ = view.navigate(done);
                 }
-                PENDING.store(true, Ordering::SeqCst);
-                RELEASED.notify_one();
+                push(Event::Released);
             }
             false
         })
@@ -160,7 +204,7 @@ pub fn place(rect: Rect) {
 /// when the user decides (retry, skip, stop) and when a connection starts — a reloaded
 /// front must not find a page from the previous one still laid over it.
 pub fn close() {
-    PENDING.store(false, Ordering::SeqCst);
+    events().clear();
     if let Some(view) = VIEW.lock().unwrap_or_else(|e| e.into_inner()).take() {
         let _ = view.close();
     }
@@ -222,23 +266,41 @@ mod tests {
     }
 
     #[test]
-    fn a_release_left_by_a_closed_page_starts_nothing() {
-        // Review: a Notify keeps a wake nobody awaited; the next 403 would have counted down
-        // and retried a row nobody approved. Closing clears the release; only a fresh one counts.
+    fn an_event_left_by_a_closed_page_acts_on_nothing() {
+        // Review: a Notify keeps a ring nobody awaited; the next 403 would have counted down
+        // and retried a row nobody approved. Closing empties the queue; only a fresh event counts.
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
             .unwrap();
+        let soon = std::time::Duration::from_millis(50);
         rt.block_on(async {
-            PENDING.store(true, Ordering::SeqCst);
-            RELEASED.notify_one();
+            push(Event::Released);
             close();
-            let stale = tokio::time::timeout(std::time::Duration::from_millis(50), released());
-            assert!(stale.await.is_err(), "a cleared release must not resolve");
-            PENDING.store(true, Ordering::SeqCst);
-            RELEASED.notify_one();
-            let fresh = tokio::time::timeout(std::time::Duration::from_millis(50), released());
-            assert!(fresh.await.is_ok());
+            let stale = tokio::time::timeout(soon, next_event());
+            assert!(stale.await.is_err(), "a cleared event must not resolve");
+            push(Event::Released);
+            push(Event::Cancel);
+            assert_eq!(
+                tokio::time::timeout(soon, next_event()).await,
+                Ok(Event::Released)
+            );
+            assert_eq!(
+                tokio::time::timeout(soon, next_event()).await,
+                Ok(Event::Cancel)
+            );
         });
+    }
+
+    #[test]
+    fn the_page_may_ask_for_a_retry_or_a_cancel_only() {
+        assert_eq!(Event::from_page("retry"), Some(Event::RetryNow));
+        assert_eq!(Event::from_page("cancel\n"), Some(Event::Cancel));
+        assert_eq!(
+            Event::from_page("released"),
+            None,
+            "only the download says that"
+        );
+        assert_eq!(Event::from_page("quit"), None);
     }
 }

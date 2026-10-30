@@ -46,18 +46,31 @@ test("a block opens the firewall's page at once, inside the panel — no step to
 });
 
 test("the approval seen, Talos counts down and retries by itself — cancellable", () => {
-  assert.match(arm("unblock-released"), /startRetryCountdown\(\)/);
+  const ev = arm("unblock-event");
+  assert.match(ev, /msg\.event === "released"\) startRetryCountdown\(\)/);
+  assert.match(ev, /msg\.event === "cancel"\) stopRetryCountdown\(true\)/);
+  assert.match(ev, /msg\.event === "retry" && fbActive !== null\) retryStep\(fbActive\)/);
   const count = fnBody(appjs, "startRetryCountdown");
   assert.match(count, /fbEmbedRetry\.hidden\) return/, "never past the retry cap");
   assert.match(count, /retryStep\(i\)/);
-  assert.match(count, /data-fb="count-cancel"/);
-  assert.match(count, /stopRetryCountdown\(true\)/, "a cancel says the retry is the user's now");
-  assert.match(fnBody(appjs, "stopRetryCountdown"), /automatic retry is off/);
+  assert.match(count, /fbRetryWhen\.textContent = `in \$\{left\} s`/, "the Retry button says when");
+  assert.match(fnBody(appjs, "sayFb"), /automatic retry is off/);
   assert.match(appjs, /const FB_COUNTDOWN = 5;/);
   // Whatever takes the page away stops the count.
   assert.match(fnBody(appjs, "closeBlockedPage"), /stopRetryCountdown\(\)/);
-  // In Talos's blue.
-  assert.match(html, /\.fb-count \{[^}]*background:var\(--head\)/);
+});
+
+test("the count lives in Talos's page inside the frame, with its own buttons", () => {
+  const page = readFileSync(new URL("../public/unblocked.html", import.meta.url), "utf8");
+  assert.match(page, /const SECONDS = 5;/, "the same count as the panel's FB_COUNTDOWN");
+  assert.match(page, /fetch\("\/unblock\/act", \{ method: "POST", body: word \}\)/);
+  assert.match(page, /id="now">Retry now</);
+  assert.match(page, /id="cancel">Cancel</);
+  // Talos's blue and buttons, not a page of its own style.
+  assert.match(page, /--head:#7aa2f7/);
+  assert.match(page, /\.primary \{ background:var\(--fill\)/);
+  // And the panel's Retry is Talos's two-line blue button, like Apply.
+  assert.match(html, /id="fb-embed-retry" class="applybtn live"><span>Retry<\/span><small id="fb-retry-when">/);
 });
 
 test("the page follows its frame and goes with the panel", () => {
@@ -96,8 +109,4 @@ test("review: no countdown on a page nobody approved, none promised at the cap, 
   assert.match(fnBody(appjs, "paintFbAttempt"), /sayFb\(\)/);
   // Switching rows stops the other row's countdown.
   assert.match(fnBody(appjs, "showFbPanel"), /if \(fbActive !== i\) closeBlockedPage\(\)/);
-  // Cancel is built once, not redrawn each second.
-  const count = fnBody(appjs, "startRetryCountdown");
-  const paint = count.slice(count.indexOf("const paint"), count.indexOf("paint();"));
-  assert.doesNotMatch(paint, /innerHTML/, "a redraw each tick loses a click on Cancel");
 });

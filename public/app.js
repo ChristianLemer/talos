@@ -1481,44 +1481,40 @@ function closeBlockedPage() {
   ws.send(JSON.stringify({ type: "unblock-close" }));
 }
 
-// The panel's one line of guidance, for what it shows.
+// The panel's one line of guidance, for what it shows; and when its Retry will happen, on the
+// button's second line, as Apply says what it will do.
 const fbSay = document.querySelector(".fb-embed-say");
+const fbRetryWhen = document.getElementById("fb-retry-when");
+let fbRetryOff = false; // the user cancelled the automatic retry of this block
 function sayFb() {
   fbSay.textContent = fbEmbedded
     ? fbEmbedRetry.hidden
       // At the retry cap: no retry will follow, so the line does not promise one.
-      ? "No retry is left for this one — approve below if you still want it later, " +
-        "then Skip it or Stop the Apply."
-      : "Approve the access request below — you don't need to download anything. " +
-        "Talos retries by itself once it's through."
+      ? "No retry is left for this one — Skip it, or Stop the Apply."
+      : fbRetryOff
+        ? "Access granted — the automatic retry is off. Press Retry when you're ready."
+        : "Approve the access request below. You don't need to download anything: " +
+          "Talos retries by itself once it's through."
     : fbActiveUrl
       ? "Open the blocked page in your browser and approve the access request, then press Retry."
       : "Talos could not tell which page to approve. Clear the access as you usually do, " +
         "then press Retry.";
+  fbRetryWhen.textContent = fbEmbedded && !fbRetryOff ? "once approved" : "when you're ready";
   fbBrowserBtn.hidden = !fbActiveUrl;
 }
 
-// The approval worked (`unblock-released`): Talos retries by itself after a short count, which
-// the user can cut short (Retry) or cancel. Not past the retry cap: nothing to retry then.
+// The approval worked (`unblock-event` released): Talos retries by itself after a short count.
+// The count shows in Talos's page inside the frame (unblocked.html, with its own Retry now and
+// Cancel) and on the Retry button. Not past the retry cap: nothing to retry then.
 const FB_COUNTDOWN = 5;
 let fbCountdown = null;
 function startRetryCountdown() {
   if (!fbEmbedded || fbActive === null || fbCountdown !== null || fbEmbedRetry.hidden) return;
   const i = fbActive;
   let left = FB_COUNTDOWN;
-  // Built once: only the number changes, so a click on Cancel is never lost to a redraw.
-  fbSay.innerHTML =
-    `<b class="fb-granted">Access granted.</b> Talos retries in ` +
-    `<span class="fb-count"></span> ` +
-    `<button class="fb-linkbtn" data-fb="count-cancel">Cancel</button>`;
-  fbSay.querySelector('[data-fb="count-cancel"]').onclick = () => stopRetryCountdown(true);
-  const num = fbSay.querySelector(".fb-count");
-  const paint = () => {
-    num.textContent = left;
-    num.classList.remove("tick");
-    void num.offsetWidth; // restarts the tick animation
-    num.classList.add("tick");
-  };
+  fbRetryOff = false;
+  fbSay.textContent = "Access granted. Talos retries the download for you.";
+  const paint = () => { fbRetryWhen.textContent = `in ${left} s`; };
   paint();
   fbCountdown = setInterval(() => {
     left -= 1;
@@ -1527,13 +1523,13 @@ function startRetryCountdown() {
     if (fbActive === i) retryStep(i);
   }, 1000);
 }
-// `cancelled`: the user stopped it — the line says the retry is theirs now, not "by itself".
+// `cancelled`: the user stopped it — the panel says the retry is theirs now, not "by itself".
 function stopRetryCountdown(cancelled = false) {
   if (fbCountdown === null) return;
   clearInterval(fbCountdown);
   fbCountdown = null;
+  fbRetryOff = cancelled;
   sayFb();
-  if (cancelled) fbSay.textContent = "Access granted — the automatic retry is off. Press Retry when you're ready.";
 }
 
 // The page follows its frame: a window resize, the frame itself moving (a note appearing above
@@ -1563,6 +1559,7 @@ function showFbPanel(i, url, inside) {
   // Another row's block: its page and its countdown go first.
   if (fbActive !== i) closeBlockedPage();
   fbActive = i;
+  fbRetryOff = false;
   fbActiveUrl = url;
   fbEl.classList.add("show");
   if (inside && url) openBlockedPage(url);
@@ -2687,8 +2684,10 @@ ws.onmessage = (ev) => {
       // (nothing extractable → link-less message).
       showForbidden(msg.i, msg.url || null, msg.inside === true);
       break;
-    case "unblock-released": // the page let the download through (server::send_released)
-      startRetryCountdown();
+    case "unblock-event": // the page inside Talos (server::send_unblock_event)
+      if (msg.event === "released") startRetryCountdown(); // the approval worked
+      else if (msg.event === "cancel") stopRetryCountdown(true); // its Cancel
+      else if (msg.event === "retry" && fbActive !== null) retryStep(fbActive); // its Retry now
       break;
     case "unblock-shown": // the page is laid over #fb-frame (server::unblock_message)
       break;

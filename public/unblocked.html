@@ -4,30 +4,94 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Access granted</title>
-<!-- Shown INSIDE Talos's 403 panel (unblock.rs) when the firewall's page let the download
-     through: the approval worked. Nothing is downloaded here — the panel above counts down
-     and Talos retries by itself. Talos's own palette (index.html :root). -->
+<!-- Shown INSIDE Talos's 403 panel (unblock.rs) once the firewall's page let the download
+     through: the approval worked. Nothing is downloaded here. The ring counts down the
+     automatic retry the panel runs (app.js, FB_COUNTDOWN — the two start together, at the
+     release), and its buttons reach the panel through POST /unblock/act: this page has no
+     socket of its own. Talos's palette and buttons (index.html: :root, .applybtn.live,
+     .dlgbtn-sec). -->
 <style>
-  :root { --bg:#1a1b26; --fg:#c0caf5; --dim:#565f89; --head:#7aa2f7; }
-  body { margin:0; height:100vh; display:flex; align-items:center; justify-content:center;
-         background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; }
-  main { max-width:42ch; text-align:center; padding:24px; }
-  .ring { width:64px; height:64px; margin:0 auto 14px; border-radius:50%;
-          border:3px solid var(--head); display:flex; align-items:center; justify-content:center;
-          color:var(--head); font-size:30px; animation:pulse 1.6s ease-out infinite; }
-  @keyframes pulse {
-    0% { box-shadow:0 0 0 0 rgba(122,162,247,.45); }
-    100% { box-shadow:0 0 0 18px rgba(122,162,247,0); }
-  }
-  h1 { font-size:18px; margin:0 0 6px; color:var(--head); }
-  p { color:var(--dim); margin:0; }
+  :root { --bg:#1a1b26; --fg:#c0caf5; --line:#2a2e42; --dim:#565f89; --head:#7aa2f7;
+          --fill:#3d59a1; --soft:#a9b1d6; }
+  html, body { height:100%; margin:0; }
+  body { display:flex; align-items:center; justify-content:center; background:var(--bg);
+         color:var(--fg); font:15px/1.5 system-ui, sans-serif; -webkit-user-select:none;
+         user-select:none; }
+  main { text-align:center; padding:24px; max-width:44ch; }
+  .ring { position:relative; width:112px; height:112px; margin:0 auto 18px; }
+  .ring svg { width:100%; height:100%; transform:rotate(-90deg); }
+  .ring circle { fill:none; stroke-width:6; }
+  .ring .track { stroke:var(--line); }
+  .ring .left { stroke:var(--head); stroke-linecap:round;
+                transition:stroke-dashoffset 1s linear; }
+  .ring .n { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+             font-size:38px; font-weight:700; color:var(--head); letter-spacing:-1px; }
+  h1 { font-size:19px; margin:0 0 4px; font-weight:700; letter-spacing:-0.2px; }
+  p { color:var(--soft); margin:0; font-size:13.5px; }
+  .actions { display:flex; gap:10px; justify-content:center; margin-top:20px; }
+  button { font:inherit; cursor:pointer; border-radius:9px; }
+  .primary { background:var(--fill); color:var(--fg); border:1px solid var(--fill);
+             padding:9px 22px; font-size:14px; font-weight:700; }
+  .primary:hover { filter:brightness(1.15); }
+  .secondary { background:none; color:var(--fg); border:1px solid var(--line); padding:9px 16px;
+               font-size:13px; border-radius:7px; }
+  .secondary:hover { border-color:var(--dim); background:var(--line); }
+  button:focus-visible { outline:2px solid var(--head); outline-offset:2px; }
+  .off .ring .left { stroke:var(--dim); }
+  .off .ring .n { color:var(--dim); }
+  @media (prefers-reduced-motion: reduce) { .ring .left { transition:none; } }
 </style>
 </head>
 <body>
 <main>
-  <div class="ring">✓</div>
-  <h1>Access granted</h1>
-  <p>Talos retries the download by itself in a few seconds — nothing to do here.</p>
+  <div class="ring" aria-hidden="true">
+    <svg viewBox="0 0 112 112"><circle class="track" cx="56" cy="56" r="50"/><circle class="left" cx="56" cy="56" r="50"/></svg>
+    <div class="n" id="n">5</div>
+  </div>
+  <h1 id="title">Access granted</h1>
+  <p id="say">Talos retries the download in 5 seconds.</p>
+  <div class="actions">
+    <button class="primary" id="now">Retry now</button>
+    <button class="secondary" id="cancel">Cancel</button>
+  </div>
 </main>
+<script>
+  // The same count as the panel's (app.js FB_COUNTDOWN): it drives the retry, this one shows it.
+  const SECONDS = 5;
+  const ring = document.querySelector(".ring .left");
+  const n = document.getElementById("n");
+  const say = document.getElementById("say");
+  const circumference = 2 * Math.PI * 50;
+  ring.style.strokeDasharray = `${circumference}px`;
+  let left = SECONDS;
+  const paint = () => {
+    n.textContent = left;
+    ring.style.strokeDashoffset = `${circumference * (1 - left / SECONDS)}px`;
+    say.textContent = `Talos retries the download in ${left} second${left === 1 ? "" : "s"}.`;
+  };
+  paint();
+  let timer = setInterval(() => {
+    left -= 1;
+    if (left <= 0) {
+      clearInterval(timer);
+      say.textContent = "Retrying…";
+      n.textContent = "✓";
+      return;
+    }
+    paint();
+  }, 1000);
+  // The panel acts; this page only asks (server: unblock_act).
+  const act = (word) => fetch("/unblock/act", { method: "POST", body: word }).catch(() => {});
+  document.getElementById("now").onclick = () => act("retry");
+  document.getElementById("cancel").onclick = () => {
+    clearInterval(timer);
+    act("cancel");
+    document.body.classList.add("off");
+    n.textContent = "✓";
+    say.textContent = "The automatic retry is off. Press Retry when you're ready.";
+    document.getElementById("cancel").hidden = true;
+    document.getElementById("now").textContent = "Retry";
+  };
+</script>
 </body>
 </html>
