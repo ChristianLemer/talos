@@ -819,6 +819,24 @@ mod tests {
         assert_eq!(p.present, Some(false));
     }
 
+    /// The two verdicts above are pure; this pins that the detection consults them. Reverting
+    /// either call site leaves every behaviour test green (a real manager probe cannot run in a
+    /// test), so the wiring is read from the code, comments stripped.
+    #[test]
+    fn the_detection_asks_whether_the_manager_answered() {
+        let src = include_str!("detect.rs");
+        let start = src
+            .find("pub fn detect_present_detailed_with_vscode(")
+            .expect("re-point this test");
+        let body: String = src[start..start + src[start..].find("\n}\n").unwrap()]
+            .lines()
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(body.contains("return absent_or_unknown(step, bin, sd);"));
+        assert!(body.contains("return manager_verdict(step, run_probe_detailed(&probe));"));
+    }
+
     #[test]
     fn a_bulk_hit_replaces_the_manager_probe() {
         let mut s = step();

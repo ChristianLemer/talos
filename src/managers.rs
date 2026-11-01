@@ -544,7 +544,10 @@ fn winget_table(lines: &[String]) -> Option<(usize, Vec<usize>)> {
             prev_blank = c.is_whitespace();
         }
         let reaches = sep.trim_end().chars().count() > *starts.last()?;
-        ((3..=5).contains(&starts.len()) && reaches).then_some((s, starts))
+        // winget prints its header from column 0: a cell before it (a spinner frame left
+        // without its `\r`) would shift every rank by one.
+        let flush = starts.first() == Some(&0);
+        ((3..=5).contains(&starts.len()) && reaches && flush).then_some((s, starts))
     })
 }
 
@@ -657,6 +660,10 @@ pub fn parse_winget_upgrade(raw: &str) -> HashMap<String, Outdated> {
         if line.trim().is_empty() {
             break;
         }
+        // A line of dashes after the separator (a second table's) is not a row.
+        if line.trim().chars().all(|c| c == '-') {
+            continue;
+        }
         if line.chars().count() < av_pos {
             continue;
         }
@@ -705,6 +712,10 @@ fn parse_winget_list(raw: &str) -> Result<HashMap<String, String>, ()> {
         // ⚠️ `continue`, not `break` as the upgrade parser does: there every row
         // after a blank is noise, here a short MSIX row must not end the table.
         if line.trim().is_empty() {
+            continue;
+        }
+        // A line of dashes after the separator (a second table's) is not a row.
+        if line.trim().chars().all(|c| c == '-') {
             continue;
         }
         if line.chars().count() < ver_pos {
@@ -1673,6 +1684,30 @@ Nushell          Nushell.Nushell           0.116.0      0.116.1
         }
         // A spinner's lone dash under a line of prose is not a separator either.
         assert!(!WINGET.is_recognised("Searching the source\n   -\n"));
+        // Nor a header that does not start at column 0: a stray cell would shift every rank.
+        let shifted = format!(
+            "   -  Name             Id                        Version      Available\n{}\n\
+             Git              Git.Git                   2.55.0.3     2.55.0.5\n",
+            "-".repeat(70)
+        );
+        assert!(parse_winget_upgrade(&shifted).is_empty());
+    }
+
+    /// `winget list` on a machine with nothing to upgrade prints no Available column: the
+    /// fourth cell is then Source, and it still ends the version.
+    #[test]
+    fn winget_list_without_an_available_column_is_read() {
+        let raw = "\
+Nom              ID                        Version      Source
+--------------------------------------------------------------
+Git              Git.Git                   2.55.0.3     winget
+";
+        let m = WINGET.parse_presence(raw).expect("recognised");
+        assert_eq!(m.get("git.git").map(String::as_str), Some("2.55.0.3"));
+        // And it is no upgrade table: nothing there is outdated.
+        assert!(parse_winget_upgrade(raw)
+            .values()
+            .all(|o| o.available == "winget"));
     }
 
     #[test]

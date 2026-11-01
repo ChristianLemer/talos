@@ -238,7 +238,7 @@ config-atom calls. `--check` reads only the YAML. When you count packages, count
 | the row never turns green | `detect:` — is exit 0 really "present"? For `claude-plugin` / `copilot-plugin` / `skill` it is a **list name**, not a binary |
 | the displayed version is wrong | `version-regex:` — override how the version is pulled from the output |
 | the row is greyed / indeterminate | an unmet `requires:` — the reason is shown on the row |
-| the row reads "winget did not answer (exit 127)" and the Apply holds it | the manager itself could not be asked (not on PATH — often a user PATH stored as REG_SZ). Not your YAML: Talos will not install on a silence; repair the manager, then Refresh |
+| the row reads "winget did not answer (exit 127)" and the Apply holds it | the manager itself could not be asked (not on PATH — often a user PATH stored as REG_SZ). Not your YAML: Talos will not install on a silence; repair the manager, then Refresh. A manager your content installs (Homebrew) answers only once it is there: packages that need it must say `requires:` it, or they wait for the next Apply |
 | the step hangs forever | the command prompts (rule 2) |
 | a downgrade appears out of nowhere | an invalid `version:` word read as `0.0.0` |
 | a `--check` finding names an unknown field | serde ignores it: the field did nothing. Check the spelling against `references/fields.md` |
