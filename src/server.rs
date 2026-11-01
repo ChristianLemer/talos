@@ -2570,6 +2570,35 @@ async fn send_kept(socket: &mut WebSocket, i: usize, why: &str) {
         .await;
 }
 
+/// An install decided on a presence the manager never gave (`Presence::unanswered`) is held:
+/// unknown reads as "not present" to `action_for`, and installing on that reinstalled the same
+/// package on every Apply (field-hit: winget exit 127). The row says why, and the next scan that
+/// gets an answer lifts the hold.
+///
+/// ⚠️ Not when a requirement is absent now: this Apply installs it first (or `requires_blocked`
+/// has already taken the row out), and a manager the content itself brings could not have
+/// answered before it was there.
+fn unanswered_hold(
+    a: crate::decision::Action,
+    p: &crate::detect::Presence,
+    node: &crate::deps::DepNode,
+    nodes: &[crate::deps::DepNode],
+    idx: &std::collections::HashMap<String, usize>,
+) -> Option<String> {
+    if a != crate::decision::Action::Install || !p.unanswered {
+        return None;
+    }
+    let waits = node
+        .requires
+        .iter()
+        .any(|r| idx.get(r).is_some_and(|&j| !nodes[j].present_now));
+    if waits {
+        return None;
+    }
+    let why = p.reason.as_deref().unwrap_or("presence unknown");
+    Some(format!("{why}; not installed blindly"))
+}
+
 /// Rows held absent at plan time (brew cannot serve the pin) will not be there after the
 /// Apply, so what requires them cannot run either: it leaves the plan, saying what it waits
 /// for, and a chain goes with it. `nodes` was built before any hold was known. A removal stays:
@@ -3222,6 +3251,12 @@ async fn apply_diff(
         };
         match batch_action(action_for(desired, &facts), step.downgrade.is_some()) {
             Ok(Some(a)) => {
+                if let Some(silent) = unanswered_hold(a, &presences[i], &nodes[i], &nodes, &idx) {
+                    println!("[apply] {} held: {silent}", step.name);
+                    send_held(socket, i, &silent).await;
+                    held_absent.push(i);
+                    continue;
+                }
                 // A change that already ran toward this target in this session and moved
                 // nothing is not run again: the row says why, and a new target lifts the hold.
                 if matches!(a, Action::Upgrade | Action::Downgrade) {
@@ -5642,6 +5677,68 @@ mod tests {
         assert_eq!(super::brew_plan(Uninstall, &s, cur), Ok(None));
     }
 
+    /// ⭐ The Apply half of "unknown is not absent": a row whose manager did not answer is not
+    /// installed on the strength of that silence, and says why.
+    #[test]
+    fn an_install_on_an_unanswered_presence_is_held() {
+        use crate::decision::Action;
+        let node = |name: &str, requires: &[&str], present_now: bool| crate::deps::DepNode {
+            name: name.into(),
+            requires: requires.iter().map(|r| r.to_string()).collect(),
+            will_be_present: true,
+            present_now,
+            reachable: true,
+        };
+        let silent = crate::detect::Presence {
+            present: None,
+            reason: Some("winget did not answer (exit 127): presence unknown".into()),
+            unanswered: true,
+            ..Default::default()
+        };
+        let nodes = vec![node("1Password", &[], false)];
+        let idx = crate::deps::make_index(&nodes);
+        let why = unanswered_hold(Action::Install, &silent, &nodes[0], &nodes, &idx).expect("held");
+        assert!(
+            why.contains("exit 127") && why.contains("not installed"),
+            "{why}"
+        );
+
+        // A real absent installs, as before.
+        let absent = crate::detect::Presence {
+            present: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(
+            unanswered_hold(Action::Install, &absent, &nodes[0], &nodes, &idx),
+            None
+        );
+        // An unknown that is NOT a silence (no route to detect, a missing prerequisite) is
+        // left to the rules it had.
+        let no_route = crate::detect::Presence::default();
+        assert_eq!(
+            unanswered_hold(Action::Install, &no_route, &nodes[0], &nodes, &idx),
+            None
+        );
+
+        // Its requirement is absent now, so this Apply installs it first: the manager it
+        // brings could not have answered yet.
+        let nodes = vec![
+            node("Homebrew", &[], false),
+            node("jq", &["Homebrew"], false),
+        ];
+        let idx = crate::deps::make_index(&nodes);
+        assert_eq!(
+            unanswered_hold(Action::Install, &silent, &nodes[1], &nodes, &idx),
+            None
+        );
+        let nodes = vec![
+            node("Homebrew", &[], true),
+            node("jq", &["Homebrew"], false),
+        ];
+        let idx = crate::deps::make_index(&nodes);
+        assert!(unanswered_hold(Action::Install, &silent, &nodes[1], &nodes, &idx).is_some());
+    }
+
     #[test]
     fn a_held_absent_row_takes_the_rows_that_require_it_out_of_the_plan() {
         // Found at the review: nushell absent and held (brew cannot serve its pin) still read
@@ -7259,6 +7356,18 @@ mod tests {
     // requirement that is COMPUTED and then only shown. `requires_reason` was already
     // computed at server.rs:1604 before this work and fed nothing but the row's text,
     // which is why a Microsoft redistributable kept an install button on a Mac.
+
+    #[test]
+    fn an_unanswered_presence_is_held_before_it_reaches_the_plan() {
+        // `unanswered_hold` is pure and tested; this pins that the Apply consults it, holds the
+        // row on screen, and lets what requires it leave the plan too.
+        let plan = fn_body("apply_diff");
+        let at = |s: &str| plan.find(s).unwrap_or_else(|| panic!("no `{s}`"));
+        let asked = at("unanswered_hold(a, &presences[i]");
+        let held = at("send_held(socket, i, &silent)");
+        let pushed = at("held_absent.push(i);\n                    continue;");
+        assert!(asked < held && held < pushed && pushed < at("visual_plan.push((i, a))"));
+    }
 
     #[test]
     fn a_brew_pin_is_asked_at_plan_time_and_again_at_the_step() {

@@ -25,6 +25,10 @@ pub struct Presence {
     /// version change reads it (`server::unmoved_reason`): the copy the manager was asked to
     /// change is the one that tells whether it did.
     pub managed: Option<String>,
+    /// The verdict is unknown because the MANAGER could not be asked (`unanswered`), not
+    /// because nothing could be said. The Apply holds such a row rather than install it
+    /// blindly: a question left without an answer is not a "no".
+    pub unanswered: bool,
     /// The detection evidence: command run + output + code. Exposed to the operator
     /// (written to the row's terminal at scan time) — "which command decided?".
     pub diag: Option<ProbeResult>,
@@ -36,6 +40,62 @@ pub struct ProbeResult {
     pub code: i32,
     pub output: String,
     pub cmdline: String,
+}
+
+/// Did the probe get no answer at all? 127 is "command not found" (POSIX, and the Windows
+/// guard in `shell_probe`, which also turns any PowerShell exception into it), 126 a command
+/// that could not be executed, -1 a process that could not be started or was killed.
+///
+/// ⚠️ Every OTHER non-zero exit is an answer. `brew list` exits 1 and winget -1978335212
+/// (NO_APPLICATIONS_FOUND) for a package that is not installed: those must stay "absent".
+pub fn unanswered(d: &ProbeResult) -> bool {
+    !d.ok && matches!(d.code, 126 | 127 | -1)
+}
+
+/// The manager probe `d` could not be asked: presence is unknown, and the row says why.
+fn unanswered_presence(step: &Step, d: ProbeResult) -> Presence {
+    let who = step.route.as_deref().unwrap_or("the package manager");
+    Presence {
+        present: None,
+        reason: Some(format!(
+            "{who} did not answer (exit {}): presence unknown",
+            d.code
+        )),
+        unanswered: true,
+        diag: Some(d),
+        ..Default::default()
+    }
+}
+
+/// Stage 2's verdict when neither half found the package. The binary not on PATH is no proof
+/// when the manager could not be asked: a broken PATH hides both at once (field-hit, a user
+/// PATH stored as REG_SZ), and reading that as "absent" reinstalled the package on every Apply.
+fn absent_or_unknown(step: &Step, bin: Option<ProbeResult>, sd: Option<ProbeResult>) -> Presence {
+    if let Some(d) = sd.as_ref().filter(|d| unanswered(d)) {
+        return unanswered_presence(step, d.clone());
+    }
+    // Absent: show the binary probe (the one queried first) — the most telling evidence of
+    // "why absent" (often "command not found").
+    Presence {
+        present: Some(false),
+        diag: bin.or(sd),
+        ..Default::default()
+    }
+}
+
+/// Stage 4's verdict: the manager's own answer is the ONLY evidence, so a manager that did not
+/// answer leaves nothing known — never "absent", which the Apply would install again.
+fn manager_verdict(step: &Step, d: ProbeResult) -> Presence {
+    if unanswered(&d) {
+        return unanswered_presence(step, d);
+    }
+    let v = version_from(step, &d.output);
+    Presence {
+        present: Some(d.ok),
+        version: Some(v),
+        diag: Some(d),
+        ..Default::default()
+    }
 }
 
 /// Runs a Probe, captures code + merged output (stdout+stderr).
@@ -517,13 +577,7 @@ pub fn detect_present_detailed_with_vscode(
         let system_ok = sd.as_ref().map(|d| d.ok).unwrap_or(false);
         let present = bin_ok || system_ok;
         if !present {
-            // Absent: show the binary probe (the one queried first) — the most
-            // telling evidence of "why absent" (often "command not found").
-            return Presence {
-                present: Some(false),
-                diag: bin.or(sd),
-                ..Default::default()
-            };
+            return absent_or_unknown(step, bin, sd);
         }
         if system_ok {
             // Presence established by the SYSTEM probe → IT is the evidence to show
@@ -643,14 +697,7 @@ pub fn detect_present_detailed_with_vscode(
         };
     }
     if let Some(probe) = system_probe(step, os) {
-        let d = run_probe_detailed(&probe);
-        let v = version_from(step, &d.output);
-        return Presence {
-            present: Some(d.ok),
-            version: Some(v),
-            diag: Some(d),
-            ..Default::default()
-        };
+        return manager_verdict(step, run_probe_detailed(&probe));
     }
     // Nothing above could answer. ⚠️ Reachable for a CONTENT ROUTE THAT HAS NO DISPATCH ARM —
     // the stage-2 guard excludes every extension route by class (`is_extension_route`), so a
@@ -703,6 +750,73 @@ mod tests {
             overrides: Overrides::default(),
             update_each_apply: false,
         }
+    }
+
+    fn answered(code: i32, output: &str) -> ProbeResult {
+        ProbeResult {
+            ok: code == 0,
+            code,
+            output: output.into(),
+            cmdline: "winget list --id AgileBits.1Password --exact".into(),
+        }
+    }
+
+    fn winget_only() -> Step {
+        let mut s = step();
+        s.route = Some("winget".into());
+        s.system_id = Some("AgileBits.1Password".into());
+        s
+    }
+
+    /// ⭐ Field-hit (1Password reinstalled up to 8 times across 11 machines): the manager's
+    /// query is the only evidence, and a manager that never answered was read as "absent".
+    #[test]
+    fn a_manager_that_did_not_answer_leaves_presence_unknown() {
+        for code in [127, 126, -1] {
+            let p = manager_verdict(&winget_only(), answered(code, ""));
+            assert_eq!(p.present, None, "exit {code} is no answer");
+            assert!(p.unanswered);
+            let why = p.reason.unwrap();
+            assert!(
+                why.contains("winget") && why.contains(&code.to_string()),
+                "{why}"
+            );
+            // The evidence stays on the row: which command, which code.
+            assert_eq!(p.diag.unwrap().code, code);
+        }
+    }
+
+    /// The other side: a manager that ANSWERS "not installed" is believed. winget's
+    /// NO_APPLICATIONS_FOUND and brew's exit 1 are answers, not silences.
+    #[test]
+    fn a_manager_that_answers_not_installed_stays_absent() {
+        for code in [-1978335212, 1] {
+            let p = manager_verdict(&winget_only(), answered(code, "No installed package"));
+            assert_eq!(p.present, Some(false), "exit {code} is an answer");
+            assert!(!p.unanswered);
+        }
+        let p = manager_verdict(
+            &winget_only(),
+            answered(0, "1Password AgileBits.1Password 8.12.30.21 winget"),
+        );
+        assert_eq!(p.present, Some(true));
+        assert_eq!(p.version.as_deref(), Some("8.12.30.21"));
+    }
+
+    /// Stage 2 (a binary AND a manager): the binary not found is only "absent" when the manager
+    /// answered too.
+    #[test]
+    fn a_missing_binary_is_not_absent_when_the_manager_did_not_answer() {
+        let s = winget_only();
+        let p = absent_or_unknown(&s, Some(answered(127, "")), Some(answered(127, "")));
+        assert_eq!(p.present, None);
+        assert!(p.unanswered);
+        let p = absent_or_unknown(&s, Some(answered(127, "")), Some(answered(-1978335212, "")));
+        assert_eq!(p.present, Some(false));
+        assert!(!p.unanswered);
+        // No manager half at all: the binary is the only question, and it was answered.
+        let p = absent_or_unknown(&s, Some(answered(127, "")), None);
+        assert_eq!(p.present, Some(false));
     }
 
     #[test]
