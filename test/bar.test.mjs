@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { barView, planSub, IDLE_HINT } from "../public/bar.js";
 
+const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+const appjs = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
+
 const open = { conn: "open", scanning: false };
 const text = (v) => v.hint.map((h) => h.text).join(" · ");
 
@@ -79,7 +82,6 @@ test("before the socket opens and after it drops, nothing is offered either", ()
 test("an Apply: how far on the button, the row running now in the line", () => {
   const v = barView({
     ...open,
-    advanced: true,
     running: { kind: "apply", done: 1, total: 3, current: { name: "Gamma", status: "installing" } },
   });
   assert.equal(v.label, "Applying");
@@ -91,13 +93,13 @@ test("an Apply: how far on the button, the row running now in the line", () => {
   assert.equal(rm.hint[0].text, "Removing Delta");
 });
 
-test("simple mode does not send anyone to a Stop it hides", () => {
-  // Found by the pre-tag review: the row's button (Stop while running) is advanced-only.
-  const v = barView({
-    ...open,
-    running: { kind: "apply", done: 1, total: 3, current: { name: "Gamma", status: "installing" } },
-  });
-  assert.equal(text(v), "Installing Gamma · 1 of 3");
+test("the bar never takes a mode: the row's Stop is shown, and named, in both", () => {
+  // Until 2026-11-01 simple mode hid the Stop and the line stopped naming it, so a hung step
+  // left the colleague nothing but Quit. One sentence for both modes now, so no flag to pass.
+  assert.doesNotMatch(readFileSync(new URL("../public/bar.js", import.meta.url), "utf8"), /advanced/);
+  assert.match(html, /body:not\(\.advanced\)\s+\.rerun:not\(\.remove\)\s*\{\s*display:\s*none/);
+  assert.doesNotMatch(html, /body:not\(\.advanced\)\s+\.rerun\s*\{/);
+  assert.match(appjs, /r\.apply\.className = "rerun remove"/);
 });
 
 test("an Apply before its plan is known says it is checking, not 0 of 0", () => {
@@ -131,7 +133,6 @@ test("a diff and a retry have no plan: their row is what the bar names, never 's
   const r = barView({
     ...open,
     running: { kind: "retry", row: "Gamma", done: 0, total: 0, current: { name: "Gamma", status: "installing" } },
-    advanced: true,
   });
   assert.equal(r.sub, "Gamma");
   assert.equal(text(r), "Installing Gamma · Stop is on its row");

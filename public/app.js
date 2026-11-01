@@ -873,7 +873,6 @@ function paintBar() {
     scan: rescanTotal > 0 ? { seen: rescanSeen, total: rescanTotal } : { seen: scanSeen, total: scanTotal },
     running,
     note: doneNote,
-    advanced: document.body.classList.contains("advanced"),
     actions,
     estimate: busy ? "" : formatEstimate(estimate(M.planSeconds(model))),
   });
@@ -923,6 +922,10 @@ function refreshArbitration() {
   // The LABEL, never the button: the button also holds the tab's icon.
   const label = document.querySelector('.tab[data-view="arbitration"] .tab-label');
   if (label) label.textContent = n ? `Arbitration (${n})` : "Arbitration";
+  // Not before the machine is read: an un-probed row has no version yet, so "nothing to
+  // arbitrate" would be said before it is known.
+  const empty = document.getElementById("arb-empty");
+  if (empty) empty.hidden = n !== 0 || scanning || !planSeen;
 }
 
 // The re-scan veil covers the WHOLE window (position:fixed, top-level), so the
@@ -2226,15 +2229,14 @@ document.querySelectorAll(".tab").forEach((tab) => {
 // Default scope: the Bundles tab (only wanted rows) is the active tab at load.
 document.body.classList.add("tab-bundles");
 
-// --- advanced mode: a UI preference (per-package toggles, postures, the row's own
-// button). Default OFF → simple. Persisted in selection.json's `ui` (one config
+// --- advanced mode: a UI preference (per-package toggles, scope, the row's diff, the fit
+// line, the Arbitration tab). Default OFF → simple. Persisted in selection.json's `ui` (one config
 // file for all), sent via persistSelection on change; restored by
 // applySavedSelection from the plan. Boots OFF until the plan arrives.
 const advToggle = document.getElementById("advanced-toggle");
 function applyAdvanced(on) {
   document.body.classList.toggle("advanced", on);
   advToggle.checked = on;
-  paintBar(); // the line names the row's Stop in advanced mode only — say it, or stop saying it, now
   // If turning off advanced while on the Arbitration tab, return to the default Bundles tab.
   // Otherwise the operator is stranded on an invisible view until relaunch.
   if (!on && document.body.classList.contains("tab-arbitration")) {

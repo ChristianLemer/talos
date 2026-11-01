@@ -69,19 +69,17 @@ function countKinds(actions) {
 //   actions   the plan's actions, one per row the Apply would run
 //   estimate  the duration phrase for that plan ("" when there is none)
 //   note      a one-off sentence from the last run's end, said only while the plan is empty
-//   advanced  advanced mode: the rows carry their own button (Stop while running); simple
-//             mode hides it, so the line must not send anyone to look for it
 //
 // Returns { label, sub, live, disabled, hint: [{ text, tone }], quitPrimary }. `tone` is
 // "strong", "remove" or undefined (the line's ordinary dim).
-export function barView({ conn, scanning, scan, running, actions = [], estimate = "", note = "", advanced = false }) {
+export function barView({ conn, scanning, scan, running, actions = [], estimate = "", note = "" }) {
   const view = { label: "Apply", sub: "", live: false, disabled: true, hint: [], quitPrimary: false };
   if (conn !== "open") {
     view.sub = conn === "closed" ? "disconnected" : "connecting…";
     view.hint = [{ text: conn === "closed" ? "Lost the connection to the engine." : "Connecting to the engine…" }];
     return view;
   }
-  if (running) return runningView(view, running, advanced);
+  if (running) return runningView(view, running);
   if (scanning) {
     view.sub = "scanning…";
     const count = scan && scan.total > 0 ? ` — ${Math.min(scan.seen, scan.total)} of ${scan.total} packages` : "";
@@ -108,7 +106,7 @@ export function barView({ conn, scanning, scan, running, actions = [], estimate 
   return view;
 }
 
-function runningView(view, run, advanced) {
+function runningView(view, run) {
   if (run.paused) {
     view.label = "Paused";
     view.sub = "waiting for you";
@@ -123,9 +121,8 @@ function runningView(view, run, advanced) {
   if (cur && DOING[cur.status]) {
     view.hint = [{ text: `${DOING[cur.status]} ${cur.name}`, tone: "strong" }];
     if (progress) view.hint.push({ text: progress });
-    // The one interruption there is lives on the row itself: say where — in advanced mode
-    // only, the one that shows the row's button (simple mode hides it, Stop included).
-    if (advanced) view.hint.push({ text: "Stop is on its row" });
+    // The one interruption there is lives on the row itself: say where. Both modes show it.
+    view.hint.push({ text: "Stop is on its row" });
   } else if (run.kind === "apply") {
     view.hint = [{ text: progress ? "Working…" : "Checking this machine before acting…" }];
   } else {

@@ -254,10 +254,14 @@
 
       /* --- SIMPLE vs ADVANCED: only GRANULARITY differs, not the switch's meaning.
          Simple = one switch per bundle. Advanced adds per-package toggles, the
-         row's own button (Stop while it runs, diff on a config you own), and the
-         default-side dot. The colour rule above is identical in both. */
+         row's diff on a config you own, and the default-side dot. The colour rule
+         above is identical in both. */
       body:not(.advanced) .bundle-body .toggle { display:none; }   /* no per-package toggles */
-      body:not(.advanced) .rerun { display:none; }                 /* only the bar's Apply */
+      /* The row's button, except its Stop: the one interruption an Apply has stays in BOTH
+         modes. Hidden in simple, a step that hung (a command waiting for an answer the row
+         terminal cannot give) left the colleague nothing but Quit. `.remove` is how
+         paintActions marks the Stop. */
+      body:not(.advanced) .rerun:not(.remove) { display:none; }
       /* The SCOPE switch and the two state words are ADVANCED-ONLY. Measured on this
          machine: 25 of 31 rows are in scope, so a switch on every row announces "yes,
          mine" 25 times to say "no" 6 times — the majority state must stay silent (the
@@ -682,6 +686,7 @@
       body.tab-arbitration #arb-head { display:flex; align-items:center;
         justify-content:space-between; gap:8px; }
       #arb-head .arb-note { font-size:11px; color:var(--dim); }
+      body:not(.tab-arbitration) #arb-empty { display:none; }
       /* "This machine": what the journal received about this machine, shown as-is — the
          answer to "what does sharing send?". Filled by renderMachine (app.js). */
       #machine-card { position:relative; padding:4px 0 14px; }
@@ -1257,6 +1262,9 @@
         <span class="arb-note">versions as seen on this machine</span>
         <button id="arb-copy" class="btn">Copy</button>
       </div>
+      <!-- Said, not left black: with no row to decide, the tab was a header over nothing, and
+           nothing told "nothing to arbitrate" from a view that failed to paint. -->
+      <div id="arb-empty" class="steps-empty" hidden>Nothing to arbitrate — no held version has a newer one available here.</div>
       <div id="steps"></div>
     </div>
 
@@ -1324,7 +1332,7 @@
         </div>
         <div class="set-row">
           <div><div class="set-title">Advanced mode</div>
-            <div class="set-desc">Per-package control with in/out toggles, author postures, and per-bundle Apply. Off by default — the panel stays simple: one on/off switch per bundle.</div></div>
+            <div class="set-desc">For whoever composes the kit: a switch per package inside the bundles, what Talos manages and what it leaves alone, a diff on the config files you own, what this machine can reach, and the Arbitration tab. Off by default — the panel stays simple: one switch per bundle.</div></div>
           <label class="switch"><input type="checkbox" id="advanced-toggle"><span class="slider"></span></label>
         </div>
         <div class="set-row has-where">

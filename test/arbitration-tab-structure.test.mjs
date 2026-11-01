@@ -28,3 +28,15 @@ test("applyAdvanced returns to bundles when turning off from arbitration", () =>
     "applyAdvanced must return to bundles tab when appropriate",
   );
 });
+
+test("an empty Arbitration tab says so, and only once the machine has been read", () => {
+  // Before 2026-11-01 the tab with nothing held was a header over a black page: nothing told
+  // "nothing to arbitrate" from a view that failed to paint.
+  const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+  assert.match(html, /id="arb-empty"[^>]*hidden/);
+  assert.match(html, /body:not\(\.tab-arbitration\)\s+#arb-empty\s*\{\s*display:\s*none/);
+  const fnStart = appjs.indexOf("function refreshArbitration(");
+  const fnBody = appjs.slice(fnStart, appjs.indexOf("\n}", fnStart));
+  assert.match(fnBody, /arb-empty/);
+  assert.match(fnBody, /n !== 0 \|\| scanning \|\| !planSeen/);
+});
