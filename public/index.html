@@ -501,6 +501,9 @@
          Stop on a running row and diff on a config-atom you own; the row's tint, not the
          button, previews what the Apply will do. */
       .rerun:disabled { opacity:.35; cursor:default; background:none; }
+      /* The Stop is the one row button a colleague may hunt for mid-Apply (both modes show
+         it): soft red and fully opaque, in the act-remove tone — it interrupts, like a removal. */
+      .rerun.remove { color:#ce697a; border-color:#5a3d44; opacity:1; }
       .panel { position:relative; border-top:1px solid var(--line); }
       .term-host { padding:12px 16px; }
       .copy { position:absolute; top:8px; right:12px; z-index:2; background:var(--line); color:var(--dim);
@@ -687,6 +690,9 @@
         justify-content:space-between; gap:8px; }
       #arb-head .arb-note { font-size:11px; color:var(--dim); }
       body:not(.tab-arbitration) #arb-empty { display:none; }
+      /* Its own empty line only: the list's "Nothing to send — N held" counts another thing
+         (rows the Apply holds) and, beside this one, read as a contradiction. */
+      body.tab-arbitration #steps-empty { display:none; }
       /* "This machine": what the journal received about this machine, shown as-is — the
          answer to "what does sharing send?". Filled by renderMachine (app.js). */
       #machine-card { position:relative; padding:4px 0 14px; }
@@ -813,7 +819,7 @@
         font-size:11px; font-weight:600; vertical-align:middle; letter-spacing:.2px; }
       .consent-actions { display:flex; gap:10px; margin-top:18px; justify-content:center; }
       /* Secondary (cancel/decline) button for MODAL dialogs. NOT .rerun — that's
-         the per-row Apply button, hidden in simple mode (body:not(.advanced)),
+         the per-row button, hidden in simple mode except as a Stop (body:not(.advanced)),
          which would swallow a dialog's cancel button and leave only one option. */
       .dlgbtn-sec { background:none; color:var(--fg); border:1px solid var(--line);
                     padding:7px 14px; border-radius:7px; font-size:13px; cursor:pointer; }

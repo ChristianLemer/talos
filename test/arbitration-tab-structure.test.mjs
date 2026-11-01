@@ -35,6 +35,8 @@ test("an empty Arbitration tab says so, and only once the machine has been read"
   const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
   assert.match(html, /id="arb-empty"[^>]*hidden/);
   assert.match(html, /body:not\(\.tab-arbitration\)\s+#arb-empty\s*\{\s*display:\s*none/);
+  // One empty line on that tab, never the list's too: its "held" counts something else.
+  assert.match(html, /body\.tab-arbitration\s+#steps-empty\s*\{\s*display:\s*none/);
   const fnStart = appjs.indexOf("function refreshArbitration(");
   const fnBody = appjs.slice(fnStart, appjs.indexOf("\n}", fnStart));
   assert.match(fnBody, /arb-empty/);
