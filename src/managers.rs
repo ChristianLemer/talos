@@ -444,9 +444,9 @@ impl SystemManager {
             // a legitimate no-table answer, which it states in prose.
             "winget" => {
                 let clean = strip_ansi(output);
-                let has_header = clean
-                    .lines()
-                    .any(|l| l.contains("Id") && l.contains("Available"));
+                // The upgrade table has an Available column: a fourth header cell.
+                let has_header =
+                    winget_table(&screen_lines(output)).is_some_and(|(_, cols)| cols.len() >= 4);
                 let says_nothing_to_do = clean.to_lowercase().contains("no installed package")
                     || clean.contains("No applicable update found")
                     || clean.contains("are up to date");
@@ -506,13 +506,54 @@ fn screen_lines(raw: &str) -> Vec<String> {
         .collect()
 }
 
-/// Where `needle` starts on a screen line, in COLUMNS — characters, not bytes.
+/// winget's table, found by its SHAPE: the line of dashes it prints under the header, and the
+/// header just above it. Returns the separator's index and where each header cell starts.
 ///
-/// ⚠️ winget ends a truncated cell with `…`: one column on screen, three bytes in UTF-8.
-/// A byte offset taken from the header drifts by two on every such row and slices the
-/// next cell mid-word (or off a char boundary, which `str::get` answers with nothing).
-fn column(line: &str, needle: &str) -> Option<usize> {
-    line.find(needle).map(|b| line[..b].chars().count())
+/// ⚠️ Never by the column NAMES: winget translates them. A French winget prints
+/// `Nom  ID  Version  Disponible` (field-hit: the upgrade scan was thrown away, and a
+/// non-English Windows never saw an upgrade). The order is the language-free part — Name, Id,
+/// Version, then Available and Source when they are printed — so a cell is read by its rank.
+///
+/// Positions are in COLUMNS — characters, not bytes. ⚠️ winget ends a truncated cell with `…`:
+/// one column on screen, three bytes in UTF-8. A byte offset taken from the header drifts by two
+/// on every such row and slices the next cell mid-word (or off a char boundary, which `str::get`
+/// answers with nothing).
+///
+/// The separator must reach under the last header cell, which tells it from a spinner's lone
+/// `-` and from prose. One word per header cell, at most five: true of winget-cli's own
+/// resources for en, fr, de, es, it, pt-BR, ru, ja, zh-CN, zh-TW. Two are REFUSED, the safe
+/// direction ("could not be read", as before): ko-KR, whose `장치 ID` and `사용 가능` are two
+/// words, and any header in double-width script (ja, zh, ko), where a character is not a screen
+/// column. Only the French line was seen on a machine; the others are read from the resources.
+fn winget_table(lines: &[String]) -> Option<(usize, Vec<usize>)> {
+    lines.iter().enumerate().skip(1).find_map(|(s, sep)| {
+        let dashes = sep.trim();
+        if dashes.is_empty() || !dashes.chars().all(|c| c == '-') {
+            return None;
+        }
+        let header = &lines[s - 1];
+        if header.chars().any(is_wide) {
+            return None;
+        }
+        let mut starts = Vec::new();
+        let mut prev_blank = true;
+        for (at, c) in header.chars().enumerate() {
+            if !c.is_whitespace() && prev_blank {
+                starts.push(at);
+            }
+            prev_blank = c.is_whitespace();
+        }
+        let reaches = sep.trim_end().chars().count() > *starts.last()?;
+        ((3..=5).contains(&starts.len()) && reaches).then_some((s, starts))
+    })
+}
+
+/// Two screen columns for one character: the East Asian wide ranges (Hangul, CJK, kana,
+/// fullwidth forms).
+fn is_wide(c: char) -> bool {
+    matches!(c as u32,
+        0x1100..=0x115F | 0x2E80..=0xA4CF | 0xAC00..=0xD7A3 | 0xF900..=0xFAFF
+        | 0xFE30..=0xFE4F | 0xFF00..=0xFF60 | 0xFFE0..=0xFFE6)
 }
 
 /// The trimmed cell between columns `a` and `b` (`None`, or a `b` not after `a`, means to
@@ -603,28 +644,18 @@ fn parse_brew_version(id: &str, output: &str) -> String {
 pub fn parse_winget_upgrade(raw: &str) -> HashMap<String, Outdated> {
     let mut map = HashMap::new();
     let lines = screen_lines(raw);
-    let Some(h) = lines
-        .iter()
-        .position(|l| l.contains("Id") && l.contains("Available"))
+    // Name, Id, Version, Available[, Source] — by rank (`winget_table`).
+    let Some((s, cols)) = winget_table(&lines) else {
+        return map;
+    };
+    let (Some(&id_pos), Some(&ver_pos), Some(&av_pos)) = (cols.get(1), cols.get(2), cols.get(3))
     else {
         return map;
     };
-    let header = &lines[h];
-    let (Some(id_pos), Some(ver_pos), Some(av_pos)) = (
-        column(header, "Id"),
-        column(header, "Version"),
-        column(header, "Available"),
-    ) else {
-        return map;
-    };
-    let src_pos = column(header, "Source");
-    for line in &lines[h + 1..] {
+    let src_pos = cols.get(4).copied();
+    for line in &lines[s + 1..] {
         if line.trim().is_empty() {
             break;
-        }
-        // separator line (dashes/spaces only)
-        if line.trim().chars().all(|c| c == '-' || c.is_whitespace()) {
-            continue;
         }
         if line.chars().count() < av_pos {
             continue;
@@ -652,24 +683,16 @@ pub fn parse_winget_upgrade(raw: &str) -> HashMap<String, Outdated> {
 // by header offsets, never by spaces (names and versions contain them).
 fn parse_winget_list(raw: &str) -> Result<HashMap<String, String>, ()> {
     let lines = screen_lines(raw);
-    // "Available" is optional here: `winget list` prints the column, but a machine
-    // with nothing to upgrade leaves every cell empty, so recognition keys on
-    // Id + Version — the two columns that always carry meaning.
-    let Some(h) = lines
-        .iter()
-        .position(|l| l.contains("Id") && l.contains("Version"))
-    else {
+    // Name, Id, Version — by rank (`winget_table`). "Available" is optional here: a machine
+    // with nothing to upgrade leaves every cell empty, so the table needs only the three
+    // columns that always carry meaning.
+    let Some((s, cols)) = winget_table(&lines) else {
         return Err(());
     };
-    let header = &lines[h];
-    let (Some(id_pos), Some(ver_pos)) = (column(header, "Id"), column(header, "Version")) else {
-        return Err(());
-    };
+    let (id_pos, ver_pos) = (cols[1], cols[2]);
     // The column after Version bounds the version cell: Available if present, else
     // Source, else the end of the line.
-    let ver_end = column(header, "Available")
-        .or_else(|| column(header, "Source"))
-        .filter(|&e| e > ver_pos);
+    let ver_end = cols.get(3).copied();
 
     // Field-reported defect (beta.32): two installed versions of the same id
     // appeared on separate rows → the last one silently overwrote the first.
@@ -678,14 +701,10 @@ fn parse_winget_list(raw: &str) -> Result<HashMap<String, String>, ()> {
     // fixed in beta.31). ⚠️ This is the symmetric twin of parse_brew_list that
     // was missed in beta.31: bulk scan calls THIS parser, not the per-package one.
     let mut versions_by_id: HashMap<String, Vec<String>> = HashMap::new();
-    for line in &lines[h + 1..] {
+    for line in &lines[s + 1..] {
         // ⚠️ `continue`, not `break` as the upgrade parser does: there every row
         // after a blank is noise, here a short MSIX row must not end the table.
         if line.trim().is_empty() {
-            continue;
-        }
-        // separator line (dashes/spaces only)
-        if line.trim().chars().all(|c| c == '-' || c.is_whitespace()) {
             continue;
         }
         if line.chars().count() < ver_pos {
@@ -1021,7 +1040,9 @@ mod tests {
         // A recognised-but-empty listing is a REAL answer and must be Ok.
         assert_eq!(
             WINGET
-                .parse_presence("Name  Id  Version  Available  Source\n----\n")
+                .parse_presence(
+                    "Name  Id  Version  Available  Source\n------------------------------------\n"
+                )
                 .map(|m| m.len()),
             Ok(0)
         );
@@ -1395,8 +1416,11 @@ mod tests {
     #[test]
     fn recognised_separates_a_real_empty_answer_from_an_unreadable_one() {
         let w = &WINGET;
-        // A header with no rows: read, and genuinely empty.
-        assert!(w.is_recognised("Name  Id  Version  Available  Source\n----\n"));
+        // A header with no rows: read, and genuinely empty. (The dashes span the table, as
+        // winget prints them: a separator that stops short is not one.)
+        assert!(w.is_recognised(
+            "Name  Id  Version  Available  Source\n------------------------------------\n"
+        ));
         // winget's prose answer for "nothing to do".
         assert!(w.is_recognised("No installed package found matching input criteria."));
         // ⚠️ The field-hit case: the source failed, no table was printed. This is
@@ -1565,6 +1589,90 @@ GitHub Copilot GitHub.Copilot v1.0.96 v1.0.102 winget
                 .map(|o| o.available.as_str()),
             Some("1.25.2733.0")
         );
+    }
+
+    /// ⭐ Field-hit: a French winget's upgrade scan was thrown away ("could not be read: Nom  ID
+    /// Version  Disponible"), so a non-English Windows never saw an upgrade. The header words are
+    /// that line's, verbatim; the layout is the English no-console capture's (`--source winget`
+    /// prints no Source column).
+    #[test]
+    fn winget_upgrade_is_read_in_french() {
+        let raw = "\
+Nom              ID                        Version      Disponible
+-------------------------------------------------------------------
+Git              Git.Git                   2.55.0.3     2.55.0.5
+Nushell          Nushell.Nushell           0.116.0      0.116.1
+2 mises à niveau disponibles.
+";
+        assert!(WINGET.is_recognised(raw));
+        let m = parse_winget_upgrade(raw);
+        assert_eq!(m.len(), 2, "{m:?}");
+        assert_eq!(
+            m.get("git.git")
+                .map(|o| (o.current.as_str(), o.available.as_str())),
+            Some(("2.55.0.3", "2.55.0.5"))
+        );
+    }
+
+    /// The same table in two more languages, header words from winget-cli's resources
+    /// (`SearchName`, `SearchId`, `SearchVersion`, `AvailableHeader`, `SearchSource`):
+    /// unmeasured on a machine.
+    #[test]
+    fn winget_tables_are_read_by_shape_in_german_and_spanish() {
+        for (name, id, version, available, source) in [
+            ("Name", "ID", "Version", "Verfügbar", "Quelle"),
+            ("Nombre", "Id", "Versión", "Disponible", "Origen"),
+        ] {
+            let header = format!("{name:<17}{id:<26}{version:<13}{available:<12}{source}");
+            let sep = "-".repeat(header.chars().count());
+            let list = format!(
+                "{header}\n{sep}\n\
+                 Git              Git.Git                   2.55.0.3     2.55.0.5    winget\n\
+                 7-Zip            7zip.7zip                 26.02.00.0               winget\n"
+            );
+            let m = WINGET.parse_presence(&list).expect(name);
+            assert_eq!(
+                m.get("git.git").map(String::as_str),
+                Some("2.55.0.3"),
+                "{name}"
+            );
+            assert_eq!(
+                m.get("7zip.7zip").map(String::as_str),
+                Some("26.02.00.0"),
+                "{name}"
+            );
+            let up = parse_winget_upgrade(&list);
+            assert_eq!(
+                up.len(),
+                1,
+                "{name}: only the row with an Available cell: {up:?}"
+            );
+            assert_eq!(
+                up.get("git.git").map(|o| o.available.as_str()),
+                Some("2.55.0.5")
+            );
+        }
+    }
+
+    /// What the rank rule cannot read it refuses, rather than slicing the wrong cells: a
+    /// double-width header (ja-JP) and two-word cells (ko-KR). "Could not be read" is what
+    /// these languages already got; it is not an answer to act on.
+    #[test]
+    fn a_winget_header_the_shape_cannot_place_is_not_a_table() {
+        for header in [
+            "名前             ID                        バージョン   利用可能",
+            "이름             장치 ID                   버전         사용 가능",
+        ] {
+            let raw = format!(
+                "{header}\n{}\nGit              Git.Git                   2.55.0.3     2.55.0.5\n",
+                "-".repeat(67)
+            );
+            assert!(!WINGET.is_recognised(&raw), "{header}");
+            assert!(parse_winget_upgrade(&raw).is_empty(), "{header}");
+            assert!(WINGET.parse_presence(&raw).is_err(), "{header}");
+        }
+        // A spinner's lone dash under a line of prose is not a separator either.
+        assert!(!WINGET.is_recognised("Searching the source\n   -\n"));
     }
 
     #[test]
