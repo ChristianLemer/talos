@@ -38,7 +38,7 @@ jobs:
       fail-fast: false # one OS failing shouldn't cancel the other's artifact
       matrix:
         include:
-          - os: macos-14 # Apple Silicon runner → aarch64-apple-darwin
+          - os: macos-15 # Apple Silicon runner → aarch64-apple-darwin (macos-14 retired 2026-11-02)
             # the .app (a directory) zipped — a Release asset must be a single file.
             # BOTH kit scripts ride along: an integrator fetches one by TAG
             # (releases/download/<tag>/get-talos.ps1), a pin that does not move. They
