@@ -37,7 +37,7 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # The download probe (passage.rs): one GET of byte 0, the way the application's own updater
 # will ask. Already in the tree through tauri, with no TLS; `native-tls` is the OS's own stack
 # (Schannel, Security.framework), so it trusts the root a corporate firewall installs there,
-# and `system-proxy` reads the proxy the OS is set to.
+# and `system-proxy` reads the fixed proxy the OS is set to (not an auto-config script).
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "system-proxy"] }
 
 [[bin]]

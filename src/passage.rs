@@ -18,6 +18,10 @@
 //!
 //! The probe goes through the engine's own HTTP client, never a shell: the OS's TLS stack
 //! (which trusts the root a corporate firewall installs) and the OS's proxy setting (Cargo.toml).
+//! ⚠️ A FIXED proxy only (the environment, Windows' `ProxyServer`, macOS's settings): a proxy
+//! auto-config script is not read, where the application (Chromium's stack) follows it. On such
+//! a network the probe goes direct and may test another road than the application's. A client
+//! agent that tunnels everything (the usual corporate setup) needs no proxy setting at all.
 use crate::bundles::Passage;
 use crate::platform::Os;
 use reqwest::Url;
@@ -65,9 +69,10 @@ pub fn classify(status: u16, content_type: Option<&str>) -> Verdict {
     })
 }
 
-/// The file an electron-updater feed (`latest.yml`, `latest-mac.yml`) names — the one the
-/// application's updater takes — resolved against the feed's address. On macOS the updater
-/// takes a `.zip`, for the machine's architecture when the feed lists one per architecture.
+/// The file an electron-updater feed (`latest.yml`, `latest-mac.yml`, `latest-linux.yml`) names —
+/// the one the application's updater takes — resolved against the feed's address. The updater
+/// keeps one kind per OS (a `.zip` on macOS, an `.exe` on Windows, an `.AppImage` on Linux), then
+/// the file for the machine's architecture when the feed lists one per architecture.
 pub fn file_from_feed(feed: &Url, body: &str, os: Os, arch: &str) -> Result<Url, String> {
     let doc: serde_yaml::Value =
         serde_yaml::from_str(body).map_err(|e| format!("the feed is not YAML: {e}"))?;
@@ -86,20 +91,17 @@ pub fn file_from_feed(feed: &Url, body: &str, os: Os, arch: &str) -> Result<Url,
             names.push(path.to_string());
         }
     }
-    if os == Os::Darwin {
-        names.retain(|n| n.to_ascii_lowercase().ends_with(".zip"));
-        let arm = names.iter().any(|n| n.contains("arm64"));
-        if arm {
-            let want_arm = arch == "aarch64";
-            let mine: Vec<String> = names
-                .iter()
-                .filter(|n| n.contains("arm64") == want_arm)
-                .cloned()
-                .collect();
-            if !mine.is_empty() {
-                names = mine;
-            }
-        }
+    let kind = match os {
+        Os::Darwin => ".zip",
+        Os::Windows => ".exe",
+        Os::Linux => ".appimage",
+    };
+    names.retain(|n| n.to_ascii_lowercase().ends_with(kind));
+    // A feed listing an arm64 file beside another: this machine takes its own architecture's. A
+    // machine of the other architecture never takes an arm64 file it would not run.
+    if names.iter().any(|n| n.contains("arm64")) {
+        let want_arm = arch == "aarch64";
+        names.retain(|n| n.contains("arm64") == want_arm);
     }
     let name = names.first().ok_or("the feed names no file to download")?;
     feed.join(name)
@@ -254,6 +256,19 @@ mod tests {
             "{w}"
         );
         // An older feed with only `path:`; an absolute address is taken as it is.
+        // One installer per architecture, and a file that is not an installer: the updater's own.
+        let both =
+            "files:\n  - url: App.blockmap\n  - url: App-Setup-arm64.exe\n  - url: App-Setup.exe\n";
+        let w = file_from_feed(&feed, both, Os::Windows, "x86_64").unwrap();
+        assert!(w.as_str().ends_with("/App-Setup.exe"), "{w}");
+        let a = file_from_feed(&feed, both, Os::Windows, "aarch64").unwrap();
+        assert!(a.as_str().ends_with("/App-Setup-arm64.exe"), "{a}");
+        let linux = "files:\n  - url: app_1.0_amd64.deb\n  - url: App-1.0.AppImage\n";
+        let l = file_from_feed(&feed, linux, Os::Linux, "x86_64").unwrap();
+        assert!(l.as_str().ends_with("/App-1.0.AppImage"), "{l}");
+        // An Intel Mac never takes an arm64-only zip: nothing for it is a failure, not a guess.
+        let arm_only = "files:\n  - url: App-arm64-mac.zip\n";
+        assert!(file_from_feed(&feed, arm_only, Os::Darwin, "x86_64").is_err());
         let old = file_from_feed(
             &feed,
             "path: https://cdn.example/x.exe\n",

@@ -29,6 +29,7 @@ const DOING = {
   upgrading: "Updating",
   reinstalling: "Reinstalling",
   uninstalling: "Removing",
+  probing: "Checking the download of",
 };
 
 // The rest of the bar's sentence when the plan is empty: what Apply does, for whoever reads

@@ -136,6 +136,7 @@ const newTerm = () =>
 
 const GLYPH = {
   checking: "⠹",
+  probing: "⠹",
   waiting: "·",
   installing: "⠹",
   uninstalling: "⠹",
@@ -155,14 +156,16 @@ const LABEL = {
   // (settled-absent) so we never flash "absent" before the probe answers — the
   // whole panel showing "absent" then correcting looked broken/alarming.
   checking: "checking…",
+  // A passage probe: asking for the first byte of the download the application makes itself.
+  probing: "checking the download…",
   waiting: "absent",
   installing: "installing…",
   uninstalling: "removing…",
   upgrading: "updating…",
   reinstalling: "reinstalling at the pin…", // a downgrade: uninstall, then install the pin
   ok: "present",
-  // A passage probe found the file passing: the person runs the update in the application.
-  ready: "ready to update",
+  // A passage probe found the file passing: the application's own update can download it.
+  ready: "download passes",
   absent: "removed",
   // The server's `self` step-status: a config-atom that settled without acting.
   // The WORD "self-managed" is retired (it over-promised — it implied the user had
@@ -629,9 +632,11 @@ function paintVersion(i) {
   if (v.to === null) {
     // One number — the current state, blue. 📌 when it IS the pin (at rest). A `self` row says
     // who keeps it current: the application, not Talos — so no newer number is compared.
-    const own = M.isPassageReady(model, i)
+    const own = M.isPassageBehind(model, i)
       ? ` <span class="v-held" title="the download this application makes itself came through the firewall (206): run its update in the application — Talos installs nothing">update it in the app</span>`
-      : M.isUpdatedThisSession(model, i)
+      : M.isPassageReady(model, i)
+        ? ` <span class="v-held" title="the download this application makes itself came through the firewall (206); there is no newer version to take yet">download passes</span>`
+        : M.isUpdatedThisSession(model, i)
       ? ` <span class="v-held" title="installed, or its own update command ran ok, in this session; the Apply leaves it until Refresh, and the Apply after a Refresh runs the update again">done this session</span>`
       : M.isUpdatedEachApply(model, i)
         ? ` <span class="v-held" title="the next Apply runs the tool's own update command; the command knows when there is nothing to do, and once it ran ok the row is done until Refresh">updated at the next Apply</span>`
@@ -1329,7 +1334,7 @@ const RUNNING = new Set(["installing", "uninstalling", "upgrading", "reinstallin
 // animate. One interval for the whole panel — cheap, and only touches spinning
 // badges. The badge's status CLASS (set by setStatus) is the source of truth.
 const SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const SPIN_STATES = ["checking", "installing", "uninstalling", "upgrading", "reinstalling"];
+const SPIN_STATES = ["checking", "probing", "installing", "uninstalling", "upgrading", "reinstalling"];
 let spinFrame = 0;
 setInterval(() => {
   spinFrame = (spinFrame + 1) % SPIN_FRAMES.length;
@@ -1748,14 +1753,17 @@ function retryStep(i) {
   // The action the Apply chose for this row, from the same rule the batch used — a retry is
   // not a new choice. A downgrade retries as a downgrade.
   const action = M.actionOf(model, i);
-  if (!action) return;
+  // A passage held from the row button, on a row the Apply would not touch: its Retry is the
+  // same probe again.
+  const passage = !action && M.rowGesture(model, i)?.type === "passage";
+  if (!action && !passage) return;
   clearForbidden(i);
   applyRunning = true;
-  runKind = "retry";
+  runKind = passage ? "passage" : "retry";
   runRow = i;
   doneNote = "";
   refreshLiveness();
-  ws.send(JSON.stringify({ type: "retry-step", i, action }));
+  ws.send(JSON.stringify(passage ? { type: "passage", i } : { type: "retry-step", i, action }));
 }
 
 function giveUp(i) {
@@ -1800,7 +1808,9 @@ document.getElementById("fb-stop").onclick = () => {
 function setStatus(i, status) {
   const r = rows[i];
   if (!r) return;
-  if (RUNNING.has(status)) {
+  // A passage probe starts a step too: a fresh terminal, counted as started. Not in RUNNING: there
+  // is no process to Stop, and the probe ends on its own within its timeout.
+  if (RUNNING.has(status) || status === "probing") {
     M.resetLog(model, i);
     if (r.term) r.term.reset();
     if (focusPlan?.has(i)) focusStarted.add(i);
@@ -1824,7 +1834,7 @@ function setStatus(i, status) {
   // changed — repaint the cards so the count tracks the scan, not only manual
   // toggles. Without this the count stayed stale until the next card/row click.
   paintProfiles();
-  if (RUNNING.has(status) || status === "fail" || status === "forbidden") {
+  if (RUNNING.has(status) || status === "probing" || status === "fail" || status === "forbidden") {
     r.details.open = true; // show activity / failures / firewall recovery
   }
   if (status === "ok" || status === "absent") r.details.open = false; // fold completed (frame stays)

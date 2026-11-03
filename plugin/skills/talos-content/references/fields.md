@@ -508,11 +508,15 @@ held, and then leave the update to the application. **Talos installs nothing.**
 - **Per OS.** The keys are `macos`, `windows` and `linux`. An OS with no entry is never probed.
   Within a declared OS the probe decides: if the file comes through, nothing is shown.
 - **Each entry gives one address.** `feed:` is an electron-updater `latest*.yml`. Talos reads from
-  it the name of the file the application's updater will take: on macOS the `.zip` for the
-  machine's architecture, on Windows the first file listed. `url:` is the file itself, for a tool
-  with no feed.
+  it the name of the file the application's updater will take: the `.zip` on macOS, the `.exe`
+  on Windows, the `.AppImage` on Linux, each for the machine's architecture when the feed lists
+  an `arm64` file beside another. A feed with nothing for this machine is a failure, not a guess.
+  `url:` is the file itself, for a tool with no feed.
 - **The probe** is one `GET` of byte 0 (`Range: bytes=0-0`), following redirects, through the
-  engine's own HTTP client. That client uses the OS's TLS trust and the OS's proxy setting. Only
+  engine's own HTTP client. That client uses the OS's TLS trust and the OS's fixed proxy
+  setting. ⚠️ It does not read a proxy auto-config script, which the application itself
+  follows; on such a network the probe goes direct and may not test the application's road. A
+  client agent that tunnels all traffic needs no proxy setting and is not affected. Only
   **`206` with `application/octet-stream`** counts as the file. Anything else is a block: a 403,
   a redirect that ends on the firewall's page, a `200 text/html` served instead of the file. A
   feed that is held is a block too, and its page is the one to approve first. A network that does
@@ -521,8 +525,8 @@ held, and then leave the update to the application. **Talos installs nothing.**
   is behind what the manager announces, exactly as with `update:`. An up-to-date row is never
   probed, and a scan never probes. In advanced mode, a present row also has a **check download**
   button, which runs the same probe on demand.
-- **What the row says.** `206`: the row reads `ready to update` / `update it in the app`; run the
-  update in the application. The row is then done for the session: the next Apply does not ask
+- **What the row says.** `206`: the row reads `download passes`, and `update it in the app` when
+  it is behind; run the update in the application. The journal records a `probe` line either way. The row is then done for the session: the next Apply does not ask
   again until a **Refresh**. Held: the 403 panel opens with the file's page. On Windows the page
   opens inside Talos and Talos asks again by itself once the page lets the download through.
   Elsewhere the panel offers the browser, and its Retry asks again. The row never reads `ready`

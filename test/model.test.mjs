@@ -56,6 +56,7 @@ import {
   setUpdatedThisSession,
   isPassageNext,
   isPassageReady,
+  isPassageBehind,
   toggleOf,
   unmanagedIndices,
   versionSummary,
@@ -805,6 +806,9 @@ test("a passage row: the Apply probes it when behind, and its button probes it o
   setUpdatedThisSession(m, 0, true);
   assert.equal(actionOf(m, 0), null);
   assert.equal(isPassageReady(m, 0), true);
+  assert.equal(isPassageBehind(m, 0), true, "an update to run in the app");
+  setOutdated(m, 0, false);
+  assert.equal(isPassageBehind(m, 0), false, "current: the download passes, nothing to update");
   // Absent: no button — there is no application to update.
   setStatusData(m, 0, "waiting");
   assert.equal(rowGesture(m, 0), null);

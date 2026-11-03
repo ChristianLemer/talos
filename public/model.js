@@ -519,11 +519,15 @@ export function isUpdatedThisSession(model, i) {
   return !!(p?.selfUpdate && p?.updateEachApply && p?.updatedThisSession) && p.present === true
     && isSelfUpdating(model, i) && actionOf(model, i) === null;
 }
-// Did the probe of this row's own download find it passing, in this session? The person updates
-// it in the application; the Apply leaves it until a Refresh.
+// Did the probe of this row's own download find it passing, in this session? The Apply leaves it
+// until a Refresh. `isPassageBehind`: and there is an update to run in the application — a probe
+// from the row button may pass on a row that is current.
 export function isPassageReady(model, i) {
   const p = model.pkgs.get(i);
   return !!(p?.passage && p?.updatedThisSession) && p.present === true && isSelfUpdating(model, i);
+}
+export function isPassageBehind(model, i) {
+  return isPassageReady(model, i) && !!model.pkgs.get(i)?.outdated;
 }
 // Will the next Apply probe this row's own download (it is behind, and declares `unblock:`)?
 export function isPassageNext(model, i) {

@@ -2181,6 +2181,12 @@ async fn passage_now(socket: &mut WebSocket, state: &AppState, i: usize) {
     };
     if !probes_passage(&step) || scope_refuses(&read_selection(&state.data_dir), &step.name) {
         println!("[passage] refused on row {i}: no passage to probe here");
+        say(
+            socket,
+            i,
+            "[passage] nothing to check here: no `unblock:` for this OS, or the row is out of scope.",
+        )
+        .await;
         return;
     }
     let aim = Aim {
@@ -4501,9 +4507,10 @@ async fn passage_step(
     let Some(passage) = step.passage.as_ref() else {
         return StepOutcome::default();
     };
+    let started = std::time::Instant::now();
     let _ = socket
         .send(Message::Text(
-            json!({ "type": "step", "i": i, "status": "checking" }).to_string(),
+            json!({ "type": "step", "i": i, "status": "probing" }).to_string(),
         ))
         .await;
     let first = passage
@@ -4528,7 +4535,8 @@ async fn passage_step(
                 socket,
                 i,
                 &format!(
-                    "[passage] {} answers 206 with the file's bytes — ready: run the update in {}                      itself. Talos installed nothing.",
+                    "[passage] {} answers 206 with the file's bytes — ready: run the update in {} itself. \
+                     Talos installed nothing.",
                     probe.url, step.name
                 ),
             )
@@ -4587,6 +4595,25 @@ async fn passage_step(
             ))
             .await;
     }
+    // The trace, like any step's: `probe`, its verdict, and why when it did not pass.
+    append_history(
+        &state.consent,
+        &HistEntry {
+            at: chrono::Utc::now().to_rfc3339(),
+            package: step.name.clone(),
+            version: String::new(),
+            action: "probe".into(),
+            ok,
+            secs: started.elapsed().as_secs(),
+            found: String::new(),
+            target: String::new(),
+            exit: None,
+            tail: match &probe.verdict {
+                Verdict::Passes => String::new(),
+                Verdict::Blocked(why) | Verdict::Failed(why) => format!("{}: {why}", probe.url),
+            },
+        },
+    );
     StepOutcome {
         ok,
         blocked,
