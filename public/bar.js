@@ -113,7 +113,8 @@ function runningView(view, run) {
     view.hint = [{ text: "A blocked row is waiting for your answer." }];
     return view;
   }
-  view.label = run.kind === "diff" ? "Diffing" : run.kind === "retry" ? "Retrying" : "Applying";
+  view.label = run.kind === "diff" ? "Diffing" : run.kind === "retry" ? "Retrying"
+    : run.kind === "passage" ? "Checking" : "Applying";
   const progress = run.total > 0 ? `${Math.max(1, Math.min(run.done, run.total))} of ${run.total}` : "";
   // A diff or a retry has no plan to count: its row is what it is working on.
   view.sub = run.word || progress || run.row || "starting…";

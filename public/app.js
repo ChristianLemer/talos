@@ -142,6 +142,7 @@ const GLYPH = {
   upgrading: "⠹",
   reinstalling: "⠹",
   ok: "✓",
+  ready: "✓",
   absent: "·",
   self: "·",
   fail: "✗",
@@ -160,6 +161,8 @@ const LABEL = {
   upgrading: "updating…",
   reinstalling: "reinstalling at the pin…", // a downgrade: uninstall, then install the pin
   ok: "present",
+  // A passage probe found the file passing: the person runs the update in the application.
+  ready: "ready to update",
   absent: "removed",
   // The server's `self` step-status: a config-atom that settled without acting.
   // The WORD "self-managed" is retired (it over-promised — it implied the user had
@@ -626,7 +629,9 @@ function paintVersion(i) {
   if (v.to === null) {
     // One number — the current state, blue. 📌 when it IS the pin (at rest). A `self` row says
     // who keeps it current: the application, not Talos — so no newer number is compared.
-    const own = M.isUpdatedThisSession(model, i)
+    const own = M.isPassageReady(model, i)
+      ? ` <span class="v-held" title="the download this application makes itself came through the firewall (206): run its update in the application — Talos installs nothing">update it in the app</span>`
+      : M.isUpdatedThisSession(model, i)
       ? ` <span class="v-held" title="installed, or its own update command ran ok, in this session; the Apply leaves it until Refresh, and the Apply after a Refresh runs the update again">done this session</span>`
       : M.isUpdatedEachApply(model, i)
         ? ` <span class="v-held" title="the next Apply runs the tool's own update command; the command knows when there is nothing to do, and once it ran ok the row is done until Refresh">updated at the next Apply</span>`
@@ -651,7 +656,9 @@ function paintVersion(i) {
   // A downgrade the Apply WILL take says so before the click: it is an uninstall first.
   const re = !v.muted && M.actionOf(model, i) === "downgrade"
     ? ` <span class="v-held" title="uninstalled, then installed at the pin">reinstall</span>`
-    : "";
+    : M.isPassageNext(model, i)
+      ? ` <span class="v-held" title="the application updates itself; the Apply checks that the corporate firewall lets its download through, opens the firewall's page if not, and installs nothing">download check</span>`
+      : "";
   r.delta.innerHTML = `${left} → ${right}${re}`;
 }
 function setToggle(i, state, opts = {}) {
@@ -781,7 +788,11 @@ function refreshLiveness() {
     r.apply.className = "rerun";
     r.apply.hidden = !gesture;
     r.apply.textContent = gesture ? gesture.verb : "";
-    r.apply.title = gesture ? "Show how your file differs from the shipped one" : "";
+    r.apply.title = !gesture
+      ? ""
+      : gesture.type === "passage"
+        ? "Ask for the download this application makes itself, and open the firewall's page if it is held. Installs nothing."
+        : "Show how your file differs from the shipped one";
     r.apply.disabled = busy || !gesture;
     // Tint the WHOLE row when it's in the plan — the change is unmissable. Keyed on what
     // the Apply WILL do: green when the row ends up present (install, update, reinstall at
@@ -1161,13 +1172,14 @@ function render(steps, profiles = [], columns = 2) {
         return;
       }
       if (applyRunning) return;
-      if (!rowGesture(s.i)) return; // the only non-running gesture is a diff
+      const gesture = rowGesture(s.i); // a diff, or the probe of a passage
+      if (!gesture) return;
       applyRunning = true;
-      runKind = "diff";
+      runKind = gesture.type;
       runRow = s.i;
       doneNote = "";
       refreshLiveness();
-      ws.send(JSON.stringify({ type: "diff", i: s.i }));
+      ws.send(JSON.stringify({ type: gesture.type, i: s.i }));
     };
     // Wanting is now the ✓ cell of the segmented toggle (spec §20) — no separate
     // Add button. "My extras" = the packages set to ✓ (manualToggle "in").
@@ -1579,10 +1591,16 @@ function showForbidden(i, url, inside = false) {
   // access, don't download — Talos re-runs the download on Retry.
   // "Stop the whole Apply" only appears while the Apply is actually held — outside
   // a run there is no plan to abandon. Three outcomes, three controls, no synonyms.
+  // A passage row installs nothing: Retry asks for the file again, and the application downloads it.
+  const passage = !!model.pkgs.get(i)?.passage;
   r.fbBanner.innerHTML =
-    `<b>⚠ A download was blocked by the corporate firewall (403).</b><br>` +
-    `Approve the access request on the blocked page — you don't need to ` +
-    `download anything. Then Retry and Talos fetches it for you.` +
+    (passage
+      ? `<b>⚠ The corporate firewall holds the download this application makes itself.</b><br>` +
+        `Approve the access request on the blocked page — you don't need to download anything. ` +
+        `Then Retry: once the file comes through, update it from the application.`
+      : `<b>⚠ A download was blocked by the corporate firewall (403).</b><br>` +
+        `Approve the access request on the blocked page — you don't need to ` +
+        `download anything. Then Retry and Talos fetches it for you.`) +
     `<div class="fb-attempt" data-fb="attempt" hidden></div>` +
     `<div class="fb-banner-actions">` +
     (url ? `<button data-fb="open">Open blocked page</button>` : "") +
@@ -2676,7 +2694,7 @@ ws.onmessage = (ev) => {
       setStatus(msg.i, msg.status);
       // A step that settled ok clears any lingering firewall recovery UI (the
       // 403 was transient — the exit code is truth). Retry / new run also reset it.
-      if (msg.status === "ok" || msg.status === "absent") clearForbidden(msg.i);
+      if (msg.status === "ok" || msg.status === "ready" || msg.status === "absent") clearForbidden(msg.i);
       break;
     case "forbidden":
       // Live: a download was blocked by the firewall. Show the row banner (durable) and the

@@ -54,6 +54,8 @@ import {
   isUpdatedEachApply,
   isUpdatedThisSession,
   setUpdatedThisSession,
+  isPassageNext,
+  isPassageReady,
   toggleOf,
   unmanagedIndices,
   versionSummary,
@@ -780,6 +782,32 @@ test("rowGesture offers diff on a self-owned config-atom, and nothing else", () 
   assert.equal(rowGesture(m, 1), null, "an install is the Apply's, not the row's");
   setDecision(m, 0, "in");
   assert.equal(rowGesture(m, 0), null, "a managed config-atom is converged, not inspected");
+});
+
+test("a passage row: the Apply probes it when behind, and its button probes it on demand", () => {
+  const m = createModel();
+  loadPlan(m, [
+    { i: 0, name: "Orca", bundle: "Agents", posture: "opt-in", canUninstall: true,
+      pin: "self", selfUpdate: true, passage: true },
+  ], []);
+  setDecision(m, 0, "in");
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "1.4.237");
+  // Current: no Apply action, but the button is there (advanced mode shows it).
+  assert.equal(actionOf(m, 0), null);
+  assert.deepEqual(rowGesture(m, 0), { verb: "check download", type: "passage" });
+  assert.equal(isPassageNext(m, 0), false);
+  // Behind: the Apply probes it.
+  setOutdated(m, 0, true, "1.4.246");
+  assert.equal(actionOf(m, 0), "upgrade");
+  assert.equal(isPassageNext(m, 0), true);
+  // It passed: ready, and the Apply leaves it until a Refresh.
+  setUpdatedThisSession(m, 0, true);
+  assert.equal(actionOf(m, 0), null);
+  assert.equal(isPassageReady(m, 0), true);
+  // Absent: no button — there is no application to update.
+  setStatusData(m, 0, "waiting");
+  assert.equal(rowGesture(m, 0), null);
 });
 
 // --- B5: transitive requires pull (spec Consolidation §8) --------------------

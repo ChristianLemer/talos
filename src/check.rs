@@ -225,6 +225,31 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
                 ));
             }
         }
+        // `unblock:` probes the download an application makes ITSELF: a `self` row whose update
+        // nobody else runs, and whose being behind a manager announces. Per OS, each entry one
+        // address, read the strict way here (the runtime reads what it can).
+        if let Some(raw_u) = raw_value(&raw).and_then(|v| v.get("unblock").cloned()) {
+            unblock_findings(&mut r, &label, &raw_u);
+            if pin != Some(PinKind::SelfUpdating) {
+                r.errors.push(format!(
+                    "{label}: `unblock:` is for an application that updates itself — it runs \
+                     only with `version: \"self\"`"
+                ));
+            }
+            if cp.pkg.update.is_some() {
+                r.errors.push(format!(
+                    "{label}: `unblock:` and `update:` together — the Apply runs `update:`, so \
+                     the download is never probed; keep one"
+                ));
+            }
+            if cp.pkg.detect.is_none() || (cp.pkg.winget.is_none() && cp.pkg.brew.is_none()) {
+                r.errors.push(format!(
+                    "{label}: `unblock:` needs `detect:` and a `winget:` or `brew:` id — the \
+                     Apply probes when the version the tool reports is behind what the manager \
+                     announces"
+                ));
+            }
+        }
         // `scope:` says where winget puts the package. A word that is not one is no scope at
         // all at runtime, and on another route it means nothing — both are the author's
         // mistake, and both are said here rather than left to a machine to reveal.
@@ -527,6 +552,63 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
         }
     }
     r
+}
+
+/// The YAML of a catalog file as a tree, for the checks that look inside a field.
+fn raw_value(raw: &str) -> Option<serde_yaml::Value> {
+    serde_yaml::from_str(raw).ok()
+}
+
+/// `unblock:` the strict way: a map of `macos` / `windows` / `linux`, each with exactly one of
+/// `feed:` or `url:`, an http(s) address.
+fn unblock_findings(r: &mut Report, label: &str, v: &serde_yaml::Value) {
+    let Some(map) = v.as_mapping() else {
+        r.errors.push(format!(
+            "{label}: `unblock:` is a map of OSes (`macos:`, `windows:`, `linux:`)"
+        ));
+        return;
+    };
+    if map.is_empty() {
+        r.errors.push(format!(
+            "{label}: `unblock:` names no OS — no download is ever probed"
+        ));
+    }
+    for (os, entry) in map {
+        let os = os.as_str().unwrap_or("?");
+        if !["macos", "windows", "linux"].contains(&os) {
+            r.errors.push(format!(
+                "{label}: `unblock: {os}` is not an OS — write `macos`, `windows` or `linux`"
+            ));
+            continue;
+        }
+        let keys: Vec<&str> = entry
+            .as_mapping()
+            .map(|m| m.keys().filter_map(|k| k.as_str()).collect())
+            .unwrap_or_default();
+        if let Some(k) = keys.iter().find(|k| !["feed", "url"].contains(k)) {
+            r.errors.push(format!(
+                "{label}: `unblock: {os}: {k}` — the entry takes `feed:` or `url:`"
+            ));
+        }
+        let given: Vec<&str> = ["feed", "url"]
+            .into_iter()
+            .filter(|k| keys.contains(k))
+            .collect();
+        if given.len() != 1 {
+            r.errors.push(format!(
+                "{label}: `unblock: {os}` takes exactly one of `feed:` (an electron-updater \
+                 latest*.yml) or `url:` (the file itself)"
+            ));
+            continue;
+        }
+        let addr = entry.get(given[0]).and_then(|a| a.as_str()).unwrap_or("");
+        if !(addr.starts_with("https://") || addr.starts_with("http://")) {
+            r.errors.push(format!(
+                "{label}: `unblock: {os}: {}` is not an http(s) address",
+                given[0]
+            ));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -893,6 +975,66 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("catalog/c.yaml"), "{text}");
+    }
+
+    #[test]
+    fn unblock_is_read_the_strict_way() {
+        let d = tmp("unblock");
+        let base = "winget: V.X\nbrew: x\ndetect: x --version\n";
+        // Clean: one OS, a feed; the other OS absent is the author's choice.
+        write(
+            &d,
+            "catalog/ok.yaml",
+            &format!("name: Ok\n{base}version: self\nunblock:\n  macos:\n    feed: https://h/latest-mac.yml\n"),
+        );
+        write(
+            &d,
+            "catalog/nopin.yaml",
+            &format!("name: NoPin\n{base}unblock:\n  windows:\n    url: https://h/x.exe\n"),
+        );
+        write(
+            &d,
+            "catalog/both.yaml",
+            &format!("name: Both\n{base}version: self\nupdate: x update\nunblock:\n  windows:\n    url: https://h/x.exe\n    feed: https://h/latest.yml\n"),
+        );
+        write(
+            &d,
+            "catalog/os.yaml",
+            &format!("name: Os\n{base}version: self\nunblock:\n  darwin:\n    url: https://h/x.zip\n  linux:\n    url: ftp://h/x\n"),
+        );
+        write(
+            &d,
+            "catalog/bare.yaml",
+            "name: Bare\nversion: self\nunblock:\n  windows:\n    url: https://h/x.exe\n",
+        );
+        let text = run(&d.join("catalog"), &d.join("bundles")).render();
+        assert!(!text.contains("catalog/ok.yaml"), "{text}");
+        assert!(
+            text.contains(
+                "catalog/nopin.yaml: `unblock:` is for an application that updates itself"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("catalog/both.yaml: `unblock:` and `update:` together"),
+            "{text}"
+        );
+        assert!(
+            text.contains("catalog/both.yaml: `unblock: windows` takes exactly one"),
+            "{text}"
+        );
+        assert!(
+            text.contains("catalog/os.yaml: `unblock: darwin` is not an OS"),
+            "{text}"
+        );
+        assert!(
+            text.contains("catalog/os.yaml: `unblock: linux: url` is not an http(s) address"),
+            "{text}"
+        );
+        assert!(
+            text.contains("catalog/bare.yaml: `unblock:` needs `detect:`"),
+            "{text}"
+        );
     }
 
     #[test]

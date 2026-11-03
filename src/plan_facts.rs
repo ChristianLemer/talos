@@ -130,6 +130,7 @@ mod tests {
             categories: Vec::new(),
             overrides: ov,
             update_each_apply: false,
+            passage: None,
         }
     }
 

@@ -81,7 +81,8 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            libsoup-3.0-dev
+            libsoup-3.0-dev \
+            libssl-dev
 
       # NO rust-cache here: release runs only on tags, and Actions caches are
       # scoped by ref — a tag build can only read caches saved on the SAME tag

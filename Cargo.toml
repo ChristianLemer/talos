@@ -34,6 +34,11 @@ vt100 = "0.16"
 # alone it comes with no backend at all, and miniz_oxide is already in the tree.
 zip = { version = "9.1.1", default-features = false, features = ["deflate-flate2"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# The download probe (passage.rs): one GET of byte 0, the way the application's own updater
+# will ask. Already in the tree through tauri, with no TLS; `native-tls` is the OS's own stack
+# (Schannel, Security.framework), so it trusts the root a corporate firewall installs there,
+# and `system-proxy` reads the proxy the OS is set to.
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "system-proxy"] }
 
 [[bin]]
 name = "pty-smoke"

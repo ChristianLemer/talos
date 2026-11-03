@@ -142,6 +142,11 @@ pub fn action_for(desired: Desired, f: &MachineFacts) -> Option<Action> {
             // tool rewrote itself behind it. Without `update:`, nothing: not a decision left
             // pending, a decision to leave it to the application.
             if pin.eq_ignore_ascii_case("self") {
+                // Done for the session — its `update-on: apply` command ran ok, or the probe of
+                // its own download found it passing (`unblock:`) — until a Refresh.
+                if f.updated_this_session {
+                    return None;
+                }
                 // `update-on: apply`: the command itself knows whether there is anything to
                 // do, so no announcement is needed — nor a version read. Once per session: after
                 // it succeeded the row is done until a Refresh, or the end of a run would find it
@@ -507,6 +512,30 @@ mod tests {
             updated_this_session: false,
         };
         assert_eq!(action_for(Desired::Present, &f), None, "never a downgrade");
+    }
+
+    #[test]
+    fn a_self_row_done_this_session_is_left_whatever_it_is_behind() {
+        // A passage probe found the download passing: the person updates it in the application,
+        // and until then the row is still behind — the next Apply must not ask again.
+        let behind = MachineFacts {
+            present: true,
+            outdated: true,
+            can_uninstall: true,
+            pin: Some("self"),
+            installed_version: "1.4.237",
+            available: "1.4.246",
+            can_self_update: true,
+            update_each_apply: false,
+            updated_this_session: false,
+        };
+        assert_eq!(action_for(Desired::Present, &behind), Some(Action::Upgrade));
+        let done = MachineFacts {
+            updated_this_session: true,
+            ..behind
+        };
+        assert_eq!(action_for(Desired::Present, &done), None);
+        assert_eq!(action_for(Desired::Absent, &done), Some(Action::Uninstall));
     }
 
     #[test]

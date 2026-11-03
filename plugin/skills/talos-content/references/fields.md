@@ -485,6 +485,52 @@ application — so the row is **not** arbitration and shows one number with `upd
 Brew casks declaring `auto_updates true` are **not** read as `self`: Talos scans brew with
 `--greedy-auto-updates` on purpose, so such a cask is upgraded unless its file says `self`.
 
+### `unblock:` — the download an application makes itself, behind a corporate firewall
+
+Some firewalls put a warning page in front of certain downloads, and a person has to accept it.
+An application that updates itself has no window to show that page, so its update fails ("cannot
+download"). `unblock:` lets Talos ask for that file first, open the firewall's page when it is
+held, and then leave the update to the application. **Talos installs nothing.**
+
+```yaml
+  - name: Orca
+    winget: StablyAI.Orca
+    brew: orca
+    detect: orca --version
+    version: "self"
+    unblock:
+      macos:
+        feed: https://github.com/stablyai/orca/releases/latest/download/latest-mac.yml
+      windows:
+        feed: https://github.com/stablyai/orca/releases/latest/download/latest.yml
+```
+
+- **Per OS.** The keys are `macos`, `windows` and `linux`. An OS with no entry is never probed.
+  Within a declared OS the probe decides: if the file comes through, nothing is shown.
+- **Each entry gives one address.** `feed:` is an electron-updater `latest*.yml`. Talos reads from
+  it the name of the file the application's updater will take: on macOS the `.zip` for the
+  machine's architecture, on Windows the first file listed. `url:` is the file itself, for a tool
+  with no feed.
+- **The probe** is one `GET` of byte 0 (`Range: bytes=0-0`), following redirects, through the
+  engine's own HTTP client. That client uses the OS's TLS trust and the OS's proxy setting. Only
+  **`206` with `application/octet-stream`** counts as the file. Anything else is a block: a 403,
+  a redirect that ends on the firewall's page, a `200 text/html` served instead of the file. A
+  feed that is held is a block too, and its page is the one to approve first. A network that does
+  not answer at all is a failure, said on the row, because there is no page to approve.
+- **When it runs:** when the Apply would update the row. That means the version `detect:` reads
+  is behind what the manager announces, exactly as with `update:`. An up-to-date row is never
+  probed, and a scan never probes. In advanced mode, a present row also has a **check download**
+  button, which runs the same probe on demand.
+- **What the row says.** `206`: the row reads `ready to update` / `update it in the app`; run the
+  update in the application. The row is then done for the session: the next Apply does not ask
+  again until a **Refresh**. Held: the 403 panel opens with the file's page. On Windows the page
+  opens inside Talos and Talos asks again by itself once the page lets the download through.
+  Elsewhere the panel offers the browser, and its Retry asks again. The row never reads `ready`
+  without a `206`.
+- It needs `version: "self"`, `detect:` and a `winget:` or `brew:` id, for the same reason as
+  `update:`: only the manager announces a newer version. It does not go with `update:`, because
+  the Apply would run the command and never probe. `--check` names each of these.
+
 ### A version change is a success when the version moved
 
 After an upgrade or a downgrade that exited 0, Talos reads the version again. Toward an exact

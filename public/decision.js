@@ -158,6 +158,9 @@ export function actionFor(
       // `update:` runs when the version the tool REPORTS is behind what the manager announces
       // (the receipt is stale by construction). Without `update:`, nothing.
       if (p === "self") {
+        // Done for the session — its `update-on: apply` command ran ok, or the probe of its own
+        // download found it passing (`unblock:`) — until a Refresh.
+        if (updatedThisSession) return null;
         // `update-on: apply`: the command itself knows whether there is anything to do, so no
         // announcement is needed — nor a version read. Once per session: after it succeeded the
         // row is done until a Refresh, or the end of a run would find it pending again.

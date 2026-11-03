@@ -1,0 +1,18 @@
+# FORM: `unblock:` — an application that updates ITSELF, behind a corporate firewall. When the
+# version it reports is behind what the manager announces, the Apply asks for the first byte of
+# the file its own updater will download: 206 with the file's bytes → "ready, update it in the
+# app"; anything else → the firewall's page in the 403 panel, then ask again. Nothing installed.
+# Per OS: an OS with no entry is never probed. `feed:` reads an electron-updater latest*.yml for
+# the file's name; `url:` is the file itself.
+name: Unblock
+description: An application whose own updater a corporate firewall may hold
+winget: Vendor.Unblock
+brew: unblock
+detect: unblock --version
+version: "self"
+unblock:
+  macos:
+    feed: https://github.com/vendor/unblock/releases/latest/download/latest-mac.yml
+  windows:
+    url: https://example.com/unblock-setup.exe
+category: [foundation]

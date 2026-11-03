@@ -1,0 +1,290 @@
+//! passage.rs — does a corporate firewall let through the download an application will make
+//! ITSELF? Talos installs nothing here: it asks for the file the way the application's own
+//! updater will, and says whether the file's bytes came back.
+//!
+//! WHY: an application that updates itself (`version: "self"`, an Electron app) cannot show the
+//! warning page a corporate firewall puts in front of some downloads, so its update fails with
+//! a bare "cannot download". The person can approve that page — in Talos's 403 panel — and the
+//! application's next try goes through. The manager cannot do the update instead: winget closes
+//! every process of the application it upgrades, its terminals included (measured).
+//!
+//! ⭐ THE RULE (the operator's): one `GET` of byte 0 (`Range: bytes=0-0`), following redirects.
+//! Only `206 Partial Content` with `application/octet-stream` is the file — reachable, and its
+//! own bytes rather than a page in its place. Any other answer is a block: a 403, a redirect to
+//! the firewall's gateway (it ends on the gateway's page), a `200 text/html` (the page instead
+//! of the file). So a block is recognised by what it is NOT, and no vendor's hostname is
+//! written here. A network that does not answer at all is not a block — there is no page to
+//! approve — and is said as a failure.
+//!
+//! The probe goes through the engine's own HTTP client, never a shell: the OS's TLS stack
+//! (which trusts the root a corporate firewall installs) and the OS's proxy setting (Cargo.toml).
+use crate::bundles::Passage;
+use crate::platform::Os;
+use reqwest::Url;
+use std::time::Duration;
+
+/// What one probe found.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Verdict {
+    /// 206 with the file's bytes: the application's own update can take it.
+    Passes,
+    /// Anything else that answered: the firewall's page is the thing to approve.
+    Blocked(String),
+    /// Nothing usable came back (no network, a feed that names no file): no page to approve.
+    Failed(String),
+}
+
+/// A probe's answer, and the address it is about: the file, or the feed when the feed itself
+/// was held (approving the feed's page is then the gesture, and the next probe goes further).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Probe {
+    pub url: String,
+    pub verdict: Verdict,
+}
+
+/// The rule, on the final answer after redirects. Pure, so every case is tested offline.
+pub fn classify(status: u16, content_type: Option<&str>) -> Verdict {
+    let mime = content_type
+        .and_then(|c| c.split(';').next())
+        .map(|m| m.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    if status == 206 && mime == "application/octet-stream" {
+        return Verdict::Passes;
+    }
+    let what = if mime.is_empty() {
+        "no content type".to_string()
+    } else {
+        mime.clone()
+    };
+    Verdict::Blocked(match status {
+        403 => "the firewall refused it (403)".to_string(),
+        200 if mime.starts_with("text/html") => {
+            "a web page came back instead of the file (200 text/html)".to_string()
+        }
+        _ => format!("it answered {status} with {what}, not the file's bytes (206)"),
+    })
+}
+
+/// The file an electron-updater feed (`latest.yml`, `latest-mac.yml`) names — the one the
+/// application's updater takes — resolved against the feed's address. On macOS the updater
+/// takes a `.zip`, for the machine's architecture when the feed lists one per architecture.
+pub fn file_from_feed(feed: &Url, body: &str, os: Os, arch: &str) -> Result<Url, String> {
+    let doc: serde_yaml::Value =
+        serde_yaml::from_str(body).map_err(|e| format!("the feed is not YAML: {e}"))?;
+    let mut names: Vec<String> = doc
+        .get("files")
+        .and_then(|f| f.as_sequence())
+        .map(|files| {
+            files
+                .iter()
+                .filter_map(|f| f.get("url").and_then(|u| u.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    if names.is_empty() {
+        if let Some(path) = doc.get("path").and_then(|p| p.as_str()) {
+            names.push(path.to_string());
+        }
+    }
+    if os == Os::Darwin {
+        names.retain(|n| n.to_ascii_lowercase().ends_with(".zip"));
+        let arm = names.iter().any(|n| n.contains("arm64"));
+        if arm {
+            let want_arm = arch == "aarch64";
+            let mine: Vec<String> = names
+                .iter()
+                .filter(|n| n.contains("arm64") == want_arm)
+                .cloned()
+                .collect();
+            if !mine.is_empty() {
+                names = mine;
+            }
+        }
+    }
+    let name = names.first().ok_or("the feed names no file to download")?;
+    feed.join(name)
+        .map_err(|e| format!("the feed names `{name}`, not an address: {e}"))
+}
+
+fn client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .timeout(Duration::from_secs(20))
+        .user_agent(concat!("Talos/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| format!("no HTTP client: {e}"))
+}
+
+/// A request that got no answer: too many redirects is a gateway's loop (a block); anything
+/// else — no route, no name, a timeout, a TLS refusal — is the network, and no page helps.
+fn unanswered(e: &reqwest::Error) -> Verdict {
+    if e.is_redirect() {
+        Verdict::Blocked("it never stopped redirecting".into())
+    } else {
+        Verdict::Failed(format!("no answer: {e}"))
+    }
+}
+
+/// Probes the passage: the feed first when there is one (for the file's name), then the file.
+pub async fn probe(passage: &Passage, os: Os) -> Probe {
+    let fail = |url: &str, why: String| Probe {
+        url: url.to_string(),
+        verdict: Verdict::Failed(why),
+    };
+    let client = match client() {
+        Ok(c) => c,
+        Err(e) => return fail("", e),
+    };
+    let file = match (&passage.url, &passage.feed) {
+        (Some(url), _) => url.clone(),
+        (None, Some(feed)) => {
+            let Ok(feed_url) = Url::parse(feed) else {
+                return fail(feed, "the feed is not an address".into());
+            };
+            let resp = match client.get(feed_url.clone()).send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    return Probe {
+                        url: feed.clone(),
+                        verdict: unanswered(&e),
+                    }
+                }
+            };
+            let ct = header(&resp);
+            let status = resp.status().as_u16();
+            // The feed is a YAML text: a 200 that is not a web page is it. Anything else is held
+            // the way a file is — its page is what to approve first.
+            if status != 200 || ct.as_deref().is_some_and(|c| c.contains("text/html")) {
+                let verdict = match classify(status, ct.as_deref()) {
+                    Verdict::Passes => Verdict::Blocked(format!("the feed answered {status}")),
+                    v => v,
+                };
+                return Probe {
+                    url: feed.clone(),
+                    verdict,
+                };
+            }
+            let body = match resp.text().await {
+                Ok(b) => b,
+                Err(e) => return fail(feed, format!("the feed could not be read: {e}")),
+            };
+            match file_from_feed(&feed_url, &body, os, std::env::consts::ARCH) {
+                Ok(u) => u.to_string(),
+                Err(e) => return fail(feed, e),
+            }
+        }
+        (None, None) => return fail("", "neither `feed:` nor `url:` is declared".into()),
+    };
+    let verdict = match client
+        .get(&file)
+        .header(reqwest::header::RANGE, "bytes=0-0")
+        .send()
+        .await
+    {
+        Ok(resp) => classify(resp.status().as_u16(), header(&resp).as_deref()),
+        Err(e) => unanswered(&e),
+    };
+    Probe { url: file, verdict }
+}
+
+fn header(resp: &reqwest::Response) -> Option<String> {
+    resp.headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_206_with_the_files_bytes_passes() {
+        assert_eq!(
+            classify(206, Some("application/octet-stream")),
+            Verdict::Passes
+        );
+        assert_eq!(
+            classify(206, Some("Application/Octet-Stream; charset=binary")),
+            Verdict::Passes
+        );
+        // The firewall's refusal, its page in place of the file, its gateway's page after a
+        // redirect, a server ignoring the range: all held.
+        for (status, ct) in [
+            (403, Some("text/html")),
+            (200, Some("text/html; charset=utf-8")),
+            (200, Some("application/octet-stream")),
+            (206, Some("text/html")),
+            (206, None),
+            (302, None),
+            (500, Some("text/plain")),
+        ] {
+            assert!(
+                matches!(classify(status, ct), Verdict::Blocked(_)),
+                "{status} {ct:?} must not pass"
+            );
+        }
+        let Verdict::Blocked(why) = classify(403, Some("text/html")) else {
+            unreachable!()
+        };
+        assert!(why.contains("403"), "{why}");
+        let Verdict::Blocked(why) = classify(200, Some("text/html")) else {
+            unreachable!()
+        };
+        assert!(why.contains("web page"), "{why}");
+    }
+
+    const MAC_FEED: &str = "version: 1.4.246\nfiles:\n  - url: Orca-1.4.246-arm64-mac.zip\n    sha512: x\n    size: 1\n  - url: Orca-1.4.246-mac.zip\n    size: 1\n  - url: Orca-1.4.246-arm64.dmg\n    size: 1\npath: Orca-1.4.246-arm64-mac.zip\n";
+
+    #[test]
+    fn a_feed_names_the_file_the_updater_takes() {
+        let feed =
+            Url::parse("https://github.com/o/r/releases/latest/download/latest-mac.yml").unwrap();
+        let arm = file_from_feed(&feed, MAC_FEED, Os::Darwin, "aarch64").unwrap();
+        assert_eq!(
+            arm.as_str(),
+            "https://github.com/o/r/releases/latest/download/Orca-1.4.246-arm64-mac.zip"
+        );
+        let intel = file_from_feed(&feed, MAC_FEED, Os::Darwin, "x86_64").unwrap();
+        assert!(intel.as_str().ends_with("/Orca-1.4.246-mac.zip"), "{intel}");
+        let win = "version: 1.4.246\nfiles:\n  - url: orca-windows-setup.exe\n    size: 1\npath: orca-windows-setup.exe\n";
+        let w = file_from_feed(&feed, win, Os::Windows, "x86_64").unwrap();
+        assert!(
+            w.as_str().ends_with("/download/orca-windows-setup.exe"),
+            "{w}"
+        );
+        // An older feed with only `path:`; an absolute address is taken as it is.
+        let old = file_from_feed(
+            &feed,
+            "path: https://cdn.example/x.exe\n",
+            Os::Windows,
+            "x86_64",
+        )
+        .unwrap();
+        assert_eq!(old.as_str(), "https://cdn.example/x.exe");
+    }
+
+    #[test]
+    fn a_feed_with_no_file_for_this_os_is_a_failure_not_a_guess() {
+        let feed = Url::parse("https://example.com/latest-mac.yml").unwrap();
+        let dmg_only = "files:\n  - url: App.dmg\n";
+        assert!(file_from_feed(&feed, dmg_only, Os::Darwin, "aarch64").is_err());
+        assert!(file_from_feed(&feed, "<html>blocked</html>", Os::Darwin, "aarch64").is_err());
+    }
+
+    #[test]
+    fn no_answer_is_a_failure_not_a_block() {
+        // Nothing listens on port 9 of the loopback: the network fails, there is no page.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let p = Passage {
+            feed: None,
+            url: Some("http://127.0.0.1:9/x.zip".into()),
+        };
+        let probe = rt.block_on(probe(&p, Os::Linux));
+        assert!(matches!(probe.verdict, Verdict::Failed(_)), "{probe:?}");
+        assert_eq!(probe.url, "http://127.0.0.1:9/x.zip");
+    }
+}

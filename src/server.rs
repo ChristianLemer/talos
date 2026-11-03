@@ -118,6 +118,19 @@ fn is_self_updating(step: &crate::bundles::Step) -> bool {
     crate::bundles::classify_pin(step.pin.as_deref()) == Some(crate::bundles::PinKind::SelfUpdating)
 }
 
+/// Does the Apply's upgrade of this row run something of the row's OWN — its `update:` command,
+/// or the probe of the download it makes itself (`unblock:`, passage.rs)? The rule's
+/// `can_self_update`, on both sides of the wire.
+fn runs_own_update(step: &crate::bundles::Step) -> bool {
+    is_self_updating(step) && (step.upgrade.is_some() || step.passage.is_some())
+}
+
+/// The row whose upgrade is the probe of its own download: `self`, an `unblock:` for this OS, and
+/// no `update:` (which would be what runs).
+fn probes_passage(step: &crate::bundles::Step) -> bool {
+    is_self_updating(step) && step.upgrade.is_none() && step.passage.is_some()
+}
+
 /// Would this present row still act toward what it last ran for, so a remembered hold is worth
 /// re-sending to the front? Toward an exact pin, yes while the pin is declared; otherwise only
 /// while the manager still lists it behind — a row it no longer lists does nothing, and a hold
@@ -1255,7 +1268,9 @@ fn step_json(
         "canDowngrade": s.downgrade.is_some(),
         // `version: self` with its own `update:`: the Apply runs that command when the tool is
         // behind what the manager announces. The front's twin of `action_for` reads it.
-        "selfUpdate": is_self_updating(s) && s.upgrade.is_some(),
+        "selfUpdate": runs_own_update(s),
+        // ... and that upgrade is the probe of the download the application makes itself.
+        "passage": probes_passage(s),
         "updateEachApply": is_self_updating(s) && s.upgrade.is_some() && s.update_each_apply,
         "pin": s.pin, "categories": s.categories,
         "requires": s.requires, // package names this one needs (B5 transitive pull, §8)
@@ -1467,6 +1482,17 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 }
                 // `done` unconditionally — even for a bad index or an atom with no
                 // `check:`. The front is locked and only this releases it.
+                let _ = socket
+                    .send(Message::Text(json!({ "type": "done" }).to_string()))
+                    .await;
+            }
+            // passage: probe row i's own download now, outside an Apply (advanced mode's row
+            // button), with the 403 panel when it is held. Installs nothing.
+            "passage" => {
+                if let Some(i) = parsed.get("i").and_then(|v| v.as_u64()) {
+                    passage_now(&mut socket, &state, i as usize).await;
+                }
+                // `done` whatever happened: the front locked itself when it sent this.
                 let _ = socket
                     .send(Message::Text(json!({ "type": "done" }).to_string()))
                     .await;
@@ -2085,7 +2111,7 @@ fn probe_json(diag: &Option<crate::detect::ProbeResult>) -> serde_json::Value {
 ///
 /// Keeping this list next to the handler — and asserting the handler covers it — makes
 /// the next added verb a compile-adjacent concern rather than a silent freeze.
-const LOCKING_CLIENT_MSGS: &[&str] = &["apply", "diff", "retry-step"];
+const LOCKING_CLIENT_MSGS: &[&str] = &["apply", "diff", "retry-step", "passage"];
 
 /// The per-row action verbs RETIRED on 2026-10-10, when the Apply became the one path that
 /// acts. A stale front may still send one after locking its UI, so `handle_socket` answers
@@ -2144,6 +2170,33 @@ async fn requirement_blocks_row(state: &AppState, step: &crate::bundles::Step) -
     let idx = make_index(&nodes);
     let me = nodes.iter().position(|n| n.name == step.name)?;
     requires_blocked(&nodes[me], &nodes, &idx)
+}
+
+/// The row button's probe of a passage: the same step the Apply runs for a behind row, with the
+/// same 403 pause around it, on demand — so it can be tried on a machine whose row is current.
+/// Only for a row that declares one for this OS, and never on a row out of scope.
+async fn passage_now(socket: &mut WebSocket, state: &AppState, i: usize) {
+    let Some(step) = state.plan.read().await.steps.get(i).cloned() else {
+        return;
+    };
+    if !probes_passage(&step) || scope_refuses(&read_selection(&state.data_dir), &step.name) {
+        println!("[passage] refused on row {i}: no passage to probe here");
+        return;
+    }
+    let aim = Aim {
+        before: None,
+        announced: None,
+    };
+    step_with_forbidden_pause(
+        socket,
+        state,
+        i,
+        crate::decision::Action::Upgrade,
+        &step,
+        false,
+        aim,
+    )
+    .await;
 }
 
 /// Re-runs the action the Apply chose for row i, after that step failed (a 403). Not a
@@ -3245,7 +3298,7 @@ async fn apply_diff(
             pin: step.pin.as_deref(),
             installed_version: presences[i].version.as_deref().unwrap_or(""),
             available: od.map(|o| o.available.as_str()).unwrap_or(""),
-            can_self_update: is_self_updating(step) && step.upgrade.is_some(),
+            can_self_update: runs_own_update(step),
             update_each_apply: step.update_each_apply,
             updated_this_session: updated_this_session(state, step),
         };
@@ -4433,6 +4486,114 @@ struct StepOutcome {
     after: Option<crate::detect::Presence>,
 }
 
+/// The upgrade of a `self` row with `unblock:`: probe the download the application will make
+/// itself, and install nothing. The file's bytes came back (206) → `ready`, and the row is done
+/// for the session — the person runs the update in the application. Held → `forbidden`, the
+/// 403 panel with the file's page, exactly as a blocked install (its Retry probes again). No
+/// answer → `fail`, said on the row: there is no page to approve. Never `ready` without a 206.
+async fn passage_step(
+    socket: &mut WebSocket,
+    state: &AppState,
+    i: usize,
+    step: &crate::bundles::Step,
+) -> StepOutcome {
+    use crate::passage::Verdict;
+    let Some(passage) = step.passage.as_ref() else {
+        return StepOutcome::default();
+    };
+    let _ = socket
+        .send(Message::Text(
+            json!({ "type": "step", "i": i, "status": "checking" }).to_string(),
+        ))
+        .await;
+    let first = passage
+        .feed
+        .as_deref()
+        .or(passage.url.as_deref())
+        .unwrap_or("");
+    say(
+        socket,
+        i,
+        &format!("[passage] asking for the first byte of {first}"),
+    )
+    .await;
+    let probe = crate::passage::probe(passage, state.os).await;
+    println!(
+        "[passage] {} — {}: {:?}",
+        step.name, probe.url, probe.verdict
+    );
+    let (status, ok, blocked) = match &probe.verdict {
+        Verdict::Passes => {
+            say(
+                socket,
+                i,
+                &format!(
+                    "[passage] {} answers 206 with the file's bytes — ready: run the update in {}                      itself. Talos installed nothing.",
+                    probe.url, step.name
+                ),
+            )
+            .await;
+            ("ready", true, false)
+        }
+        Verdict::Blocked(why) => {
+            say(
+                socket,
+                i,
+                &format!(
+                    "[passage] {} is held: {why}. Approve the page, and Talos asks again.",
+                    probe.url
+                ),
+            )
+            .await;
+            ("forbidden", false, true)
+        }
+        Verdict::Failed(why) => {
+            say(
+                socket,
+                i,
+                &format!("[passage] {why} — nothing to approve, and nothing changed."),
+            )
+            .await;
+            ("fail", false, false)
+        }
+    };
+    let _ = socket
+        .send(Message::Text(
+            json!({ "type": "step", "i": i, "status": status }).to_string(),
+        ))
+        .await;
+    if blocked {
+        let _ = socket
+            .send(Message::Text(
+                json!({
+                    "type": "forbidden", "i": i, "url": probe.url,
+                    "inside": crate::unblock::available()
+                })
+                .to_string(),
+            ))
+            .await;
+    }
+    if ok {
+        // Done until a Refresh: the row stays behind until the application updates itself, and
+        // the next Apply must not ask again for a file it already knows passes.
+        state
+            .updated_this_session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(step.id.clone());
+        let _ = socket
+            .send(Message::Text(
+                json!({ "type": "self-updated", "i": i, "done": true }).to_string(),
+            ))
+            .await;
+    }
+    StepOutcome {
+        ok,
+        blocked,
+        after: None,
+    }
+}
+
 /// Runs ONE step (install/upgrade/uninstall): streams the command, reads the exit
 /// code, emits `step` (running → ok/absent/fail/forbidden) and the 403 verdict.
 async fn do_step(
@@ -4451,6 +4612,10 @@ async fn do_step(
     // startup scan times it per package. (The outdated scan is NOT in this window; both
     // callers scan before calling and pass `is_cask` in.) A duration that stopped at the
     // pty would flatter exactly the slow packages the number exists to expose.
+    // A row whose upgrade is the probe of its own download runs nothing: passage.rs asks.
+    if action == Action::Upgrade && probes_passage(step) {
+        return passage_step(socket, state, i, step).await;
+    }
     let started = std::time::Instant::now();
     let os = state.os;
     // Whatever this step does — install, upgrade, uninstall, even a failure half-way — the
@@ -5653,6 +5818,7 @@ mod tests {
             categories: Vec::new(),
             overrides: Overrides::default(),
             update_each_apply: false,
+            passage: None,
         }
     }
 
@@ -5989,6 +6155,44 @@ mod tests {
             row["selfUpdate"], false,
             "a manager upgrade is not the tool's own"
         );
+        assert_eq!(row["passage"], false);
+        // `unblock:` for this OS, no `update:`: the upgrade is the probe of its own download.
+        let mut p = brew_step("orca", Some("self"));
+        p.upgrade = None;
+        p.passage = Some(crate::bundles::Passage {
+            feed: None,
+            url: Some("https://h/x.zip".into()),
+        });
+        let row = super::step_json(&p, 0, &[], &no_timings, Os::Darwin);
+        assert_eq!(row["selfUpdate"], true, "the rule's canSelfUpdate");
+        assert_eq!(row["passage"], true);
+        assert_eq!(row["updateEachApply"], false);
+        // With an `update:` beside it, the command is what runs.
+        p.upgrade = Some("orca update".into());
+        assert!(!super::probes_passage(&p));
+    }
+
+    #[test]
+    fn a_passage_row_probes_instead_of_running_and_marks_itself_done() {
+        // The pure rule says Upgrade; the wiring must send that Upgrade to the probe, before any
+        // command is looked up, and only a 206 may make the row done for the session.
+        let step = fn_body("do_step");
+        let probe = step
+            .find("if action == Action::Upgrade && probes_passage(step)")
+            .expect("do_step routes a passage row to the probe");
+        assert!(probe < step.find("run_in_pty(").expect("a pty run"));
+        let passage = fn_body("passage_step");
+        let ready = passage.find("Verdict::Passes =>").expect("the 206 arm");
+        let done = passage
+            .find(".updated_this_session")
+            .expect("done for the session");
+        assert!(ready < done);
+        assert!(passage.contains("if ok {"), "done only when it passed");
+        assert!(passage.contains(r#""inside": crate::unblock::available()"#));
+        // The on-demand button goes through the same 403 pause, and only for a passage row.
+        let now = fn_body("passage_now");
+        assert!(now.contains("!probes_passage(&step) || scope_refuses("));
+        assert!(now.contains("step_with_forbidden_pause("));
     }
 
     #[test]

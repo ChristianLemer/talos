@@ -65,6 +65,44 @@ pub struct CleanLaunch {
     pub args: Vec<String>,
 }
 
+/// `unblock:` — the download an application that updates ITSELF will make, per OS, so Talos can
+/// tell whether a corporate firewall lets it through before the application tries.
+///
+/// ⭐ PER OS, because the file is: an Electron app's updater takes a `.zip` on macOS and an
+/// installer on Windows, and a firewall may hold one and pass the other. An OS with no entry is
+/// never probed — the author says where it matters. Nothing is installed: the probe only opens
+/// the firewall's page when the file is held, and says "ready" once its bytes come through.
+#[derive(Debug, Deserialize, Default, Clone, PartialEq)]
+pub struct UnblockDecl {
+    #[serde(default)]
+    pub macos: Option<Passage>,
+    #[serde(default)]
+    pub windows: Option<Passage>,
+    #[serde(default)]
+    pub linux: Option<Passage>,
+}
+
+impl UnblockDecl {
+    pub fn for_os(&self, os: Os) -> Option<&Passage> {
+        match os {
+            Os::Darwin => self.macos.as_ref(),
+            Os::Windows => self.windows.as_ref(),
+            Os::Linux => self.linux.as_ref(),
+        }
+    }
+}
+
+/// Where the file is: a `feed:` (an electron-updater `latest*.yml`, read for the file's name —
+/// the very file the application's updater will take) or a direct `url:`. One of the two;
+/// `--check` refuses both or neither.
+#[derive(Debug, Deserialize, Default, Clone, PartialEq)]
+pub struct Passage {
+    #[serde(default)]
+    pub feed: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
 impl RawPkg {
     /// Every YAML key a catalog file may carry, as `--check` enforces it. ⚠️ Kept BY HAND
     /// beside the struct: serde has no way to list a struct's accepted names, and
@@ -104,6 +142,7 @@ impl RawPkg {
         "403",
         "slow",
         "doctor",
+        "unblock",
     ];
 }
 
@@ -209,6 +248,9 @@ pub struct RawPkg {
     /// See `DoctorDecl`.
     #[serde(default)]
     pub doctor: Option<DoctorDecl>,
+    /// See `UnblockDecl`.
+    #[serde(default)]
+    pub unblock: Option<UnblockDecl>,
 }
 
 impl RawPkg {
@@ -369,6 +411,10 @@ pub struct Step {
     /// the package is wanted and present, until it succeeds — then done until a Refresh — and
     /// never judged by the version it leaves.
     pub update_each_apply: bool,
+    /// `unblock:` for THIS OS, on a `version: "self"` row with no `update:` of its own: the
+    /// Apply's upgrade of such a row probes the download the application will make itself
+    /// (passage.rs) instead of running anything.
+    pub passage: Option<Passage>,
 }
 
 #[derive(Debug)]
@@ -968,6 +1014,12 @@ pub fn load_from_catalog(catalog_dir: &str, kit_dir: &str, os: Os, log: &dyn Fn(
                 && p.update_on
                     .as_deref()
                     .is_some_and(|w| w.trim().eq_ignore_ascii_case("apply")),
+            // A row's own `update:` is what its upgrade runs; `--check` refuses the two together.
+            passage: (declared == Some(PinKind::SelfUpdating)
+                && !is_extension
+                && p.update.is_none())
+            .then(|| p.unblock.as_ref().and_then(|u| u.for_os(os)).cloned())
+            .flatten(),
         });
     }
     Plan { steps }
@@ -1108,6 +1160,7 @@ mod tests {
                 "requires" | "replaces" | "category" => format!("{k}: []\n"),
                 "uac" | "403" | "slow" => format!("\"{k}\": true\n"),
                 "doctor" => "doctor: {}\n".to_string(),
+                "unblock" => "unblock: {}\n".to_string(),
                 _ => format!("{k}: x\n"),
             })
             .collect();
@@ -1603,6 +1656,37 @@ mod tests {
         });
         let _ = std::fs::remove_dir_all(&dir);
         (plan.steps, logged.into_inner())
+    }
+
+    #[test]
+    fn a_passage_is_read_for_this_os_only_and_only_on_a_self_row() {
+        let load = |extra: &str, os: Os| {
+            let dir = std::env::temp_dir().join(format!(
+                "talos-passage-{}-{}",
+                std::process::id(),
+                extra.len()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let yaml = format!(
+                "name: App\nbrew: app\nwinget: V.App\ndetect: app --version\n{extra}\
+                 unblock:\n  macos:\n    feed: https://h/latest-mac.yml\n"
+            );
+            std::fs::write(dir.join("app.yaml"), yaml).unwrap();
+            let plan = load_from_catalog(dir.to_str().unwrap(), "", os, &|_| {});
+            let _ = std::fs::remove_dir_all(&dir);
+            plan.steps[0].passage.clone()
+        };
+        let mac = load("version: self\n", Os::Darwin);
+        assert_eq!(
+            mac.as_ref().and_then(|p| p.feed.as_deref()),
+            Some("https://h/latest-mac.yml")
+        );
+        // No entry for Windows: never probed there.
+        assert!(load("version: self\n", Os::Windows).is_none());
+        // Not `self`, or with its own `update:`: nothing to probe.
+        assert!(load("version: latest\n", Os::Darwin).is_none());
+        assert!(load("version: self\nupdate: app update\n", Os::Darwin).is_none());
     }
 
     #[test]

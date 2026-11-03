@@ -70,6 +70,9 @@ export function loadPlan(model, steps, profiles = []) {
       // `version: self` with its own `update:` command: the Apply runs that command when the
       // tool is behind what the manager announces (`step_json`). False for every other row.
       selfUpdate: !!s.selfUpdate,
+      // ... and that upgrade is the probe of the download the application makes itself
+      // (`unblock:`): Talos installs nothing, it says whether a corporate firewall lets it through.
+      passage: !!s.passage,
       // `update-on: apply`: that update runs at each Apply while the row is wanted, until it succeeds.
       updateEachApply: !!s.updateEachApply,
       // Done for this Talos session — its update exited ok, or the Apply installed it (the
@@ -516,6 +519,17 @@ export function isUpdatedThisSession(model, i) {
   return !!(p?.selfUpdate && p?.updateEachApply && p?.updatedThisSession) && p.present === true
     && isSelfUpdating(model, i) && actionOf(model, i) === null;
 }
+// Did the probe of this row's own download find it passing, in this session? The person updates
+// it in the application; the Apply leaves it until a Refresh.
+export function isPassageReady(model, i) {
+  const p = model.pkgs.get(i);
+  return !!(p?.passage && p?.updatedThisSession) && p.present === true && isSelfUpdating(model, i);
+}
+// Will the next Apply probe this row's own download (it is behind, and declares `unblock:`)?
+export function isPassageNext(model, i) {
+  const p = model.pkgs.get(i);
+  return !!p?.passage && actionOf(model, i) === "upgrade";
+}
 // Does this row declare `version: self` — the application updates itself?
 export function isSelfUpdating(model, i) {
   return String(model.pkgs.get(i)?.pin || "").toLowerCase() === "self";
@@ -781,6 +795,9 @@ export function applyPlan(model) {
 export function rowGesture(model, i) {
   const p = model.pkgs.get(i);
   if (p?.isConfig && desiredOf(model, i) === "absent") return { verb: "diff", type: "diff" };
+  // A passage probed on demand (advanced mode shows the row button): on a present row, so it can
+  // be tried before the row is behind. It installs nothing.
+  if (p?.passage && p.present === true) return { verb: "check download", type: "passage" };
   return null;
 }
 

@@ -276,6 +276,17 @@ test("actionFor: `update-on: apply` runs the tool's update whenever it is presen
   assert.equal(actionFor("absent", done), "uninstall");
 });
 
+test("actionFor: a self row done this session is left, behind or not — as decision.rs", () => {
+  // The probe of its own download passed (`unblock:`): the person updates it in the application.
+  const behind = {
+    present: true, outdated: true, canUninstall: true, pin: "self",
+    installedVersion: "1.4.237", available: "1.4.246", canSelfUpdate: true,
+  };
+  assert.equal(actionFor("present", behind), "upgrade");
+  assert.equal(actionFor("present", { ...behind, updatedThisSession: true }), null);
+  assert.equal(actionFor("absent", { ...behind, updatedThisSession: true }), "uninstall");
+});
+
 test("actionFor: a keyword is never compared as a version", () => {
   // The same measurement the Rust twin records: `compareVersions("2.50.1", "pending")` is 1,
   // so a naive implementation returns "downgrade" — the destructive path.

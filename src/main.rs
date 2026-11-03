@@ -21,6 +21,7 @@ mod forbidden;
 mod machine;
 mod managers;
 mod outdated;
+mod passage;
 mod plan_facts;
 mod platform;
 mod profiles;
