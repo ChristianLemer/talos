@@ -493,7 +493,9 @@ fn system_from_bulk(step: &Step, os: Os, bulk: Option<&BulkPresence>) -> Option<
 pub fn fetch_bulk_presence(os: Os) -> Option<BulkPresence> {
     let mgr = native_manager(os)?;
     let mut text = String::new();
-    for cmd in std::iter::once(mgr.presence_scan_command()).chain(mgr.presence_scan_command_cask())
+    for cmd in std::iter::once(mgr.presence_scan_command())
+        .chain(mgr.presence_scan_command_cask())
+        .chain(mgr.presence_scan_command_names())
     {
         let probe = shell_probe(os, &cmd);
         let d = run_probe_detailed(&probe);
@@ -887,6 +889,31 @@ mod tests {
             "the fallback must run a per-package probe: {:?}",
             p.diag
         );
+    }
+
+    #[test]
+    fn a_cask_from_a_tap_is_tracked_not_external() {
+        // ⭐ The field case (a Mac, 2026-11-05): the row declares `stablyai/orca/orca`, brew's
+        // versioned listing prints `orca 1.4.237`, and the binary answers. Read by short name
+        // the row was present by its binary alone, so `external`, out of scope. The full-name
+        // listing puts it back under its manager.
+        if cfg!(target_os = "windows") {
+            return;
+        }
+        let listings = "jq 1.8.2\norca 1.4.237\njq\nstablyai/orca/orca\n";
+        let bulk = crate::managers::BREW.parse_presence(listings).unwrap();
+        let mut s = step();
+        s.route = Some("brew".into());
+        s.system_id = Some("stablyai/orca/orca".into());
+        s.detect = Some("printf 1.4.237".into()); // the binary answers too
+        let p = detect_present_detailed_with(&s, Os::Darwin, Some(&bulk));
+        assert_eq!(p.present, Some(true), "{:?}", p.diag);
+        assert!(!p.external, "installed by brew, from its tap: {:?}", p.diag);
+        // The unrelated `orca` of brew's main repository is NOT installed: same short name,
+        // another package.
+        s.system_id = Some("orca".into());
+        let other = detect_present_detailed_with(&s, Os::Darwin, Some(&bulk));
+        assert!(other.external, "the main repository's orca is not this one");
     }
 
     #[test]

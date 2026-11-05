@@ -405,6 +405,17 @@ impl SystemManager {
             _ => Some("brew list --cask --versions".into()),
         }
     }
+    /// The installed packages' FULL names, for a manager whose versioned listing gives only
+    /// the short one. `brew list --versions` prints `orca 1.4.237` for `stablyai/orca/orca`
+    /// (and `gum 2.0.2` for the formula `charmbracelet/tap/gum`, measured on Linuxbrew), and
+    /// `--full-name` does not combine with `--versions`: a third call names the taps. `-1`:
+    /// one per line even on a terminal. `None` for a manager whose ids are already whole.
+    pub fn presence_scan_command_names(&self) -> Option<String> {
+        match self.route {
+            "winget" => None,
+            _ => Some("brew list -1 --full-name".into()),
+        }
+    }
     /// Installed id (lowercased) → its version, for the WHOLE machine.
     ///
     /// `Err` when the output was not recognised. That distinction is the point: an
@@ -610,9 +621,16 @@ pub fn parse_winget_version(id: &str, output: &str) -> String {
 // the winget parser: the newest is what PATH resolves and what a pin compares against.
 fn parse_brew_version(id: &str, output: &str) -> String {
     let lc = id.to_lowercase();
+    // `brew list --versions owner/tap/name` answers `name 1.2.3`: brew resolved the tap itself,
+    // so the short name in ITS answer is the declared package. (The machine-wide listing is
+    // re-keyed by full name instead — `parse_brew_list` — where a short name would be ambiguous.)
+    let short = tap_short_name(&lc);
     for line in output.lines() {
         let cols: Vec<&str> = line.split_whitespace().collect();
-        if cols.first().is_some_and(|c| c.to_lowercase() == lc) {
+        if cols
+            .first()
+            .is_some_and(|c| c.to_lowercase() == lc || short.is_some_and(|s| c.to_lowercase() == s))
+        {
             // ⚠️ The line must match the expected shape: "name version..." where the
             // SECOND token starts with a digit. Reject "git version 2.50.1" (the word
             // "version" is not a version token). This preserves the original behavior.
@@ -786,9 +804,40 @@ fn parse_brew_list(raw: &str) -> Result<HashMap<String, String>, ()> {
         }
     }
     if map.is_empty() {
-        Err(()) // nothing recognised: cannot claim the machine is empty
-    } else {
-        Ok(map)
+        return Err(()); // nothing recognised: cannot claim the machine is empty
+    }
+    // The `--full-name` listing's tap lines (`owner/tap/name`, alone on their line): the
+    // installed `name` IS that tap's package — brew keeps one keg (Cellar/name, Caskroom/name)
+    // per short name — so its entry moves to the full id. The short key goes: `orca` alone is
+    // also another, unrelated cask of brew's main repository, and must not read as installed.
+    for line in raw.lines() {
+        let full = line.trim().to_lowercase();
+        if let Some(short) = tap_short_name(&full) {
+            if !full.contains(char::is_whitespace) {
+                if let Some(v) = map.remove(short) {
+                    map.insert(full.clone(), v);
+                }
+            }
+        }
+    }
+    Ok(map)
+}
+
+/// The short name of a tap id (`owner/tap/name` → `name`); `None` for a bare name. brew's own
+/// repositories (`homebrew/core/`, `homebrew/cask/`) are listed bare, so they are not taps here.
+pub fn tap_short_name(id: &str) -> Option<&str> {
+    let parts: Vec<&str> = id.split('/').collect();
+    match parts.as_slice() {
+        [owner, tap, name]
+            if !owner.is_empty()
+                && !tap.is_empty()
+                && !name.is_empty()
+                && !(owner.eq_ignore_ascii_case("homebrew")
+                    && (tap.eq_ignore_ascii_case("core") || tap.eq_ignore_ascii_case("cask"))) =>
+        {
+            Some(name)
+        }
+        _ => None,
     }
 }
 
@@ -1015,6 +1064,45 @@ mod tests {
             "an MSIX row is still an installed package: {:?}",
             m.keys().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn a_tap_package_is_keyed_by_its_full_name() {
+        // Measured on Linuxbrew 2026-11-05 with `charmbracelet/tap/gum` installed: the versioned
+        // listing names it `gum`, `brew list -1 --full-name` names it whole, core ones bare.
+        let versions = "gum 2.0.2\njq 1.8.2\noniguruma 6.9.10\n";
+        let names = "jq\noniguruma\ncharmbracelet/tap/gum\n";
+        let m = BREW.parse_presence(&format!("{versions}{names}")).unwrap();
+        assert_eq!(
+            m.get("charmbracelet/tap/gum").map(String::as_str),
+            Some("2.0.2")
+        );
+        // The short name is gone: homebrew/core's own `gum` is not what is installed.
+        assert_eq!(m.get("gum"), None);
+        assert_eq!(m.get("jq").map(String::as_str), Some("1.8.2"));
+        // Without the names listing (it failed), the table is read as before.
+        let m = BREW.parse_presence(versions).unwrap();
+        assert_eq!(m.get("gum").map(String::as_str), Some("2.0.2"));
+        assert_eq!(
+            BREW.presence_scan_command_names().as_deref(),
+            Some("brew list -1 --full-name")
+        );
+        assert_eq!(WINGET.presence_scan_command_names(), None);
+    }
+
+    #[test]
+    fn a_tap_id_is_found_in_brews_answer_for_it() {
+        // `brew list --versions stablyai/orca/orca` answers by short name (measured with a tap
+        // formula): brew resolved the tap, so that short name is the package.
+        assert_eq!(
+            BREW.parse_version("stablyai/orca/orca", "orca 1.4.237\n"),
+            "1.4.237"
+        );
+        assert_eq!(BREW.parse_version("jq", "jq 1.8.2\n"), "1.8.2");
+        assert_eq!(tap_short_name("stablyai/orca/orca"), Some("orca"));
+        assert_eq!(tap_short_name("homebrew/cask/orca"), None);
+        assert_eq!(tap_short_name("orca"), None);
+        assert_eq!(tap_short_name("a//b"), None);
     }
 
     #[test]

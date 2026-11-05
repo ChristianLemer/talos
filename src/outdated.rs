@@ -111,16 +111,47 @@ pub fn scan_outdated(os: Os) -> Result<HashMap<String, Outdated>, ScanFailure> {
 }
 
 /// A package's systemId (lowercased) → its outdated entry, or None.
+///
+/// brew's `outdated --json=v2` names a formula by its full name but a CASK by its short token
+/// (brew's `Cask#outdated_info`), so a tap cask (`stablyai/orca/orca`) is found under `orca`.
+/// Only a cask entry is taken that way: brew keeps one Caskroom/<token> per machine, so the
+/// outdated `orca` IS the installed one, and the row's presence (the full-name listing) has
+/// already said whose it is. A formula entry under the short name is another formula.
 pub fn outdated_for<'a>(
     system_id: Option<&str>,
     scan: &'a HashMap<String, Outdated>,
 ) -> Option<&'a Outdated> {
-    scan.get(&system_id?.to_lowercase())
+    let id = system_id?.to_lowercase();
+    scan.get(&id).or_else(|| {
+        crate::managers::tap_short_name(&id)
+            .and_then(|short| scan.get(short))
+            .filter(|o| o.is_cask)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tap_cask_is_found_by_its_token_a_formula_is_not() {
+        let od = |is_cask| Outdated {
+            current: "1.4.237".into(),
+            available: "1.4.249".into(),
+            is_cask,
+        };
+        // brew's outdated JSON: a cask under its short token, a formula under its full name.
+        let mut scan = HashMap::new();
+        scan.insert("orca".to_string(), od(true));
+        scan.insert("charmbracelet/tap/gum".to_string(), od(false));
+        scan.insert("jq".to_string(), od(false));
+        assert!(outdated_for(Some("stablyai/orca/orca"), &scan).is_some());
+        assert!(outdated_for(Some("charmbracelet/tap/gum"), &scan).is_some());
+        assert!(outdated_for(Some("orca"), &scan).is_some());
+        // A formula found only by short name is another formula.
+        assert!(outdated_for(Some("someone/tap/jq"), &scan).is_none());
+        assert!(outdated_for(None, &scan).is_none());
+    }
 
     #[test]
     fn head_of_takes_the_first_meaningful_line() {

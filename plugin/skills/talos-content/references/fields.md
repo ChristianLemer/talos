@@ -102,7 +102,7 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
 | Route | Field(s) | Notes |
 |---|---|---|
 | winget | `winget: Publisher.Id` | Windows system manager |
-| brew | `brew: formula-or-cask` | macOS/Linux system manager |
+| brew | `brew: formula-or-cask` | macOS/Linux system manager; a tap's package by its full id, `owner/tap/name` |
 | cargo | `cargo: crate` | cross-platform; reinstall = upgrade |
 | npm | `npm: pkg` + optional `npmFlags:` | global install via `npm install -g` (ships with Node) |
 | bun | `bun: pkg` | global install via `bun add -g`; declared by nothing today (npm wins if both) |
@@ -112,6 +112,10 @@ Declare **one** route per package. On a system-manager route, declare *both* ids
 | skill | `skill: source` + optional `skillName:` | cross-agent SKILL.md via `npx skills` |
 | vscode-extension | `vscode-extension: publisher.name` | a VS Code extension |
 | nu-plugin | `nu-plugin: name` + optional `plugin-release: owner/repo@tag` | a nushell plugin |
+
+A tap's package is matched by its **full id**, never by its short name: brew lists
+`stablyai/orca/orca` as `orca`, and `orca` alone is also an unrelated cask of brew's main
+repository. Talos reads `brew list -1 --full-name` beside the versioned listing for that.
 
 **`detect:`** — how Talos knows a package is already present.
 - A binary route: the command whose exit 0 = present, e.g. `detect: code --version`.
