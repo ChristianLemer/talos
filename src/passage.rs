@@ -11,8 +11,8 @@
 //! ⭐ THE RULE (the operator's): one `GET` of byte 0 (`Range: bytes=0-0`), following redirects.
 //! Only `206 Partial Content` with a type that is not text is the file — reachable, and its own
 //! bytes rather than a page in its place: `application/octet-stream` as often as not, but a host
-//! may name the kind (`application/zip`, `application/x-msdownload`). A `206 text/html` is the
-//! firewall's page, never a pass; a 206 that names no type is not taken on trust. Any other
+//! may name the kind (`application/zip`, `application/x-msdownload`). A `206 text/html` (or any
+//! html type) is the firewall's page, never a pass; a 206 that names no type is not taken on trust. Any other
 //! answer is a block: a 403, a redirect to the firewall's gateway (it ends on the gateway's
 //! page), a `200 text/html` (the page instead of the file). So a block is recognised by what it is NOT, and no vendor's hostname is
 //! written here. A network that does not answer at all is not a block — there is no page to
@@ -55,7 +55,9 @@ pub fn classify(status: u16, content_type: Option<&str>) -> Verdict {
         .and_then(|c| c.split(';').next())
         .map(|m| m.trim().to_ascii_lowercase())
         .unwrap_or_default();
-    if status == 206 && !mime.is_empty() && !mime.starts_with("text/") {
+    // A page is never the file, whatever prefix it wears (`application/xhtml+xml`).
+    let page = mime.starts_with("text/") || mime.contains("html");
+    if status == 206 && !mime.is_empty() && !page {
         return Verdict::Passes;
     }
     let what = if mime.is_empty() {
@@ -247,6 +249,7 @@ mod tests {
             (206, Some("text/html")),
             (206, Some("Text/HTML; charset=utf-8")),
             (206, Some("text/plain")),
+            (206, Some("application/xhtml+xml")),
             (206, None),
             (302, None),
             (500, Some("text/plain")),
