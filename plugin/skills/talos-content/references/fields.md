@@ -516,11 +516,15 @@ held, and then leave the update to the application. **Talos installs nothing.**
   engine's own HTTP client. That client uses the OS's TLS trust and the OS's fixed proxy
   setting. ⚠️ It does not read a proxy auto-config script, which the application itself
   follows; on such a network the probe goes direct and may not test the application's road. A
-  client agent that tunnels all traffic needs no proxy setting and is not affected. Only
-  **`206` with `application/octet-stream`** counts as the file. Anything else is a block: a 403,
-  a redirect that ends on the firewall's page, a `200 text/html` served instead of the file. A
-  feed that is held is a block too, and its page is the one to approve first. A network that does
-  not answer at all is a failure, said on the row, because there is no page to approve.
+  client agent that tunnels all traffic needs no proxy setting and is not affected. Only a
+  **`206` whose type is not text** counts as the file: `application/octet-stream`, or the kind a
+  host names (`application/zip`, `application/x-msdownload`). A `206 text/html` is the
+  firewall's page, and a `206` with no type is not taken on trust. Anything else is a block: a
+  403, a redirect that ends on the firewall's page, a `200 text/html` served instead of the file.
+  A feed that is held is a block too, and its page is the one to approve first; so is a feed
+  address that answers something that is not a feed (no `files:`, no `path:`), whatever type it
+  says. A network that does not answer at all is a failure, said on the row, because there is no
+  page to approve.
 - **When it runs:** when the Apply would update the row. That means the version `detect:` reads
   is behind what the manager announces, exactly as with `update:`. An up-to-date row is never
   probed, and a scan never probes. In advanced mode, a present row also has a **check download**

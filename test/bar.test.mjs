@@ -28,6 +28,21 @@ test("the button names one kind by its name, several as changes", () => {
   assert.equal(planSub(["install", "upgrade", "upgrade"]), "3 changes");
 });
 
+test("a passage probe is a download check, never an update or a change (beta.74 review)", () => {
+  assert.equal(planSub(["probe"]), "1 download check");
+  assert.equal(planSub(["upgrade", "probe", "probe"]), "1 update · 2 download checks");
+  assert.equal(planSub(["install", "upgrade", "probe"]), "2 changes · 1 download check");
+  const v = barView({ ...open, actions: ["upgrade", "probe"], estimate: "~2 min for all 1" });
+  assert.equal(text(v), "1 to update · 1 download to check · ~2 min for all 1");
+  assert.equal(text(barView({ ...open, actions: ["probe", "probe"] })), "2 downloads to check");
+  assert.equal(v.live, true, "a check is still something for Apply to send");
+});
+
+test("a passage row's states (beta.74 review) have their colours: checking dim, passing green like present", () => {
+  assert.match(html, /\.checking, \.probing \{ color:var\(--dim\); \}/);
+  assert.match(html, /\.ok, \.ready   \{ color:#9ece6a; \}/);
+});
+
 test("a removal and a reinstall are always named on the button", () => {
   // Apply honours the rows you unchecked: a count that hid them would be the label lying. A
   // reinstall removes the package first, so it is named for the same reason.

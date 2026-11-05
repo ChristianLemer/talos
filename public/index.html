@@ -329,12 +329,13 @@
       /* Installed outside winget — present, but winget can't manage it. Amber
          hint, not an error: it's a fact about provenance, not a problem. */
       .statusLabel.external { color:#e0af68; }
-      .checking     { color:var(--dim); }
+      .checking, .probing { color:var(--dim); }
       .waiting      { color:var(--dim); }
       .installing   { color:#e0af68; }
       .uninstalling { color:#e0af68; }
       .upgrading, .reinstalling { color:#7dcfff; }
-      .ok           { color:#9ece6a; }
+      /* `ready`: a passage's download passes (passage.rs) — as good as present. */
+      .ok, .ready   { color:#9ece6a; }
       /* The row's version display (paintVersion) — ONE colour language shared with
          the buttons, so a coloured target matches the button that leads there:
            .v-cur    current/installed state — BLUE  (same family as the avail btn)

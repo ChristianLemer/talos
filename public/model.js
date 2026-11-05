@@ -678,9 +678,10 @@ export function isActionable(model, i) {
 }
 // What the Apply would do, one action per row, in plan order — what the bar counts (bar.js).
 // The actions stay apart, not summed: a downgrade is an uninstall first and an uninstall is a
-// removal, and the spec wants both said before the click.
+// removal, and the spec wants both said before the click. A passage row's `upgrade` is said
+// `probe`: the Apply only asks for the first byte of its download, it updates nothing.
 export function planActions(model) {
-  return applyPlan(model).map((i) => actionOf(model, i));
+  return applyPlan(model).map((i) => (isPassageNext(model, i) ? "probe" : actionOf(model, i)));
 }
 // The rows whose removal the button announces — an uninstall, or a reinstall at the pin, which
 // removes first. The Apply sends them, and the server runs no removal outside them
@@ -695,9 +696,12 @@ export function presenceStatus(model, i) {
   return present === true ? "ok" : present === false ? "waiting" : "unknown";
 }
 // What each row the Apply would run took HERE last time, in plan order; 0 = never measured.
-// The button's estimate sums them, and counts the zeros as unknown instead of free.
+// The button's estimate sums them, and counts the zeros as unknown instead of free. A probe is
+// not in it: one request, no step to time — and the row's duration, if any, is an install's.
 export function planSeconds(model) {
-  return applyPlan(model).map((i) => model.pkgs.get(i)?.secs ?? 0);
+  return applyPlan(model)
+    .filter((i) => !isPassageNext(model, i))
+    .map((i) => model.pkgs.get(i)?.secs ?? 0);
 }
 // WHY the Apply leaves a row it would otherwise act on, or null. Three cases: a change that
 // already ran and moved nothing (`unmovedHold`); a brew pin brew cannot serve, which the server

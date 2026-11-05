@@ -802,6 +802,11 @@ test("a passage row: the Apply probes it when behind, and its button probes it o
   setOutdated(m, 0, true, "1.4.246");
   assert.equal(actionOf(m, 0), "upgrade");
   assert.equal(isPassageNext(m, 0), true);
+  // …and the bar counts a probe, not an update; the estimate leaves it out, whatever the row
+  // once took to install (beta.74 review).
+  m.pkgs.get(0).secs = 95;
+  assert.deepEqual(planActions(m), ["probe"]);
+  assert.deepEqual(planSeconds(m), [], "a probe is one request, not a step to time");
   // It passed: ready, and the Apply leaves it until a Refresh.
   setUpdatedThisSession(m, 0, true);
   assert.equal(actionOf(m, 0), null);

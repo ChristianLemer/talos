@@ -9,10 +9,12 @@
 //! every process of the application it upgrades, its terminals included (measured).
 //!
 //! ⭐ THE RULE (the operator's): one `GET` of byte 0 (`Range: bytes=0-0`), following redirects.
-//! Only `206 Partial Content` with `application/octet-stream` is the file — reachable, and its
-//! own bytes rather than a page in its place. Any other answer is a block: a 403, a redirect to
-//! the firewall's gateway (it ends on the gateway's page), a `200 text/html` (the page instead
-//! of the file). So a block is recognised by what it is NOT, and no vendor's hostname is
+//! Only `206 Partial Content` with a type that is not text is the file — reachable, and its own
+//! bytes rather than a page in its place: `application/octet-stream` as often as not, but a host
+//! may name the kind (`application/zip`, `application/x-msdownload`). A `206 text/html` is the
+//! firewall's page, never a pass; a 206 that names no type is not taken on trust. Any other
+//! answer is a block: a 403, a redirect to the firewall's gateway (it ends on the gateway's
+//! page), a `200 text/html` (the page instead of the file). So a block is recognised by what it is NOT, and no vendor's hostname is
 //! written here. A network that does not answer at all is not a block — there is no page to
 //! approve — and is said as a failure.
 //!
@@ -34,7 +36,8 @@ pub enum Verdict {
     Passes,
     /// Anything else that answered: the firewall's page is the thing to approve.
     Blocked(String),
-    /// Nothing usable came back (no network, a feed that names no file): no page to approve.
+    /// Nothing usable came back (no network, a real feed with no file for this machine): no page
+    /// to approve.
     Failed(String),
 }
 
@@ -52,7 +55,7 @@ pub fn classify(status: u16, content_type: Option<&str>) -> Verdict {
         .and_then(|c| c.split(';').next())
         .map(|m| m.trim().to_ascii_lowercase())
         .unwrap_or_default();
-    if status == 206 && mime == "application/octet-stream" {
+    if status == 206 && !mime.is_empty() && !mime.starts_with("text/") {
         return Verdict::Passes;
     }
     let what = if mime.is_empty() {
@@ -66,6 +69,31 @@ pub fn classify(status: u16, content_type: Option<&str>) -> Verdict {
             "a web page came back instead of the file (200 text/html)".to_string()
         }
         _ => format!("it answered {status} with {what}, not the file's bytes (206)"),
+    })
+}
+
+/// Whether the feed's own answer is held, from its status and type: the feed is a YAML text, so a
+/// 200 that is not a web page may be it (the body says — `not_a_feed`). Anything else is held the
+/// way a file is: its page is what to approve first. The type is read in any case (`Text/HTML`).
+pub fn feed_held(status: u16, content_type: Option<&str>) -> Option<Verdict> {
+    let html = content_type.is_some_and(|c| c.to_ascii_lowercase().contains("text/html"));
+    if status == 200 && !html {
+        return None;
+    }
+    Some(match classify(status, content_type) {
+        Verdict::Passes => Verdict::Blocked(format!("the feed answered {status}")),
+        v => v,
+    })
+}
+
+/// A 200 that is not the feed at all — neither `files:` nor `path:` in it: a page served in its
+/// place under another type (`text/plain`, none). That is a block with a page to approve, not a
+/// failure. A real feed that names no file for this machine stays a failure (`file_from_feed`).
+pub fn not_a_feed(body: &str) -> Option<Verdict> {
+    let doc: Option<serde_yaml::Value> = serde_yaml::from_str(body).ok();
+    let is_feed = doc.is_some_and(|d| d.get("files").is_some() || d.get("path").is_some());
+    (!is_feed).then(|| {
+        Verdict::Blocked("the feed's address answered something that is not a feed".into())
     })
 }
 
@@ -152,15 +180,7 @@ pub async fn probe(passage: &Passage, os: Os) -> Probe {
                     }
                 }
             };
-            let ct = header(&resp);
-            let status = resp.status().as_u16();
-            // The feed is a YAML text: a 200 that is not a web page is it. Anything else is held
-            // the way a file is — its page is what to approve first.
-            if status != 200 || ct.as_deref().is_some_and(|c| c.contains("text/html")) {
-                let verdict = match classify(status, ct.as_deref()) {
-                    Verdict::Passes => Verdict::Blocked(format!("the feed answered {status}")),
-                    v => v,
-                };
+            if let Some(verdict) = feed_held(resp.status().as_u16(), header(&resp).as_deref()) {
                 return Probe {
                     url: feed.clone(),
                     verdict,
@@ -170,6 +190,12 @@ pub async fn probe(passage: &Passage, os: Os) -> Probe {
                 Ok(b) => b,
                 Err(e) => return fail(feed, format!("the feed could not be read: {e}")),
             };
+            if let Some(verdict) = not_a_feed(&body) {
+                return Probe {
+                    url: feed.clone(),
+                    verdict,
+                };
+            }
             match file_from_feed(&feed_url, &body, os, std::env::consts::ARCH) {
                 Ok(u) => u.to_string(),
                 Err(e) => return fail(feed, e),
@@ -202,14 +228,16 @@ mod tests {
 
     #[test]
     fn only_206_with_the_files_bytes_passes() {
-        assert_eq!(
-            classify(206, Some("application/octet-stream")),
-            Verdict::Passes
-        );
-        assert_eq!(
-            classify(206, Some("Application/Octet-Stream; charset=binary")),
-            Verdict::Passes
-        );
+        // Whatever kind the host names the file by — but not text.
+        for ct in [
+            "application/octet-stream",
+            "Application/Octet-Stream; charset=binary",
+            "application/zip",
+            "application/x-msdownload",
+            "application/x-apple-diskimage",
+        ] {
+            assert_eq!(classify(206, Some(ct)), Verdict::Passes, "{ct}");
+        }
         // The firewall's refusal, its page in place of the file, its gateway's page after a
         // redirect, a server ignoring the range: all held.
         for (status, ct) in [
@@ -217,6 +245,8 @@ mod tests {
             (200, Some("text/html; charset=utf-8")),
             (200, Some("application/octet-stream")),
             (206, Some("text/html")),
+            (206, Some("Text/HTML; charset=utf-8")),
+            (206, Some("text/plain")),
             (206, None),
             (302, None),
             (500, Some("text/plain")),
@@ -234,6 +264,42 @@ mod tests {
             unreachable!()
         };
         assert!(why.contains("web page"), "{why}");
+    }
+
+    #[test]
+    fn a_feed_answered_by_a_page_is_held_whatever_its_type_says() {
+        // The type read in any case: the firewall's page is held before any YAML is parsed.
+        for ct in [Some("text/html"), Some("Text/HTML; charset=UTF-8")] {
+            assert!(
+                matches!(feed_held(200, ct), Some(Verdict::Blocked(_))),
+                "{ct:?}"
+            );
+        }
+        assert!(matches!(feed_held(403, None), Some(Verdict::Blocked(_))));
+        assert!(matches!(
+            feed_held(206, Some("application/octet-stream")),
+            Some(Verdict::Blocked(_))
+        ));
+        // A 200 that is not a web page may be the feed: its body says.
+        for ct in [None, Some("text/plain"), Some("application/x-yaml")] {
+            assert_eq!(feed_held(200, ct), None, "{ct:?}");
+        }
+        // A page under another type, or no type, names no file: a block, with a page to approve.
+        for body in [
+            "<html><body>Access to this site is blocked</body></html>",
+            "Blocked by policy.",
+            "",
+            "- a\n- b\n",
+        ] {
+            assert!(
+                matches!(not_a_feed(body), Some(Verdict::Blocked(_))),
+                "{body:?}"
+            );
+        }
+        // A real feed is not held, even one with no file for this machine (that one fails).
+        assert_eq!(not_a_feed(MAC_FEED), None);
+        assert_eq!(not_a_feed("files:\n  - url: App.dmg\n"), None);
+        assert_eq!(not_a_feed("path: x.exe\n"), None);
     }
 
     const MAC_FEED: &str = "version: 1.4.246\nfiles:\n  - url: Orca-1.4.246-arm64-mac.zip\n    sha512: x\n    size: 1\n  - url: Orca-1.4.246-mac.zip\n    size: 1\n  - url: Orca-1.4.246-arm64.dmg\n    size: 1\npath: Orca-1.4.246-arm64-mac.zip\n";

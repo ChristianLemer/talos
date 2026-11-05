@@ -13,6 +13,9 @@
 // ⚠️ REMOVALS ARE NAMED ON THE BUTTON, not only in the line. Apply honours the rows you
 // unchecked, and a count that hid them would be the label lying. A reinstall (a downgrade to a
 // pin) removes the package first, so it is named apart for the same reason.
+//
+// A PROBE IS NOT A CHANGE. The Apply checks a passage row's download (`unblock:`) and updates
+// nothing: it is named apart, never folded into "updates" or "changes".
 
 // One plan action → [what the line says, what the button counts], singular then plural.
 const KINDS = {
@@ -20,8 +23,11 @@ const KINDS = {
   upgrade: { line: "to update", one: "update", many: "updates" },
   downgrade: { line: "to reinstall", one: "reinstall", many: "reinstalls", destructive: true },
   uninstall: { line: "to remove", one: "removal", many: "removals", destructive: true },
+  probe: { line: "download to check", lines: "downloads to check", one: "download check",
+    many: "download checks", apart: true },
 };
-const ORDER = ["install", "upgrade", "downgrade", "uninstall"];
+const ORDER = ["install", "upgrade", "downgrade", "uninstall", "probe"];
+const named = (k) => KINDS[k].destructive || KINDS[k].apart;
 
 // What a running row is doing, said as the line's first word.
 const DOING = {
@@ -43,16 +49,16 @@ const plural = (n, k) => `${n} ${n === 1 ? KINDS[k].one : KINDS[k].many}`;
 export function planSub(actions) {
   const n = countKinds(actions);
   const parts = [];
-  const plain = ORDER.filter((k) => !KINDS[k].destructive && n[k]);
+  const plain = ORDER.filter((k) => !named(k) && n[k]);
   const plainTotal = plain.reduce((s, k) => s + n[k], 0);
   if (plain.length === 1) parts.push(plural(plainTotal, plain[0]));
   else if (plain.length > 1) parts.push(`${plainTotal} changes`);
-  for (const k of ORDER) if (KINDS[k].destructive && n[k]) parts.push(plural(n[k], k));
+  for (const k of ORDER) if (named(k) && n[k]) parts.push(plural(n[k], k));
   return parts.join(" · ");
 }
 
 function countKinds(actions) {
-  const n = { install: 0, upgrade: 0, downgrade: 0, uninstall: 0 };
+  const n = { install: 0, upgrade: 0, downgrade: 0, uninstall: 0, probe: 0 };
   for (const a of actions) if (a in n) n[a] += 1;
   return n;
 }
@@ -98,7 +104,7 @@ export function barView({ conn, scanning, scan, running, actions = [], estimate 
   view.disabled = false;
   const n = countKinds(actions);
   view.hint = ORDER.filter((k) => n[k]).map((k) => ({
-    text: `${n[k]} ${KINDS[k].line}`,
+    text: `${n[k]} ${n[k] > 1 && KINDS[k].lines ? KINDS[k].lines : KINDS[k].line}`,
     tone: KINDS[k].destructive ? "remove" : "strong",
   }));
   // No `note` here: it says the engine found nothing to do, and beside a plan it would
