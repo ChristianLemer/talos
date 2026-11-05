@@ -121,7 +121,7 @@ mod os {
     use windows_sys::Win32::Foundation::{GetLastError, GlobalFree};
     use windows_sys::Win32::Networking::WinHttp::{
         WinHttpCloseHandle, WinHttpGetIEProxyConfigForCurrentUser, WinHttpGetProxyForUrl,
-        WinHttpOpen, ERROR_WINHTTP_AUTODETECTION_FAILED, WINHTTP_ACCESS_TYPE_NO_PROXY,
+        WinHttpOpen, WinHttpSetTimeouts, WINHTTP_ACCESS_TYPE_NO_PROXY,
         WINHTTP_AUTOPROXY_AUTO_DETECT, WINHTTP_AUTOPROXY_CONFIG_URL, WINHTTP_AUTOPROXY_OPTIONS,
         WINHTTP_AUTO_DETECT_TYPE_DHCP, WINHTTP_AUTO_DETECT_TYPE_DNS_A,
         WINHTTP_CURRENT_USER_IE_PROXY_CONFIG, WINHTTP_PROXY_INFO,
@@ -145,11 +145,10 @@ mod os {
     pub fn route_for(url: &Url) -> Result<Route, String> {
         // The user's settings: the ones Edge and Chromium-based applications follow.
         let mut ie: WINHTTP_CURRENT_USER_IE_PROXY_CONFIG = unsafe { std::mem::zeroed() };
+        // None stored (a fresh or locked-down profile answers ERROR_FILE_NOT_FOUND): no script
+        // to follow, so the fixed setting decides, as Chromium reads that case.
         if unsafe { WinHttpGetIEProxyConfigForCurrentUser(&mut ie) } == 0 {
-            return Err(format!(
-                "the user's proxy settings could not be read (error {})",
-                unsafe { GetLastError() }
-            ));
+            return Ok(Route::System);
         }
         let auto_detect = ie.fAutoDetect != 0;
         let script = unsafe { take(ie.lpszAutoConfigUrl) }.filter(|s| !s.trim().is_empty());
@@ -189,9 +188,14 @@ mod os {
                 _ => from_winhttp_list(&list),
             })
         };
+        // A script server that accepts and never answers must not hold a hop for WinHTTP's
+        // defaults (no limit on resolving): 10 s per stage.
+        unsafe { WinHttpSetTimeouts(session, 10_000, 10_000, 10_000, 10_000) };
         let mut result = Ok(Route::System);
-        // WPAD first, as Windows does; a network with no WPAD is not a failure — the script
-        // named in the settings, or else the fixed setting, decides.
+        // WPAD first, as Windows does. Auto-detect is on by default, so a WPAD that fails in
+        // any way (none found, a stale record, a script that will not load) is not a failure:
+        // the script named in the settings, or else the fixed setting, decides — as Edge falls
+        // back, and as a dead discovery script gives way on macOS.
         if auto_detect {
             let mut options = WINHTTP_AUTOPROXY_OPTIONS {
                 dwFlags: WINHTTP_AUTOPROXY_AUTO_DETECT,
@@ -201,13 +205,9 @@ mod os {
                 dwReserved: 0,
                 fAutoLogonIfChallenged: 1,
             };
-            match ask(&mut options) {
-                Ok(route) => {
-                    unsafe { WinHttpCloseHandle(session) };
-                    return route;
-                }
-                Err(ERROR_WINHTTP_AUTODETECTION_FAILED) => {}
-                Err(code) => result = Err(format!("WPAD lookup failed (error {code})")),
+            if let Ok(route) = ask(&mut options) {
+                unsafe { WinHttpCloseHandle(session) };
+                return route;
             }
         }
         if let Some(script) = script {

@@ -523,7 +523,8 @@ held, and then leave the update to the application. **Talos installs nothing.**
   because a corporate client agent in PAC mode filters only what follows its script, and a
   probe that went direct would get the file the application is refused. Each hop's road is
   said on the row (`road — github.com: through http://127.0.0.1:9000`). A road the OS cannot
-  give (its script unreachable, a SOCKS proxy) is a failure, never a pass. On Linux the probe
+  give (the script the settings name cannot be run and nothing follows it, a SOCKS proxy) is a
+  failure, never a pass. A WPAD that finds nothing is not: the fixed setting decides. On Linux the probe
   keeps the environment's proxy and reads no script (unmeasured against one). Only a
   **`206` whose type is not text** counts as the file: `application/octet-stream`, or the kind a
   host names (`application/zip`, `application/x-msdownload`). A `206 text/html` is the
