@@ -7,12 +7,13 @@
 <!-- Shown INSIDE Talos's 403 panel (unblock.rs) once the firewall's page let the download
      through: the approval worked. Nothing is downloaded here. The ring counts down the
      automatic retry the panel runs (app.js, FB_COUNTDOWN — the two start together, at the
-     release), and its buttons reach the panel through POST /unblock/act: this page has no
-     socket of its own. Talos's palette and buttons (index.html: :root, .applybtn.live,
-     .dlgbtn-sec). -->
+     release), and its Cancel reaches the panel through POST /unblock/act: this page has no
+     socket of its own. There is no "Retry now": the count is not decoration, it gives the
+     approval time to take effect, and a retry that skipped it failed (issue #12). Talos's
+     palette and buttons (index.html: :root, .dlgbtn-sec). -->
 <style>
   :root { --bg:#1a1b26; --fg:#c0caf5; --line:#2a2e42; --dim:#565f89; --head:#7aa2f7;
-          --fill:#3d59a1; --soft:#a9b1d6; }
+          --soft:#a9b1d6; }
   /* `hidden` must WIN over any author display rule (index.html says why: `.actions` is flex). */
   [hidden] { display:none !important; }
   html, body { height:100%; margin:0; }
@@ -32,9 +33,6 @@
   p { color:var(--soft); margin:0; font-size:13.5px; }
   .actions { display:flex; gap:10px; justify-content:center; margin-top:20px; }
   button { font:inherit; cursor:pointer; border-radius:9px; }
-  .primary { background:var(--fill); color:var(--fg); border:1px solid var(--fill);
-             padding:9px 22px; font-size:14px; font-weight:700; }
-  .primary:hover { filter:brightness(1.15); }
   .secondary { background:none; color:var(--fg); border:1px solid var(--line); padding:9px 16px;
                font-size:13px; border-radius:7px; }
   .secondary:hover { border-color:var(--dim); background:var(--line); }
@@ -53,7 +51,6 @@
   <h1 id="title">Access granted</h1>
   <p id="say">Talos retries the download in 5 seconds.</p>
   <div class="actions">
-    <button class="primary" id="now">Retry now</button>
     <button class="secondary" id="cancel">Cancel</button>
   </div>
 </main>
@@ -94,17 +91,16 @@
     }
     paint();
   }, 1000);
-  // The panel acts; this page only asks (server: unblock_act).
+  // The panel acts; this page only asks (server: unblock_act). Cancel is all it asks: the
+  // retry is the count's, or — once cancelled — the panel's Retry, above.
   const act = (word) => fetch("/unblock/act", { method: "POST", body: word }).catch(() => {});
-  document.getElementById("now").onclick = () => act("retry");
   document.getElementById("cancel").onclick = () => {
     clearInterval(timer);
     act("cancel");
     document.body.classList.add("off");
     n.textContent = "✓";
-    say.textContent = "The automatic retry is off. Press Retry when you're ready.";
-    document.getElementById("cancel").hidden = true;
-    document.getElementById("now").textContent = "Retry";
+    say.textContent = "The automatic retry is off. Press Retry above when you're ready.";
+    document.querySelector(".actions").hidden = true;
   };
 </script>
 </body>

@@ -3992,7 +3992,7 @@ fn retry_offered(attempt: u32) -> bool {
 }
 
 /// What happened in the page inside Talos, for the front: the download let through (it counts
-/// down and retries), or Talos's page asking to retry now or to cancel that.
+/// down and retries), or Talos's page asking to cancel that.
 async fn send_unblock_event(socket: &mut WebSocket, event: crate::unblock::Event) {
     println!("[unblock] {} — told to the front", event.word());
     let _ = socket
@@ -4003,7 +4003,7 @@ async fn send_unblock_event(socket: &mut WebSocket, event: crate::unblock::Event
 }
 
 /// `POST /unblock/act` — the buttons of Talos's own page shown inside the panel
-/// (unblocked.html): `retry` or `cancel`, as the body. It has no socket of its own (a second
+/// (unblocked.html): `cancel`, as the body — the one it has (#12). It has no socket of its own (a second
 /// front would reset the session), so it asks here and the front is told. Talos's page only:
 /// the same Origin rule as the sockets, and only while a page is shown.
 async fn unblock_act(headers: axum::http::HeaderMap, body: String) -> Response {
@@ -4016,7 +4016,7 @@ async fn unblock_act(headers: axum::http::HeaderMap, body: String) -> Response {
             axum::http::StatusCode::NO_CONTENT.into_response()
         }
         Some(_) => (axum::http::StatusCode::CONFLICT, "no page is shown").into_response(),
-        None => (axum::http::StatusCode::BAD_REQUEST, "retry or cancel").into_response(),
+        None => (axum::http::StatusCode::BAD_REQUEST, "cancel only").into_response(),
     }
 }
 

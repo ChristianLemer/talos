@@ -43,26 +43,26 @@ static RING: LazyLock<tokio::sync::Notify> = LazyLock::new(tokio::sync::Notify::
 pub enum Event {
     /// The page let its download through: the approval worked, the front counts down.
     Released,
-    /// "Retry now", pressed in Talos's page.
-    RetryNow,
-    /// "Cancel", pressed in Talos's page: no automatic retry.
+    /// "Cancel", pressed in Talos's page: no automatic retry. The page offers nothing else —
+    /// a "Retry now" that skipped the count retried before the approval had taken effect, and
+    /// failed (issue #12): the countdown is the one way forward.
     Cancel,
 }
 
 impl Event {
-    /// The word on the wire (`unblock-event`) and on `POST /unblock/act` (the two pressable ones).
+    /// The word on the wire (`unblock-event`) and on `POST /unblock/act` (`cancel`, the one
+    /// pressable).
     pub fn word(self) -> &'static str {
         match self {
             Event::Released => "released",
-            Event::RetryNow => "retry",
             Event::Cancel => "cancel",
         }
     }
 
-    /// What Talos's page may ask for — never `released`, which only the download can say.
+    /// What Talos's page may ask for — never `released`, which only the download can say, and
+    /// never `retry`, which only the countdown may start (#12).
     pub fn from_page(word: &str) -> Option<Event> {
         match word.trim() {
-            "retry" => Some(Event::RetryNow),
             "cancel" => Some(Event::Cancel),
             _ => None,
         }
@@ -330,9 +330,14 @@ mod tests {
     }
 
     #[test]
-    fn the_page_may_ask_for_a_retry_or_a_cancel_only() {
-        assert_eq!(Event::from_page("retry"), Some(Event::RetryNow));
+    fn the_page_may_ask_for_a_cancel_only() {
         assert_eq!(Event::from_page("cancel\n"), Some(Event::Cancel));
+        // #12: a retry before the count ends came too early and failed.
+        assert_eq!(
+            Event::from_page("retry"),
+            None,
+            "only the countdown retries"
+        );
         assert_eq!(
             Event::from_page("released"),
             None,

@@ -1524,10 +1524,15 @@ function sayFb() {
 }
 
 // The approval worked (`unblock-event` released): Talos retries by itself after a short count.
-// The count shows in Talos's page inside the frame (unblocked.html, with its own Retry now and
-// Cancel) and on the Retry button. Not past the retry cap: nothing to retry then.
+// The count shows in Talos's page inside the frame (unblocked.html, with its Cancel) and on the
+// Retry button. Not past the retry cap: nothing to retry then.
+// ⚠️ The count is not decoration: it gives the approval time to take effect. A retry started
+// during it came too early and failed (#12), so while it runs nothing else retries — the page
+// has no "Retry now", and the panel's and the row's Retry are disabled (fbHoldRetry), with
+// retryStep refusing as well, whoever calls it.
 const FB_COUNTDOWN = 5;
 let fbCountdown = null;
+let fbCountdownRow = null; // the block it counts for
 function startRetryCountdown() {
   if (!fbEmbedded || fbActive === null || fbCountdown !== null || fbEmbedRetry.hidden) return;
   const i = fbActive;
@@ -1536,6 +1541,8 @@ function startRetryCountdown() {
   fbSay.textContent = "Access granted. Talos retries the download for you.";
   const paint = () => { fbRetryWhen.textContent = `in ${left} s`; };
   paint();
+  fbCountdownRow = i;
+  fbHoldRetry(i, true);
   fbCountdown = setInterval(() => {
     left -= 1;
     if (left > 0) return paint();
@@ -1548,8 +1555,16 @@ function stopRetryCountdown(cancelled = false) {
   if (fbCountdown === null) return;
   clearInterval(fbCountdown);
   fbCountdown = null;
+  fbHoldRetry(fbCountdownRow, false);
+  fbCountdownRow = null;
   fbRetryOff = cancelled;
   sayFb();
+}
+// The Retry buttons of block `i` while its count runs: there, but not pressable.
+function fbHoldRetry(i, held) {
+  fbEmbedRetry.disabled = held;
+  const rowRetry = rows[i]?.fbBanner?.querySelector('[data-fb="retry"]');
+  if (rowRetry) rowRetry.disabled = held;
 }
 
 // The page follows its frame: a window resize, the frame itself moving (a note appearing above
@@ -1732,6 +1747,8 @@ function decideForbidden(gesture) {
 }
 
 function retryStep(i) {
+  // The count to the automatic retry is running: it is the one that retries (#12).
+  if (fbCountdown !== null) return;
   // Paused mid-Apply: the loop is holding for us, so ask it to RE-RUN this row.
   // The banner stays until the retry's own verdict lands (a `step` event settles
   // it) — clearing it now would claim success we don't have yet.
@@ -2716,8 +2733,7 @@ ws.onmessage = (ev) => {
       break;
     case "unblock-event": // the page inside Talos (server::send_unblock_event)
       if (msg.event === "released") startRetryCountdown(); // the approval worked
-      else if (msg.event === "cancel") stopRetryCountdown(true); // its Cancel
-      else if (msg.event === "retry" && fbActive !== null) retryStep(fbActive); // its Retry now
+      else if (msg.event === "cancel") stopRetryCountdown(true); // its Cancel, its one button
       break;
     case "unblock-shown": // the page is laid over #fb-frame (server::unblock_message)
       break;

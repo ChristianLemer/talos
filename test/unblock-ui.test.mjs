@@ -49,7 +49,6 @@ test("the approval seen, Talos counts down and retries by itself — cancellable
   const ev = arm("unblock-event");
   assert.match(ev, /msg\.event === "released"\) startRetryCountdown\(\)/);
   assert.match(ev, /msg\.event === "cancel"\) stopRetryCountdown\(true\)/);
-  assert.match(ev, /msg\.event === "retry" && fbActive !== null\) retryStep\(fbActive\)/);
   const count = fnBody(appjs, "startRetryCountdown");
   assert.match(count, /fbEmbedRetry\.hidden\) return/, "never past the retry cap");
   assert.match(count, /retryStep\(i\)/);
@@ -60,11 +59,10 @@ test("the approval seen, Talos counts down and retries by itself — cancellable
   assert.match(fnBody(appjs, "closeBlockedPage"), /stopRetryCountdown\(\)/);
 });
 
-test("the count lives in Talos's page inside the frame, with its own buttons", () => {
+test("the count lives in Talos's page inside the frame, with its Cancel", () => {
   const page = readFileSync(new URL("../public/unblocked.html", import.meta.url), "utf8");
   assert.match(page, /const SECONDS = 5;/, "the same count as the panel's FB_COUNTDOWN");
   assert.match(page, /fetch\("\/unblock\/act", \{ method: "POST", body: word \}\)/);
-  assert.match(page, /id="now">Retry now</);
   assert.match(page, /id="cancel">Cancel</);
   // At the retry cap the page promises nothing (review): the server sends it `?left=0`.
   assert.match(page, /get\("left"\) === "0"/);
@@ -72,7 +70,7 @@ test("the count lives in Talos's page inside the frame, with its own buttons", (
   assert.match(page, /\[hidden\] \{ display:none !important; \}/, "or the flex row ignores hidden");
   // Talos's blue and buttons, not a page of its own style.
   assert.match(page, /--head:#7aa2f7/);
-  assert.match(page, /\.primary \{ background:var\(--fill\)/);
+  assert.match(page, /\.secondary \{ background:none; color:var\(--fg\); border:1px solid var\(--line\)/);
   // And the panel's Retry is Talos's two-line blue button, like Apply.
   assert.match(html, /id="fb-embed-retry" class="applybtn live"><span>Retry<\/span><small id="fb-retry-when">/);
 });
@@ -113,4 +111,31 @@ test("review: no countdown on a page nobody approved, none promised at the cap, 
   assert.match(fnBody(appjs, "paintFbAttempt"), /sayFb\(\)/);
   // Switching rows stops the other row's countdown.
   assert.match(fnBody(appjs, "showFbPanel"), /if \(fbActive !== i\) closeBlockedPage\(\)/);
+});
+
+// #12 (MEASURED in the field, beta.70–74): "Retry now" during the count retried before the
+// approval had taken effect, and failed; letting the count run worked. The count is the one
+// way forward — or Cancel, after which the retry is the user's.
+test("#12: during the count nothing but the count retries", () => {
+  const page = readFileSync(new URL("../public/unblocked.html", import.meta.url), "utf8");
+  assert.doesNotMatch(page, /id="now"|>Retry now<|act\("retry"\)/, "the page offers only Cancel");
+  assert.match(page, /id="cancel">Cancel</);
+  // Cancelled, the page points at the panel's Retry, and keeps no button of its own.
+  const cancel = page.slice(page.indexOf('getElementById("cancel").onclick'));
+  assert.match(cancel, /Press Retry above/);
+  assert.match(cancel, /querySelector\("\.actions"\)\.hidden = true/);
+  // The front no longer hears a page's retry…
+  assert.doesNotMatch(arm("unblock-event"), /"retry"/);
+  // …and refuses any retry while the count runs, whoever asks: the panel's Retry, the row's,
+  // a key on a focused button. The count stops itself BEFORE it retries.
+  assert.match(fnBody(appjs, "retryStep"), /^\{\s*\/\/[^\n]*\n\s*if \(fbCountdown !== null\) return;/);
+  const count = fnBody(appjs, "startRetryCountdown");
+  assert.ok(count.indexOf("stopRetryCountdown()") < count.indexOf("retryStep(i)"));
+  // The two Retry buttons say so: disabled for the count, pressable again once it ends.
+  assert.match(count, /fbHoldRetry\(i, true\)/);
+  assert.match(fnBody(appjs, "stopRetryCountdown"), /fbHoldRetry\(fbCountdownRow, false\)/);
+  const hold = fnBody(appjs, "fbHoldRetry");
+  assert.match(hold, /fbEmbedRetry\.disabled = held/);
+  assert.match(hold, /\[data-fb="retry"\]'\)/);
+  assert.match(hold, /rowRetry\.disabled = held/);
 });
