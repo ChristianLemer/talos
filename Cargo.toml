@@ -37,8 +37,19 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # The download probe (passage.rs): one GET of byte 0, the way the application's own updater
 # will ask. Already in the tree through tauri, with no TLS; `native-tls` is the OS's own stack
 # (Schannel, Security.framework), so it trusts the root a corporate firewall installs there,
-# and `system-proxy` reads the fixed proxy the OS is set to (not an auto-config script).
+# and `system-proxy` reads the fixed proxy the OS is set to. An auto-config script is the OS's
+# own to run (proxy.rs): the two target sections below.
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "system-proxy"] }
+
+# proxy.rs: which proxy WinHTTP's auto-config gives one URL. Already in the tree through tauri.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Networking_WinHttp"] }
+
+# proxy.rs: which proxy CFNetwork's settings and auto-config give one URL. Already in the tree
+# through the TLS stack.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
 
 [[bin]]
 name = "pty-smoke"

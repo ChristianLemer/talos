@@ -4529,6 +4529,10 @@ async fn passage_step(
         "[passage] {} — {}: {:?}",
         step.name, probe.url, probe.verdict
     );
+    // The road of every hop, as the OS gave it: what a pass is checked against.
+    for road in &probe.roads {
+        say(socket, i, &format!("[passage] road — {road}")).await;
+    }
     let (status, ok, blocked) = match &probe.verdict {
         Verdict::Passes => {
             say(

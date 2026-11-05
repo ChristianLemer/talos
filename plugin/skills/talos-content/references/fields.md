@@ -513,10 +513,14 @@ held, and then leave the update to the application. **Talos installs nothing.**
   an `arm64` file beside another. A feed with nothing for this machine is a failure, not a guess.
   `url:` is the file itself, for a tool with no feed.
 - **The probe** is one `GET` of byte 0 (`Range: bytes=0-0`), following redirects, through the
-  engine's own HTTP client. That client uses the OS's TLS trust and the OS's fixed proxy
-  setting. ⚠️ It does not read a proxy auto-config script, which the application itself
-  follows; on such a network the probe goes direct and may not test the application's road. A
-  client agent that tunnels all traffic needs no proxy setting and is not affected. Only a
+  engine's own HTTP client, with the OS's TLS trust. It takes **the application's road**: at
+  every redirect hop it asks the OS which proxy that address takes — a proxy auto-config
+  script included, run by the OS itself (CFNetwork on macOS, WinHTTP with WPAD on Windows) —
+  because a corporate client agent in PAC mode filters only what follows its script, and a
+  probe that went direct would get the file the application is refused. Each hop's road is
+  said on the row (`road — github.com: through http://127.0.0.1:9000`). A road the OS cannot
+  give (its script unreachable, a SOCKS proxy) is a failure, never a pass. On Linux the probe
+  keeps the environment's proxy and reads no script (unmeasured against one). Only a
   **`206` whose type is not text** counts as the file: `application/octet-stream`, or the kind a
   host names (`application/zip`, `application/x-msdownload`). A `206 text/html` is the
   firewall's page, and a `206` with no type is not taken on trust. Anything else is a block: a

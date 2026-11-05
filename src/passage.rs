@@ -19,14 +19,21 @@
 //! approve — and is said as a failure.
 //!
 //! The probe goes through the engine's own HTTP client, never a shell: the OS's TLS stack
-//! (which trusts the root a corporate firewall installs) and the OS's proxy setting (Cargo.toml).
-//! ⚠️ A FIXED proxy only (the environment, Windows' `ProxyServer`, macOS's settings): a proxy
-//! auto-config script is not read, where the application (Chromium's stack) follows it. On such
-//! a network the probe goes direct and may test another road than the application's. A client
-//! agent that tunnels everything (the usual corporate setup) needs no proxy setting at all.
+//! (which trusts the root a corporate firewall installs), on THE APPLICATION'S ROAD. A corporate
+//! client agent commonly runs in proxy auto-config mode: the OS follows a script that sends the
+//! filtered hosts to a local proxy, and whatever does not follow it leaves unfiltered — so a
+//! probe that went direct got `206` while the application, through the script's proxy, got the
+//! firewall's `403` (measured on a Mac). The road is therefore the OS's answer for each address
+//! (proxy.rs), asked again at EVERY redirect, since the host changes (`github.com` → the release
+//! assets' host): redirects are followed here, not by the client. A road the OS cannot give is a
+//! failure, never a pass. Linux keeps the environment's proxy (no script read; unmeasured).
+//! Probing through the webview instead was ruled out: its `fetch` cannot read a cross-origin
+//! status, so it could not tell a `206` from the firewall's page.
 use crate::bundles::Passage;
 use crate::platform::Os;
+use crate::proxy::Route;
 use reqwest::Url;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// What one probe found.
@@ -47,6 +54,9 @@ pub enum Verdict {
 pub struct Probe {
     pub url: String,
     pub verdict: Verdict,
+    /// The road each hop took, in order (`github.com: through http://127.0.0.1:9000`): what the
+    /// row says, so a pass can be checked against the application's own road.
+    pub roads: Vec<String>,
 }
 
 /// The rule, on the final answer after redirects. Pure, so every case is tested offline.
@@ -138,83 +148,142 @@ pub fn file_from_feed(feed: &Url, body: &str, os: Os, arch: &str) -> Result<Url,
         .map_err(|e| format!("the feed names `{name}`, not an address: {e}"))
 }
 
-fn client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(10))
+/// Which road an address takes. The OS's answer in the engine; a stand-in in the tests.
+pub type Resolver = Arc<dyn Fn(&Url) -> Result<Route, String> + Send + Sync>;
+
+/// As many redirects as reqwest's own default policy follows.
+const MAX_REDIRECTS: usize = 10;
+
+fn client(route: &Route) -> Result<reqwest::Client, String> {
+    let builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(20))
-        .user_agent(concat!("Talos/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|e| format!("no HTTP client: {e}"))
+        .user_agent(concat!("Talos/", env!("CARGO_PKG_VERSION")));
+    let builder = match route {
+        Route::Direct => builder.no_proxy(),
+        Route::Proxy(p) => builder.proxy(
+            reqwest::Proxy::all(p.as_str())
+                .map_err(|e| format!("the proxy {p} is unusable: {e}"))?,
+        ),
+        Route::System => builder,
+    };
+    builder.build().map_err(|e| format!("no HTTP client: {e}"))
 }
 
-/// A request that got no answer: too many redirects is a gateway's loop (a block); anything
-/// else — no route, no name, a timeout, a TLS refusal — is the network, and no page helps.
+/// A request that got no answer — no route, no name, a timeout, a TLS refusal — is the network,
+/// and no page helps.
 fn unanswered(e: &reqwest::Error) -> Verdict {
-    if e.is_redirect() {
-        Verdict::Blocked("it never stopped redirecting".into())
-    } else {
-        Verdict::Failed(format!("no answer: {e}"))
+    Verdict::Failed(format!("no answer: {e}"))
+}
+
+/// One GET, its redirects followed by hand: the road is asked again at every hop. The answer
+/// returned is the last one, which is not a redirect (or a redirect with nowhere to go).
+async fn fetch(
+    resolve: &Resolver,
+    start: &Url,
+    range: bool,
+    roads: &mut Vec<String>,
+) -> Result<reqwest::Response, Verdict> {
+    let mut url = start.clone();
+    for _ in 0..=MAX_REDIRECTS {
+        let host = url.host_str().unwrap_or("?").to_string();
+        let (r, u) = (resolve.clone(), url.clone());
+        let route = tokio::task::spawn_blocking(move || r(&u))
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|found| found)
+            .map_err(|e| {
+                Verdict::Failed(format!(
+                    "the system could not say which road {host} takes: {e}"
+                ))
+            })?;
+        roads.push(format!("{host}: {route}"));
+        let mut req = client(&route).map_err(Verdict::Failed)?.get(url.clone());
+        if range {
+            req = req.header(reqwest::header::RANGE, "bytes=0-0");
+        }
+        let resp = req.send().await.map_err(|e| unanswered(&e))?;
+        let next = resp
+            .status()
+            .is_redirection()
+            .then(|| resp.headers().get(reqwest::header::LOCATION))
+            .flatten()
+            .and_then(|l| l.to_str().ok())
+            .and_then(|l| url.join(l).ok());
+        match next {
+            Some(n) => url = n,
+            None => return Ok(resp),
+        }
     }
+    Err(Verdict::Blocked("it never stopped redirecting".into()))
 }
 
 /// Probes the passage: the feed first when there is one (for the file's name), then the file.
+/// Each hop on the road the OS gives it.
 pub async fn probe(passage: &Passage, os: Os) -> Probe {
-    let fail = |url: &str, why: String| Probe {
-        url: url.to_string(),
-        verdict: Verdict::Failed(why),
-    };
-    let client = match client() {
-        Ok(c) => c,
-        Err(e) => return fail("", e),
-    };
+    probe_with(passage, os, Arc::new(crate::proxy::route_for)).await
+}
+
+/// `probe`, with the road given by `resolve`.
+pub async fn probe_with(passage: &Passage, os: Os, resolve: Resolver) -> Probe {
+    let mut roads = Vec::new();
     let file = match (&passage.url, &passage.feed) {
         (Some(url), _) => url.clone(),
         (None, Some(feed)) => {
             let Ok(feed_url) = Url::parse(feed) else {
-                return fail(feed, "the feed is not an address".into());
+                return done(
+                    feed,
+                    Verdict::Failed("the feed is not an address".into()),
+                    roads,
+                );
             };
-            let resp = match client.get(feed_url.clone()).send().await {
+            let resp = match fetch(&resolve, &feed_url, false, &mut roads).await {
                 Ok(r) => r,
-                Err(e) => {
-                    return Probe {
-                        url: feed.clone(),
-                        verdict: unanswered(&e),
-                    }
-                }
+                Err(verdict) => return done(feed, verdict, roads),
             };
             if let Some(verdict) = feed_held(resp.status().as_u16(), header(&resp).as_deref()) {
-                return Probe {
-                    url: feed.clone(),
-                    verdict,
-                };
+                return done(feed, verdict, roads);
             }
             let body = match resp.text().await {
                 Ok(b) => b,
-                Err(e) => return fail(feed, format!("the feed could not be read: {e}")),
+                Err(e) => {
+                    let why = format!("the feed could not be read: {e}");
+                    return done(feed, Verdict::Failed(why), roads);
+                }
             };
             if let Some(verdict) = not_a_feed(&body) {
-                return Probe {
-                    url: feed.clone(),
-                    verdict,
-                };
+                return done(feed, verdict, roads);
             }
             match file_from_feed(&feed_url, &body, os, std::env::consts::ARCH) {
                 Ok(u) => u.to_string(),
-                Err(e) => return fail(feed, e),
+                Err(e) => return done(feed, Verdict::Failed(e), roads),
             }
         }
-        (None, None) => return fail("", "neither `feed:` nor `url:` is declared".into()),
+        (None, None) => {
+            let why = "neither `feed:` nor `url:` is declared".into();
+            return done("", Verdict::Failed(why), roads);
+        }
     };
-    let verdict = match client
-        .get(&file)
-        .header(reqwest::header::RANGE, "bytes=0-0")
-        .send()
-        .await
-    {
+    let Ok(file_url) = Url::parse(&file) else {
+        return done(
+            &file,
+            Verdict::Failed("the file is not an address".into()),
+            roads,
+        );
+    };
+    let verdict = match fetch(&resolve, &file_url, true, &mut roads).await {
         Ok(resp) => classify(resp.status().as_u16(), header(&resp).as_deref()),
-        Err(e) => unanswered(&e),
+        Err(verdict) => verdict,
     };
-    Probe { url: file, verdict }
+    done(&file, verdict, roads)
+}
+
+fn done(url: &str, verdict: Verdict, roads: Vec<String>) -> Probe {
+    Probe {
+        url: url.to_string(),
+        verdict,
+        roads,
+    }
 }
 
 fn header(resp: &reqwest::Response) -> Option<String> {
@@ -370,5 +439,153 @@ mod tests {
         let probe = rt.block_on(probe(&p, Os::Linux));
         assert!(matches!(probe.verdict, Verdict::Failed(_)), "{probe:?}");
         assert_eq!(probe.url, "http://127.0.0.1:9/x.zip");
+    }
+
+    /// A one-thread HTTP stand-in: each connection's request line → the raw answer `reply` gives.
+    async fn stand_in(reply: fn(&str) -> String) -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 4096];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                let answer = reply(req.lines().next().unwrap_or(""));
+                let _ = sock.write_all(answer.as_bytes()).await;
+            }
+        });
+        port
+    }
+
+    fn answer(status: &str, headers: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    /// The origin: `/latest` redirects to a host the machine cannot resolve (only a proxy can
+    /// reach it, like a release-assets host behind the script's proxy); `/direct.zip` is the file.
+    fn origin(line: &str) -> String {
+        if line.contains("/latest") {
+            answer(
+                "302 Found",
+                "Location: http://assets.invalid/held.zip\r\n",
+                "",
+            )
+        } else if line.contains("/to-open") {
+            answer(
+                "302 Found",
+                "Location: http://assets.invalid/open.zip\r\n",
+                "",
+            )
+        } else {
+            answer(
+                "206 Partial Content",
+                "Content-Type: application/octet-stream\r\n",
+                "x",
+            )
+        }
+    }
+
+    /// The script's proxy: the firewall's page for `held`, the file's byte otherwise.
+    fn firewall(line: &str) -> String {
+        if line.contains("held") {
+            answer(
+                "403 Forbidden",
+                "Content-Type: text/html\r\n",
+                "<html>warning</html>",
+            )
+        } else {
+            answer(
+                "206 Partial Content",
+                "Content-Type: application/octet-stream\r\n",
+                "x",
+            )
+        }
+    }
+
+    #[test]
+    fn every_hop_takes_the_road_the_system_gives_it() {
+        // ⭐ The field case: the first host is direct, the host it redirects to goes through
+        // the script's proxy, and the proxy answers the firewall's page. The probe must see the
+        // page, not the direct road's file.
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let o = stand_in(origin).await;
+            let f = stand_in(firewall).await;
+            let proxy = format!("http://127.0.0.1:{f}");
+            let script = {
+                let proxy = proxy.clone();
+                Arc::new(move |u: &Url| {
+                    Ok(if u.host_str() == Some("assets.invalid") {
+                        Route::Proxy(proxy.clone())
+                    } else {
+                        Route::Direct
+                    })
+                }) as Resolver
+            };
+            let at = |path: &str| Passage {
+                feed: None,
+                url: Some(format!("http://127.0.0.1:{o}{path}")),
+            };
+
+            let held = probe_with(&at("/latest"), Os::Linux, script.clone()).await;
+            assert!(
+                matches!(&held.verdict, Verdict::Blocked(why) if why.contains("403")),
+                "{held:?}"
+            );
+            assert_eq!(
+                held.roads,
+                vec![
+                    "127.0.0.1: direct".to_string(),
+                    format!("assets.invalid: through {proxy}")
+                ]
+            );
+            // Through the proxy, a file it lets by passes: the second hop really went there.
+            let open = probe_with(&at("/to-open"), Os::Linux, script.clone()).await;
+            assert_eq!(open.verdict, Verdict::Passes, "{open:?}");
+            // Direct all the way, the file passes, as before.
+            let direct = probe_with(&at("/direct.zip"), Os::Linux, script).await;
+            assert_eq!(direct.verdict, Verdict::Passes, "{direct:?}");
+            assert_eq!(direct.roads, vec!["127.0.0.1: direct".to_string()]);
+
+            // A system that cannot say the road: a failure, never a pass on the direct road.
+            let blind: Resolver = Arc::new(|_: &Url| Err("no script".to_string()));
+            let unknown = probe_with(&at("/direct.zip"), Os::Linux, blind).await;
+            assert!(
+                matches!(&unknown.verdict, Verdict::Failed(why) if why.contains("which road")),
+                "{unknown:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_redirect_loop_is_a_block() {
+        fn looping(_: &str) -> String {
+            answer("302 Found", "Location: /again\r\n", "")
+        }
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let o = stand_in(looping).await;
+            let p = Passage {
+                feed: None,
+                url: Some(format!("http://127.0.0.1:{o}/x.zip")),
+            };
+            let direct: Resolver = Arc::new(|_: &Url| Ok(Route::Direct));
+            let probe = probe_with(&p, Os::Linux, direct).await;
+            assert!(
+                matches!(&probe.verdict, Verdict::Blocked(why) if why.contains("redirecting")),
+                "{probe:?}"
+            );
+            assert_eq!(probe.roads.len(), MAX_REDIRECTS + 1);
+        });
     }
 }

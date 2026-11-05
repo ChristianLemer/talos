@@ -25,6 +25,7 @@ mod passage;
 mod plan_facts;
 mod platform;
 mod profiles;
+mod proxy;
 mod pty;
 mod relocate;
 mod selection;
