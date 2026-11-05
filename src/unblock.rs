@@ -27,8 +27,9 @@
 //! person's; and no proxy of wry's own (`mac-proxy` off), so the page takes the system's road,
 //! PAC included — a passage's application's road (brew's own downloads, by curl, follow the
 //! environment's proxy instead, as the browser did). ⚠️ wry's WKWebView answers no
-//! authentication challenge: a proxy asking for credentials leaves the page blank there —
-//! "Open in my browser" stays the way out. If the view cannot be made, the front falls back to
+//! authentication challenge: a proxy asking for credentials leaves the page blank there, and so
+//! may a block page on plain `http://` if App Transport Security applies to the child (not
+//! read, not measured) — "Open in my browser" stays the way out. If the view cannot be made, the front falls back to
 //! the browser.
 //!
 //! The approval only helps winget if the proxy remembers it per user or per machine (the

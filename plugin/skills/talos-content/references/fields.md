@@ -541,8 +541,9 @@ held, and then leave the update to the application. **Talos installs nothing.**
 - **What the row says.** `206`: the row reads `download passes`, and `update it in the app` when
   it is behind; run the update in the application. The journal records a `probe` line either way. The row is then done for the session: the next Apply does not ask
   again until a **Refresh**. Held: the 403 panel opens with the file's page. On Windows and
-  macOS the page opens inside Talos; once it lets the download through, a 5-second count runs
-  and Talos asks again by itself. On Linux the panel offers the browser, and its Retry asks
+  macOS the page opens inside Talos; once it hands over the file, a 5-second count runs and
+  Talos asks again by itself. A page that shows what it lets through instead (macOS displays a
+  text feed, a held `latest-mac.yml`) starts no count: press Retry. On Linux the panel offers the browser, and its Retry asks
   again. Whenever such a check gets the `206`, the panel says so — approved, the next update in
   the application will go through, Talos installed nothing — and closes on its button. Still
   held, the panel stays. The row never reads `ready` without a `206`.
