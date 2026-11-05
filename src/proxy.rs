@@ -38,7 +38,7 @@ impl std::fmt::Display for Route {
         match self {
             Route::Direct => write!(f, "direct"),
             Route::Proxy(p) => write!(f, "through {p}"),
-            Route::System => write!(f, "the fixed proxy setting, if any"),
+            Route::System => write!(f, "the proxy setting (fixed, or the environment's), if any"),
         }
     }
 }
@@ -77,9 +77,11 @@ fn pick(entries: &[Entry]) -> Result<Route, String> {
 /// WinHTTP's proxy list (`host:port`, several separated by `;` or spaces, possibly
 /// `scheme=host:port` per scheme) as a road: the `https=` entry when there is one, since the
 /// probed addresses are https, else the first entry for every scheme, else the `http=` one. An
-/// empty list, or one that names only other schemes, is direct.
+/// empty list, or `DIRECT`, is direct. A list that names only another scheme (`socks=h:p`, what
+/// a script's `SOCKS` becomes) is an error: the application goes through it, so direct would
+/// be another road.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn from_winhttp_list(list: &str) -> Route {
+fn from_winhttp_list(list: &str) -> Result<Route, String> {
     let entries: Vec<&str> = list
         .split(|c: char| c == ';' || c.is_whitespace())
         .filter(|e| !e.is_empty())
@@ -90,9 +92,13 @@ fn from_winhttp_list(list: &str) -> Route {
         .or_else(|| entries.iter().find(|e| !e.contains('=')).copied())
         .or_else(|| entries.iter().find_map(|e| e.strip_prefix("http=")));
     match chosen {
-        None => Route::Direct,
-        Some(p) if p.contains("://") => Route::Proxy(p.to_string()),
-        Some(p) => Route::Proxy(format!("http://{p}")),
+        None if entries.is_empty() => Ok(Route::Direct),
+        None => Err(format!(
+            "the system sends it to `{list}`, a proxy the probe does not speak"
+        )),
+        Some(p) if p.eq_ignore_ascii_case("direct") => Ok(Route::Direct),
+        Some(p) if p.contains("://") => Ok(Route::Proxy(p.to_string())),
+        Some(p) => Ok(Route::Proxy(format!("http://{p}"))),
     }
 }
 
@@ -170,7 +176,8 @@ mod os {
             }));
         }
         let target = wide(url.as_str());
-        let ask = |options: &mut WINHTTP_AUTOPROXY_OPTIONS| -> Result<Route, u32> {
+        // Err: WinHTTP's error code; Ok: the list read as a road (or why it is not one).
+        let ask = |options: &mut WINHTTP_AUTOPROXY_OPTIONS| -> Result<Result<Route, String>, u32> {
             let mut info: WINHTTP_PROXY_INFO = unsafe { std::mem::zeroed() };
             if unsafe { WinHttpGetProxyForUrl(session, target.as_ptr(), options, &mut info) } == 0 {
                 return Err(unsafe { GetLastError() });
@@ -178,7 +185,7 @@ mod os {
             let list = unsafe { take(info.lpszProxy) }.unwrap_or_default();
             unsafe { take(info.lpszProxyBypass) };
             Ok(match info.dwAccessType {
-                WINHTTP_ACCESS_TYPE_NO_PROXY => Route::Direct,
+                WINHTTP_ACCESS_TYPE_NO_PROXY => Ok(Route::Direct),
                 _ => from_winhttp_list(&list),
             })
         };
@@ -197,7 +204,7 @@ mod os {
             match ask(&mut options) {
                 Ok(route) => {
                     unsafe { WinHttpCloseHandle(session) };
-                    return Ok(route);
+                    return route;
                 }
                 Err(ERROR_WINHTTP_AUTODETECTION_FAILED) => {}
                 Err(code) => result = Err(format!("WPAD lookup failed (error {code})")),
@@ -215,9 +222,11 @@ mod os {
             };
             // A script the settings name and that cannot be run is a failure: the application
             // follows that script, and the probe does not know where it would go.
-            result = ask(&mut options).map_err(|code| {
-                format!("the proxy script {script} could not be run (error {code})")
-            });
+            result = ask(&mut options)
+                .map_err(|code| {
+                    format!("the proxy script {script} could not be run (error {code})")
+                })
+                .and_then(|route| route);
         }
         unsafe { WinHttpCloseHandle(session) };
         result
@@ -236,8 +245,8 @@ mod os {
     use core_foundation_sys::error::CFErrorRef;
     use core_foundation_sys::number::{kCFNumberSInt32Type, CFNumberGetTypeID, CFNumberGetValue};
     use core_foundation_sys::runloop::{
-        kCFRunLoopRunTimedOut, CFRunLoopAddSource, CFRunLoopGetCurrent, CFRunLoopRemoveSource,
-        CFRunLoopRunInMode, CFRunLoopSourceRef, CFRunLoopStop,
+        kCFRunLoopRunHandledSource, CFRunLoopAddSource, CFRunLoopGetCurrent, CFRunLoopRemoveSource,
+        CFRunLoopRunInMode, CFRunLoopSourceInvalidate, CFRunLoopSourceRef, CFRunLoopStop,
     };
     use core_foundation_sys::string::{CFStringGetTypeID, CFStringRef};
     use core_foundation_sys::url::{CFURLGetTypeID, CFURLRef};
@@ -370,8 +379,13 @@ mod os {
         unsafe { CFRunLoopStop(CFRunLoopGetCurrent()) };
     }
 
+    /// One script run at a time in the process: Chromium serialises them too, since concurrent
+    /// runs on separate threads misbehave.
+    static SCRIPT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Runs a script on this thread's own run loop, for 20 s at most.
     unsafe fn run_script(raw: &Raw, target: CFURLRef) -> Result<Vec<Entry>, String> {
+        let _one = SCRIPT.lock().unwrap_or_else(|e| e.into_inner());
         let mut slot: Slot = None;
         let mut ctx = ClientContext {
             version: 0,
@@ -396,15 +410,19 @@ mod os {
         let run_loop = CFRunLoopGetCurrent();
         CFRunLoopAddSource(run_loop, source, mode.as_concrete_TypeRef());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        // Stopped (the callback ran), timed out, or finished (nothing left to run): all end the
+        // wait. Only a source handled without the answer keeps it going.
         while slot.is_none() {
             let left = deadline.saturating_duration_since(std::time::Instant::now());
             if left.is_zero()
                 || CFRunLoopRunInMode(mode.as_concrete_TypeRef(), left.as_secs_f64(), 0)
-                    == kCFRunLoopRunTimedOut
+                    != kCFRunLoopRunHandledSource
             {
                 break;
             }
         }
+        // Invalidated before release: a late answer can never reach `slot` once this returns.
+        CFRunLoopSourceInvalidate(source);
         CFRunLoopRemoveSource(run_loop, source, mode.as_concrete_TypeRef());
         CFRelease(source.cast());
         slot.unwrap_or_else(|| Err("the proxy script gave no answer in 20 s".into()))
@@ -434,16 +452,24 @@ mod os {
                 return Err("the system gave no proxy answer".into());
             }
             // The first entry decides; a script is run first, and its own first entry decides.
-            let result = if CFArrayGetCount(list) == 0 {
-                Ok(Route::Direct)
-            } else {
-                match read(CFArrayGetValueAtIndex(list, 0) as CFDictionaryRef) {
+            // A script that cannot be run gives way to the next entry, as CFNetwork does (an
+            // auto-discovery with no WPAD server, followed by "none"); the last one cannot.
+            let count = CFArrayGetCount(list);
+            let mut result = Ok(Route::Direct);
+            for i in 0..count {
+                result = match read(CFArrayGetValueAtIndex(list, i) as CFDictionaryRef) {
                     Raw::Entry(e) => pick(&[e]),
                     raw => run_script(&raw, target.as_concrete_TypeRef())
                         .map_err(|e| format!("the system's proxy script could not be run: {e}"))
                         .and_then(|found| pick(&found)),
+                };
+                let script_failed = result
+                    .as_ref()
+                    .is_err_and(|e| e.starts_with("the system's proxy script"));
+                if !script_failed {
+                    break;
                 }
-            };
+            }
             CFRelease(list.cast());
             CFRelease(settings.cast());
             result
@@ -474,23 +500,24 @@ mod tests {
 
     #[test]
     fn a_winhttp_list_gives_its_first_proxy() {
+        let proxy = |p: &str| Ok(Route::Proxy(p.into()));
         assert_eq!(
             from_winhttp_list("127.0.0.1:9000"),
-            Route::Proxy("http://127.0.0.1:9000".into())
+            proxy("http://127.0.0.1:9000")
         );
-        assert_eq!(
-            from_winhttp_list("a:1; b:2"),
-            Route::Proxy("http://a:1".into())
-        );
+        assert_eq!(from_winhttp_list("a:1; b:2"), proxy("http://a:1"));
         assert_eq!(
             from_winhttp_list("http=h:80;https=s:443"),
-            Route::Proxy("http://s:443".into())
+            proxy("http://s:443")
         );
         assert_eq!(
             from_winhttp_list("ftp=f:21;http=h:80"),
-            Route::Proxy("http://h:80".into())
+            proxy("http://h:80")
         );
-        assert_eq!(from_winhttp_list("ftp=f:21"), Route::Direct);
-        assert_eq!(from_winhttp_list(""), Route::Direct);
+        assert_eq!(from_winhttp_list(""), Ok(Route::Direct));
+        assert_eq!(from_winhttp_list("DIRECT"), Ok(Route::Direct));
+        // A script's SOCKS answer: the application goes through it, so never direct.
+        assert!(from_winhttp_list("socks=s:1080").is_err());
+        assert!(from_winhttp_list("ftp=f:21").is_err());
     }
 }

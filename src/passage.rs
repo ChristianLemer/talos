@@ -27,6 +27,9 @@
 //! (proxy.rs), asked again at EVERY redirect, since the host changes (`github.com` → the release
 //! assets' host): redirects are followed here, not by the client. A road the OS cannot give is a
 //! failure, never a pass. Linux keeps the environment's proxy (no script read; unmeasured).
+//! Through a proxy, an https address is a `CONNECT` tunnel: the measured agent accepts it and
+//! answers inside (its `307` to the gateway's page), which is classified as usual. A proxy that
+//! refused the tunnel itself would be a failure — no page comes back, so none can be approved.
 //! Probing through the webview instead was ruled out: its `fetch` cannot read a cross-origin
 //! status, so it could not tell a `206` from the firewall's page.
 use crate::bundles::Passage;
