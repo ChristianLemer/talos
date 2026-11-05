@@ -1470,9 +1470,9 @@ function openForbidden(url) {
 }
 
 // The blocked page INSIDE Talos (unblock.rs): the panel grows, and the server lays a webview
-// over #fb-frame — the rectangle sent here, and again whenever it moves. A 403 happens on
-// Windows, where this works; when it cannot (`unblock-unavailable`), the panel stays small and
-// offers the browser.
+// over #fb-frame — the rectangle sent here, and again whenever it moves. Windows and macOS; when
+// it cannot (`unblock-unavailable`: Linux, or a view that could not be made), the panel stays
+// small and offers the browser.
 let fbEmbedded = false;
 const fbFrame = document.getElementById("fb-frame");
 const fbEmbedRetry = document.getElementById("fb-embed-retry");
@@ -1486,8 +1486,12 @@ function openBlockedPage(url) {
   fbEl.classList.add("embedded");
   sayFb();
   // After layout: the frame has its size only once the panel has grown.
+  // A passage's page ends on a check, not a download: its let-through page says so.
+  const passage = fbActive !== null && !!model.pkgs.get(fbActive)?.passage;
   requestAnimationFrame(() => {
-    if (fbEmbedded) ws.send(JSON.stringify({ type: "unblock-open", url, rect: fbFrameRect() }));
+    if (fbEmbedded) {
+      ws.send(JSON.stringify({ type: "unblock-open", url, rect: fbFrameRect(), passage }));
+    }
   });
 }
 // Takes the page away with the panel's embedded look. The server also closes it when the user
@@ -1538,7 +1542,9 @@ function startRetryCountdown() {
   const i = fbActive;
   let left = FB_COUNTDOWN;
   fbRetryOff = false;
-  fbSay.textContent = "Access granted. Talos retries the download for you.";
+  fbSay.textContent = model.pkgs.get(i)?.passage
+    ? "Access granted. Talos checks that the download comes through."
+    : "Access granted. Talos retries the download for you.";
   const paint = () => { fbRetryWhen.textContent = `in ${left} s`; };
   paint();
   fbCountdownRow = i;
@@ -1593,6 +1599,7 @@ watchScale();
 function showFbPanel(i, url, inside) {
   // Another row's block: its page and its countdown go first.
   if (fbActive !== i) closeBlockedPage();
+  fbDoneLook(false);
   fbActive = i;
   fbRetryOff = false;
   fbActiveUrl = url;
@@ -1710,6 +1717,35 @@ function setFbControlsEnabled(i, on) {
   }
 }
 
+// A passage row whose block is being checked again (its Retry, or the count's): when that check
+// finds the file coming through (`ready`), the panel says so before it goes — approved, the
+// application's next update takes the file, Talos installed nothing — instead of vanishing.
+let fbPassageCheck = null;
+const fbTitle = document.getElementById("fb-title");
+const fbDoneBtn = document.getElementById("fb-done");
+const FB_TITLE = fbTitle.textContent;
+function fbDoneLook(done) {
+  fbEl.classList.toggle("done", done);
+  fbDoneBtn.hidden = !done;
+  fbTitle.textContent = done ? "Access approved" : FB_TITLE;
+  document.querySelector(".fb-mark").textContent = done ? "✓" : "!";
+}
+function showPassageDone(i) {
+  const name = model.pkgs.get(i)?.name || "the application";
+  closeBlockedPage();
+  fbActive = null;
+  fbActiveUrl = null;
+  fbDoneLook(true);
+  fbSay.textContent =
+    `The next update in ${name} will go through. Talos installed nothing — ` +
+    `${name} updates itself.`;
+  fbEl.classList.add("show");
+}
+fbDoneBtn.onclick = () => {
+  fbDoneLook(false);
+  fbEl.classList.remove("show");
+};
+
 function clearForbidden(i) {
   const r = rows[i];
   if (r && r.fbBanner) {
@@ -1749,6 +1785,10 @@ function decideForbidden(gesture) {
 function retryStep(i) {
   // The count to the automatic retry is running: it is the one that retries (#12).
   if (fbCountdown !== null) return;
+  // Set only where a retry is really sent: a refused one must leave no check waiting.
+  const checkPassage = () => {
+    if (model.pkgs.get(i)?.passage) fbPassageCheck = i;
+  };
   // Paused mid-Apply: the loop is holding for us, so ask it to RE-RUN this row.
   // The banner stays until the retry's own verdict lands (a `step` event settles
   // it) — clearing it now would claim success we don't have yet.
@@ -1759,7 +1799,7 @@ function retryStep(i) {
     // The modal goes (it would cover the run it just started); the row banner
     // stays, because nothing has been settled yet.
     if (fbActive === i) dismissFbModal();
-    decideForbidden("retry");
+    if (decideForbidden("retry")) checkPassage();
     // The banner stays (nothing is settled) but its controls are now INERT: the
     // server is running, not waiting, so none of the three has anything to answer.
     // Say that visually instead of letting a click land on nothing.
@@ -1780,6 +1820,7 @@ function retryStep(i) {
   runRow = i;
   doneNote = "";
   refreshLiveness();
+  checkPassage();
   ws.send(JSON.stringify(passage ? { type: "passage", i } : { type: "retry-step", i, action }));
 }
 
@@ -2722,10 +2763,16 @@ ws.onmessage = (ev) => {
       // A step that settled ok clears any lingering firewall recovery UI (the
       // 403 was transient — the exit code is truth). Retry / new run also reset it.
       if (msg.status === "ok" || msg.status === "ready" || msg.status === "absent") clearForbidden(msg.i);
+      // The check of an approved passage settled: passing, the panel says so; held again, the
+      // `forbidden` that follows brings the panel back as before.
+      if (msg.i === fbPassageCheck && msg.status !== "probing") {
+        fbPassageCheck = null;
+        if (msg.status === "ready") showPassageDone(msg.i);
+      }
       break;
     case "forbidden":
       // Live: a download was blocked by the firewall. Show the row banner (durable) and the
-      // panel. Where the page can open inside Talos (`inside`, Windows), it opens at once —
+      // panel. Where the page can open inside Talos (`inside`: Windows, macOS), it opens at once —
       // the approval is the one thing to do. Elsewhere the steps stay, and the browser opens
       // only on a click, so the guidance is read before a window covers it. url may be null
       // (nothing extractable → link-less message).

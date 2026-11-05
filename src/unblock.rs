@@ -15,12 +15,16 @@
 //! ⚠️ `Window::add_child` is behind Tauri's `unstable` feature (Cargo.toml). Its API may move
 //! between Tauri minors; `Cargo.lock` pins it, so the risk is only met at a deliberate update.
 //!
-//! ⚠️ WINDOWS ONLY, by measurement. On Linux Tauri packs a child webview into the window's
-//! GTK box instead of placing it (tauri-runtime-wry `build_gtk(vbox)`): MEASURED under Xvfb,
-//! the page took the lower half and squeezed the panel into the upper one, whatever rectangle
-//! was asked; WebKitGTK also never reported the download. macOS places it like Windows on
-//! paper, but no Mac measured it. Elsewhere `open` says no — a 403 happens on Windows — and the
-//! panel offers the browser without opening the page inside.
+//! ⚠️ WINDOWS AND macOS. On Linux Tauri packs a child webview into the window's GTK box instead
+//! of placing it (tauri-runtime-wry `build_gtk(vbox)`): MEASURED under Xvfb, the page took the
+//! lower half and squeezed the panel into the upper one, whatever rectangle was asked;
+//! WebKitGTK also never reported the download. There `open` says no, and the panel offers the
+//! browser without opening the page inside. macOS is measured on Windows' terms by reading,
+//! not by a run: wry places a WKWebView child at the rectangle like WebView2, turns a response
+//! WebKit cannot show (the file the approval lets through) into a WKDownload that reaches
+//! `on_download` (wry `wkwebview/download.rs`), and sets no proxy of its own unless its
+//! `mac-proxy` feature is on (it is not), so the page takes the system's road, PAC included —
+//! the application's. If the view cannot be made there, the front falls back to the browser.
 //!
 //! The approval only helps winget if the proxy remembers it per user or per machine (the
 //! child uses the system proxy and Windows authentication, like winget). A proxy that keys
@@ -77,6 +81,11 @@ const LABEL: &str = "unblock";
 const LET_THROUGH: &str = "http://127.0.0.1:1420/unblocked.html";
 /// The same page when no retry is left for this block: it says so, with no count and no button.
 const LET_THROUGH_NO_RETRY: &str = "http://127.0.0.1:1420/unblocked.html?left=0";
+/// The same page for a passage (`unblock:`): its count ends on a check, not a download.
+const LET_THROUGH_PASSAGE: &str = "http://127.0.0.1:1420/unblocked.html?passage=1";
+
+/// Whether the page shown is a passage's: Talos downloads nothing after it, it checks.
+static PASSAGE: AtomicBool = AtomicBool::new(false);
 
 /// Whether the block shown may still be retried. The 403 pause knows (it caps the retries) and
 /// says so for as long as it holds (`RetryLeft`); the page let through must not promise a retry
@@ -135,10 +144,19 @@ pub fn page_url(url: &str) -> Result<tauri::Url, String> {
     }
 }
 
-/// Can a page open inside Talos here? Windows, and a Talos window in this process. The front
-/// then opens it the moment a download is blocked, without a step to click first.
+/// Whether this OS places a child webview where it is asked: Windows (measured) and macOS
+/// (read in wry, not run). Not Linux (measured broken).
+fn placed_here() -> bool {
+    matches!(
+        crate::platform::current_os(),
+        crate::platform::Os::Windows | crate::platform::Os::Darwin
+    )
+}
+
+/// Can a page open inside Talos here? Windows or macOS, and a Talos window in this process. The
+/// front then opens it the moment a download is blocked, without a step to click first.
 pub fn available() -> bool {
-    crate::platform::current_os() == crate::platform::Os::Windows && APP.get().is_some()
+    placed_here() && APP.get().is_some()
 }
 
 fn events() -> std::sync::MutexGuard<'static, VecDeque<Event>> {
@@ -182,24 +200,28 @@ pub fn init(app: &AppHandle) {
 /// Opens the blocked page over `rect` of the main window, replacing any page already shown.
 /// `Err(reason)`: no Talos window here (the dev server in a browser, a headless run) or the
 /// webview could not be made — the front then falls back to the browser.
-pub fn open(url: &str, rect: Rect) -> Result<(), String> {
+/// `passage`: the block is a passage's (`unblock:`), whose let-through page promises a check.
+pub fn open(url: &str, rect: Rect, passage: bool) -> Result<(), String> {
     let url = page_url(url)?;
-    if crate::platform::current_os() != crate::platform::Os::Windows {
-        return Err("a page inside the window is measured on Windows only".into());
+    if !placed_here() {
+        return Err("a page inside the window is not placed right on this system".into());
     }
     let app = APP
         .get()
         .ok_or("no Talos window in this process (a browser on the dev server?)")?;
     let window = app.get_window("main").ok_or("the main window is gone")?;
     close();
+    PASSAGE.store(passage, Ordering::SeqCst);
     let builder = WebviewBuilder::new(LABEL, tauri::WebviewUrl::External(url))
         .on_download(|view, event| {
             if let tauri::webview::DownloadEvent::Requested { url, .. } = event {
                 println!("[unblock] the page let {url} through — not downloaded here");
-                let page = if RETRY_LEFT.load(Ordering::SeqCst) {
-                    LET_THROUGH
-                } else {
+                let page = if !RETRY_LEFT.load(Ordering::SeqCst) {
                     LET_THROUGH_NO_RETRY
+                } else if PASSAGE.load(Ordering::SeqCst) {
+                    LET_THROUGH_PASSAGE
+                } else {
+                    LET_THROUGH
                 };
                 if let Ok(done) = page.parse() {
                     let _ = view.navigate(done);
@@ -297,9 +319,22 @@ mod tests {
             w: 10.0,
             h: 10.0,
         };
-        assert!(open("https://example.com", rect).is_err());
+        assert!(open("https://example.com", rect, false).is_err());
+        assert!(open("https://example.com", rect, true).is_err());
         close();
         place(rect);
+    }
+
+    #[test]
+    fn the_page_opens_inside_talos_on_windows_and_macos_not_linux() {
+        // Linux measured broken (the page squeezes the panel); macOS placed like Windows.
+        use crate::platform::{current_os, Os};
+        assert_eq!(
+            placed_here(),
+            matches!(current_os(), Os::Windows | Os::Darwin)
+        );
+        // Without a Talos window in the process, never.
+        assert!(!available());
     }
 
     #[test]

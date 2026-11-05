@@ -540,10 +540,12 @@ held, and then leave the update to the application. **Talos installs nothing.**
   button, which runs the same probe on demand.
 - **What the row says.** `206`: the row reads `download passes`, and `update it in the app` when
   it is behind; run the update in the application. The journal records a `probe` line either way. The row is then done for the session: the next Apply does not ask
-  again until a **Refresh**. Held: the 403 panel opens with the file's page. On Windows the page
-  opens inside Talos and Talos asks again by itself once the page lets the download through.
-  Elsewhere the panel offers the browser, and its Retry asks again. The row never reads `ready`
-  without a `206`.
+  again until a **Refresh**. Held: the 403 panel opens with the file's page. On Windows and
+  macOS the page opens inside Talos; once it lets the download through, a 5-second count runs
+  and Talos asks again by itself. When that check gets the `206`, the panel says so — approved,
+  the next update in the application will go through, Talos installed nothing — and closes on
+  its button. Still held, the panel stays. On Linux the panel offers the browser, and its Retry
+  asks again. The row never reads `ready` without a `206`.
 - It needs `version: "self"`, `detect:` and a `winget:` or `brew:` id, for the same reason as
   `update:`: only the manager announces a newer version. It does not go with `update:`, because
   the Apply would run the command and never probe. `--check` names each of these.

@@ -4024,15 +4024,16 @@ async fn unblock_act(headers: axum::http::HeaderMap, body: String) -> Response {
 /// by the 403 pause alike, since the page is used while the Apply is held.
 const UNBLOCK_MSGS: [&str; 3] = ["unblock-open", "unblock-move", "unblock-close"];
 
-/// `unblock-open` {url, rect} → the page over that rectangle, answered `unblock-shown`, or
+/// `unblock-open` {url, rect, passage?} → the page over that rectangle, answered `unblock-shown`, or
 /// `unblock-unavailable` {reason} and the front opens the browser instead. `unblock-move`
 /// {rect} follows a resize; `unblock-close` takes the page away.
 async fn unblock_message(socket: &mut WebSocket, kind: &str, parsed: &serde_json::Value) {
     match kind {
         "unblock-open" => {
             let url = parsed.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            let passage = parsed.get("passage").and_then(|v| v.as_bool()) == Some(true);
             let shown = match crate::unblock::rect_of(parsed) {
-                Some(rect) => crate::unblock::open(url, rect),
+                Some(rect) => crate::unblock::open(url, rect, passage),
                 None => Err("no place to show it".to_string()),
             };
             let reply = match shown {

@@ -69,6 +69,9 @@
     document.querySelector(".actions").hidden = true;
     throw new Error("no retry left"); // nothing below applies
   }
+  // `?passage=1`: the block was a passage's (`unblock:`) — Talos installs nothing, its count
+  // ends on a check that the file now comes through, and the application downloads it.
+  const passage = new URLSearchParams(location.search).get("passage") === "1";
   const ring = document.querySelector(".ring .left");
   const n = document.getElementById("n");
   const say = document.getElementById("say");
@@ -78,14 +81,17 @@
   const paint = () => {
     n.textContent = left;
     ring.style.strokeDashoffset = `${circumference * (1 - left / SECONDS)}px`;
-    say.textContent = `Talos retries the download in ${left} second${left === 1 ? "" : "s"}.`;
+    const when = `in ${left} second${left === 1 ? "" : "s"}`;
+    say.textContent = passage
+      ? `Talos checks the download comes through ${when}.`
+      : `Talos retries the download ${when}.`;
   };
   paint();
   let timer = setInterval(() => {
     left -= 1;
     if (left <= 0) {
       clearInterval(timer);
-      say.textContent = "Retrying…";
+      say.textContent = passage ? "Checking…" : "Retrying…";
       n.textContent = "✓";
       return;
     }

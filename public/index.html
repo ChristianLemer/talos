@@ -775,6 +775,8 @@
       /* Retry is the Apply button's twin: its second line says when it will happen. */
       .fb-actions .applybtn { min-width:140px; }
       #fb-frame { display:none; }
+      /* A passage approved (showPassageDone): the panel says it is done, and only Close is left. */
+      #forbidden.done .fb-actions > button:not(#fb-done) { display:none; }
       #forbidden.embedded #fb-frame { display:flex; flex:1; min-height:120px; margin:16px 22px 20px;
                   border:1px solid var(--line); border-radius:10px; background:var(--surface);
                   color:var(--dim); align-items:center; justify-content:center; font-size:13px; }
@@ -1069,7 +1071,7 @@
       <div class="fb-head">
         <div class="fb-mark" aria-hidden="true">!</div>
         <div class="fb-text">
-          <h2>A download was blocked by the corporate firewall</h2>
+          <h2 id="fb-title">A download was blocked by the corporate firewall</h2>
           <p class="fb-embed-say"></p>
           <!-- Named by paintFbAttempt on a repeat block: a second identical panel with no
                count reads as "my click did nothing". -->
@@ -1082,6 +1084,8 @@
           <button id="fb-giveup" class="dlgbtn-sec">Skip this one</button>
           <button id="fb-stop" class="dlgbtn-sec" hidden>Stop the Apply</button>
           <button id="fb-embed-retry" class="applybtn live"><span>Retry</span><small id="fb-retry-when">once approved</small></button>
+          <!-- The passage's last word (showPassageDone): approved, and the application updates. -->
+          <button id="fb-done" class="applybtn live" hidden>Close</button>
         </div>
       </div>
       <div id="fb-frame">Loading the blocked page…</div>
