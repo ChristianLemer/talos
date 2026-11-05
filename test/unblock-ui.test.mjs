@@ -139,3 +139,26 @@ test("#12: during the count nothing but the count retries", () => {
   assert.match(hold, /\[data-fb="retry"\]'\)/);
   assert.match(hold, /rowRetry\.disabled = held/);
 });
+
+// A passage approved (2026-11-05, operator): the check that follows ends on its word.
+import * as M from "../public/model.js";
+
+test("a passage's check ends on 'approved' only when that check gets the 206", () => {
+  // Probing keeps waiting; another row's step changes nothing.
+  assert.deepEqual(M.passageCheckStep(3, 3, "probing"), { check: 3, done: false });
+  assert.deepEqual(M.passageCheckStep(3, 4, "ready"), { check: 3, done: false });
+  // The 206: the panel says it.
+  assert.deepEqual(M.passageCheckStep(3, 3, "ready"), { check: null, done: true });
+  // Held again or failed: the wait ends, nothing approved is said.
+  for (const s of ["forbidden", "fail"]) {
+    assert.deepEqual(M.passageCheckStep(3, 3, s), { check: null, done: false });
+  }
+  // No check waited for: a plain `ready` (a probe that simply passed) says nothing.
+  assert.deepEqual(M.passageCheckStep(null, 3, "ready"), { check: null, done: false });
+});
+
+test("the approved panel clears an earlier attempt's note, and no check outlives its run", () => {
+  assert.match(fnBody(appjs, "showPassageDone"), /fbAttemptEl\.hidden = true/);
+  assert.match(arm("done"), /fbPassageCheck = null/);
+  assert.match(appjs, /M\.passageCheckStep\(fbPassageCheck, msg\.i, msg\.status\)/);
+});

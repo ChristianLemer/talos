@@ -83,7 +83,7 @@
     ring.style.strokeDashoffset = `${circumference * (1 - left / SECONDS)}px`;
     const when = `in ${left} second${left === 1 ? "" : "s"}`;
     say.textContent = passage
-      ? `Talos checks the download comes through ${when}.`
+      ? `Talos checks ${when} that the download comes through.`
       : `Talos retries the download ${when}.`;
   };
   paint();

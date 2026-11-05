@@ -1735,6 +1735,9 @@ function showPassageDone(i) {
   closeBlockedPage();
   fbActive = null;
   fbActiveUrl = null;
+  // An earlier attempt's "blocked too" must not sit under "approved".
+  fbAttemptEl.hidden = true;
+  fbAttemptEl.textContent = "";
   fbDoneLook(true);
   fbSay.textContent =
     `The next update in ${name} will go through. Talos installed nothing — ` +
@@ -2765,9 +2768,10 @@ ws.onmessage = (ev) => {
       if (msg.status === "ok" || msg.status === "ready" || msg.status === "absent") clearForbidden(msg.i);
       // The check of an approved passage settled: passing, the panel says so; held again, the
       // `forbidden` that follows brings the panel back as before.
-      if (msg.i === fbPassageCheck && msg.status !== "probing") {
-        fbPassageCheck = null;
-        if (msg.status === "ready") showPassageDone(msg.i);
+      {
+        const after = M.passageCheckStep(fbPassageCheck, msg.i, msg.status);
+        fbPassageCheck = after.check;
+        if (after.done) showPassageDone(msg.i);
       }
       break;
     case "forbidden":
@@ -2834,6 +2838,9 @@ ws.onmessage = (ev) => {
       paintBar();
       break;
     case "done":
+      // A check the server answered with no step (the row left scope, no `unblock:` here) must
+      // not wait on: a later, unapproved `ready` would read as this approval.
+      fbPassageCheck = null;
       applyRunning = false;
       runKind = null;
       runRow = null;
@@ -2891,6 +2898,7 @@ ws.onmessage = (ev) => {
 };
 ws.onclose = () => {
   conn = "closed";
+  fbPassageCheck = null;
   paintBar();
   hideRescanVeil(); // don't leave the veil stuck on
   hideWait(); // don't leave the banner stuck on

@@ -529,6 +529,14 @@ export function isPassageReady(model, i) {
 export function isPassageBehind(model, i) {
   return isPassageReady(model, i) && !!model.pkgs.get(i)?.outdated;
 }
+// A passage row's check after its block (its Retry, or the count's), as a `step` for row `i` with
+// `status` lands: `probing` keeps waiting; `ready` (the 206) ends it on the "approved" panel; any
+// other status ends it with nothing to say, and the panel the block brings back speaks. Another
+// row's step changes nothing. `check` is the row waited for, or null.
+export function passageCheckStep(check, i, status) {
+  if (check === null || i !== check || status === "probing") return { check, done: false };
+  return { check: null, done: status === "ready" };
+}
 // Will the next Apply probe this row's own download (it is behind, and declares `unblock:`)?
 export function isPassageNext(model, i) {
   const p = model.pkgs.get(i);

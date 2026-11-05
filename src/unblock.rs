@@ -19,12 +19,17 @@
 //! of placing it (tauri-runtime-wry `build_gtk(vbox)`): MEASURED under Xvfb, the page took the
 //! lower half and squeezed the panel into the upper one, whatever rectangle was asked;
 //! WebKitGTK also never reported the download. There `open` says no, and the panel offers the
-//! browser without opening the page inside. macOS is measured on Windows' terms by reading,
-//! not by a run: wry places a WKWebView child at the rectangle like WebView2, turns a response
-//! WebKit cannot show (the file the approval lets through) into a WKDownload that reaches
-//! `on_download` (wry `wkwebview/download.rs`), and sets no proxy of its own unless its
-//! `mac-proxy` feature is on (it is not), so the page takes the system's road, PAC included —
-//! the application's. If the view cannot be made there, the front falls back to the browser.
+//! browser without opening the page inside. macOS is READ in wry 0.55, not run: a WKWebView child
+//! placed at the rectangle like WebView2 (top-left origin converted for the parent view); a
+//! response WebKit cannot show (an installer, an archive) turned into a WKDownload that reaches
+//! `on_download` (wry `wkwebview/download.rs`) — but one it can show (a text feed, a PDF) is
+//! displayed, `Content-Disposition` notwithstanding, so no count starts and Retry is the
+//! person's; and no proxy of wry's own (`mac-proxy` off), so the page takes the system's road,
+//! PAC included — a passage's application's road (brew's own downloads, by curl, follow the
+//! environment's proxy instead, as the browser did). ⚠️ wry's WKWebView answers no
+//! authentication challenge: a proxy asking for credentials leaves the page blank there —
+//! "Open in my browser" stays the way out. If the view cannot be made, the front falls back to
+//! the browser.
 //!
 //! The approval only helps winget if the proxy remembers it per user or per machine (the
 //! child uses the system proxy and Windows authentication, like winget). A proxy that keys
@@ -326,14 +331,8 @@ mod tests {
     }
 
     #[test]
-    fn the_page_opens_inside_talos_on_windows_and_macos_not_linux() {
-        // Linux measured broken (the page squeezes the panel); macOS placed like Windows.
-        use crate::platform::{current_os, Os};
-        assert_eq!(
-            placed_here(),
-            matches!(current_os(), Os::Windows | Os::Darwin)
-        );
-        // Without a Talos window in the process, never.
+    fn without_a_talos_window_no_page_is_available() {
+        // Whatever the OS, a process with no Talos window (a test, a headless run) offers none.
         assert!(!available());
     }
 
