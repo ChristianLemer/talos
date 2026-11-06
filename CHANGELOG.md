@@ -4,7 +4,7 @@ One section per stable release, newest first. A release page shows its version's
 (`admin/release-notes.sh`), then the commits since the tag before. The `v0.0.1-beta.N` builds
 that led to 0.1.0 have no section of their own: their pages list their commits.
 
-## 0.1.0 — unreleased
+## 0.1.0 — 2026-11-06
 
 The first stable release. Talos shows what a machine really has, lets a person choose what
 should be there, and converges, showing every step.
