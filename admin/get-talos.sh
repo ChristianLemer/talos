@@ -12,7 +12,7 @@
 #                   else the newest release
 #   --content DIR   a folder holding `catalog/` and `bundles/`: YOUR content, copied into
 #                   the kit in place of the socle. Without it, the kit gets the SOCLE of
-#                   the same release — `talos-content.zip`, what a stranger receives
+#                   the same release — `talos-content-<version>.zip`, what a stranger receives
 #   --verify        recompute every file in the kit against MANIFEST.sha256 and exit 1 on
 #                   the first difference. Offline; run it on any synced replica
 #
@@ -43,7 +43,7 @@
 # from a local extraction: a synced replica has the old archive or the new one, never half
 # of the content, which loose files on a share cannot promise. The loose copy beside it is
 # for engines older than the archive, which read nothing else; it can go once no machine
-# runs one. Without `--content` the archive IS the release's `talos-content.zip`, copied;
+# runs one. Without `--content` the archive IS the release's `talos-content-<version>.zip`, copied;
 # with it, it is built here from the folders just placed (`zip`, else `ditto` on macOS,
 # else `python3`), so the two copies are the same content.
 #

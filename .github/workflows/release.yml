@@ -168,12 +168,15 @@ jobs:
           # A tag containing "-" (v0.1.0-beta.1) is flagged pre-release.
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: ${{ matrix.artifacts }}
-          fail_on_unmatched_files: false # bundle naming varies by version; don't hard-fail
+          # Every name is fixed by the tag: a file missing from the upload is a defect to see,
+          # not a fallback the scripts would quietly take.
+          fail_on_unmatched_files: true
 
   # The release page, written once every build is in (#5): what Talos is, which file is for
   # which machine, the one command — then this version's section of CHANGELOG.md when it has
   # one, then the commits since the previous tag. Most people who land on a release page never
-  # read the README. Runs even when one build failed: the page still says what it holds.
+  # read the README. Runs even when one build failed: the page still says what the release is
+  # meant to hold (its table is fixed; the assets list below it is GitHub's own).
   notes:
     needs: build
     if: ${{ !cancelled() }}

@@ -21,22 +21,22 @@ there — a graphical installer for a team's tools that shows what it does. A te
 **kit**: these launchers beside its own \`catalog/\` and \`bundles/\`, in one folder it launches
 from a shared drive.
 
-### Compose a kit from this release
+## Compose a kit from this release
 
 \`\`\`bash
 # macOS or Linux
-curl -fsSL $DL/get-talos.sh | sh -s -- ./Talos
+curl -fsSL $DL/get-talos.sh | sh -s -- ./Talos --version $TAG
 \`\`\`
 
 \`\`\`powershell
 # Windows (Windows PowerShell 5.1 is enough)
-irm $DL/get-talos.ps1 | iex
+& ([scriptblock]::Create((irm $DL/get-talos.ps1))) -Kit .\\Talos -Version $TAG
 \`\`\`
 
 The script verifies every file against this page's checksums and composes the kit with this
 release's example content; \`--content <folder>\` (\`-Content\`) puts yours in its place.
 
-### Which file
+## Which file
 
 | File | For |
 |---|---|
@@ -57,16 +57,16 @@ if [ -f CHANGELOG.md ]; then
         /^## / { on = ($0 ~ "^## \\[?" v "\\]?([ ]|$)") ; if (on) next }
         on' CHANGELOG.md)"
     if [ -n "$(printf '%s' "$SECTION" | tr -d '[:space:]')" ]; then
-        printf '\n### What changed\n%s\n' "$SECTION"
+        printf '\n## What changed\n%s\n' "$SECTION"
     fi
 fi
 
 # The commits since the previous tag; all of them for the first one.
 PREV="$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)"
 if [ -n "$PREV" ]; then
-    printf '\n### Commits since %s\n\n' "$PREV"
+    printf '\n## Commits since %s\n\n' "$PREV"
     git log --no-merges --format='- %s (%h)' "$PREV..$TAG"
 else
-    printf '\n### Commits\n\n'
+    printf '\n## Commits\n\n'
     git log --no-merges --format='- %s (%h)' "$TAG"
 fi

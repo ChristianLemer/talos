@@ -26,7 +26,7 @@
 #                   else the newest release
 #   -Content DIR    a folder holding `catalog\` and `bundles\`: YOUR content, copied into
 #                   the kit in place of the socle. Without it, the kit gets the SOCLE of
-#                   the same release -- `talos-content.zip`, what a stranger receives
+#                   the same release -- `talos-content-<version>.zip`, what a stranger receives
 #   -Verify         recompute every file in the kit against MANIFEST.sha256 and exit 1 on
 #                   the first difference. Offline; run it on any synced replica
 #
@@ -69,7 +69,7 @@
 # from a local extraction: a synced replica has the old archive or the new one, never half
 # of the content, which loose files on a share cannot promise. The loose copy beside it is
 # for engines older than the archive, which read nothing else; it can go once no machine
-# runs one. Without -Content the archive IS the release's `talos-content.zip`, copied; with
+# runs one. Without -Content the archive IS the release's `talos-content-<version>.zip`, copied; with
 # it, it is built here from the folders just placed (Compress-Archive -- 5.1 writes
 # backslash entry names, which the engine reads as separators).
 #
