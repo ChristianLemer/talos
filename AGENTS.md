@@ -14,24 +14,24 @@ choose what should be there, and converges. Rust + Tauri backend, plain-JS front
 **English everywhere in the artefact** — UI text, comments, commit messages, docs. Zero French
 in committed files. The conversation with the operator is usually French; the code never is.
 
-## Version control: git, direct on `beta` — no PRs, tags mark releases
+## Version control: git, direct on `main` — no PRs, tags mark releases
 
 Since 2026-09-05 the operator no longer commits by hand. Agents commit, with **git**,
-straight on `beta`, in a plain git clone — the jj era is over for this repo (the
+straight on `main`, in a plain git clone — the jj era is over for this repo (the
 operator drove it with jj, colocated, until then; an old note saying `jj describe`
 or `jj new` describes that era).
 
 ⚠️ **This did not end at 0.1.0.** An older note (and this file, until 0.1.0) said the stable
 release would switch the flow to a branch per intention, a PR, and a squash-merge by the
 operator. The operator decided otherwise on 2026-11-01: there are no PRs. A session lands
-its own work on `beta`, and releases are marked by tags. The loop, every time:
+its own work on `main`, and releases are marked by tags. The loop, every time:
 
-1. **A worktree per intention**, from `beta` (below).
+1. **A worktree per intention**, from `main` (below).
 2. **The four verifications**, green, in that worktree.
 3. **A review by another agent** — a fresh sub-agent that did not write the code, given the
    diff rather than the author's conclusions. Its findings are absorbed (fixed, or answered
    with a reason) before landing. The session that implemented may then land the work itself.
-4. **Fast-forward `beta` and push.** Linear: rebase the worktree onto `origin/beta` first if
+4. **Fast-forward `main` and push.** Linear: rebase the worktree onto `origin/main` first if
    it moved; never a merge commit. A fast-forward that fails stops the landing — check it on
    its own line, never at the head of an `&&` chain or through a pipe that hides its status.
 
@@ -43,8 +43,8 @@ Rules that stay:
 
 - **Never work in the main checkout.** Every change, a one-line fix included, is made in a
   worktree of its own (Orca creates them: `orca worktree create --name <intention>
-  --base-branch beta`); the main checkout is only ever pulled, fast-forwarded onto the
-  finished branch and pushed. "Direct on `beta`" says where commits LAND, not where they
+  --base-branch main`); the main checkout is only ever pulled, fast-forwarded onto the
+  finished branch and pushed. "Direct on `main`" says where commits LAND, not where they
   are made. The `docs` symlink is per checkout, so link it in the worktree too.
 - **Never rewrite pushed history.** The repo has been rewritten twice (2026-08-09, and
   once more after); each time left dead build stamps behind. A third time is not on.
@@ -62,19 +62,15 @@ What stays true; the counts are one command away.
 
 | ref | what | ask git |
 |---|---|---|
-| `beta` | **the living branch**, and the GitHub default; linear, no merge commits | `git rev-list --merges --count beta` → 0 |
-| `main` | the primordial empty commit — deliberately, work is on `beta` | |
-| tags | `v*`, all on `beta`, one per release; beta.1–19 were retired on 2026-09-06 with their releases | `git tag --sort=v:refname` |
+| `main` | **the living branch**, and the GitHub default; linear, no merge commits | `git rev-list --merges --count main` → 0 |
+| tags | `v*`, all on `main`, one per release; beta.1–19 were retired on 2026-09-06 with their releases | `git tag --sort=v:refname` |
 | visibility | **public** since 2026-09-06, after a history audit the same day | `gh repo view --json visibility` |
 
-⚠️ **The living branch was called `tauri` until 2026-08-09.** It was renamed because the name
-described the *framework* — and the framework had already been replaced once (Deno →
-Rust/Tauri), so it was one migration away from lying again. An old note, handoff or shell
-history citing `tauri` means `beta`. The branch `tauri` no longer exists.
-
-⚠️ **`beta` the branch and `beta.N` the tags are two different things.** The branch is *where
-work happens*; the tags are *released builds*. A future 1.0 will still live on a branch called
-`beta` — the name will be wrong then, and that was a knowing trade-off.
+⚠️ **The living branch has had three names**: `tauri` until 2026-08-09 (dropped because it
+named the framework, already replaced once), then `beta`, then `main` from v0.1.0
+(2026-11-06), when the beta line ended. Each rename kept the history, commit for commit. An
+old note, handoff or shell history citing `tauri` or `beta` as a BRANCH means `main`; neither
+branch exists any more. The `v0.0.1-beta.N` tags are past releases and keep their names.
 
 `docs/` is **gitignored** — the field notes (handoffs, plans, specs, session states) describe
 specific corporate estates, so they are not in the repo. Do not try to `git add` them back,
@@ -220,7 +216,7 @@ releases that carried them (beta.1–19) were retired on 2026-09-06.
   the template too, below); a test that names a file names the fixture. Keep the two apart: the socle is real, the fixture is complete.
 - **`.claude-plugin/marketplace.json`** + **`plugin/`** — the repo is also a Claude Code
   marketplace serving one plugin, `talos` (`claude plugin install talos@talos`; the GitHub
-  default branch is `beta`, so `github:ChristianLemer/talos` resolves to the living
+  default branch is `main`, so `github:ChristianLemer/talos` resolves to the living
   branch). Two skills — `talos-content` (the doctrine and the **field reference**,
   `plugin/skills/talos-content/references/fields.md`) and `talos-kit` (composing,
   `--verify`, the Doctor) — plus `/talos:init`, which scaffolds an integrator's content

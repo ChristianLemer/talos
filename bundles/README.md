@@ -17,7 +17,7 @@ Talos --check catalog bundles     # exit 1 on a broken file, an unknown name, a 
 ## The full field reference
 
 Every key, what the engine does with it, and the traps:
-**[`plugin/skills/talos-content/references/fields.md`](https://github.com/ChristianLemer/talos/blob/beta/plugin/skills/talos-content/references/fields.md)**
+**[`plugin/skills/talos-content/references/fields.md`](https://github.com/ChristianLemer/talos/blob/main/plugin/skills/talos-content/references/fields.md)**
 
 It moved out of this file so there would be exactly one copy of it: it is now the
 reference *inside the `talos` plugin*, guarded by a test that fails when the engine grows

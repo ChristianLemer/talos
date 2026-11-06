@@ -51,7 +51,7 @@ verbatim copy — that is the only reason the copy can still be trusted months l
 
 If `CLAUDE_PLUGIN_ROOT` is unset, say so and stop rather than reconstructing the files from
 memory. The template is at
-`https://github.com/ChristianLemer/talos/tree/beta/plugin/template`.
+`https://github.com/ChristianLemer/talos/tree/main/plugin/template`.
 
 ## 3 — Pin the engine
 
