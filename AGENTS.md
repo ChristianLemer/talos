@@ -41,7 +41,7 @@ everything the tag carries since the previous one, not only the last branch.
 
 Rules that stay:
 
-- **Never work in the main checkout.** Every change, a one-line fix included, is made in a
+- **Never work in the main checkout** (the primary clone, not the branch). Every change, a one-line fix included, is made in a
   worktree of its own (Orca creates them: `orca worktree create --name <intention>
   --base-branch main`); the main checkout is only ever pulled, fast-forwarded onto the
   finished branch and pushed. "Direct on `main`" says where commits LAND, not where they
@@ -68,7 +68,7 @@ What stays true; the counts are one command away.
 
 ⚠️ **The living branch has had three names**: `tauri` until 2026-08-09 (dropped because it
 named the framework, already replaced once), then `beta`, then `main` from v0.1.0
-(2026-11-06), when the beta line ended. Each rename kept the history, commit for commit. An
+(2026-11-06), when the beta line ended; that last rename kept the history, commit for commit. An
 old note, handoff or shell history citing `tauri` or `beta` as a BRANCH means `main`; neither
 branch exists any more. The `v0.0.1-beta.N` tags are past releases and keep their names.
 
