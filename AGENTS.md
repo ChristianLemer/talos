@@ -121,9 +121,15 @@ Edit the master and regenerate; never touch `icons/` by hand.
 
 The Mac deliverable is `target/release/bundle/macos/Talos.app`, never the bare binary. A release
 is triggered by pushing a `v*` tag: `.github/workflows/release.yml` builds natively per OS
-(Tauri does not cross-compile) and attaches `Talos-macos-aarch64.app.zip`, `Talos.exe`,
-`Talos-linux-x86_64`, `talos-content.zip` (the socle, checked by the Linux build before
-zipping) and BOTH kit scripts, `admin/get-talos.sh` + `admin/get-talos.ps1`.
+(Tauri does not cross-compile) and attaches each launcher under its version and target triple
+(`Talos-<ver>-aarch64-apple-darwin.app.zip`, `Talos-<ver>-x86_64-pc-windows-msvc.exe`,
+`Talos-<ver>-x86_64-unknown-linux-gnu`), `talos-content-<ver>.zip` (the socle, checked by the
+Linux build before zipping) and BOTH kit scripts, `admin/get-talos.sh` + `admin/get-talos.ps1`.
+The betas' names (`Talos-macos-aarch64.app.zip`, `Talos.exe`, `Talos-linux-x86_64`,
+`talos-content.zip`) ride along as the same files: scripts and CI copies already in content
+repos fetch them, and nothing updates a copy. A last job writes the release page
+(`admin/release-notes.sh`: what Talos is, which file, the command, this version's
+`CHANGELOG.md` section, the commits since the previous tag).
 
 ⚠️ **A release is TWO halves**: the binary *and* `catalog/` + `bundles/`, which the exe reads
 from disk. Shipping the exe alone tests a mixture and fails misleadingly. Any handoff says

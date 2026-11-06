@@ -88,10 +88,6 @@ set -eu
 
 REPO="ChristianLemer/talos"
 API="https://api.github.com/repos/$REPO/releases"
-MAC_ASSET="Talos-macos-aarch64.app.zip"
-WIN_ASSET="Talos.exe"
-LNX_ASSET="Talos-linux-x86_64"
-CONTENT_ASSET="talos-content.zip"
 
 DEST=""
 TAG=""
@@ -180,6 +176,24 @@ grep -o -E '"(name|size|digest)": *("[^"]*"|[0-9]+)' "$TMP/release.json" \
                       else if ($1 == "\"size") s = $2
                       else if ($1 == "\"digest") print n, s, $2 }' > "$TMP/assets.txt"
 [ -s "$TMP/assets.txt" ] || { echo "release $TAG publishes no asset digests — refusing to compose an unverifiable kit" >&2; exit 1; }
+
+# Each asset by its target-triple name (`Talos-<version>-<triple>`, from v0.1.0), else by the
+# name of the releases before — so a kit pinned to an older tag composes as it always did.
+# Neither published: the first name, which the digest check below refuses by name.
+VER="${TAG#v}"
+pick() {
+    for n in "$@"; do
+        if awk -v a="$n" '$1 == a { f = 1 } END { exit !f }' "$TMP/assets.txt"; then
+            echo "$n"
+            return 0
+        fi
+    done
+    echo "$1"
+}
+MAC_ASSET="$(pick "Talos-$VER-aarch64-apple-darwin.app.zip" Talos-macos-aarch64.app.zip)"
+WIN_ASSET="$(pick "Talos-$VER-x86_64-pc-windows-msvc.exe" Talos.exe)"
+LNX_ASSET="$(pick "Talos-$VER-x86_64-unknown-linux-gnu" Talos-linux-x86_64)"
+CONTENT_ASSET="$(pick "talos-content-$VER.zip" talos-content.zip)"
 
 # Which assets: the three launchers always — the kit does not depend on who composed it;
 # the socle only when no content is given.

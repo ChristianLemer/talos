@@ -111,10 +111,6 @@ if ($PSVersionTable.PSVersion.Major -ge 6) { $IsWindowsHost = $IsWindows }
 
 $Repo = 'ChristianLemer/talos'
 $Api = "https://api.github.com/repos/$Repo/releases"
-$MacAsset = 'Talos-macos-aarch64.app.zip'
-$WinAsset = 'Talos.exe'
-$LnxAsset = 'Talos-linux-x86_64'
-$ContentAsset = 'talos-content.zip'
 
 function Fail([string]$Message) {
     # NOT Write-Error: with $ErrorActionPreference = 'Stop' that throws, and a throw inside
@@ -288,6 +284,19 @@ try {
     if ($published.Count -eq 0) {
         Fail "release $Version publishes no asset digests - refusing to compose an unverifiable kit"
     }
+
+    # Each asset by its target-triple name (`Talos-<version>-<triple>`, from v0.1.0), else by
+    # the name of the releases before -- so a kit pinned to an older tag composes as it always
+    # did. Neither published: the first name, which the digest check below refuses by name.
+    $ver = $Version -replace '^v', ''
+    function Pick([string[]]$Names) {
+        foreach ($n in $Names) { if ($published.ContainsKey($n)) { return $n } }
+        return $Names[0]
+    }
+    $MacAsset = Pick @("Talos-$ver-aarch64-apple-darwin.app.zip", 'Talos-macos-aarch64.app.zip')
+    $WinAsset = Pick @("Talos-$ver-x86_64-pc-windows-msvc.exe", 'Talos.exe')
+    $LnxAsset = Pick @("Talos-$ver-x86_64-unknown-linux-gnu", 'Talos-linux-x86_64')
+    $ContentAsset = Pick @("talos-content-$ver.zip", 'talos-content.zip')
 
     # The three launchers always -- the kit does not depend on who composed it; the socle
     # only when no content is given.

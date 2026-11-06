@@ -90,9 +90,10 @@ code is the contract.
 
 ### 2 — The engine: a release, not a build
 
-Every tag `v*` publishes the launchers on the [Releases](../../releases) page: the
-zipped `Talos.app` (Apple Silicon), `Talos.exe` (x64), the bare Linux binary — and
-`talos-content.zip`, the socle of that same tag, plus the kit script. They are the same
+Every tag `v*` publishes the launchers on the [Releases](../../releases) page, each named
+after its version and target: the zipped `Talos.app` (Apple Silicon), the Windows exe (x64),
+the bare Linux binary — and `talos-content-<version>.zip`, the socle of that same tag, plus
+the kit scripts. They are the same
 engine for everyone; you download, you do not compile.
 
 If you do want to build (to change the engine, not the content): [Rust](https://rustup.rs)
