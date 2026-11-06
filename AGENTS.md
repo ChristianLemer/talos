@@ -14,13 +14,30 @@ choose what should be there, and converges. Rust + Tauri backend, plain-JS front
 **English everywhere in the artefact** — UI text, comments, commit messages, docs. Zero French
 in committed files. The conversation with the operator is usually French; the code never is.
 
-## Version control: git, direct on `beta`, until the 0.1.0 freeze
+## Version control: git, direct on `beta` — no PRs, tags mark releases
 
 Since 2026-09-05 the operator no longer commits by hand. Agents commit, with **git**,
 straight on `beta`, in a plain git clone — the jj era is over for this repo (the
 operator drove it with jj, colocated, until then; an old note saying `jj describe`
-or `jj new` describes that era). After the 0.1.0 freeze the flow becomes a branch per
-intention and a PR to `beta`, squash-merged by the operator.
+or `jj new` describes that era).
+
+⚠️ **This did not end at 0.1.0.** An older note (and this file, until 0.1.0) said the stable
+release would switch the flow to a branch per intention, a PR, and a squash-merge by the
+operator. The operator decided otherwise on 2026-11-01: there are no PRs. A session lands
+its own work on `beta`, and releases are marked by tags. The loop, every time:
+
+1. **A worktree per intention**, from `beta` (below).
+2. **The four verifications**, green, in that worktree.
+3. **A review by another agent** — a fresh sub-agent that did not write the code, given the
+   diff rather than the author's conclusions. Its findings are absorbed (fixed, or answered
+   with a reason) before landing. The session that implemented may then land the work itself.
+4. **Fast-forward `beta` and push.** Linear: rebase the worktree onto `origin/beta` first if
+   it moved; never a merge commit. A fast-forward that fails stops the landing — check it on
+   its own line, never at the head of an `&&` chain or through a pipe that hides its status.
+
+A **tag** is the only release gesture (below): `vX.Y.Z` is a stable release, marked *Latest*;
+a tag with a suffix (`vX.Y.Z-beta.N`) is a pre-release. The review before a tag covers
+everything the tag carries since the previous one, not only the last branch.
 
 Rules that stay:
 
@@ -32,7 +49,9 @@ Rules that stay:
 - **Never rewrite pushed history.** The repo has been rewritten twice (2026-08-09, and
   once more after); each time left dead build stamps behind. A third time is not on.
 - **Tag = release.** Pushing `v*` builds and publishes; only tag a commit that passed the
-  four verifications, and say in the tag message what the release is for.
+  four verifications and a review of everything since the previous tag, and say in the tag
+  message what the release is for. Check that the tag names the reviewed commit
+  (`git rev-parse <tag>^{commit}`) before pushing it.
 - **`_*` is gitignored** (local scratch). Editing only a `_*` file and committing
   produces an EMPTY commit.
 - **A change made with an AI assistant says so in a trailer.**
