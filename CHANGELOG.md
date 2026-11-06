@@ -31,6 +31,9 @@ should be there, and converges, showing every step.
   locked.
 - **Says what is wrong with content.** `Talos --check` reads a content folder the strict way;
   the Doctor tab offers the rescue packages a content declares.
+- **Ships an example, not a policy.** The `catalog/` and `bundles/` published with a release
+  are a starting point to copy into a team's own content. They name no system runtime that
+  other software shares, so a first Apply never proposes removing one.
 - **Comes with an authoring kit.** The repo is a Claude Code marketplace: the `talos` plugin
   holds the content doctrine, the field reference, and `/talos:init`, which scaffolds a team's
   content repository.
@@ -41,6 +44,8 @@ should be there, and converges, showing every step.
   `talos-content-0.1.0.zip`. The names of the betas are published too, as the same files.
 - `releases/latest/download/get-talos.sh` (and `.ps1`) now resolves: this is the first release
   that is not a pre-release.
+- With no tag and no `.talos-version` pin, the kit scripts compose the newest stable release; a
+  beta is fetched by its tag.
 
 ### Known limits
 - The launchers are not signed or notarised.
