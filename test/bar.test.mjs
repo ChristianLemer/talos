@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { barView, planSub, IDLE_HINT } from "../public/bar.js";
+import { barView, planSub, IDLE_HINT, NOTHING_NOTE } from "../public/bar.js";
 
 const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 const appjs = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
@@ -158,6 +158,17 @@ test("an Apply the engine found nothing for says so — only while the plan is e
   assert.equal(text(barView({ ...open, actions: [], note })), note);
   // Beside a plan it would contradict the lit button ("already matches · 1 to remove").
   assert.equal(text(barView({ ...open, actions: ["uninstall"], note })), "1 to remove");
+  assert.equal(note, NOTHING_NOTE);
+});
+
+test("the note an Apply ended with (a repaired PATH) is said beside a plan too", () => {
+  const note = "User PATH repaired by User PATH repair. Terminals and programs opened from now on use it; the ones already open keep the old one.";
+  assert.equal(text(barView({ ...open, actions: [], note })), note);
+  // Still true beside what is left to do, unlike "nothing to do".
+  assert.equal(text(barView({ ...open, actions: ["install"], note })), `1 to install · ${note}`);
+  // app.js takes it from the server's `done`.
+  const done = appjs.slice(appjs.indexOf('case "done":'), appjs.indexOf("break;", appjs.indexOf('case "done":')));
+  assert.match(done, /doneNote = msg\.nothing \? NOTHING_NOTE : msg\.note \|\| ""/);
 });
 
 // --- the wiring -----------------------------------------------------------------
@@ -165,7 +176,7 @@ test("an Apply the engine found nothing for says so — only while the plan is e
 test("app.js paints the bar from bar.js, and the old status word is gone", () => {
   const appjs = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
   const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
-  assert.match(appjs, /import \{ barView \} from "\.\/bar\.js";/);
+  assert.match(appjs, /import \{ barView, NOTHING_NOTE \} from "\.\/bar\.js";/);
   assert.match(appjs, /classList\.toggle\("primary", v\.quitPrimary\)/);
   // A row that starts clears the transient word ("retrying…"), or it masks the progress for
   // the rest of the run; and the plan's arrival repaints, or "starting…" outlives it.

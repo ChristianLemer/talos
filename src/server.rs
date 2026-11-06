@@ -3395,6 +3395,8 @@ async fn apply_diff(
     // Each dependent is re-checked at most ONCE per Apply, whatever number of its requirements
     // change: half of the bound (`dependents_of` being direct is the other half).
     let mut rechecked: HashSet<usize> = HashSet::new();
+    // The rows that repaired the user's PATH in this Apply, for the ONE note at its end.
+    let mut path_repaired_by: Vec<String> = Vec::new();
     'plan: for (pos, (i, action)) in plan.iter().enumerate() {
         if *action == Action::Uninstall && replaced.contains(i) {
             if let Some(why) = replacement_missing(&steps[*i], steps, &replacer_present) {
@@ -3427,6 +3429,9 @@ async fn apply_diff(
         };
         let (outcome, stop_all) =
             step_with_forbidden_pause(socket, state, *i, *action, &steps[*i], is_cask, aim).await;
+        if outcome.path_repaired && !path_repaired_by.contains(&steps[*i].name) {
+            path_repaired_by.push(steps[*i].name.clone());
+        }
         // Only a step that succeeded re-probes; a failed one leaves the presence as it was.
         if let (Some(now), Some(after)) = (replacer_present.get_mut(i), outcome.after.as_ref()) {
             *now = after.present == Some(true);
@@ -3531,9 +3536,47 @@ async fn apply_diff(
     flush_behaviour(state).await;
     state.brew_pins.lock().await.clear(); // rows the Apply did not reach leave no answer behind
     clear_sudo_pw(state).await; // end of Apply: the cached password is cleared (model C)
+    let note = path_note(&path_repaired_by);
+    if let Some(note) = &note {
+        // Every gesture leaves a trace: the note the person read, in the journal too. A
+        // record naming no package, which the install reader skips (`append_record`).
+        crate::consent::append_record(
+            &state.consent,
+            &json!({
+                "at": chrono::Utc::now().to_rfc3339(),
+                "note": "path-repaired",
+                "by": path_repaired_by,
+            }),
+        );
+        println!("[apply] {note}");
+    }
     let _ = socket
-        .send(Message::Text(json!({ "type": "done" }).to_string()))
+        .send(Message::Text(
+            json!({ "type": "done", "note": note }).to_string(),
+        ))
         .await;
+}
+
+/// The note an Apply ends with when rows of it printed `tail::PATH_REPAIRED`, or `None`.
+/// ONE sentence however many rows said it, naming them. INFORMATIVE ONLY: it states what
+/// changed and asks the person for nothing — no sign-out, no restart, nothing to close.
+///
+/// ⭐ What it claims is what was measured on Windows 11 (2026-11-06), a user PATH stored as
+/// REG_SZ holding `%USERPROFILE%` repaired to REG_EXPAND_SZ by a row that then broadcasts
+/// `WM_SETTINGCHANGE`: a program started from Explorer afterwards, and a NEW tab of a Windows
+/// Terminal opened before the repair, both find winget, with no sign-out; a shell already
+/// running keeps the PATH it was started with. Talos itself needs nothing: every later step
+/// of the same Apply reads the repaired value (`platform::WIN_PATH_REFRESH` re-reads it from
+/// the registry for each command, and .NET expands a REG_EXPAND_SZ there).
+fn path_note(rows: &[String]) -> Option<String> {
+    if rows.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "User PATH repaired by {}. Terminals and programs opened from now on use it; the ones \
+         already open keep the old one.",
+        rows.join(", ")
+    ))
 }
 
 /// What ONE pty run produced. NAMED rather than a tuple because three of its five fields
@@ -4491,6 +4534,8 @@ struct StepOutcome {
     /// cancelled or had no command. What the Apply compares with the presence it decided from,
     /// to learn whether the step changed the package (`step_changed_package`).
     after: Option<crate::detect::Presence>,
+    /// The step succeeded and printed `tail::PATH_REPAIRED`: the Apply ends with `path_note`.
+    path_repaired: bool,
 }
 
 /// The upgrade of a `self` row with `unblock:`: probe the download the application will make
@@ -4623,6 +4668,7 @@ async fn passage_step(
         ok,
         blocked,
         after: None,
+        path_repaired: false,
     }
 }
 
@@ -5152,6 +5198,7 @@ async fn do_step(
         ok: ok && unmoved.is_none(),
         blocked,
         after,
+        path_repaired: !failed && !cancelled && crate::tail::says_path_repaired(&output),
     }
 }
 
@@ -5935,6 +5982,87 @@ mod tests {
         ];
         let idx = crate::deps::make_index(&nodes);
         assert!(unanswered_hold(Action::Install, &silent, &nodes[1], &nodes, &idx).is_some());
+    }
+
+    /// ⭐ A user PATH repaired mid-Apply: the winget rows after it run in THAT Apply, with no
+    /// restart. Measured on Windows 11 (2026-11-06): Talos started with a REG_SZ user PATH (its
+    /// upgrade scan exits 127, the winget row reads unknown), the repair row ran first, then
+    /// `winget install jqlang.jq` succeeded in the same Apply. What makes it so, pinned here:
+    /// the row is not held on its unknown because its requirement is absent now, it is not
+    /// blocked because the requirement will be present, and it is ordered after it.
+    ///
+    /// ⚠️ The requirement must have an uninstall (`runUninstall:`) to count as reachable: the
+    /// first measurement's stand-in had none, and the winget row left the plan silently.
+    #[test]
+    fn the_rows_after_a_path_repair_run_in_the_same_apply() {
+        use crate::decision::Action;
+        let row = |name: &str, requires: &[&str], present_now: bool, reachable: bool| {
+            crate::deps::DepNode {
+                name: name.into(),
+                requires: requires.iter().map(|r| r.to_string()).collect(),
+                will_be_present: true,
+                present_now,
+                reachable,
+            }
+        };
+        let silent = crate::detect::Presence {
+            present: None,
+            reason: Some("winget did not answer (exit 127): presence unknown".into()),
+            unanswered: true,
+            ..Default::default()
+        };
+        let nodes = vec![
+            row("jq", &["User PATH repair"], false, true),
+            row("User PATH repair", &[], false, true),
+        ];
+        let idx = crate::deps::make_index(&nodes);
+        assert_eq!(
+            unanswered_hold(Action::Install, &silent, &nodes[0], &nodes, &idx),
+            None
+        );
+        assert_eq!(crate::deps::requires_blocked(&nodes[0], &nodes, &idx), None);
+        let plan =
+            crate::deps::topo_sort(&[(0, Action::Install), (1, Action::Install)], &nodes, &idx);
+        assert_eq!(plan.iter().map(|(i, _)| *i).collect::<Vec<_>>(), [1, 0]);
+        // Without an uninstall the repair is not reachable, and the winget row is blocked.
+        let nodes = vec![
+            row("jq", &["User PATH repair"], false, true),
+            row("User PATH repair", &[], false, false),
+        ];
+        let idx = crate::deps::make_index(&nodes);
+        assert!(crate::deps::requires_blocked(&nodes[0], &nodes, &idx).is_some());
+    }
+
+    /// The note an Apply ends with after a PATH repair: one sentence, naming every row that
+    /// said it, and asking for nothing.
+    #[test]
+    fn a_path_repair_ends_the_apply_with_one_informative_note() {
+        assert_eq!(path_note(&[]), None);
+        let one = path_note(&["User PATH repair".into()]).unwrap();
+        assert!(
+            one.starts_with("User PATH repaired by User PATH repair."),
+            "{one}"
+        );
+        let two = path_note(&["A".into(), "B".into()]).unwrap();
+        assert!(two.contains("by A, B."), "{two}");
+        for word in [
+            "sign out", "restart", "close", "reopen", "log out", "reboot",
+        ] {
+            assert!(
+                !two.to_lowercase().contains(word),
+                "asks for `{word}`: {two}"
+            );
+        }
+        // Wired ONCE per Apply: each row named once, the note sent with `done` and journalled.
+        let apply = fn_body("apply_diff");
+        assert_eq!(
+            apply.matches("path_repaired_by.push(").count(),
+            1,
+            "{apply}"
+        );
+        assert!(apply.contains("!path_repaired_by.contains("));
+        assert!(apply.contains(r#""type": "done", "note": note"#));
+        assert!(apply.contains(r#""note": "path-repaired""#));
     }
 
     #[test]

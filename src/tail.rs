@@ -85,6 +85,23 @@ pub fn readable_tail(raw: &str, home: &str, user: &str, typed: &[&str]) -> Strin
     keep_last_bytes(&text, MAX_BYTES).to_string()
 }
 
+/// The line a row's own command prints, alone on its line, after it repaired the user's PATH,
+/// and only then: the Apply ends with a note naming the row (`server::path_note`). Read on
+/// the RENDERED screen like the tail, so ConPTY's repaints cannot hide it or forge it, and as
+/// a whole line, so a command that merely contains the words (an echoed `Write-Output '…'`)
+/// does not count.
+pub const PATH_REPAIRED: &str = "talos: path-repaired";
+
+/// Did the step print `PATH_REPAIRED` as a line of its own? Read over the same end of the
+/// output the tail is (`RENDER_LAST_BYTES`): a script prints it as its last word.
+pub fn says_path_repaired(raw: &str) -> bool {
+    let raw = keep_last_bytes(raw, RENDER_LAST_BYTES);
+    std::panic::catch_unwind(|| screen_lines(raw))
+        .unwrap_or_default()
+        .iter()
+        .any(|l| l.trim() == PATH_REPAIRED)
+}
+
 /// Every non-blank line the emulated terminal ends with — scrollback first, then the screen
 /// — a row the terminal wrapped joined back to the next one.
 fn screen_lines(raw: &str) -> Vec<String> {
@@ -267,6 +284,23 @@ mod tests {
 
     fn tail(raw: &str) -> String {
         readable_tail(raw, "", "", &[])
+    }
+
+    #[test]
+    fn the_path_repaired_line_is_read_only_alone_on_its_line() {
+        assert!(says_path_repaired(
+            "repaired: REG_EXPAND_SZ\r\ntalos: path-repaired\r\n"
+        ));
+        // ConPTY repaints: the words placed by cursor moves still read as the line.
+        assert!(says_path_repaired(
+            "\x1b[?25l\x1b[2J\x1b[Hrepaired\x1b[2;1Htalos:\x1b[1Cpath-repaired\x1b[K\x1b[?25h"
+        ));
+        // In a longer line (an echoed command) it is not the signal; nor is a near miss.
+        assert!(!says_path_repaired(
+            "PS> Write-Output 'talos: path-repaired'\r\n"
+        ));
+        assert!(!says_path_repaired("talos: path-repaired-not\r\n"));
+        assert!(!says_path_repaired("user PATH: ExpandString - healthy\r\n"));
     }
 
     #[test]

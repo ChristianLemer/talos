@@ -41,6 +41,8 @@ const DOING = {
 // The rest of the bar's sentence when the plan is empty: what Apply does, for whoever reads
 // the bar for the first time. The list below already says that there is nothing to send.
 export const IDLE_HINT = "Installs what you checked, updates what's outdated, removes what you unchecked.";
+// What the bar says when the engine answered an Apply with nothing to do.
+export const NOTHING_NOTE = "The engine found nothing to do — this machine already matches.";
 
 const plural = (n, k) => `${n} ${n === 1 ? KINDS[k].one : KINDS[k].many}`;
 
@@ -107,8 +109,9 @@ export function barView({ conn, scanning, scan, running, actions = [], estimate 
     text: `${n[k]} ${n[k] > 1 && KINDS[k].lines ? KINDS[k].lines : KINDS[k].line}`,
     tone: KINDS[k].destructive ? "remove" : "strong",
   }));
-  // No `note` here: it says the engine found nothing to do, and beside a plan it would
-  // contradict the button.
+  // The "nothing to do" note stays out of here: beside a plan it would contradict the button.
+  // Any other note (a repaired PATH) is still true beside one, and it is said once, here too.
+  if (note && note !== NOTHING_NOTE) view.hint.push({ text: note });
   if (estimate) view.hint.push({ text: estimate });
   return view;
 }

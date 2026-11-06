@@ -6,7 +6,7 @@ import {
 } from "./decision.js";
 import * as M from "./model.js";
 import { estimate, formatEstimate } from "./estimate.js";
-import { barView } from "./bar.js";
+import { barView, NOTHING_NOTE } from "./bar.js";
 import { changeText, failureText, machineRows, machineText, scanSummary, shareLine } from "./machine.js";
 const model = M.createModel();
 
@@ -2845,7 +2845,8 @@ ws.onmessage = (ev) => {
       runKind = null;
       runRow = null;
       barWord = "";
-      doneNote = msg.nothing ? "The engine found nothing to do — this machine already matches." : "";
+      // `note`: what the Apply changed beyond its rows (server::path_note) — informative, once.
+      doneNote = msg.nothing ? NOTHING_NOTE : msg.note || "";
       fbPaused = false; // the loop is over — no pause left to release
       hideRescanVeil(); // net: scan found nothing → no apply-plan
       exitFocusMode(); // everything reappears — failures already open, stand out
