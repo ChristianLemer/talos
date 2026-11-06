@@ -77,7 +77,8 @@ function countKinds(actions) {
 //             current: { name, status } of the row running now, or null }
 //   actions   the plan's actions, one per row the Apply would run
 //   estimate  the duration phrase for that plan ("" when there is none)
-//   note      a one-off sentence from the last run's end, said only while the plan is empty
+//   note      a one-off sentence from the last run's end; `NOTHING_NOTE` only while the plan
+//             is empty, any other note (a repaired PATH) beside a plan too
 //
 // Returns { label, sub, live, disabled, hint: [{ text, tone }], quitPrimary }. `tone` is
 // "strong", "remove" or undefined (the line's ordinary dim).

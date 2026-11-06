@@ -2209,6 +2209,9 @@ async fn passage_now(socket: &mut WebSocket, state: &AppState, i: usize) {
 /// choice: the front sends the action `actionOf` derived, the same rule the batch used.
 /// Emits `done` whatever the attempt did: the front froze itself when it sent the retry, and
 /// `done` is the only thing that unfreezes it.
+///
+/// ⚠️ This `done` carries no `path_note`: a PATH repair retried from here (it would have to have
+/// met a 403 first) is journalled as a step but ends without the note. Accepted, not missed.
 async fn retry_step(socket: &mut WebSocket, state: &AppState, i: usize, action: &str) {
     retry_attempt(socket, state, i, action).await;
     let _ = socket
@@ -3508,7 +3511,7 @@ async fn apply_diff(
                 queue_note(state, d, why).await;
             }
             // A repair does not re-check ITS dependents: one extra pass, never a cascade.
-            let (_, stop_all) = step_with_forbidden_pause(
+            let (repaired, stop_all) = step_with_forbidden_pause(
                 socket,
                 state,
                 d,
@@ -3518,6 +3521,9 @@ async fn apply_diff(
                 Aim::default(),
             )
             .await;
+            if repaired.path_repaired && !path_repaired_by.contains(&steps[d].name) {
+                path_repaired_by.push(steps[d].name.clone());
+            }
             if stop_all {
                 break 'plan;
             }
@@ -3544,6 +3550,7 @@ async fn apply_diff(
             &state.consent,
             &json!({
                 "at": chrono::Utc::now().to_rfc3339(),
+                "kind": "note",
                 "note": "path-repaired",
                 "by": path_repaired_by,
             }),
@@ -6055,14 +6062,21 @@ mod tests {
         }
         // Wired ONCE per Apply: each row named once, the note sent with `done` and journalled.
         let apply = fn_body("apply_diff");
+        // Both places a step runs in the Apply: the plan, and the dependents pass.
         assert_eq!(
             apply.matches("path_repaired_by.push(").count(),
-            1,
+            2,
             "{apply}"
         );
-        assert!(apply.contains("!path_repaired_by.contains("));
+        assert_eq!(apply.matches("!path_repaired_by.contains(").count(), 2);
+        // Only a step that succeeded and was not stopped counts: a script that printed the
+        // line and then failed repaired nothing we can vouch for.
+        assert!(fn_body("do_step")
+            .contains("!failed && !cancelled && crate::tail::says_path_repaired(&output)"));
         assert!(apply.contains(r#""type": "done", "note": note"#));
-        assert!(apply.contains(r#""note": "path-repaired""#));
+        assert!(
+            apply.contains(r#""kind": "note","#) && apply.contains(r#""note": "path-repaired""#)
+        );
     }
 
     #[test]

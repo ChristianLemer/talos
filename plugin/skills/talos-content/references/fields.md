@@ -626,9 +626,11 @@ converges a file instead of installing software. The pattern (see `terminal/`):
 - Write the patch so it **upserts only your keys** (a record→record transform): the
   user's own edits pass through untouched. That's why config-atoms usually have no
   uninstall — a leftover config is inert, and removing it could destroy the user's edits.
-  ⚠️ But an atom that other rows `requires:` needs a `runUninstall:`, even a harmless
-  one: a requirement without an uninstall does not count as reachable, and the rows
-  that require it leave the plan while it is absent.
+  ⚠️ But an atom that other rows `requires:` needs a `runUninstall:`: a requirement
+  without an uninstall does not count as reachable, and the rows that require it leave
+  the plan while it is absent. When there is nothing to undo, let the uninstall say so
+  and exit 0 — but know that the row then still reads present, so unchecking it offers
+  the same removal on every Apply.
 
 ### `talos: path-repaired` — a row that repaired the user's PATH says so
 
@@ -637,7 +639,7 @@ changed the user's PATH (on Windows, `HKCU\Environment\Path` back to `REG_EXPAND
 and **never** on a machine that was already healthy. The Apply then ends with one note in
 the action bar, whatever number of rows printed it: *"User PATH repaired by <rows>.
 Terminals and programs opened from now on use it; the ones already open keep the old
-one."* It is recorded in the journal (`"note": "path-repaired"`). It asks the person for
+one."* It is recorded in the journal (`"kind": "note", "note": "path-repaired"`). It asks the person for
 nothing, so print it only when it is true.
 
 ```powershell
