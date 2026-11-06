@@ -20,6 +20,11 @@ should be there, and converges, showing every step.
 - **Converges live.** Apply installs, upgrades and removes in a visible order, with each row's
   own terminal. A cancelled or skipped row stays on screen with its reason, and every gesture
   goes into the journal.
+- **Sees a repaired PATH without a restart.** Each step re-reads the user PATH, so when a
+  content row repairs it on Windows, the rows that `requires:` it find their tools in that
+  same Apply, with no sign-out. A row that prints `talos: path-repaired` gets one informative
+  note at the end of the Apply: terminals opened from then on use the new PATH, the ones
+  already open keep the old.
 - **Gets past a corporate firewall.** A blocked download opens the firewall's page inside
   Talos (Windows, macOS), and Talos retries by itself after the approval. For applications
   that update themselves (`version: "self"`), `unblock:` checks their own download on the
