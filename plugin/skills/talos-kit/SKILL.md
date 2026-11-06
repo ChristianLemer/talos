@@ -265,13 +265,14 @@ share. The content is read from the share's ONE archive, extracted per machine (
 Each machine keeps a journal in its own data dir (`%LOCALAPPDATA%\Talos\history.jsonl`).
 With the user's **share consent**, every line written from then on is also appended to
 `logs/<host>/<user>.jsonl` beside the exe — that is the file to read when a machine is
-slow or never finds a tool. Three kinds of line, one JSON object each:
+slow or never finds a tool. Four kinds of line, one JSON object each:
 
 | line | when | what it carries |
 |---|---|---|
 | install (has `package`) | each step | `package`, `version`, `action`, `ok`, `secs`; for a version change `found` and `target`; and when `ok` is `false`, **`exit`** (the command's exit code) and **`tail`** (its last 20 lines, about 2 KB of text, as a terminal of the row's size would have shown them — colours, cursor moves and progress repaints resolved) |
 | `"kind": "machine"` | once per launch, after the first scan | OS, CPU and logical cores, RAM total/free, free space on the system disk, where the kit sits (`local`, `network`, `onedrive`, `synced`), **`shell_ms`** — one empty shell through the probe wrapper — and where each manager the plan uses resolves; on Windows also the winget alias state, the antivirus products the OS declares, Defender real-time, AC or battery, **`policies`** — every value under the AppInstaller and WindowsStore policy keys (machine and user) and their subkeys, as stored — and **`user_path_kind`** / **`user_path_vars`**, the registry type of the user PATH and whether it names a `%variable%`. A collection that failed or took over 60 s carries `error` instead, its other fields empty |
 | `"kind": "scan"` | each scan | total, the three batched calls, every package probe in **ms**, and why a batched call gave no answer; `profile_running: true` when the machine profile was being collected meanwhile — its timings are then not the machine's alone |
+| `"kind": "note"` | at the end of an Apply that has one to say | `note` names it — today only `"path-repaired"`, written when a row that succeeded printed `talos: path-repaired`; `by` lists those rows; no `package` |
 
 What to read first:
 

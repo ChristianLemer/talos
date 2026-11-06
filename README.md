@@ -34,8 +34,8 @@ Talos holds out a ramp to those who do not yet live inside the text. It is a nat
 (Tauri + Rust) with an embedded web UI: one `Talos` / `Talos.exe` that scans a machine and
 installs, upgrades and removes packages live — proven on macOS and Windows, building and
 running on Linux. The core is generic — it knows no client. Everything specific (packages,
-bundles, a name) enters as **content** beside it, never into the core. Its inaugural payload
-is Tekton (Chiron included, as a removable example).
+bundles, a name) enters as **content** beside it, never into the core. The content each
+release ships is an example to copy, not a policy to adopt.
 
 ---
 
@@ -223,7 +223,7 @@ claude plugin install talos@talos
 - skill **`talos-kit`** — composing and distributing a kit, `--verify` on a shared drive,
   and the Doctor tab.
 - command **`/talos:init`** — scaffolds a content repo: `catalog/`, `bundles/`, a
-  `.talos-version` pinned at the newest release, a workflow that runs `--check` in CI, the
+  `.talos-version` pinned at the newest stable release, a workflow that runs `--check` in CI, the
   reference copied in verbatim, and an `AGENTS.md` so *any* agent can maintain the repo.
 
 It ships from this branch and these tags, so the plugin and the engine always describe the

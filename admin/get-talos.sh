@@ -9,7 +9,7 @@
 #                   folder of your own you will double-click in
 #   --version TAG   the release to fetch (v0.0.1-beta.42). Default: the `.talos-version`
 #                   file beside the content (or in the current directory) if there is one,
-#                   else the newest release
+#                   else the newest stable release (the newest of all while none exists)
 #   --content DIR   a folder holding `catalog/` and `bundles/`: YOUR content, copied into
 #                   the kit in place of the socle. Without it, the kit gets the SOCLE of
 #                   the same release — `talos-content-<version>.zip`, what a stranger receives
@@ -154,7 +154,14 @@ if [ -z "$TAG" ]; then
     # curl dies of EPIPE with a noisy "(23) Failure writing output" — and, worse, a pipeline
     # reports only its LAST command, so `set -e` never sees a network failure there.
     TMP_TAG="$(mktemp)"
-    curl -fsSL "$API/latest" -o "$TMP_TAG" 2>/dev/null || curl -fsSL "$API?per_page=1" -o "$TMP_TAG"
+    # Only a 404 falls back: a 5xx or a timeout on `/latest` once a stable release exists must
+    # stop here, not quietly compose the newest beta.
+    CODE="$(curl -sSL -w '%{http_code}' "$API/latest" -o "$TMP_TAG" || true)"
+    case "$CODE" in
+        200) ;;
+        404) curl -fsSL "$API?per_page=1" -o "$TMP_TAG" ;;
+        *) echo "GitHub answered '$CODE' for $API/latest" >&2; rm -f "$TMP_TAG"; exit 1 ;;
+    esac
     TAG="$(grep -m1 '"tag_name"' "$TMP_TAG" | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
     rm -f "$TMP_TAG"
     [ -n "$TAG" ] || { echo "no release found on $REPO" >&2; exit 1; }

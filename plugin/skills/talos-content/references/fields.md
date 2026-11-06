@@ -636,7 +636,8 @@ converges a file instead of installing software. The pattern (see `terminal/`):
 
 Not a key: a **line the row's command prints**, alone on its line, after it really
 changed the user's PATH (on Windows, `HKCU\Environment\Path` back to `REG_EXPAND_SZ`),
-and **never** on a machine that was already healthy. The Apply then ends with one note in
+and **never** on a machine that was already healthy. Only a step that succeeded counts:
+the line on a failed or cancelled row is ignored. The Apply then ends with one note in
 the action bar, whatever number of rows printed it: *"User PATH repaired by <rows>.
 Terminals and programs opened from now on use it; the ones already open keep the old
 one."* It is recorded in the journal (`"kind": "note", "note": "path-repaired"`). It asks the person for

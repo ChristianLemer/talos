@@ -23,7 +23,7 @@
 #                   for when you want to name it outright.
 #   -Version TAG    the release to fetch (v0.0.1-beta.42). Default: the `.talos-version`
 #                   file beside the content (or in the current directory) if there is one,
-#                   else the newest release
+#                   else the newest stable release (the newest of all while none exists)
 #   -Content DIR    a folder holding `catalog\` and `bundles\`: YOUR content, copied into
 #                   the kit in place of the socle. Without it, the kit gets the SOCLE of
 #                   the same release -- `talos-content-<version>.zip`, what a stranger receives
@@ -256,6 +256,10 @@ if (-not $Version) {
     try {
         $Version = (Invoke-RestMethod -Uri "$Api/latest" -UseBasicParsing).tag_name
     } catch {
+        # Only a 404 falls back: a 5xx or a timeout on `/latest` once a stable release exists
+        # must stop here, not quietly compose the newest beta.
+        $resp = $_.Exception.Response
+        if (-not $resp -or [int]$resp.StatusCode -ne 404) { throw }
         $newest = Invoke-RestMethod -Uri "${Api}?per_page=1" -UseBasicParsing
         if (-not $newest) { Fail "no release found on $Repo" }
         $Version = @($newest)[0].tag_name

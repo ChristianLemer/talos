@@ -1,5 +1,5 @@
 ---
-description: Scaffold a Talos content repo — catalog/, bundles/, .talos-version pinned at the newest release, a CI check, the field reference, and an AGENTS.md so any agent can maintain it.
+description: Scaffold a Talos content repo — catalog/, bundles/, .talos-version pinned at the newest stable release, a CI check, the field reference, and an AGENTS.md so any agent can maintain it.
 argument-hint: "[folder — defaults to the current one]"
 allowed-tools: Bash, Read, Write, Edit
 ---
@@ -58,8 +58,9 @@ memory. The template is at
 Pin the newest **stable** release — GitHub's `latest`, which skips the betas:
 
 ```bash
-curl -fsSL https://api.github.com/repos/ChristianLemer/talos/releases/latest \
-  | grep -m1 '"tag_name"' | cut -d'"' -f4 > .talos-version
+tag="$(curl -fsSL https://api.github.com/repos/ChristianLemer/talos/releases/latest \
+  | grep -m1 '"tag_name"' | cut -d'"' -f4)"
+[ -n "$tag" ] && echo "$tag" > .talos-version
 ```
 
 If the call fails (offline, rate-limited), say so and leave `.talos-version` absent: a
