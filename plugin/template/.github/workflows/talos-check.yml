@@ -23,7 +23,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-0
 
-      # By its target-triple name (from v0.1.0), else by the name of the releases before.
+      # By its target-triple name (from v0.0.1-beta.78), else by the name of the betas before it.
       - name: Fetch the pinned engine
         run: |
           TAG=$(cat .talos-version)

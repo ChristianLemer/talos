@@ -26,7 +26,7 @@
 //! An extraction is never rewritten: a new archive is a new folder beside it, so a running
 //! Talos keeps reading the version it started on.
 //!
-//! ⚠️ `.talos/content.zip`, not `talos-content.zip`. The release asset keeps its name; a kit
+//! ⚠️ `.talos/content.zip`, not the release's `talos-content-<version>.zip`; a kit
 //! composer writes the kit's copy into `.talos/`, the folder only composers write, so a stray
 //! release download left on a share can never switch a kit to the socle by being found.
 //!

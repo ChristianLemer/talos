@@ -47,7 +47,7 @@ loose copy stays beside it for engines older than the archive; drop it once none
 - `{dir}` is the extraction — the catalog folder actually read. Files that stay loose on the
   share beside the content (a large payload) are reached with **`{kit}`**, the kit root,
   never `{dir}/..`, which now names the local cache.
-- `get-talos` writes `.talos/content.zip` (the release's `talos-content.zip` as is, or yours
+- `get-talos` writes `.talos/content.zip` (the release's `talos-content-<version>.zip` as is, or yours
   packed). An integrator composing with their own tooling writes the same file: a zip
   whose root holds `catalog/`, `bundles/` and, optionally, `distribution.yaml`.
 - A stray `talos-content.zip` at the kit root is NOT the kit's archive — only `.talos/`

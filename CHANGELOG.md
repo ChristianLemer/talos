@@ -46,7 +46,11 @@ should be there, and converges, showing every step.
 ### Release files
 - Each launcher is named after its version and target: `Talos-0.1.0-aarch64-apple-darwin.app.zip`,
   `Talos-0.1.0-x86_64-pc-windows-msvc.exe`, `Talos-0.1.0-x86_64-unknown-linux-gnu`, and
-  `talos-content-0.1.0.zip`. The names of the betas are published too, as the same files.
+  `talos-content-0.1.0.zip`. The betas' short names (`Talos.exe`, `Talos-macos-aarch64.app.zip`,
+  `Talos-linux-x86_64`, `talos-content.zip`) are no longer published: a script that fetches
+  them by name moves to these. A content repo whose CI `/talos:init` wrote before beta.78
+  fetches `Talos-linux-x86_64`: recopy `plugin/template/.github/workflows/talos-check.yml`
+  when its `.talos-version` moves to v0.1.0. `get-talos` still composes a pinned beta.
 - `releases/latest/download/get-talos.sh` (and `.ps1`) now resolves: this is the first release
   that is not a pre-release.
 - With no tag and no `.talos-version` pin, the kit scripts compose the newest stable release; a

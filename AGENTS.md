@@ -144,9 +144,11 @@ is triggered by pushing a `v*` tag: `.github/workflows/release.yml` builds nativ
 (`Talos-<ver>-aarch64-apple-darwin.app.zip`, `Talos-<ver>-x86_64-pc-windows-msvc.exe`,
 `Talos-<ver>-x86_64-unknown-linux-gnu`), `talos-content-<ver>.zip` (the socle, checked by the
 Linux build before zipping) and BOTH kit scripts, `admin/get-talos.sh` + `admin/get-talos.ps1`.
-The betas' names (`Talos-macos-aarch64.app.zip`, `Talos.exe`, `Talos-linux-x86_64`,
-`talos-content.zip`) ride along as the same files: scripts and CI copies already in content
-repos fetch them, and nothing updates a copy. A last job writes the release page
+The betas also carried their old names (`Talos-macos-aarch64.app.zip`, `Talos.exe`,
+`Talos-linux-x86_64`, `talos-content.zip`); from 0.1.0 a release publishes the triple names
+only. The kit scripts and the `/talos:init` CI still try the old name second, so a pin on a
+beta composes; a content repo whose CI was copied before beta.78 fetches the old Linux name
+only and must recopy it when its pin reaches 0.1.0. A last job writes the release page
 (`admin/release-notes.sh`: what Talos is, which file, the command, this version's
 `CHANGELOG.md` section, the commits since the previous tag).
 

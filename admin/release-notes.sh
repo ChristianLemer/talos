@@ -46,9 +46,7 @@ release's example content; \`--content <folder>\` (\`-Content\`) puts yours in i
 | \`talos-content-$VER.zip\` | the example content of this version: \`catalog/\`, \`bundles/\` |
 | \`get-talos.sh\`, \`get-talos.ps1\` | compose a kit (above) |
 
-\`Talos-macos-aarch64.app.zip\`, \`Talos.exe\`, \`Talos-linux-x86_64\` and \`talos-content.zip\`
-are the same files under the names of the releases before, for the scripts that already fetch
-them. The launchers are not signed yet.
+The launchers are not signed yet.
 EOF
 
 # This version's section of the changelog: from its `## ` heading to the next one.
