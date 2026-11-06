@@ -94,5 +94,5 @@ said, and the two next moves — edit `catalog/` (the `talos-content` skill is t
 and `sh get-talos.sh "<kit folder>" --content .` to publish (the `talos-kit` skill).
 
 Mention once that the **socle** — the full 19-package lesson set, where every route is
-shown by a real file — is `talos-content-<version>.zip` (`talos-content.zip` before v0.1.0) on any release, for someone who would rather
+shown by a real file — is `talos-content-<version>.zip` (`talos-content.zip` on the betas before v0.0.1-beta.78) on any release, for someone who would rather
 start from that and prune.

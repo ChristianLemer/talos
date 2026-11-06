@@ -295,7 +295,7 @@ try {
         Fail "release $Version publishes no asset digests - refusing to compose an unverifiable kit"
     }
 
-    # Each asset by its target-triple name (`Talos-<version>-<triple>`, from v0.1.0), else by
+    # Each asset by its target-triple name (`Talos-<version>-<triple>`, since v0.0.1-beta.78), else by
     # the name of the releases before -- so a kit pinned to an older tag composes as it always
     # did. Neither published: the first name, which the digest check below refuses by name.
     $ver = $Version -replace '^v', ''

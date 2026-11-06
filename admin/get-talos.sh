@@ -186,7 +186,7 @@ grep -o -E '"(name|size|digest)": *("[^"]*"|[0-9]+)' "$TMP/release.json" \
                       else if ($1 == "\"digest") print n, s, $2 }' > "$TMP/assets.txt"
 [ -s "$TMP/assets.txt" ] || { echo "release $TAG publishes no asset digests — refusing to compose an unverifiable kit" >&2; exit 1; }
 
-# Each asset by its target-triple name (`Talos-<version>-<triple>`, from v0.1.0), else by the
+# Each asset by its target-triple name (`Talos-<version>-<triple>`, since v0.0.1-beta.78), else by the
 # name of the releases before — so a kit pinned to an older tag composes as it always did.
 # Neither published: the first name, which the digest check below refuses by name.
 VER="${TAG#v}"

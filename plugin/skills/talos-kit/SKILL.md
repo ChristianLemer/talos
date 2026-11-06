@@ -109,7 +109,7 @@ sh get-talos.sh "<kit folder>" --version v0.0.1-beta.42 --content .
 
 `get-talos.sh` ships with every release (and lives at `admin/get-talos.sh` in the talos
 repo). Without `--content` the kit gets the **socle** of that same release —
-`talos-content-<version>.zip` (`talos-content.zip` before v0.1.0), what a stranger receives. With it, your folder replaces the socle.
+`talos-content-<version>.zip` (`talos-content.zip` on the betas before v0.0.1-beta.78), what a stranger receives. With it, your folder replaces the socle.
 
 ⭐ **It composes from any OS, and the kit does not record which one.** `get-talos.sh`
 runs on macOS and Linux; `get-talos.ps1` does the same job on Windows:
