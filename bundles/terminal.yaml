@@ -1,6 +1,6 @@
 # Terminal — Nushell and its plugins: a shell where everything is data, and the two ways
 # a plugin reaches it (shipped beside nu, or fetched from its project's release). On
-# Windows, the runtime it needs and Windows Terminal set to open on it.
+# Windows, Windows Terminal set to open on it.
 bundle: Terminal
 emoji: 🐚
 usage: A shell where everything is data, with DataFrames and Excel.
@@ -9,7 +9,6 @@ description: Nushell, its plugins, and Windows Terminal defaulting to it.
 needs: [Base]
 packages:
   - Nushell
-  - VC++ runtime
   - Polars for Nushell
   - Excel for Nushell
   - Windows Terminal default shell
