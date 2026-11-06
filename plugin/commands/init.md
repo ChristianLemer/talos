@@ -55,11 +55,10 @@ memory. The template is at
 
 ## 3 — Pin the engine
 
-GitHub's `latest` link **skips pre-releases**, and every Talos release is a pre-release
-until v0.1.0 — so read the list:
+Pin the newest **stable** release — GitHub's `latest`, which skips the betas:
 
 ```bash
-curl -fsSL https://api.github.com/repos/ChristianLemer/talos/releases \
+curl -fsSL https://api.github.com/repos/ChristianLemer/talos/releases/latest \
   | grep -m1 '"tag_name"' | cut -d'"' -f4 > .talos-version
 ```
 

@@ -1,20 +1,41 @@
 # Talos
 
+**Talos shows what a machine really has, lets you choose what should be there, and puts it
+there — showing every step.** A graphical installer for a team's tools, on Windows (winget)
+and macOS (brew), that a whole team launches from one shared folder.
+
+## Try it
+
+```bash
+# macOS or Linux
+curl -fsSL https://github.com/ChristianLemer/talos/releases/latest/download/get-talos.sh | sh -s -- ./Talos
+```
+
+```powershell
+# Windows — the PowerShell that ships with it is enough
+irm https://github.com/ChristianLemer/talos/releases/latest/download/get-talos.ps1 | iex
+```
+
+A `Talos` folder appears where you ran it. Open the launcher of your system —
+`MacOS/Talos.app`, `Windows/Talos.exe` or `Linux/Talos` — and Talos reads the machine and
+shows what it would install, update or leave alone. **Nothing changes until you press Apply.**
+
+<!-- DEMO: the 30-second recording (issue #4) goes here. -->
+
+What you just composed is a **kit**: the launchers of one release, verified against its
+checksums, beside an example catalogue. Your team's kit is the same folder with *your*
+packages in it — the rest of this page is how.
+
+---
+
 > Τάλως — the bronze automaton that guards the perimeter, in a loop.
 
-The **graphical promoter and installer** that puts software on a machine,
-repairs it, and shows its state — *by showing* what it does. It holds out a
-ramp to those who do not yet live inside the text. Its inaugural payload is
-Tekton (Chiron included, as a removable example).
-
-**Status: the installer runs.** It is a native app (Tauri + Rust) with an
-embedded web UI: a single `Talos` / `Talos.exe` that scans a machine and
-installs / upgrades / removes packages live — proven on macOS and Windows, and
-building and running on Linux. See
-**Build the kit** below.
-
-The core is generic — it knows no client. Everything specific (theme, packages,
-plugins) enters by **extension** (a bundle folder), never into the core.
+Talos holds out a ramp to those who do not yet live inside the text. It is a native app
+(Tauri + Rust) with an embedded web UI: one `Talos` / `Talos.exe` that scans a machine and
+installs, upgrades and removes packages live — proven on macOS and Windows, building and
+running on Linux. The core is generic — it knows no client. Everything specific (packages,
+bundles, a name) enters as **content** beside it, never into the core. Its inaugural payload
+is Tekton (Chiron included, as a removable example).
 
 ---
 
@@ -69,7 +90,7 @@ your-talos-content/
 ├── catalog/
 ├── bundles/
 ├── distribution.yaml   ← optional: what your team calls this content, and which edition
-└── .talos-version      ← one line: the release your kit runs, e.g. v0.0.1-beta.37
+└── .talos-version      ← one line: the release your kit runs, e.g. v0.1.0
 ```
 
 Changing what Talos proposes is a commit. Moving to a newer Talos is a commit that
@@ -117,24 +138,16 @@ just has nothing to say. The binaries are **unsigned** for now (signing/notarisa
 a separate step).
 
 One command composes the kit, from **whatever machine you have**, and needs nothing but
-what the OS already ships:
+what the OS already ships — the two commands of **Try it**, above. They take the newest
+stable release; to pin one, give its tag (and pin it for your team in `.talos-version`):
 
 ```bash
-# macOS or Linux
-curl -fsSL https://github.com/ChristianLemer/talos/releases/download/v0.0.1-beta.71/get-talos.sh | sh -s -- ./Talos
+curl -fsSL https://github.com/ChristianLemer/talos/releases/download/v0.1.0/get-talos.sh | sh -s -- ./Talos --version v0.1.0
 ```
 
 ```powershell
-# Windows (Windows PowerShell 5.1 is enough - no pwsh 7 needed)
-irm https://github.com/ChristianLemer/talos/releases/download/v0.0.1-beta.71/get-talos.ps1 | iex
+& ([scriptblock]::Create((irm https://github.com/ChristianLemer/talos/releases/download/v0.1.0/get-talos.ps1))) -Kit .\Talos -Version v0.1.0
 ```
-
-⚠️ **The tag is spelled out on purpose, and it moves with each release.** GitHub's
-`releases/latest/download/…` link skips pre-releases, and every Talos release is a
-pre-release until v0.1.0 — so that shorter form answers 404 today. At v0.1.0 these two
-lines become `latest/download/` and stop needing an edit. Until then, the newest tag is on
-the [releases page](https://github.com/ChristianLemer/talos/releases); the script itself
-already picks the newest release once it is running, so only fetching it needs the tag.
 
 ```bash
 # your team: the same, into the folder it launches from, with YOUR content

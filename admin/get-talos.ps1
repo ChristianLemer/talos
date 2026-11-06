@@ -84,8 +84,9 @@
 # Mac. Its shape is `sha256sum`'s and is followed to the byte: lowercase hex, two spaces,
 # forward slashes, LF endings, no BOM, ordinal sort.
 #
-# !! The newest tag is read from the releases list, not from GitHub's "latest": that link
-# skips pre-releases, and every Talos release is a pre-release until v0.1.0.
+# !! With no tag given and no pin, the kit takes the newest STABLE release (GitHub's "latest",
+# which skips pre-releases): a stranger gets what the README promises, never a beta published
+# after it. Only a repo with no stable release yet falls back to the newest of all.
 #
 # !! A running exe on a shared drive: Windows locks an exe while it runs, so the kit's
 # `Talos.exe` copies itself to %LOCALAPPDATA%\Talos\engine, starts that copy and exits --
@@ -250,10 +251,15 @@ if (-not $Version) {
     if (Test-Path -LiteralPath $pin) { $Version = (Get-Content -LiteralPath $pin -TotalCount 1).Trim() }
 }
 if (-not $Version) {
-    # The first entry in the API's list is the newest release, pre-release or not.
-    $newest = Invoke-RestMethod -Uri "${Api}?per_page=1" -UseBasicParsing
-    if (-not $newest) { Fail "no release found on $Repo" }
-    $Version = @($newest)[0].tag_name
+    # The newest stable release (`/latest` answers 404 while there is none), else the first
+    # entry of the list, pre-release or not.
+    try {
+        $Version = (Invoke-RestMethod -Uri "$Api/latest" -UseBasicParsing).tag_name
+    } catch {
+        $newest = Invoke-RestMethod -Uri "${Api}?per_page=1" -UseBasicParsing
+        if (-not $newest) { Fail "no release found on $Repo" }
+        $Version = @($newest)[0].tag_name
+    }
 }
 
 New-Item -ItemType Directory -Force -Path $Kit | Out-Null

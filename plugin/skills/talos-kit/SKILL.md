@@ -132,8 +132,9 @@ the OS ships: `sh`, `curl`, `unzip`, `shasum`/`sha256sum` on one side; on the ot
 5.1 that Windows already has. Requiring pwsh 7 would mean installing a shell in order to
 run the installer.
 
-⚠️ **The newest tag is read from the releases list, not from GitHub's "latest".** That
-link skips pre-releases, and every Talos release is a pre-release until v0.1.0.
+⚠️ **With no tag and no pin, the newest STABLE release.** GitHub's "latest" skips the betas,
+so a stranger gets what the README promises; only a repo with no stable release yet falls
+back to the newest of all. A team pins its tag in `.talos-version`, beta or not.
 
 ### What the script guarantees
 
@@ -165,11 +166,11 @@ A kit composed on Windows re-verifies on a colleague's Mac.
 The same script, a folder of your own, and nothing else to install:
 
 ```sh
-curl -fsSL https://github.com/ChristianLemer/talos/releases/download/<tag>/get-talos.sh | sh -s -- ./Talos
+curl -fsSL https://github.com/ChristianLemer/talos/releases/latest/download/get-talos.sh | sh -s -- ./Talos
 ```
 
 ```powershell
-irm https://github.com/ChristianLemer/talos/releases/download/<tag>/get-talos.ps1 | iex
+irm https://github.com/ChristianLemer/talos/releases/latest/download/get-talos.ps1 | iex
 ```
 
 Then open the launcher for the system you are on — `MacOS/Talos.app`, `Windows\Talos.exe`,
@@ -185,9 +186,8 @@ it. Both print the target before writing anything.
 one level above the launcher, so moving it to `/Applications` breaks the kit. Opening it from
 the kit folder is the supported gesture; what a Mac user does beyond that is theirs.
 
-⚠️ **Use the URL of a TAG, not `latest/download/`.** GitHub's "latest" link skips
-pre-releases, and every Talos release is a pre-release until v0.1.0, so the `latest` form
-answers 404 today.
+`latest/download/` is the newest stable release. A beta is fetched by its tag:
+`releases/download/<tag>/get-talos.sh … --version <tag>`.
 
 ⚠️ **Linux needs the WebKitGTK the build links against** — `webkit2gtk-4.1` and
 `libayatana-appindicator`, whatever your distribution calls them. `ldd <kit>/Linux/Talos |

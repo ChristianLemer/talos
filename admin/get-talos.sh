@@ -75,8 +75,9 @@
 # installs nushell. A bootstrap may lean only on what the OS ships — `sh`, `curl`,
 # `unzip`, `shasum`/`sha256sum` — and nothing you install by hand.
 #
-# ⚠️ The newest tag is read from the releases list, not from GitHub's "latest": that
-# link skips pre-releases, and every Talos release is a pre-release until v0.1.0.
+# ⚠️ With no tag given and no pin, the kit takes the newest STABLE release (GitHub's
+# "latest", which skips pre-releases): a stranger gets what the README promises, never a beta
+# published after it. Only a repo with no stable release yet falls back to the newest of all.
 #
 # ⚠️ A running exe and a shared drive: Windows locks an exe while it runs, so the kit's
 # `Talos.exe` copies itself to the machine's local data folder, starts that copy and exits —
@@ -147,12 +148,13 @@ if [ -z "$TAG" ]; then
     [ -f "$PIN" ] && TAG="$(tr -d '[:space:]' < "$PIN")"
 fi
 if [ -z "$TAG" ]; then
-    # The first `tag_name` in the API's list is the newest release, pre-release or not.
+    # The newest stable release (`/latest` answers 404 while there is none), else the first
+    # `tag_name` of the list, pre-release or not.
     # To a FILE, not down a pipe: in `curl | grep -m1`, grep leaves on its first match and
     # curl dies of EPIPE with a noisy "(23) Failure writing output" — and, worse, a pipeline
     # reports only its LAST command, so `set -e` never sees a network failure there.
     TMP_TAG="$(mktemp)"
-    curl -fsSL "$API?per_page=1" -o "$TMP_TAG"
+    curl -fsSL "$API/latest" -o "$TMP_TAG" 2>/dev/null || curl -fsSL "$API?per_page=1" -o "$TMP_TAG"
     TAG="$(grep -m1 '"tag_name"' "$TMP_TAG" | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
     rm -f "$TMP_TAG"
     [ -n "$TAG" ] || { echo "no release found on $REPO" >&2; exit 1; }
