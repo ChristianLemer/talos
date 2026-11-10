@@ -68,9 +68,12 @@ requires:
 - **The rule.** If the requirement is present but **below** the minimum, the row is held
   before the Apply, and the reason names both versions: `requires Orca >= 1.4.252 (found
   1.4.237)`. Versions are compared numerically, segment by segment, with the engine's own
-  comparator (`1.10` is above `1.9`). The hold is the whole row's: out of scope, Talos neither
-  installs, updates nor removes it until the requirement is new enough. One entry per
-  package: `--check` refuses the same name twice.
+  comparator (`1.10` is above `1.9`). One entry per package: `--check` refuses the same
+  name twice.
+- **A hold, never a lock.** The minimum holds what would *run* the row against a host too
+  old for it: install, upgrade, update. It never holds a removal, because a removal does not
+  need its requirement. The row stays in scope and visible, with its reason, and turning it
+  off still uninstalls it, even while the requirement is too old or unreadable.
 - **Unknown is held.** A present requirement whose version Talos cannot read gives
   `requires Orca >= 1.4.252 (version unknown)`. That is not a pass, and not "too old" either.
 - **Never upgraded by this rule.** The minimum holds the dependent. It never upgrades the

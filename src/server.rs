@@ -2199,8 +2199,12 @@ fn json_indices_opt(v: &serde_json::Value, key: &str) -> Option<Vec<usize>> {
 /// OPTIMISTICALLY (true for every node): the formula then reduces to
 /// `present_now || reachable`, which is exactly "could this requirement ever be here?".
 /// The narrowing is deliberate — see the call site.
-async fn requirement_blocks_row(state: &AppState, step: &crate::bundles::Step) -> Option<String> {
-    use crate::deps::{make_index, requires_blocked, DepNode};
+async fn requirement_blocks_row(
+    state: &AppState,
+    step: &crate::bundles::Step,
+    action: crate::decision::Action,
+) -> Option<String> {
+    use crate::deps::{held_by_minimum, make_index, requires_blocked, DepNode};
     if step.requires.is_empty() {
         return None; // the overwhelming majority — no lock, no clone, no walk
     }
@@ -2223,7 +2227,9 @@ async fn requirement_blocks_row(state: &AppState, step: &crate::bundles::Step) -
         .collect();
     let idx = make_index(&nodes);
     let me = nodes.iter().position(|n| n.name == step.name)?;
+    // Presence first (it blocks every gesture), then the minimum, which holds all but a removal.
     requires_blocked(&nodes[me], &nodes, &idx)
+        .or_else(|| held_by_minimum(action, &nodes[me], &nodes, &idx))
 }
 
 /// The row button's probe of a passage: the same step the Apply runs for a behind row, with the
@@ -2291,13 +2297,20 @@ async fn retry_attempt(socket: &mut WebSocket, state: &AppState, i: usize, actio
         println!("[scope] refused {} on {} (out of scope)", action, step.name);
         return;
     }
+    let act = match action {
+        "install" => Action::Install,
+        "uninstall" => Action::Uninstall,
+        "upgrade" => Action::Upgrade,
+        "downgrade" => Action::Downgrade,
+        _ => return,
+    };
     // THE SECOND SET OF TEETH: an IMPOSSIBLE requirement. This path never sees the wire's
     // `on`/`off`, so it asks a deliberately NARROWER question than the batch does — not
     // "will the requirement be there after this Apply?" but "could it ever be here?".
     // A retry is about one row the Apply already chose, and refusing it because a
     // requirement is merely not-yet-installed would break the legitimate retry of a
     // plugin whose host is on its way in the same Apply.
-    if let Some(why) = requirement_blocks_row(state, step).await {
+    if let Some(why) = requirement_blocks_row(state, step, act).await {
         println!("[scope] refused {} on {} ({})", action, step.name, why);
         let _ = socket
             .send(Message::Text(
@@ -2306,13 +2319,6 @@ async fn retry_attempt(socket: &mut WebSocket, state: &AppState, i: usize, actio
             .await;
         return;
     }
-    let act = match action {
-        "install" => Action::Install,
-        "uninstall" => Action::Uninstall,
-        "upgrade" => Action::Upgrade,
-        "downgrade" => Action::Downgrade,
-        _ => return,
-    };
     // ⭐ A retried version change is judged like the batch's (`unmoved_reason`): from a fresh
     // probe of what is there now, toward what the manager announces. Without them a retry gave
     // no verdict off a pin, and its exit 0 lifted a hold and journalled a success that had
@@ -3372,6 +3378,17 @@ async fn apply_diff(
         };
         match batch_action(action_for(desired, &facts), step.downgrade.is_some()) {
             Ok(Some(a)) => {
+                // `requires: [Orca >= 1.4.252]` with Orca too old (or unreadable): a HOLD on
+                // what would run the row against it, never on its removal, which does not
+                // need its requirement. The front holds the same rows (`holdReason`).
+                if let Some(low) = crate::deps::held_by_minimum(a, &nodes[i], &nodes, &idx) {
+                    println!("[apply] {} held: {low}", step.name);
+                    send_held(socket, i, &low).await;
+                    if !nodes[i].present_now {
+                        held_absent.push(i);
+                    }
+                    continue;
+                }
                 if let Some(silent) = unanswered_hold(a, &presences[i], &nodes[i], &nodes, &idx) {
                     println!("[apply] {} held: {silent}", step.name);
                     send_held(socket, i, &silent).await;
@@ -3542,6 +3559,8 @@ async fn apply_diff(
                 && !out_of_scope.contains(&d)
                 && !scope_refuses(&sel, &steps[d].name)
                 && requires_blocked(&nodes[d], &nodes, &idx).is_none()
+                // The repair IS an install: a minimum that does not hold holds it too.
+                && crate::deps::held_by_minimum(Action::Install, &nodes[d], &nodes, &idx).is_none()
                 && p.present == Some(false);
             if !repair {
                 continue;

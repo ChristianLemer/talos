@@ -235,12 +235,9 @@ export function requiresReason(model, i) {
     const q = model.pkgs.get(j);
     // Presence FIRST and unconditionally — the day `cmd /c ver` answers, the row
     // behaves like any other. Without this ordering the fix would break Windows.
-    if (q?.present === true) {
-      // Present, but maybe too old: `requires: [Orca >= 1.4.252]` (belowMinimum).
-      const why = belowMinimum(p, req, q);
-      if (why) return why;
-      continue;
-    }
+    // A minimum (`Orca >= 1.4.252`) is NOT judged here: it is a hold on what would run the
+    // row, never a scope verdict, so the row stays removable (minimumReason, holdReason).
+    if (q?.present === true) continue;
     // Otherwise: is it on its way in? Wanting it is NOT enough. `wantedNames` closes
     // over `requires:`, so wanting a row pulls its own requirements in — a desire-only
     // clause would make every pulled row satisfy itself and this whole rule vacuous.
@@ -249,6 +246,21 @@ export function requiresReason(model, i) {
     // acts on this row" (scope.js's `no-route`), used here for that meaning.
     if (desiredOf(model, j) === "present" && q?.canUninstall) continue;
     return `requires ${req}`;
+  }
+  return null;
+}
+// The first PRESENT requirement below this row's minimum for it, or null — deps.rs
+// `minimum_hold`, word for word. Absent requirements are not judged: requiresReason answers
+// for presence. Read by holdReason for every action but a removal (`held_by_minimum`).
+export function minimumReason(model, i) {
+  const p = model.pkgs.get(i);
+  if (!p) return null;
+  for (const req of p.requires ?? []) {
+    let q = null;
+    for (const [, c] of model.pkgs) if (c.name === req) { q = c; break; }
+    if (q?.present !== true) continue;
+    const why = belowMinimum(p, req, q);
+    if (why) return why;
   }
   return null;
 }
@@ -318,7 +330,7 @@ export function unmanagedIndices(model) {
 export function fitReason(model, i) {
   const p = model.pkgs.get(i);
   if (!p) return null;
-  return requiresReason(model, i) ??
+  return requiresReason(model, i) ?? minimumReason(model, i) ??
     (p.present !== true && !p.canUninstall && !p.isConfig ? "no-route" : null);
 }
 // Three departures from scopeReason, all because fit is a fact of the MACHINE, not of the
@@ -747,6 +759,12 @@ export function holdReason(model, i) {
   if (unmoved) return unmoved;
   const a = actionOf(model, i);
   const p = model.pkgs.get(i);
+  // A requirement below its minimum holds what would RUN the row against it — install,
+  // upgrade, downgrade — never its removal (deps.rs `held_by_minimum`).
+  if (HELD_ACTIONS.includes(a)) {
+    const low = minimumReason(model, i);
+    if (low) return low;
+  }
   if (p?.hold && HELD_ACTIONS.includes(a)) return p.hold;
   // A removal kept because its replacement is not there (`server::send_kept`): only while the
   // override is what removes the row — never against the user's own refusal — and only until
@@ -793,6 +811,9 @@ export function holdWord(model, i) {
     if (!u.ahead) return "unchanged";
     return compareVersions(u.found, u.target) > 0 ? "ahead" : "current";
   }
+  // A minimum says its reason IN the row, like every `requires …` does: it names what would
+  // fix it (`requires Orca >= 1.4.252 (found 1.4.237)`), which a bare `held` hides in a title.
+  if (why === minimumReason(model, i)) return why;
   return "held";
 }
 // The rows the Apply leaves at a gap it cannot close, in index order. The empty state asks,

@@ -626,7 +626,9 @@ function paintVersion(i) {
     // why, and the pin it could not reach when there is one (a dependent may have none).
     const p = model.pkgs.get(i);
     const target = p?.pin ? `<span class="v-muted" title="${attr(why)}">${pin(p.pin)}</span> ` : "";
-    r.delta.innerHTML = why ? `${target}<span class="v-held" title="${attr(why)}">held</span>` : "";
+    // The word is `holdWord`'s, so a minimum says its reason in plain view, as the
+    // version-bearing branches below already do through `muted`.
+    r.delta.innerHTML = why ? `${target}<span class="v-held" title="${attr(why)}">${attr(word)}</span>` : "";
     return;
   }
   if (v.to === null) {

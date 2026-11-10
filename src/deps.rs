@@ -162,14 +162,6 @@ pub fn requires_reason(
                 if !nodes[at].will_be_present {
                     return Some(format!("requires {req}"));
                 }
-                // Present now: its version is what the dependent will meet. Absent and on its
-                // way in: it arrives at whatever the route lays down, which this rule does not
-                // second-guess (`--check` refuses an exact pin below the minimum).
-                if nodes[at].present_now {
-                    if let Some(why) = below_minimum(node, &nodes[at]) {
-                        return Some(why);
-                    }
-                }
             }
         }
     }
@@ -213,13 +205,7 @@ pub fn requires_blocked(
             None => return Some(format!("requires {req} (unknown)")),
             Some(&at) => {
                 let r = &nodes[at];
-                if r.present_now {
-                    match below_minimum(node, r) {
-                        None => continue,
-                        Some(why) => return Some(why),
-                    }
-                }
-                if r.will_be_present && r.reachable {
+                if r.present_now || (r.will_be_present && r.reachable) {
                     continue;
                 }
                 return Some(format!("requires {req}"));
@@ -227,6 +213,44 @@ pub fn requires_blocked(
         }
     }
     None
+}
+
+/// The first PRESENT requirement that is below this node's minimum for it, as the row's
+/// reason, or None. Absent requirements are not judged here: `requires_blocked` /
+/// `requires_reason` answer for presence, and one on its way in arrives at whatever its
+/// route lays down (`--check` refuses an exact pin below the minimum).
+///
+/// ⭐ A minimum is a HOLD, not a scope verdict: it stops what would RUN the dependent
+/// against a host too old for it, never a removal — see `held_by_minimum`.
+pub fn minimum_hold(
+    node: &DepNode,
+    nodes: &[DepNode],
+    idx: &HashMap<String, usize>,
+) -> Option<String> {
+    node.requires.iter().find_map(|req| {
+        let r = &nodes[*idx.get(req)?];
+        if r.present_now {
+            below_minimum(node, r)
+        } else {
+            None
+        }
+    })
+}
+
+/// Does a minimum that does not hold stop THIS action? Install, upgrade and downgrade
+/// (an update-on is an upgrade): yes. A removal: never — it does not need its requirement
+/// (`drop_requiring_held` says the same), and a row whose host is too old must stay
+/// removable. model.js `holdReason` is the front's twin (`HELD_ACTIONS` + `minimumReason`).
+pub fn held_by_minimum(
+    action: crate::decision::Action,
+    node: &DepNode,
+    nodes: &[DepNode],
+    idx: &HashMap<String, usize>,
+) -> Option<String> {
+    if action == crate::decision::Action::Uninstall {
+        return None;
+    }
+    minimum_hold(node, nodes, idx)
 }
 
 /// Orders the install plan so a required package comes BEFORE its dependents.
@@ -690,12 +714,10 @@ mod tests {
         let nodes = with_minimum(Some("v1.4.237"));
         let idx = make_index(&nodes);
         let want = Some("requires Orca >= 1.4.252 (found 1.4.237)".to_string());
-        assert_eq!(requires_blocked(&nodes[0], &nodes, &idx), want);
-        assert_eq!(
-            requires_reason(&nodes[0], &nodes, &idx),
-            want,
-            "same words, both readings"
-        );
+        assert_eq!(minimum_hold(&nodes[0], &nodes, &idx), want);
+        // A HOLD, not a scope verdict: the presence readings do not see it.
+        assert_eq!(requires_blocked(&nodes[0], &nodes, &idx), None);
+        assert_eq!(requires_reason(&nodes[0], &nodes, &idx), None);
     }
 
     #[test]
@@ -703,8 +725,7 @@ mod tests {
         for found in ["1.4.252", "1.4.300", "1.10.0", "2"] {
             let nodes = with_minimum(Some(found));
             let idx = make_index(&nodes);
-            assert_eq!(requires_blocked(&nodes[0], &nodes, &idx), None, "{found}");
-            assert_eq!(requires_reason(&nodes[0], &nodes, &idx), None, "{found}");
+            assert_eq!(minimum_hold(&nodes[0], &nodes, &idx), None, "{found}");
         }
     }
 
@@ -714,8 +735,7 @@ mod tests {
             let nodes = with_minimum(found);
             let idx = make_index(&nodes);
             let want = Some("requires Orca >= 1.4.252 (version unknown)".to_string());
-            assert_eq!(requires_blocked(&nodes[0], &nodes, &idx), want, "{found:?}");
-            assert_eq!(requires_reason(&nodes[0], &nodes, &idx), want, "{found:?}");
+            assert_eq!(minimum_hold(&nodes[0], &nodes, &idx), want, "{found:?}");
         }
     }
 
@@ -726,8 +746,8 @@ mod tests {
         let mut nodes = with_minimum(None);
         nodes[1].present_now = false;
         let idx = make_index(&nodes);
+        assert_eq!(minimum_hold(&nodes[0], &nodes, &idx), None);
         assert_eq!(requires_blocked(&nodes[0], &nodes, &idx), None);
-        assert_eq!(requires_reason(&nodes[0], &nodes, &idx), None);
     }
 
     #[test]
@@ -737,7 +757,33 @@ mod tests {
         nodes[0].requires.push("Nushell".into());
         nodes.push(dep("Nushell", &[], true, true, true));
         let idx = make_index(&nodes);
-        assert_eq!(requires_blocked(&nodes[0], &nodes, &idx), None);
+        assert_eq!(minimum_hold(&nodes[0], &nodes, &idx), None);
+    }
+
+    #[test]
+    fn a_minimum_holds_every_action_but_a_removal() {
+        // The pre-tag finding: Orca below the floor (or unreadable) must not make a plugin
+        // that requires it impossible to REMOVE. A removal never needs its requirement.
+        use crate::decision::Action;
+        for found in [Some("1.4.237"), None] {
+            let nodes = with_minimum(found);
+            let idx = make_index(&nodes);
+            for a in [Action::Install, Action::Upgrade, Action::Downgrade] {
+                assert!(
+                    held_by_minimum(a, &nodes[0], &nodes, &idx).is_some(),
+                    "{a:?} {found:?}"
+                );
+            }
+            assert_eq!(
+                held_by_minimum(Action::Uninstall, &nodes[0], &nodes, &idx),
+                None
+            );
+            assert_eq!(
+                requires_blocked(&nodes[0], &nodes, &idx),
+                None,
+                "stays in scope"
+            );
+        }
     }
 
     #[test]

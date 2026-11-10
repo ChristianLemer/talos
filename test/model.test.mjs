@@ -38,6 +38,7 @@ import {
   removeFromPersonal,
   removeProfile,
   replacedBy,
+  minimumReason,
   requiresReason,
   scopeOf,
   scopeReason,
@@ -1562,25 +1563,50 @@ function seedWithMinimum() {
   return m;
 }
 
-test("requiresReason: a present requirement BELOW its minimum holds the row, naming both", () => {
+test("minimum: a present requirement BELOW it holds the install, naming both versions", () => {
   const m = seedWithMinimum();
   setInstalledVersion(m, 0, "v1.4.237");
-  assert.equal(requiresReason(m, 1), "requires Orca >= 1.4.252 (found 1.4.237)");
-  assert.equal(scopeOf(m, 1), "out", "the Apply never offers it");
-  assert.equal(scopeReason(m, 1), "requires Orca >= 1.4.252 (found 1.4.237)");
+  setDecision(m, 1, "in");
+  const why = "requires Orca >= 1.4.252 (found 1.4.237)";
+  assert.equal(minimumReason(m, 1), why);
+  assert.equal(requiresReason(m, 1), null, "a hold, not a scope verdict");
+  assert.equal(scopeOf(m, 1), "in", "the row stays visible and in scope");
+  assert.equal(actionOf(m, 1), "install");
+  assert.equal(holdReason(m, 1), why, "the row says why");
+  assert.equal(holdWord(m, 1), why, "in plain view, not only in a title");
+  assert.equal(isActionable(m, 1), false, "the Apply never offers it");
 });
 
-test("requiresReason: at or above the minimum the requirement holds", () => {
+test("minimum: at or above it, nothing is held", () => {
   for (const v of ["1.4.252", "1.4.300", "1.10.0", "2"]) {
     const m = seedWithMinimum();
     setInstalledVersion(m, 0, v);
-    assert.equal(requiresReason(m, 1), null, v);
+    setDecision(m, 1, "in");
+    assert.equal(minimumReason(m, 1), null, v);
+    assert.equal(isActionable(m, 1), true, v);
   }
 });
 
-test("requiresReason: an unknown version is held, never guessed", () => {
+test("minimum: an unknown version holds, never guessed", () => {
   const m = seedWithMinimum(); // present, no version reported
-  assert.equal(requiresReason(m, 1), "requires Orca >= 1.4.252 (version unknown)");
+  setDecision(m, 1, "in");
+  assert.equal(holdReason(m, 1), "requires Orca >= 1.4.252 (version unknown)");
+  assert.equal(isActionable(m, 1), false);
+});
+
+test("minimum: a row whose host is too old (or unreadable) is still REMOVABLE", () => {
+  // The pre-tag finding: turning the plugin off must uninstall it, whatever Orca's
+  // version. A removal never needs its requirement (deps.rs `held_by_minimum`).
+  for (const v of ["1.4.237", ""]) {
+    const m = seedWithMinimum();
+    setInstalledVersion(m, 0, v);
+    setPresence(m, 1, true); // the plugin is installed
+    setDecision(m, 1, "off");
+    assert.equal(scopeOf(m, 1), "in", v);
+    assert.equal(actionOf(m, 1), "uninstall", v);
+    assert.equal(holdReason(m, 1), null, v);
+    assert.equal(isActionable(m, 1), true, v);
+  }
 });
 
 test("requiresReason: an absent requirement on its way in is not second-guessed", () => {
