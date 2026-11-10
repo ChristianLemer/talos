@@ -655,6 +655,17 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
             .as_deref()
             .map(|m| format!("claude plugin marketplace add \"{m}\" && "))
             .unwrap_or_default();
+        // `--scope user`: the install puts the plugin at user scope, so Talos owns THAT copy, and
+        // its update acts on that copy and nothing else. MEASURED (Claude Code 2.1.321, Linux;
+        // Windows not measured), a plugin present at user AND project scope:
+        //   · from a cwd outside any project, bare and `--scope user` both update the user copy;
+        //   · from INSIDE the project, bare updated the PROJECT copy (exit 0, green) and left the
+        //     user copy stale — the worst outcome: silent, on a copy shared with a team that
+        //     Talos does not own. `--scope user` updates the user copy from either cwd.
+        // The price, measured: a copy installed by hand at project scope only reads present, and
+        // `--scope user` exits 1 "not installed at scope user" — a red line at every session's
+        // first Apply. Loud and rare, so accepted. (Detection reads presence from any scope;
+        // reading the user-scope entry only would close that, and is a separate change.)
         let update = format!("claude plugin update {id} --scope user");
         return Commands {
             route: Some("claude-plugin".into()),
@@ -680,16 +691,20 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
             install: Some(format!(
                 "{git_diag}{add}claude plugin install {id} --scope user && {update}"
             )),
-            // `--scope user` too: the scope the install writes. MEASURED (2.1.321): exit 0, and
-            // exit 1 "not found in installed plugins" once it is gone.
-            uninstall: Some(format!("claude plugin uninstall {id} --scope user")),
+            // Bare, as in 0.1.0. MEASURED (Claude Code 2.1.321, Linux; Windows not measured):
+            // from a cwd outside any project it acts as `--scope user` — removes a user copy, and
+            // only the user copy when a project one exists too; from INSIDE the project, bare
+            // still removed only the user copy while `--scope user` EXITED 1 ("enabled at project
+            // scope"). A project-only copy fails from either cwd, bare included — exit 1
+            // "installed in project scope, not user" outside, "enabled at project scope" inside —
+            // and stays: an error on the row, not a protection Talos chose.
+            uninstall: Some(format!("claude plugin uninstall {id}")),
             // ⭐ Reached since `update-on: apply` (#13): nothing marks a plugin outdated, so this
             // command runs only under that cadence — once per session, while the plugin is
             // wanted and present. MEASURED (Claude Code 2.1.321, Linux, a local marketplace
             // moved 1.0.0 → 1.1.0): exit 0 and "updated from 1.0.0 to 1.1.0 … Restart to apply
             // changes"; exit 0 and "already at the latest version" when current; exit 1 for an
-            // unknown plugin; no question asked. `--scope user` because that is the scope the
-            // install writes: left to auto-detect, a plugin ALSO enabled in a project is ambiguous.
+            // unknown plugin; no question asked. Its scope: see `update` above.
             upgrade: Some(update),
             downgrade: None,
         };
@@ -2835,7 +2850,7 @@ slow: true
     fn a_claude_plugin_with_update_on_apply_runs_the_routes_update() {
         // #13: the route already knows the update; `update-on: apply` alone gives it a cadence.
         // No `version:` and no `update:` — the plugin carries no pin, and the command is the
-        // route's, scoped where the install put it.
+        // route's, on the user copy the install put there.
         let mut p = pkg("Superpowers");
         p.claude_plugin = Some("superpowers@claude-plugins-official".into());
         p.update_on = Some("apply".into());
@@ -2845,6 +2860,16 @@ slow: true
         assert_eq!(
             s.upgrade.as_deref(),
             Some("claude plugin update superpowers@claude-plugins-official --scope user")
+        );
+        // Install and update act on the user copy Talos owns; uninstall is bare, measured to
+        // remove only that copy from either cwd, where `--scope user` failed inside a project.
+        assert!(s.install.as_deref().unwrap().contains(
+            "claude plugin install superpowers@claude-plugins-official --scope user && \
+             claude plugin update superpowers@claude-plugins-official --scope user"
+        ));
+        assert_eq!(
+            s.uninstall.as_deref(),
+            Some("claude plugin uninstall superpowers@claude-plugins-official")
         );
         // Without the word, presence only — the route's update is unreachable, as before.
         p.update_on = None;
