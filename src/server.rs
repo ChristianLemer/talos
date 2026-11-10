@@ -3538,6 +3538,13 @@ async fn apply_diff(
         if !step_changed_package(Some(&presences[*i]), outcome.after.as_ref()) {
             continue;
         }
+        // The dependents are judged against the requirement as it is NOW, after its step: a
+        // minimum (`Orca >= 1.4.252`) read off the version from before would refuse the very
+        // repair this pass exists for.
+        if let Some(after) = outcome.after.as_ref() {
+            nodes[*i].present_now = after.present == Some(true);
+            nodes[*i].version = after.version.clone();
+        }
         let still_planned: HashSet<usize> = plan[pos + 1..].iter().map(|(j, _)| *j).collect();
         for d in dependents_to_recheck(&requires, &steps[*i].name, &still_planned, &mut rechecked) {
             let step_c = steps[d].clone();
@@ -3555,14 +3562,20 @@ async fn apply_diff(
                     .to_string(),
                 ))
                 .await;
-            let repair = want_on.contains(&d)
+            let wanted_back = want_on.contains(&d)
                 && !out_of_scope.contains(&d)
                 && !scope_refuses(&sel, &steps[d].name)
                 && requires_blocked(&nodes[d], &nodes, &idx).is_none()
-                // The repair IS an install: a minimum that does not hold holds it too.
-                && crate::deps::held_by_minimum(Action::Install, &nodes[d], &nodes, &idx).is_none()
                 && p.present == Some(false);
-            if !repair {
+            if !wanted_back {
+                continue;
+            }
+            // The repair IS an install: a minimum that does not hold holds it too, and says so.
+            if let Some(low) =
+                crate::deps::held_by_minimum(Action::Install, &nodes[d], &nodes, &idx)
+            {
+                println!("[apply] {} held: {low}", steps[d].name);
+                send_held(socket, d, &low).await;
                 continue;
             }
             println!(

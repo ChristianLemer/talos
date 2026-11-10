@@ -71,9 +71,11 @@ requires:
   comparator (`1.10` is above `1.9`). One entry per package: `--check` refuses the same
   name twice.
 - **A hold, never a lock.** The minimum holds what would *run* the row against a host too
-  old for it: install, upgrade, update. It never holds a removal, because a removal does not
-  need its requirement. The row stays in scope and visible, with its reason, and turning it
-  off still uninstalls it, even while the requirement is too old or unreadable.
+  old for it: install, upgrade or downgrade (an update is an upgrade). It never holds a
+  removal, because a removal does not need its requirement. The row stays in scope and
+  visible, with its reason, and turning it off still uninstalls it, even while the
+  requirement is too old or unreadable. A row that requires a held row is held too
+  (`requires Plugin`), on the same terms.
 - **Unknown is held.** A present requirement whose version Talos cannot read gives
   `requires Orca >= 1.4.252 (version unknown)`. That is not a pass, and not "too old" either.
 - **Never upgraded by this rule.** The minimum holds the dependent. It never upgrades the

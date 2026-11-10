@@ -60,3 +60,14 @@ test("a minimum holds the same actions on both sides: every one but a removal", 
   assert.match(apply, /held_by_minimum\(a, &nodes\[i\]/, "the batch holds by the action");
   assert.match(apply, /held_by_minimum\(Action::Install, &nodes\[d\]/, "the repair is an install");
 });
+
+test("the dependents' repair judges a minimum on the requirement AFTER its step", () => {
+  // Review finding: the repair runs because the requirement's version moved, so reading the
+  // version from before the step would refuse it on "found <old>". And a refusal says so.
+  const server = readFileSync(new URL("../src/server.rs", import.meta.url), "utf8");
+  const apply = slice(server, "async fn apply_diff(", "\nasync fn ");
+  const refreshed = apply.indexOf("nodes[*i].version = after.version.clone();");
+  const judged = apply.indexOf("held_by_minimum(Action::Install, &nodes[d]");
+  assert.ok(refreshed > 0 && judged > refreshed, "refreshed before it is judged");
+  assert.match(apply.slice(judged, judged + 300), /send_held\(socket, d, &low\)/, "the refusal leaves a trace");
+});

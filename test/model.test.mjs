@@ -1647,3 +1647,54 @@ test("a replacement held by a minimum replaces nothing (landsHere reads the mini
   setInstalledVersion(m, 0, "2.0");
   assert.equal(replacedBy(m, 1), "Beta", "at the minimum, the override is back");
 });
+
+function seedChain() {
+  // Plugin requires Orca >= 1.4.252; Ext requires Plugin. Orca present at 1.4.237.
+  const m = createModel();
+  loadPlan(
+    m,
+    [
+      { i: 0, name: "Orca", bundle: "", posture: "opt-in", canUninstall: true },
+      {
+        i: 1, name: "Plugin", bundle: "", posture: "opt-in", canUninstall: true,
+        requires: ["Orca"], requiresMin: { Orca: "1.4.252" },
+      },
+      { i: 2, name: "Ext", bundle: "", posture: "opt-in", canUninstall: true, requires: ["Plugin"] },
+    ],
+    [],
+  );
+  setPresence(m, 0, true);
+  setInstalledVersion(m, 0, "1.4.237");
+  return m;
+}
+
+test("minimum: what requires a held row is held too — the server's `drop_requiring_held`", () => {
+  const m = seedChain();
+  setDecision(m, 1, "in");
+  setDecision(m, 2, "in");
+  assert.equal(holdReason(m, 1), "requires Orca >= 1.4.252 (found 1.4.237)");
+  assert.equal(holdReason(m, 2), "requires Plugin", "the server's words for the chain");
+  assert.deepEqual(planActions(m), [], "no install announced that the Apply will not run");
+});
+
+test("minimum: a present row standing on a held one is still removable", () => {
+  const m = seedChain();
+  setPresence(m, 2, true);
+  setDecision(m, 1, "in");
+  setDecision(m, 2, "off");
+  assert.equal(scopeOf(m, 2), "in");
+  assert.equal(actionOf(m, 2), "uninstall");
+  assert.equal(isActionable(m, 2), true);
+});
+
+test("minimum: the server's held message for a minimum is not stored, so it cannot go stale", () => {
+  const m = seedChain();
+  setDecision(m, 1, "in");
+  const why = "requires Orca >= 1.4.252 (found 1.4.237)";
+  setHold(m, 1, why); // what the Apply sends (`send_held`)
+  setInstalledVersion(m, 0, "1.4.300"); // Orca's own row upgraded it in the same Apply
+  assert.equal(holdReason(m, 1), null, "no stale 'found 1.4.237'");
+  assert.equal(isActionable(m, 1), true);
+  setHold(m, 1, "brew cannot serve the pin"); // a hold the front did not compute is kept
+  assert.equal(holdReason(m, 1), "brew cannot serve the pin");
+});

@@ -252,15 +252,26 @@ export function requiresReason(model, i) {
 // The first PRESENT requirement below this row's minimum for it, or null — deps.rs
 // `minimum_hold`, word for word. Absent requirements are not judged: requiresReason answers
 // for presence. Read by holdReason for every action but a removal (`held_by_minimum`).
-export function minimumReason(model, i) {
+export function minimumReason(model, i, seen = new Set()) {
   const p = model.pkgs.get(i);
-  if (!p) return null;
+  if (!p || seen.has(i)) return null;
+  seen.add(i);
   for (const req of p.requires ?? []) {
-    let q = null;
-    for (const [, c] of model.pkgs) if (c.name === req) { q = c; break; }
-    if (q?.present !== true) continue;
-    const why = belowMinimum(p, req, q);
-    if (why) return why;
+    let j = null;
+    for (const [k, c] of model.pkgs) if (c.name === req) { j = k; break; }
+    const q = j == null ? null : model.pkgs.get(j);
+    if (!q) continue; // a dangling name is requiresReason's to say
+    if (q.present === true) {
+      const why = belowMinimum(p, req, q);
+      if (why) return why;
+      continue;
+    }
+    // On its way in, but ITS install is held by a minimum: it will not be there, so neither
+    // can this row's install run — server.rs `drop_requiring_held`, same words. A hold too,
+    // never a scope verdict: a present row stays removable.
+    if (desiredOf(model, j) === "present" && q.canUninstall && minimumReason(model, j, seen)) {
+      return `requires ${req}`;
+    }
   }
   return null;
 }
@@ -778,7 +789,10 @@ export function holdReason(model, i) {
 // The server held this row at Apply, with these words (`server::send_held`).
 export function setHold(model, i, reason) {
   const p = model.pkgs.get(i);
-  if (p) p.hold = reason || "";
+  // A minimum's hold is not stored: the front computes it live (`minimumReason`), and a
+  // stored copy would outlive the requirement's own upgrade in the same Apply, still saying
+  // the old "found" version. A held reason the front did NOT compute is kept, as always.
+  if (p) p.hold = reason && reason === minimumReason(model, i) ? "" : reason || "";
 }
 // The server kept a row the override would have removed (`server::send_kept`). Apart from
 // `hold`: a removal's hold must never stop an install, nor an install's hold a removal.
