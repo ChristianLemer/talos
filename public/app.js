@@ -5,6 +5,7 @@ import {
   postureDefault as _postureDefault,
 } from "./decision.js";
 import * as M from "./model.js";
+import { findEntry, findView } from "./finder.js";
 import { estimate, formatEstimate } from "./estimate.js";
 import { barView, NOTHING_NOTE } from "./bar.js";
 import { changeText, failureText, machineRows, machineText, scanSummary, shareLine } from "./machine.js";
@@ -1026,6 +1027,8 @@ function render(steps, profiles = [], columns = 2) {
   // disappear rather than linger with a stale verdict.
   stepsEl.replaceChildren();
   for (const k of Object.keys(rows)) delete rows[k];
+  findRows = [];
+  catHeaders.clear();
   // The scan starts now and won't settle until `state-done`. Freeze actions and
   // dim the panel until then: rows show "checking…", nothing is clickable, and
   // each lights up as its probe answers — no acting on an incomplete plan.
@@ -1054,16 +1057,29 @@ function render(steps, profiles = [], columns = 2) {
       // toggle a `.cat-collapsed` set tracked on the header + hide its rows by
       // data-cat. Rows stay in the DOM (Bundles tab still sees them flat).
       h.onclick = () => {
+        // During a find, the header folds or opens THIS find's view only; the accordion
+        // the user had is untouched and comes back when the query clears.
+        if (findOn()) {
+          findToggled.has(cat) ? findToggled.delete(cat) : findToggled.add(cat);
+          applyFind();
+          return;
+        }
         const collapsed = h.classList.toggle("cat-collapsed");
         stepsEl.querySelectorAll("details[data-cat]").forEach((row) => {
           if (row.dataset.cat === cat) row.classList.toggle("cat-hidden", collapsed);
         });
       };
       stepsEl.append(h);
+      catHeaders.set(cat, h);
       lastCat = cat;
     }
     const d = document.createElement("details");
     d.dataset.cat = cat; // for the Catalog accordion (fold by category)
+    findRows.push({
+      key: s.i,
+      cat,
+      entry: findEntry({ name: s.name, description: s.description, categories: s.categories, id: s.id }),
+    });
     d.classList.add("posture-" + (s.posture || "mandatory")); // dim optional (opt-*) rows
     // When the row is first opened, flush any pending detection evidence into its
     // terminal. We DON'T write it at scan time: that would force-create a terminal
@@ -1243,10 +1259,89 @@ function render(steps, profiles = [], columns = 2) {
     };
     paintPkg(s.i); // initial pill: locked word for mandatory/forbidden, else auto
   }
+  // A Refresh rebuilds every row: a query that stands is applied to the new ones.
+  applyFind();
   // Freeze all actions immediately: the scan (scanning=true) hasn't settled, so
   // no button should be live until state-done proves the plan complete.
   refreshLiveness();
 }
+
+// --- the Catalog finder ---
+// finder.js decides (which rows match, best first, which categories open); this paints it
+// with CLASSES and `order` only. ⭐ A filter SORTS, a label INFORMS: nothing here touches a
+// row's content, so a shown row keeps every label, and nothing here reaches the model, so
+// scope, intention and the Apply cannot move. Nothing persists: the query lives in the field.
+let findRows = []; // [{ key: row index, cat, entry }], in the catalogue's order (render)
+const catHeaders = new Map(); // category → its header element
+// Categories the user folded or opened by hand DURING this find (a header click). Dropped
+// at every keystroke: a new query is a new view, and the finder decides again.
+const findToggled = new Set();
+const findInput = document.getElementById("find-input");
+const findOn = () => document.body.classList.contains("finding");
+
+function applyFind() {
+  const view = findView(findInput.value, findRows);
+  document.body.classList.toggle("finding", !!view);
+  for (const h of catHeaders.values()) {
+    h.style.order = "";
+    h.classList.remove("find-fold");
+  }
+  for (const k of Object.keys(rows)) {
+    const d = rows[k].details;
+    d.style.order = "";
+    d.classList.remove("find-miss", "find-fold");
+  }
+  const empty = document.getElementById("find-empty");
+  empty.hidden = !view || view.matched.length > 0;
+  if (!view) return;
+  if (!empty.hidden) empty.textContent = `No package matches “${findInput.value.trim()}”.`;
+  const rank = new Map(view.matched.map((key, n) => [key, n]));
+  let n = 0;
+  for (const { cat, open } of view.cats) {
+    const h = catHeaders.get(cat);
+    if (h) h.style.order = String(n++);
+    const shown = open !== findToggled.has(cat);
+    h?.classList.toggle("find-fold", !shown);
+    const members = findRows.filter((r) => r.cat === cat);
+    // Opened by hand with no match: the category shows whole, in the catalogue's order.
+    const whole = shown && !open;
+    members.sort((a, b) => (rank.get(a.key) ?? Infinity) - (rank.get(b.key) ?? Infinity));
+    for (const r of members) {
+      const d = rows[r.key]?.details;
+      if (!d) continue;
+      d.style.order = String(n++);
+      if (!shown) d.classList.add("find-fold");
+      else if (!whole && !rank.has(r.key)) d.classList.add("find-miss");
+    }
+  }
+}
+
+findInput.addEventListener("input", () => {
+  findToggled.clear();
+  applyFind();
+});
+// Typing somewhere else (the Doctor's terminal, the sudo prompt): keys there are text.
+const typingElsewhere = (t) =>
+  t !== findInput && t instanceof HTMLElement &&
+  (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+document.addEventListener("keydown", (ev) => {
+  if (!document.body.classList.contains("tab-catalog") || typingElsewhere(ev.target)) return;
+  // Esc clears the query and leaves the field — also once a header click took the focus
+  // away, or the find would stand with no key to end it.
+  if (ev.key === "Escape" && (ev.target === findInput || findInput.value)) {
+    findInput.value = "";
+    findToggled.clear();
+    applyFind();
+    findInput.blur();
+    return;
+  }
+  // `/` focuses the field, on the Catalog tab only; in the field it is a character.
+  if (ev.key === "/" && ev.target !== findInput && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+    ev.preventDefault();
+    findInput.focus();
+    findInput.select();
+  }
+});
 
 function ensureTerm(i) {
   const r = rows[i];

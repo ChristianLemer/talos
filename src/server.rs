@@ -1305,7 +1305,8 @@ fn step_json(
 ) -> Value {
     let f = facts.get(i).copied().unwrap_or_default();
     json!({
-        "i": i, "name": s.name, "description": s.description, "bundle": s.bundle,
+        // `id`: the catalogue id, for the Catalog finder (finder.js), which ranks it below the name.
+        "i": i, "id": s.id, "name": s.name, "description": s.description, "bundle": s.bundle,
         "canUninstall": s.uninstall.is_some(), "posture": s.posture.as_str(),
         "isConfig": s.is_config, "isExtension": s.is_extension,
         // Can the Apply take this row DOWN to its pin? Only when the route builds a downgrade

@@ -647,11 +647,27 @@
         color:var(--dim); padding:14px 4px 4px; border-bottom:1px solid var(--line); margin:0 0 2px; }
       .cat-header:hover { color:var(--fg); }
       .cat-caret { font-size:10px; transition:transform .12s; }
-      .cat-header.cat-collapsed .cat-caret { transform:rotate(-90deg); }
+      body:not(.finding) .cat-header.cat-collapsed .cat-caret,
+      body.finding .cat-header.find-fold .cat-caret { transform:rotate(-90deg); }
       body.tab-bundles .cat-header { display:none; }
       /* A row folded away by its category accordion — only in the Catalog tab
          (the accordion is a Catalog affordance; Bundles has its own scope). */
-      body.tab-catalog #steps > details.cat-hidden { display:none; }
+      body.tab-catalog:not(.finding) #steps > details.cat-hidden { display:none; }
+      /* The finder (Catalog only). While a query stands (`body.finding`), its own classes
+         decide what shows, and the user's accordion (`cat-collapsed` / `cat-hidden`) is left
+         exactly as it was: clearing the query only drops `finding`, so the accordion comes
+         back by construction. Ranking moves nothing in the DOM — `order` on a flex column
+         does it, and clearing removes it. */
+      #finder { display:none; }
+      body.tab-catalog #finder { display:flex; align-items:center; gap:12px; padding:10px 22px 0; }
+      #find-input { flex:1; max-width:44ch; box-sizing:border-box; padding:7px 10px; font-size:13px;
+        border-radius:6px; border:1px solid var(--line); background:var(--surface); color:var(--fg); }
+      #find-input:focus { outline:none; border-color:var(--head); }
+      #find-input::placeholder { color:var(--dim); }
+      #find-empty { font-size:12px; color:var(--dim); }
+      body.tab-catalog.finding #steps { display:flex; flex-direction:column; }
+      body.tab-catalog.finding #steps > details.find-miss,
+      body.tab-catalog.finding #steps > details.find-fold { display:none; }
       /* Catalog tab (spec §22) = browse the full list grouped by category. NO
          bundle cards, NO Apply/Reset header — just packages + their 3-state toggle.
          Those belong to the Bundles (action) tab. */
@@ -1264,6 +1280,14 @@
       <!-- The fit line: what this machine can get out of the content, counted from the rows'
            own reasons (model.fitSummary). Advanced mode only — the integrator's question,
            never shown to the colleague the kit was composed for. -->
+      <!-- The Catalog finder (finder.js ranks, app.js paints): `/` focuses it, Esc clears it.
+           A VIEW, never a decision — it sorts and folds rows, it changes no scope, no
+           intention, no Apply, and a row it shows keeps every label. Catalog tab only. -->
+      <div id="finder">
+        <input id="find-input" type="text" autocomplete="off" spellcheck="false"
+               placeholder="Find a package — press /" aria-label="Find a package">
+        <span id="find-empty" hidden></span>
+      </div>
       <div id="fit-line" hidden></div>
       <div id="steps-empty" class="steps-empty" hidden></div>
       <!-- ⚠️ "as seen on this machine" is NOT a footnote. This tab lists what the CATALOGUE
