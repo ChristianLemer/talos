@@ -4,6 +4,27 @@ One section per stable release, newest first. A release page shows its version's
 (`admin/release-notes.sh`), then the commits since the tag before. The `v0.0.1-beta.N` builds
 that led to 0.1.0 have no section of their own: their pages list their commits.
 
+## 0.2.1 — 2026-11-10
+
+A finder in the Catalog tab.
+
+### What it does
+- **`/` finds, Esc clears.** On the Catalog tab, `/` focuses a search field (never while
+  typing in another field); Esc clears the query and leaves the field.
+- **Matching is fzf's, simplified.** The query's characters in order, not necessarily
+  adjacent, with case and accents folded on both sides (`nüs` finds Nushell). Space-separated
+  terms must all match. A name match ranks above any match in the description, the categories
+  or the catalogue id.
+- **The list is filtered in place.** Categories holding a match open, ordered by their best
+  row; the others fold, header kept. No match says so in one line. Clearing the field brings
+  the accordion back as it was, a category folded by hand included.
+- **A view, nothing more.** The finder changes neither the scope, nor an intention, nor the
+  Apply. During an Apply, its focus mode wins over a standing query.
+
+### Why a patch release
+Content is unchanged: a kit pinned at v0.2.0 reads the same content, and nothing in
+`catalog/` or `bundles/` needs a newer pin.
+
 ## 0.2.0 — 2026-11-10
 
 Two new content forms. A dependent can say how recent its host must be, and a Claude plugin
