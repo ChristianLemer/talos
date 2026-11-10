@@ -4,6 +4,41 @@ One section per stable release, newest first. A release page shows its version's
 (`admin/release-notes.sh`), then the commits since the tag before. The `v0.0.1-beta.N` builds
 that led to 0.1.0 have no section of their own: their pages list their commits.
 
+## 0.2.0 — 2026-11-10
+
+Two new content forms. A dependent can say how recent its host must be, and a Claude plugin
+stays current on its own.
+
+### What it does
+- **`requires:` takes a minimum version.** `requires: [Orca >= 1.4.252]` sits beside a bare
+  name (`≥` is read too). When the requirement is present but older, the row is held before
+  the Apply, and it says why with both versions: `requires Orca >= 1.4.252 (found 1.4.237)`.
+  - **Held:** the minimum holds what would run the row against the old host, which is an
+    install, an upgrade or an `update-on` update.
+  - **Never held:** a removal. A row whose host is too old stays in scope, and turning it off
+    still uninstalls it.
+  - **Unknown version:** held as `(version unknown)`, never guessed either way.
+  - **The requirement itself** is never upgraded by this rule; its own row decides, as always.
+  - A row that requires a row whose install is held is held too. `--check` refuses any other sign, a version
+    that is not one, the same name twice, and a minimum above the requirement's own exact pin.
+- **Claude plugins stay current (#13).** A `claude-plugin:` row with `update-on: apply` runs
+  `claude plugin update` once per session. The row says `X → Y` or `already current` (when
+  both versions are read), and a failure is a line on the row. The update targets the user scope; the uninstall is bare, as
+  in 0.1.0.
+
+### Why a minor release
+Content that uses either form needs an engine pinned at **v0.2.0 or later** in `.talos-version`.
+- A 0.1.0 engine reads `Name >= x` as the name of an unknown package, so the row is held
+  everywhere.
+- Its `--check` refuses both forms.
+- The 0.2.0 socle's `superpowers.yaml` fails a 0.1.0 `--check`.
+
+### Known limits
+- A row held by a minimum is not installed in the same Apply when its requirement's own row
+  takes it past the minimum: it waits for the next scan.
+- A `claude-plugin:` copy installed at PROJECT scope reads present: detection ignores the
+  scope.
+
 ## 0.1.0 — 2026-11-06
 
 The first stable release. Talos shows what a machine really has, lets a person choose what

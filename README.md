@@ -90,7 +90,7 @@ your-talos-content/
 ├── catalog/
 ├── bundles/
 ├── distribution.yaml   ← optional: what your team calls this content, and which edition
-└── .talos-version      ← one line: the release your kit runs, e.g. v0.1.0
+└── .talos-version      ← one line: the release your kit runs, e.g. v0.2.0
 ```
 
 Changing what Talos proposes is a commit. Moving to a newer Talos is a commit that
@@ -142,11 +142,11 @@ what the OS already ships — the two commands of **Try it**, above. They take t
 stable release; to pin one, give its tag (and pin it for your team in `.talos-version`):
 
 ```bash
-curl -fsSL https://github.com/ChristianLemer/talos/releases/download/v0.1.0/get-talos.sh | sh -s -- ./Talos --version v0.1.0
+curl -fsSL https://github.com/ChristianLemer/talos/releases/download/v0.2.0/get-talos.sh | sh -s -- ./Talos --version v0.2.0
 ```
 
 ```powershell
-& ([scriptblock]::Create((irm https://github.com/ChristianLemer/talos/releases/download/v0.1.0/get-talos.ps1))) -Kit .\Talos -Version v0.1.0
+& ([scriptblock]::Create((irm https://github.com/ChristianLemer/talos/releases/download/v0.2.0/get-talos.ps1))) -Kit .\Talos -Version v0.2.0
 ```
 
 ```bash
