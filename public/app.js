@@ -2490,11 +2490,13 @@ function renderLog(consent, history, sharedTo) {
     const row = document.createElement("div");
     row.className = "hist-row";
     const when = (e.at || "").replace("T", " ").slice(0, 16);
-    row.innerHTML = `<span class="h-when">${when}</span>` +
-      `<span class="h-pkg">${e.package || ""}${
-        e.version ? ` <span class="h-ver">${e.version}</span>` : ""
+    // The journal's text is escaped: its version is what the tool printed, never markup.
+    const esc = (t) => String(t).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+    row.innerHTML = `<span class="h-when">${esc(when)}</span>` +
+      `<span class="h-pkg">${esc(e.package || "")}${
+        e.version ? ` <span class="h-ver">${esc(e.version)}</span>` : ""
       }</span>` +
-      `<span class="h-act ${e.ok ? "ok" : "fail"}">${e.action}${
+      `<span class="h-act ${e.ok ? "ok" : "fail"}">${esc(e.action)}${
         e.ok ? "" : " ✗"
       }</span>`;
     // A failed version change says where it was found and what it ran toward, as the journal

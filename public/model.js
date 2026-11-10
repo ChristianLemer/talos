@@ -253,27 +253,36 @@ export function requiresReason(model, i) {
 // `minimum_hold`, word for word. Absent requirements are not judged: requiresReason answers
 // for presence. Read by holdReason for every action but a removal (`held_by_minimum`).
 export function minimumReason(model, i, seen = new Set()) {
-  const p = model.pkgs.get(i);
-  if (!p || seen.has(i)) return null;
-  seen.add(i);
-  const reqs = [];
-  for (const req of p.requires ?? []) {
-    let j = null;
-    for (const [k, c] of model.pkgs) if (c.name === req) { j = k; break; }
-    if (j != null) reqs.push([req, j, model.pkgs.get(j)]); // a dangling name is requiresReason's
+  return ownMinimum(model, i) ?? chainHold(model, i, seen);
+}
+// The requirements of row i that exist in the catalogue: [name, index, pkg].
+function requirementsOf(model, i) {
+  const out = [];
+  for (const req of model.pkgs.get(i)?.requires ?? []) {
+    for (const [k, c] of model.pkgs) if (c.name === req) { out.push([req, k, c]); break; }
   }
-  // The server's order: the row's own minimum on a PRESENT requirement first
-  // (`held_by_minimum`), then the chain (`drop_requiring_held`), so both say the same words.
-  for (const [req, , q] of reqs) {
+  return out; // a dangling name is requiresReason's to say
+}
+// The row's OWN minimum on a PRESENT requirement — deps.rs `held_by_minimum`, which the
+// server asks first of all the holds in apply_diff.
+function ownMinimum(model, i) {
+  const p = model.pkgs.get(i);
+  if (!p) return null;
+  for (const [req, , q] of requirementsOf(model, i)) {
     if (q.present !== true) continue;
     const why = belowMinimum(p, req, q);
     if (why) return why;
   }
-  // On its way in, but ITS install is held by a minimum: it will not be there, so neither can
-  // this row's install run — `drop_requiring_held`, same words. "On its way in" is the
-  // requirement's own action, as the server decides it (scope, override and all). A hold too,
-  // never a scope verdict: a present row stays removable.
-  for (const [req, j, q] of reqs) {
+  return null;
+}
+// On its way in, but ITS install is held by a minimum: it will not be there, so neither can
+// this row's install run — server.rs `drop_requiring_held`, same words, which the server
+// applies AFTER the per-row holds. "On its way in" is the requirement's own action, as the
+// server decides it (scope, override and all). A hold too, never a scope verdict.
+function chainHold(model, i, seen) {
+  if (seen.has(i)) return null;
+  seen.add(i);
+  for (const [req, j, q] of requirementsOf(model, i)) {
     if (q.present === true) continue;
     if (actionOf(model, j) === "install" && minimumReason(model, j, seen)) return `requires ${req}`;
   }
@@ -773,15 +782,17 @@ export function holdReason(model, i) {
   const a = actionOf(model, i);
   const p = model.pkgs.get(i);
   // A requirement below its minimum holds what would RUN the row against it — install,
-  // upgrade, downgrade — never its removal (deps.rs `held_by_minimum`). FIRST, in the
-  // server's order (apply_diff asks `held_by_minimum` before `unmoved_in_view`), so a row
-  // held by both says the same words on both sides.
-  if (HELD_ACTIONS.includes(a)) {
-    const low = minimumReason(model, i);
-    if (low) return low;
-  }
+  // upgrade, downgrade — never its removal. In the server's order, so a row held twice says
+  // the same words on both sides: its own minimum (`held_by_minimum`) first, then an unmoved
+  // change (`unmoved_in_view`), then a chain through a held requirement
+  // (`drop_requiring_held`, after the loop).
+  const held = HELD_ACTIONS.includes(a);
+  const own = held ? ownMinimum(model, i) : null;
+  if (own) return own;
   const unmoved = unmovedHold(model, i);
   if (unmoved) return unmoved;
+  const chain = held ? chainHold(model, i, new Set()) : null;
+  if (chain) return chain;
   if (p?.hold && HELD_ACTIONS.includes(a)) return p.hold;
   // A removal kept because its replacement is not there (`server::send_kept`): only while the
   // override is what removes the row — never against the user's own refusal — and only until

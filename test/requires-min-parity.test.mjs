@@ -51,7 +51,9 @@ test("a minimum holds the same actions on both sides: every one but a removal", 
     Object.values(actions).filter((a) => !exempt.includes(a)).sort(),
   );
   const hold = slice(js, "export function holdReason(", "\n}");
-  assert.match(hold, /HELD_ACTIONS\.includes\(a\)\)\s*\{\s*const low = minimumReason\(model, i\)/);
+  assert.match(hold, /const held = HELD_ACTIONS\.includes\(a\);/);
+  assert.match(hold, /held \? ownMinimum\(model, i\) : null/);
+  assert.match(hold, /held \? chainHold\(model, i, new Set\(\)\) : null/);
 
   // …and every server gate that can run a row asks the same function.
   const server = readFileSync(new URL("../src/server.rs", import.meta.url), "utf8");
@@ -82,26 +84,48 @@ test("a row held by a minimum AND an unmoved change gives the server's reason: t
   assert.ok(rsMin > 0 && rsUnmoved > rsMin, "server: minimum before unmoved");
   const js = readFileSync(new URL("../public/model.js", import.meta.url), "utf8");
   const hold = slice(js, "export function holdReason(", "\n}");
-  const jsMin = hold.indexOf("minimumReason(model, i)");
+  const jsMin = hold.indexOf("ownMinimum(model, i)");
   const jsUnmoved = hold.indexOf("unmovedHold(model, i)");
-  assert.ok(jsMin > 0 && jsUnmoved > jsMin, "front: minimum before unmoved");
+  const jsChain = hold.indexOf("chainHold(model, i,");
+  assert.ok(jsMin > 0 && jsUnmoved > jsMin, "front: own minimum before unmoved");
+  assert.ok(jsChain > jsUnmoved, "front: the chain after unmoved, as drop_requiring_held runs after the loop");
+  const rsChain = apply.indexOf("drop_requiring_held(&mut visual_plan");
+  assert.ok(rsChain > rsUnmoved, "server: the chain after the per-row holds");
 });
 
 test("paintVersion puts no probe text into innerHTML unescaped", () => {
   // Pre-tag review: a minimum's reason (holdWord) carries a content name and a version read
   // off a probe, and every version is probe output. This webview drives a server that runs
-  // commands, so each text enters the markup through `attr`.
+  // commands, so each text enters the markup through `attr`, at its leaf.
   const app = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
   const body = slice(app, "function paintVersion(i) {", "\nfunction ");
-  const raw = [...body.matchAll(/\$\{([^}]*)\}/g)].map((m) => m[1].trim())
+  // `pin` is the one plain-text helper (the leaf escapes its result); it is checked apart.
+  const pinLine = /\n\s*const pin = \(t\) => `📌\$\{t\}`;/;
+  assert.match(body, pinLine, "pin stays plain text: the leaf escapes it once");
+  const rest = body.replace(pinLine, "");
+  assert.ok(!/\$\{[^}]*\$\{/.test(rest), "no nested template: this guard could not read it");
+  const raw = [...rest.matchAll(/\$\{([^}]*)\}/g)].map((m) => m[1].trim())
     .filter((e) => !/^attr\(/.test(e))
-    // composed markup (already escaped inside), and the plain-text pin marker
-    .filter((e) => !/^(cur|remove|push|muted)\(|^(left|right|re|own|lag|target|t)$/.test(e));
+    // composed markup, every piece of it built from attr(…) or constants
+    .filter((e) => !/^(cur|remove|push|muted)\(|^(left|right|re|own|lag|target)$/.test(e));
   assert.deepEqual(raw, [], "an interpolation that is neither attr(…) nor composed markup");
-  for (const leaf of ["cur", "push", "remove"]) {
-    assert.match(body, new RegExp(`const ${leaf} = \\(t\\) => \`<span class="v-[a-z]+">\\$\\{attr\\(t\\)\\}</span>\``), leaf);
+  // …and nothing joins the markup by `+` except those same composed pieces.
+  for (const m of rest.matchAll(/innerHTML\s*=\s*([^;]+);/g)) {
+    const parts = m[1].split("+").map((x) => x.trim());
+    if (parts.length < 2) continue; // a single template: its interpolations are checked above
+    const plus = parts.filter((x) => !x.startsWith("`") && !x.endsWith("`"));
+    for (const x of plus) assert.match(x, /^(cur\(|own$|lag$)/, `joined raw into innerHTML: ${x}`);
   }
-  assert.match(body, /const pin = \(t\) => `📌\$\{t\}`/, "pin stays plain text: the leaf escapes it once");
-  const muted = slice(body, "const muted = ", ";\n");
-  assert.ok(!/>\$\{t\}</.test(muted), "muted escapes its text");
+  for (const leaf of ["cur", "push", "remove"]) {
+    assert.match(rest, new RegExp(`const ${leaf} = \\(t\\) => \`<span class="v-[a-z]+">\\$\\{attr\\(t\\)\\}</span>\``), leaf);
+  }
+});
+
+test("the journal's rows escape what they show", () => {
+  const app = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
+  const body = slice(app, "function renderLog(", "\nfunction ");
+  const row = slice(body, "row.innerHTML = ", ";\n");
+  for (const f of ["when", "e.package", "e.version", "e.action"]) {
+    assert.ok(!row.includes("${" + f), `${f} raw into the history row`);
+  }
 });

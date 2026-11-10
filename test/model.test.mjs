@@ -1745,3 +1745,19 @@ test("minimum: a row held by a minimum AND an unmoved upgrade says the minimum (
   assert.equal(actionOf(m, 1), "upgrade");
   assert.equal(holdReason(m, 1), "requires Orca >= 1.4.252 (found 1.4.237)");
 });
+
+test("minimum: an unmoved change outranks a CHAIN hold, as on the server (the chain runs after)", () => {
+  // Review of 6fb4aea: `drop_requiring_held` runs after the loop, so a row the loop already
+  // held as unmoved says the unmoved words on the server.
+  const m = seedChain(); // Orca 1.4.237; Plugin requires Orca >= 1.4.252; Ext requires Plugin
+  setDecision(m, 1, "in"); // Plugin absent, its install held by its minimum
+  setPresence(m, 2, true);
+  setInstalledVersion(m, 2, "1.0");
+  setOutdated(m, 2, true, "2.0");
+  setDecision(m, 2, "in");
+  setUnmoved(m, 2, { reason: "ran toward 2.0 and moved nothing", found: "1.0", target: "2.0", ahead: false });
+  assert.equal(actionOf(m, 2), "upgrade");
+  assert.equal(holdReason(m, 2), "ran toward 2.0 and moved nothing");
+  m.pkgs.get(2).unmoved = null; // the next target lifts it
+  assert.equal(holdReason(m, 2), "requires Plugin", "without it, the chain");
+});
