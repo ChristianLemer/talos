@@ -185,6 +185,16 @@ fn arms_session_done(
     ok && matches!(action, Action::Upgrade | Action::Install) && updates_each_apply(step)
 }
 
+/// Is this step a row's OWN update — a `self` tool's, or the one an each-Apply row runs (a
+/// Claude plugin's `claude plugin update`)? Its failure is a line on the row, never an Apply
+/// paused on a 403: it runs at each session's first Apply, and a firewall page opened there
+/// every time would stop the Apply for an update nobody asked for by hand. An INSTALL keeps the
+/// 403 page — the plugin is missing, and the passage is how it arrives.
+fn is_own_update(step: &crate::bundles::Step, action: crate::decision::Action) -> bool {
+    action == crate::decision::Action::Upgrade
+        && (is_self_updating(step) || updates_each_apply(step))
+}
+
 /// What an each-Apply update that exited ok did, from the versions read before and after it:
 /// "already current" when nothing moved, the two versions when it did. None when either version
 /// is unread — no verdict is better than a guessed one. A Claude plugin is loaded at Claude
@@ -3357,7 +3367,7 @@ async fn apply_diff(
             installed_version: presences[i].version.as_deref().unwrap_or(""),
             available: od.map(|o| o.available.as_str()).unwrap_or(""),
             can_self_update: runs_own_update(step),
-            update_each_apply: step.update_each_apply,
+            update_each_apply: updates_each_apply(step),
             updated_this_session: updated_this_session(state, step),
         };
         match batch_action(action_for(desired, &facts), step.downgrade.is_some()) {
@@ -4915,14 +4925,13 @@ async fn do_step(
 
     // The tool's own `update:` reaches the network on its own terms, behind a corporate
     // firewall as anywhere: its failure is a line on the row, never an Apply paused on a 403.
-    let own_update = action == Action::Upgrade && is_self_updating(step);
+    let own_update = is_own_update(step, action);
     if own_update && !ok && !cancelled {
         say(
             socket,
             i,
-            "[update] the tool's own update failed; Talos changed nothing else, and the next \
-             Apply tries again. It needs the network — behind a corporate firewall, the usual \
-             cause.",
+            "[update] the update failed; Talos changed nothing else, and the next Apply tries \
+             again. It needs the network — behind a corporate firewall, the usual cause.",
         )
         .await;
     }
@@ -7376,8 +7385,13 @@ mod tests {
         let row = super::step_json(&s, 0, &[], &crate::timings::Timings::new(), Os::Darwin);
         assert_eq!(row["updateEachApply"], true, "{row}");
         assert_eq!(row["selfUpdate"], true, "{row}");
+        // Its failure is a line on the row, not a 403 page that pauses every session's Apply;
+        // the install keeps the page — the plugin is missing, and the passage is how it arrives.
+        assert!(super::is_own_update(&s, Action::Upgrade));
+        assert!(!super::is_own_update(&s, Action::Install));
         let mut plain = s.clone();
         plain.update_each_apply = false;
+        assert!(!super::is_own_update(&plain, Action::Upgrade));
         assert!(!super::updates_each_apply(&plain));
         assert!(!super::runs_own_update(&plain));
         assert!(super::judges_version(&plain, Action::Upgrade));

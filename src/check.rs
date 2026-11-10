@@ -198,10 +198,17 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
             None => false,
             Some(w) if w.eq_ignore_ascii_case("apply") => true,
             Some(w) => {
-                r.errors.push(format!(
-                    "{label}: `update-on: {w}` is not `apply` — the runtime ignores it and \
-                     runs `update:` only when the tool is behind"
-                ));
+                r.errors.push(if plugin_everywhere {
+                    format!(
+                        "{label}: `update-on: {w}` is not `apply` — the runtime ignores it, and \
+                         the plugin is never updated"
+                    )
+                } else {
+                    format!(
+                        "{label}: `update-on: {w}` is not `apply` — the runtime ignores it and \
+                         runs `update:` only when the tool is behind"
+                    )
+                });
                 false
             }
         };
@@ -1008,8 +1015,29 @@ mod tests {
             "catalog/f.yaml",
             "name: F\ncopilot-plugin: f@m\nupdate-on: apply\n",
         );
+        // A word it does not know: said in the plugin's terms.
+        write(
+            &d,
+            "catalog/g.yaml",
+            "name: G\nclaude-plugin: g@m\nupdate-on: daily\n",
+        );
+        // A manager wins on some OS: the plugin route runs where it is the route, and the
+        // cadence with it — the layout working, like `brew:` on Windows. No finding.
+        write(
+            &d,
+            "catalog/h.yaml",
+            "name: H\nbrew: h\nclaude-plugin: h@m\nupdate-on: apply\n",
+        );
         let text = run(&d.join("catalog"), &d.join("bundles")).render();
         assert!(!text.contains("catalog/a.yaml"), "{text}");
+        assert!(
+            text.contains(
+                "catalog/g.yaml: `update-on: daily` is not `apply` — the runtime \
+                           ignores it, and the plugin is never updated"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("catalog/h.yaml"), "{text}");
         assert!(
             text.contains("catalog/b.yaml: `update:` never runs on a `claude-plugin:` row"),
             "{text}"

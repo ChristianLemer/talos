@@ -680,7 +680,9 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
             install: Some(format!(
                 "{git_diag}{add}claude plugin install {id} --scope user && {update}"
             )),
-            uninstall: Some(format!("claude plugin uninstall {id}")),
+            // `--scope user` too: the scope the install writes. MEASURED (2.1.321): exit 0, and
+            // exit 1 "not found in installed plugins" once it is gone.
+            uninstall: Some(format!("claude plugin uninstall {id} --scope user")),
             // ⭐ Reached since `update-on: apply` (#13): nothing marks a plugin outdated, so this
             // command runs only under that cadence — once per session, while the plugin is
             // wanted and present. MEASURED (Claude Code 2.1.321, Linux, a local marketplace
