@@ -194,7 +194,8 @@ mod tests {
             let cat = load_catalog(catalog);
             let names: Vec<&str> = cat.values().map(|c| c.pkg.name.as_str()).collect();
             for c in cat.values() {
-                for req in &c.pkg.requires {
+                for req in crate::deps::read_requirements(&c.pkg.requires) {
+                    let req = req.name;
                     assert!(
                         names.contains(&req.as_str()),
                         "{catalog}: {} requires \"{}\" which no file declares",

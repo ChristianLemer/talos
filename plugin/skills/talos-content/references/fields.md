@@ -52,6 +52,36 @@ category: [editors]                    # display grouping only
 the row out of the perimeter, with the reason shown. Names, not ids: `--check` refuses
 a name the catalog does not declare.
 
+An entry can also set a **minimum version**, when the dependent needs something its host
+only gained recently:
+
+```yaml
+requires:
+  - Nushell                              # present is enough
+  - Orca >= 1.4.252                      # present AND at least this version
+```
+
+- **The form.** `Name >= 1.2.3`, with digits and dots only (a leading `v` is shed). `≥` is
+  read too. There is no other sign: `>`, `<`, `=`, `<=` and ranges are refused by `--check`,
+  and so is a version that isn't a version (`latest`, `1.4.x`). A ceiling would be a pin on
+  another row, and that row's own `version:` already says it.
+- **The rule.** If the requirement is present but **below** the minimum, the row is held
+  before the Apply, and the reason names both versions: `requires Orca >= 1.4.252 (found
+  1.4.237)`. Versions are compared the same way as for pins.
+- **Unknown is held.** A present requirement whose version Talos cannot read gives
+  `requires Orca >= 1.4.252 (version unknown)`. That is not a pass, and not "too old" either.
+- **Never upgraded by this rule.** The minimum holds the dependent. It never upgrades the
+  requirement: the requirement's own row decides that, as always (Orca is `version: self`,
+  and upgrading it from outside kills its agents). The person upgrades, and the next scan
+  offers the row. That holds even when the requirement's own row upgrades it in the same
+  Apply: the dependent waits for the next scan.
+- **Absent and on its way in** is not second-guessed: it arrives at whatever its route lays
+  down. `--check` refuses a minimum above the requirement's own exact pin, because it could
+  never hold.
+- ⚠️ **Pin Talos v0.2.0 or later.** A 0.1.0 engine reads `Orca >= 1.4.252` as the name of a
+  package that does not exist, so the row is held as `requires Orca >= 1.4.252 (unknown)`
+  everywhere.
+
 ## A bundle file — one card
 
 ```yaml

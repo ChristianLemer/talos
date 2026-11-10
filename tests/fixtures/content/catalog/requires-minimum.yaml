@@ -1,0 +1,9 @@
+# FORM: a requirement with a MINIMUM version — `Name >= x`. Present but older, the row is
+# held before the Apply, naming both versions; the requirement itself is never upgraded by
+# this (its own row decides). An unknown version holds the row too.
+name: Minimum Plugin
+description: A plugin that needs a recent enough nushell
+nu-plugin: minimum
+category: [terminal]
+requires:
+  - Nushell >= 0.100

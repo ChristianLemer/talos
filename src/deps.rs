@@ -3,11 +3,86 @@
 // GLOBAL view (all packages) that per-step detection cannot have.
 use std::collections::{HashMap, HashSet};
 
+/// One `requires:` entry, split: the package NAME, and the lowest version of it that
+/// satisfies, when the author wrote one (`Orca >= 1.4.252`).
+///
+/// ⭐ Only `>=`. A requirement says "this must be here and at least this new" — the one
+/// fact a dependent can need from its host (a command that appeared in 1.4.252). No
+/// ranges, no `<`: nothing in the corpus asks for one, and a ceiling would be a pin on
+/// ANOTHER row, which is that row's own `version:` to say.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Requirement {
+    pub name: String,
+    pub min: Option<String>,
+}
+
+/// Reads one `requires:` entry. `Name`, `Name >= 1.2.3` and `Name ≥ 1.2.3` (the sign is
+/// free to accept, so it is) give a name and maybe a minimum; anything else that carries a
+/// comparison sign is MALFORMED and comes back `Err` with the reason, for `--check`.
+///
+/// The split is on the LAST sign: names carry spaces and `+` (`VC++ runtime`), never `>=`.
+pub fn parse_requirement(raw: &str) -> Result<Requirement, String> {
+    let raw = raw.trim();
+    let split = raw
+        .rfind(">=")
+        .map(|at| (at, 2))
+        .or_else(|| raw.rfind('≥').map(|at| (at, '≥'.len_utf8())));
+    let Some((at, len)) = split else {
+        if raw.contains(['<', '>', '=', '≤']) {
+            return Err(format!(
+                "`{raw}`: only `>=` is understood — `Name >= 1.2.3`"
+            ));
+        }
+        return Ok(Requirement {
+            name: raw.to_string(),
+            min: None,
+        });
+    };
+    let name = raw[..at].trim();
+    let min = crate::decision::bare_version(&raw[at + len..]);
+    if name.is_empty() || name.contains(['<', '>', '=', '≥', '≤']) {
+        return Err(format!("`{raw}`: write `Name >= 1.2.3`, one sign"));
+    }
+    let numeric = !min.is_empty()
+        && min
+            .split('.')
+            .all(|seg| !seg.is_empty() && seg.chars().all(|c| c.is_ascii_digit()));
+    if !numeric {
+        return Err(format!(
+            "`{raw}`: `{min}` is not a version — digits and dots, like `1.4.252`"
+        ));
+    }
+    Ok(Requirement {
+        name: name.to_string(),
+        min: Some(min.to_string()),
+    })
+}
+
+/// The engine's reading of a `requires:` list: malformed entries are kept WHOLE as a name,
+/// so they surface as `requires <entry> (unknown)` on the row — held, and said — rather than
+/// silently satisfied. `--check` is where they are refused (`parse_requirement`'s `Err`).
+pub fn read_requirements(raw: &[String]) -> Vec<Requirement> {
+    raw.iter()
+        .map(|r| {
+            parse_requirement(r).unwrap_or_else(|_| Requirement {
+                name: r.trim().to_string(),
+                min: None,
+            })
+        })
+        .collect()
+}
+
 /// The minimum deps reasons over. The real Steps satisfy it structurally.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DepNode {
     pub name: String,
     pub requires: Vec<String>,
+    /// `(requirement name, lowest version)` for each requirement written `Name >= x`.
+    /// Names without one are absent here: a bare name asks for presence only.
+    pub minimums: Vec<(String, String)>,
+    /// The version observed for THIS package right now (`Presence.version`), when it said
+    /// one. Read by the dependents that set a minimum on it.
+    pub version: Option<String>,
     pub will_be_present: bool, // present now OR desired-present after the Apply
     /// Observed present RIGHT NOW, before any desire is applied. `will_be_present`
     /// cannot answer for this: it folds the desire in, and the two part company on a
@@ -28,6 +103,30 @@ fn index_by_name(nodes: &[DepNode]) -> HashMap<String, usize> {
         .collect()
 }
 
+/// Is a PRESENT requirement too old for this node? The reason, or None when it is new
+/// enough or no minimum was written.
+///
+/// ⭐ An unknown version is UNKNOWN (`talos-unknown-not-absent`): it is neither "new enough"
+/// nor "too old", and the row is held saying so, never run on a guess. The requirement
+/// itself is never touched by this rule — its own row decides its upgrade.
+fn below_minimum(node: &DepNode, req: &DepNode) -> Option<String> {
+    let (_, min) = node.minimums.iter().find(|(n, _)| *n == req.name)?;
+    match req
+        .version
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        None => Some(format!("requires {} >= {min} (version unknown)", req.name)),
+        Some(v) if crate::decision::compare_versions(v, min) < 0 => Some(format!(
+            "requires {} >= {min} (found {})",
+            req.name,
+            crate::decision::bare_version(v)
+        )),
+        Some(_) => None,
+    }
+}
+
 /// The reason a node's requirements do not hold, or None.
 /// A requirement holds iff the required package exists in the plan AND will_be_present.
 /// First failing requirement wins the message.
@@ -42,6 +141,14 @@ pub fn requires_reason(
             Some(&at) => {
                 if !nodes[at].will_be_present {
                     return Some(format!("requires {req}"));
+                }
+                // Present now: its version is what the dependent will meet. Absent and on its
+                // way in: it arrives at whatever the route lays down, which this rule does not
+                // second-guess (`--check` refuses an exact pin below the minimum).
+                if nodes[at].present_now {
+                    if let Some(why) = below_minimum(node, &nodes[at]) {
+                        return Some(why);
+                    }
                 }
             }
         }
@@ -86,7 +193,13 @@ pub fn requires_blocked(
             None => return Some(format!("requires {req} (unknown)")),
             Some(&at) => {
                 let r = &nodes[at];
-                if r.present_now || (r.will_be_present && r.reachable) {
+                if r.present_now {
+                    match below_minimum(node, r) {
+                        None => continue,
+                        Some(why) => return Some(why),
+                    }
+                }
+                if r.will_be_present && r.reachable {
                     continue;
                 }
                 return Some(format!("requires {req}"));
@@ -229,6 +342,7 @@ mod tests {
             will_be_present: present,
             present_now: present,
             reachable: true,
+            ..Default::default()
         }
     }
 
@@ -246,6 +360,7 @@ mod tests {
             will_be_present,
             present_now,
             reachable,
+            ..Default::default()
         }
     }
 
@@ -492,5 +607,116 @@ mod tests {
         let plan = vec![(0usize, "a"), (1usize, "b")];
         let out = topo_sort(&plan, &nodes, &idx);
         assert_eq!(out.iter().map(|(i, _)| *i).collect::<Vec<_>>(), vec![0, 1]);
+    }
+
+    // --- `requires: [Name >= x]` ------------------------------------------------------
+
+    #[test]
+    fn parse_reads_a_bare_name_and_both_signs() {
+        let bare = parse_requirement("VC++ runtime").unwrap();
+        assert_eq!((bare.name.as_str(), bare.min), ("VC++ runtime", None));
+        for raw in [
+            "Orca >= 1.4.252",
+            "Orca>=1.4.252",
+            "Orca ≥ 1.4.252",
+            " Orca >= v1.4.252 ",
+        ] {
+            let r = parse_requirement(raw).unwrap();
+            assert_eq!(r.name, "Orca", "{raw}");
+            assert_eq!(r.min.as_deref(), Some("1.4.252"), "{raw}");
+        }
+    }
+
+    #[test]
+    fn parse_refuses_every_other_comparison_and_a_non_version() {
+        for raw in [
+            "Orca > 1.4",
+            "Orca < 2",
+            "Orca = 1.4",
+            "Orca <= 1.4",
+            "Orca ≤ 1.4",
+            ">= 1.4",
+            "Orca >= ",
+            "Orca >= latest",
+            "Orca >= 1.4.x",
+            "Orca >= 1..4",
+            "Orca >= 1.4 >= 1.5",
+        ] {
+            assert!(parse_requirement(raw).is_err(), "{raw} should be refused");
+        }
+    }
+
+    #[test]
+    fn the_engine_keeps_a_malformed_entry_whole_so_the_row_says_it() {
+        let reqs = read_requirements(&["Orca > 1.4".into(), "Nushell".into()]);
+        assert_eq!(reqs[0].name, "Orca > 1.4");
+        assert_eq!(reqs[0].min, None);
+        assert_eq!(reqs[1].name, "Nushell");
+    }
+
+    /// `plugin` requires `Orca >= 1.4.252`; Orca is present at `found`.
+    fn with_minimum(found: Option<&str>) -> Vec<DepNode> {
+        let mut nodes = vec![
+            dep("plugin", &["Orca"], true, false, true),
+            dep("Orca", &[], true, true, true),
+        ];
+        nodes[0].minimums = vec![("Orca".into(), "1.4.252".into())];
+        nodes[1].version = found.map(String::from);
+        nodes
+    }
+
+    #[test]
+    fn a_present_requirement_below_the_minimum_holds_the_row_naming_both_versions() {
+        let nodes = with_minimum(Some("v1.4.237"));
+        let idx = make_index(&nodes);
+        let want = Some("requires Orca >= 1.4.252 (found 1.4.237)".to_string());
+        assert_eq!(requires_blocked(&nodes[0], &nodes, &idx), want);
+        assert_eq!(
+            requires_reason(&nodes[0], &nodes, &idx),
+            want,
+            "same words, both readings"
+        );
+    }
+
+    #[test]
+    fn at_or_above_the_minimum_the_requirement_holds() {
+        for found in ["1.4.252", "1.4.300", "1.10.0", "2"] {
+            let nodes = with_minimum(Some(found));
+            let idx = make_index(&nodes);
+            assert_eq!(requires_blocked(&nodes[0], &nodes, &idx), None, "{found}");
+            assert_eq!(requires_reason(&nodes[0], &nodes, &idx), None, "{found}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_version_is_held_never_guessed() {
+        for found in [None, Some(""), Some("  ")] {
+            let nodes = with_minimum(found);
+            let idx = make_index(&nodes);
+            let want = Some("requires Orca >= 1.4.252 (version unknown)".to_string());
+            assert_eq!(requires_blocked(&nodes[0], &nodes, &idx), want, "{found:?}");
+            assert_eq!(requires_reason(&nodes[0], &nodes, &idx), want, "{found:?}");
+        }
+    }
+
+    #[test]
+    fn an_absent_requirement_on_its_way_in_is_not_second_guessed() {
+        // Absent, wanted, reachable: it arrives at whatever its route lays down. The minimum
+        // does not hold the dependent on a version nobody has observed yet.
+        let mut nodes = with_minimum(None);
+        nodes[1].present_now = false;
+        let idx = make_index(&nodes);
+        assert_eq!(requires_blocked(&nodes[0], &nodes, &idx), None);
+        assert_eq!(requires_reason(&nodes[0], &nodes, &idx), None);
+    }
+
+    #[test]
+    fn a_minimum_only_reads_its_own_requirement() {
+        // A second, bare requirement present at any version is untouched by Orca's minimum.
+        let mut nodes = with_minimum(Some("1.4.300"));
+        nodes[0].requires.push("Nushell".into());
+        nodes.push(dep("Nushell", &[], true, true, true));
+        let idx = make_index(&nodes);
+        assert_eq!(requires_blocked(&nodes[0], &nodes, &idx), None);
     }
 }

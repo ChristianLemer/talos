@@ -1274,6 +1274,13 @@ fn step_json(
         "updateEachApply": is_self_updating(s) && s.upgrade.is_some() && s.update_each_apply,
         "pin": s.pin, "categories": s.categories,
         "requires": s.requires, // package names this one needs (B5 transitive pull, §8)
+        // `{name: lowest version}` for each `Name >= x` requirement: model.js `requiresReason`
+        // applies the same minimum as `deps::below_minimum`, in the same words.
+        "requiresMin": s
+            .minimums
+            .iter()
+            .map(|(name, min)| (name.clone(), Value::from(min.clone())))
+            .collect::<serde_json::Map<String, Value>>(),
         // Package names this one stands in for: wanted, it makes them wanted absent
         // (model.js `replacedBy`). The front resolves it; the removal is announced like any.
         "replaces": s.replaces,
@@ -2165,6 +2172,8 @@ async fn requirement_blocks_row(state: &AppState, step: &crate::bundles::Step) -
             // treating that as present would let the gate pass on a row nobody looked at.
             present_now: seen.get(j).cloned().flatten().and_then(|p| p.present) == Some(true),
             reachable: s.uninstall.is_some(),
+            minimums: s.minimums.clone(),
+            version: seen.get(j).cloned().flatten().and_then(|p| p.version),
         })
         .collect();
     let idx = make_index(&nodes);
@@ -3236,6 +3245,11 @@ async fn apply_diff(
             // `canUninstall`, so both halves of the rule read the same predicate.
             present_now: presences[i].present == Some(true),
             reachable: s.uninstall.is_some(),
+            // `requires: [Orca >= 1.4.252]`: the requirement's version, re-probed above with
+            // the rest of the scope (`rescan_scope` pulls every requirement of a seed), so a
+            // minimum is judged on what is installed NOW, never on a remembered number.
+            minimums: s.minimums.clone(),
+            version: presences[i].version.clone(),
         })
         .collect();
     let idx = make_index(&nodes);
@@ -5899,6 +5913,7 @@ mod tests {
             pin: pin.map(|p| p.into()),
             scope: None,
             requires: Vec::new(),
+            minimums: Vec::new(),
             replaces: Vec::new(),
             posture: Posture::OptIn,
             categories: Vec::new(),
@@ -5940,6 +5955,7 @@ mod tests {
             will_be_present: true,
             present_now,
             reachable: true,
+            ..Default::default()
         };
         let silent = crate::detect::Presence {
             present: None,
@@ -6010,6 +6026,7 @@ mod tests {
                 will_be_present: true,
                 present_now,
                 reachable,
+                ..Default::default()
             }
         };
         let silent = crate::detect::Presence {
@@ -6091,6 +6108,7 @@ mod tests {
             will_be_present: true,
             present_now: present,
             reachable: true,
+            ..Default::default()
         };
         let mut nodes = vec![
             node("plugin", &["nushell"], false),
@@ -6188,6 +6206,7 @@ mod tests {
             will_be_present: true,
             present_now: true,
             reachable: true,
+            ..Default::default()
         }
     }
 

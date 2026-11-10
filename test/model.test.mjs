@@ -1518,3 +1518,61 @@ test("a held row says why in one word: unchanged, ahead of its manager, or held"
   setInstalledVersion(m, 0, "1.0.104");
   assert.equal(holdWord(m, 0), "", "nothing held");
 });
+
+// --- `requires: [Name >= x]` — the front's half of `deps::below_minimum` -------------
+
+function seedWithMinimum() {
+  const m = createModel();
+  loadPlan(
+    m,
+    [
+      { i: 0, name: "Orca", bundle: "", posture: "opt-in", canUninstall: true },
+      {
+        i: 1,
+        name: "Plugin",
+        bundle: "",
+        posture: "opt-in",
+        canUninstall: true,
+        requires: ["Orca"],
+        requiresMin: { Orca: "1.4.252" },
+      },
+    ],
+    [],
+  );
+  setPresence(m, 0, true);
+  return m;
+}
+
+test("requiresReason: a present requirement BELOW its minimum holds the row, naming both", () => {
+  const m = seedWithMinimum();
+  setInstalledVersion(m, 0, "v1.4.237");
+  assert.equal(requiresReason(m, 1), "requires Orca >= 1.4.252 (found 1.4.237)");
+  assert.equal(scopeOf(m, 1), "out", "the Apply never offers it");
+  assert.equal(scopeReason(m, 1), "requires Orca >= 1.4.252 (found 1.4.237)");
+});
+
+test("requiresReason: at or above the minimum the requirement holds", () => {
+  for (const v of ["1.4.252", "1.4.300", "1.10.0", "2"]) {
+    const m = seedWithMinimum();
+    setInstalledVersion(m, 0, v);
+    assert.equal(requiresReason(m, 1), null, v);
+  }
+});
+
+test("requiresReason: an unknown version is held, never guessed", () => {
+  const m = seedWithMinimum(); // present, no version reported
+  assert.equal(requiresReason(m, 1), "requires Orca >= 1.4.252 (version unknown)");
+});
+
+test("requiresReason: an absent requirement on its way in is not second-guessed", () => {
+  const m = seedWithMinimum();
+  setPresence(m, 0, false);
+  setDecision(m, 1, "in"); // pulls Orca in, and Orca has a route
+  assert.equal(requiresReason(m, 1), null);
+});
+
+test("requiresReason: a bare requirement still asks for presence only", () => {
+  const m = seedWithMinimum();
+  m.pkgs.get(1).requiresMin = {};
+  assert.equal(requiresReason(m, 1), null, "present at no known version is enough");
+});

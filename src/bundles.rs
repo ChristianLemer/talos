@@ -396,8 +396,13 @@ pub struct Step {
     /// The declared `scope:` (winget), or None: then a downgrade reads where the installed
     /// copy is just before acting (`server::winget_downgrade_in_place`).
     pub scope: Option<crate::managers::InstallScope>,
+    /// The NAMES this package requires — a `Name >= x` entry contributes its name only, so
+    /// the pull, the order and the re-probe scope read names, as they always did.
     #[allow(dead_code)]
     pub requires: Vec<String>,
+    /// `(name, lowest version)` for each requirement written `Name >= x`
+    /// (`deps::parse_requirement`). The requirement gates read it; nothing else does.
+    pub minimums: Vec<(String, String)>,
     /// `replaces:` as declared — sent to the front, which resolves the override.
     pub replaces: Vec<String>,
     pub posture: Posture,
@@ -931,6 +936,8 @@ pub fn load_from_catalog(catalog_dir: &str, kit_dir: &str, os: Os, log: &dyn Fn(
                 cp.id
             ));
         }
+        // `requires:` read once: names for the pull and the order, minimums for the gates.
+        let reqs = crate::deps::read_requirements(&p.requires);
         steps.push(Step {
             id: cp.id.clone(),
             doctor: p.doctor.clone(),
@@ -997,7 +1004,11 @@ pub fn load_from_catalog(catalog_dir: &str, kit_dir: &str, os: Os, log: &dyn Fn(
                 .scope
                 .as_deref()
                 .and_then(crate::managers::InstallScope::from_word),
-            requires: p.requires.clone(),
+            requires: reqs.iter().map(|r| r.name.clone()).collect(),
+            minimums: reqs
+                .iter()
+                .filter_map(|r| Some((r.name.clone(), r.min.clone()?)))
+                .collect(),
             replaces: p.replaces.clone(),
             posture: Posture::OptIn, // catalog default: free + out-by-default
             // (bundle-driven: the bundle pull decides "in", not the posture).

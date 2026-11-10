@@ -746,6 +746,7 @@ mod tests {
             pin: None,
             scope: None,
             requires: vec![],
+            minimums: vec![],
             replaces: vec![],
             posture: Posture::OptIn,
             categories: vec!["misc".into()],

@@ -124,6 +124,10 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
     let mut reads: BTreeMap<String, (String, &'static str)> = BTreeMap::new();
     // name → `requires:`, to walk chains.
     let mut requires_of: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // (file, required name, lowest version) for every `Name >= x`, and name → exact pin: a
+    // minimum above the requirement's own pin can never hold.
+    let mut minimums: Vec<(String, String, String)> = Vec::new();
+    let mut exact_pins: BTreeMap<String, String> = BTreeMap::new();
     for path in yaml_files(catalog_dir) {
         let label = file_label(catalog_dir, &path);
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
@@ -356,16 +360,44 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
         if let Some(read) = read {
             reads.insert(cp.pkg.name.clone(), (read.trim().to_string(), route));
         }
-        requires_of.insert(cp.pkg.name.clone(), cp.pkg.requires.clone());
+        // `requires:` entries are a name, or `Name >= 1.2.3`. Everything below reads NAMES;
+        // a malformed entry is refused here and kept out of the name checks, so it is said
+        // once, for what it is, rather than again as "no package with that name".
+        let mut req_names: Vec<String> = Vec::new();
+        for entry in &cp.pkg.requires {
+            match crate::deps::parse_requirement(entry) {
+                Ok(req) => {
+                    if let Some(min) = req.min {
+                        minimums.push((label.clone(), req.name.clone(), min));
+                    }
+                    req_names.push(req.name);
+                }
+                Err(why) => r.errors.push(format!("{label}: requires {why}")),
+            }
+        }
+        if let Some(PinKind::Exact(v)) = &pin {
+            exact_pins.insert(cp.pkg.name.clone(), v.clone());
+        }
+        requires_of.insert(cp.pkg.name.clone(), req_names.clone());
         if !cp.pkg.replaces.is_empty() {
             replaces.push((
                 label.clone(),
                 cp.pkg.name.clone(),
                 cp.pkg.replaces.clone(),
-                cp.pkg.requires.clone(),
+                req_names.clone(),
             ));
         }
-        requires.push((label, cp.pkg.requires.clone()));
+        requires.push((label, req_names));
+    }
+    for (label, name, min) in &minimums {
+        if let Some(pin) = exact_pins.get(name) {
+            if crate::decision::compare_versions(pin, min) < 0 {
+                r.errors.push(format!(
+                    "{label}: requires `{name} >= {min}`, but `{name}` is pinned at {pin} — \
+                     the requirement can never hold"
+                ));
+            }
+        }
     }
     for (label, reqs) in &requires {
         for req in reqs {
@@ -1063,6 +1095,60 @@ mod tests {
             "{text}"
         );
         assert!(!r.ok());
+    }
+
+    #[test]
+    fn a_requirement_with_a_minimum_reads_clean_and_a_malformed_one_is_refused_once() {
+        let d = tmp("minimum");
+        write(
+            &d,
+            "catalog/plugin.yaml",
+            "name: Plugin\nbrew: p\nrequires:\n  - Orca >= 1.4.252\n  - Nushell > 0.100\n",
+        );
+        write(&d, "catalog/orca.yaml", "name: Orca\nbrew: o\n");
+        write(&d, "catalog/nushell.yaml", "name: Nushell\nbrew: nu\n");
+        write(&d, "bundles/x.yaml", "bundle: X\n");
+        let r = run(&d.join("catalog"), &d.join("bundles"));
+        let text = r.render();
+        assert!(
+            text.contains("catalog/plugin.yaml: requires `Nushell > 0.100`: only `>=`"),
+            "{text}"
+        );
+        // Said once, for what it is — not again as an unknown name.
+        assert_eq!(text.matches("Nushell > 0.100").count(), 1, "{text}");
+        assert!(
+            !text.contains("`Orca"),
+            "the well-formed minimum reads clean: {text}"
+        );
+        assert_eq!(r.errors.len(), 1, "{text}");
+    }
+
+    #[test]
+    fn a_minimum_above_the_requirements_exact_pin_can_never_hold() {
+        let d = tmp("minimum-pin");
+        write(
+            &d,
+            "catalog/plugin.yaml",
+            "name: Plugin\nbrew: p\nrequires:\n  - Orca >= 1.4.252\n",
+        );
+        write(
+            &d,
+            "catalog/orca.yaml",
+            "name: Orca\nbrew: o\nversion: \"1.4.237\"\n",
+        );
+        write(&d, "bundles/x.yaml", "bundle: X\n");
+        let text = run(&d.join("catalog"), &d.join("bundles")).render();
+        assert!(
+            text.contains("requires `Orca >= 1.4.252`, but `Orca` is pinned at 1.4.237"),
+            "{text}"
+        );
+        // At the minimum, it holds.
+        write(
+            &d,
+            "catalog/orca.yaml",
+            "name: Orca\nbrew: o\nversion: \"1.4.252\"\n",
+        );
+        assert!(run(&d.join("catalog"), &d.join("bundles")).ok());
     }
 
     #[test]

@@ -90,6 +90,9 @@ export function loadPlan(model, steps, profiles = []) {
       // scan flips it. A switch that pre-guessed would be the bug.
       external: false,
       requires: s.requires ?? [], // package names this one needs (transitive pull, §8)
+      // `{name: lowest version}` for each requirement written `Name >= x` (deps.rs
+      // `parse_requirement`); a bare name asks for presence only and is absent here.
+      requiresMin: s.requiresMin && typeof s.requiresMin === "object" ? s.requiresMin : {},
       replaces: s.replaces ?? [], // package names this one stands in for (`replacedBy`)
       // The three behaviour facts the row labels show, resolved SERVER-side (fleet observation with the
       // catalogue's declaration laid over it) and sent with the plan. The front does not
@@ -219,7 +222,18 @@ export function requiresReason(model, i) {
     const q = model.pkgs.get(j);
     // Presence FIRST and unconditionally — the day `cmd /c ver` answers, the row
     // behaves like any other. Without this ordering the fix would break Windows.
-    if (q?.present === true) continue;
+    if (q?.present === true) {
+      // Present, but maybe too old: `requires: [Orca >= 1.4.252]`. deps.rs
+      // `below_minimum`, word for word. An unknown version is UNKNOWN — held and said,
+      // never satisfied on a guess, never called "too old" either. The requirement's own
+      // row is never upgraded by this: it decides its own version, as always.
+      const min = p.requiresMin?.[req];
+      if (min == null) continue;
+      const v = String(q.installedVersion ?? "").trim();
+      if (!v) return `requires ${req} >= ${min} (version unknown)`;
+      if (compareVersions(v, min) < 0) return `requires ${req} >= ${min} (found ${bareVersion(v)})`;
+      continue;
+    }
     // Otherwise: is it on its way in? Wanting it is NOT enough. `wantedNames` closes
     // over `requires:`, so wanting a row pulls its own requirements in — a desire-only
     // clause would make every pulled row satisfy itself and this whole rule vacuous.
