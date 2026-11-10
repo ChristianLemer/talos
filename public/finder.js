@@ -5,7 +5,9 @@
 // query and in which order. It never sees a row's state, scope or intention, and nothing it
 // returns can change one — the finder is a view.
 //
-// The matching is fzf's: the query's characters must appear in the text IN ORDER, not
+// The matching is fzf's, simplified: its constants and its run bonus, but no camelCase
+// word starts (the text is folded to lower case first) and no separate whitespace bonus.
+// The query's characters must appear in the text IN ORDER, not
 // necessarily side by side ("vsc" finds "Visual Studio Code"). Case and accents are folded
 // on both sides ("ecran" finds "Écran"). The score rewards what a reader means by "it
 // matched": a run of consecutive characters, a character that starts a word, the first
@@ -55,8 +57,13 @@ export function scoreText(q, t) {
   if (m > n) return null;
   const bonus = Array.from({ length: n }, (_, j) => (boundary(t, j) ? BOUNDARY : 0));
   let prev = new Array(n).fill(-Infinity);
+  // The word-start bonus of the run each cell's best alignment belongs to. fzf carries it
+  // along a run so every character of "git" in "git" earns the bonus its "g" earned;
+  // without it, "g-i-t" (three word starts) outscored "git" itself.
+  let prevRun = new Array(n).fill(0);
   for (let i = 0; i < m; i++) {
     const cur = new Array(n).fill(-Infinity);
+    const curRun = new Array(n).fill(0);
     // The best score of the previous row ending at least two characters back, already
     // charged for the gap up to j — carried along so each cell reads it in O(1).
     let gapped = -Infinity;
@@ -65,12 +72,22 @@ export function scoreText(q, t) {
       if (t[j] !== q[i]) continue;
       if (i === 0) {
         cur[j] = MATCH + 2 * bonus[j];
+        curRun[j] = bonus[j];
         continue;
       }
-      const run = j >= 1 ? prev[j - 1] + MATCH + Math.max(bonus[j], CONSECUTIVE) : -Infinity;
-      cur[j] = Math.max(run, gapped + MATCH + bonus[j]);
+      const runBonus = j >= 1 ? Math.max(bonus[j], prevRun[j - 1], CONSECUTIVE) : 0;
+      const run = j >= 1 ? prev[j - 1] + MATCH + runBonus : -Infinity;
+      const gap = gapped + MATCH + bonus[j];
+      if (run >= gap) {
+        cur[j] = run;
+        curRun[j] = Math.max(bonus[j], prevRun[j - 1]);
+      } else {
+        cur[j] = gap;
+        curRun[j] = bonus[j];
+      }
     }
     prev = cur;
+    prevRun = curRun;
   }
   const best = Math.max(...prev);
   return best === -Infinity ? null : best;
@@ -80,6 +97,8 @@ export function scoreText(q, t) {
 // term must fall inside one word. Across a whole sentence almost any three letters are a
 // subsequence ("nu" is in "ruN a commaNd for yoU"), and the finder would open every category
 // for every query. A name or an id is short and chosen, so it is matched whole.
+// ⚠️ So a term with punctuation in it ("node.js", "c++") never lands inside one prose word;
+// it still finds a name or an id, which is where such a term is typed for.
 function scoreProse(q, t) {
   let best = null;
   for (const w of t.split(/[^\p{L}\p{N}]+/u)) {

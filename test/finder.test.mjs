@@ -30,6 +30,12 @@ test("consecutive characters and word starts score higher than scattered ones", 
   assert.ok(scoreText("st", "visual studio") > scoreText("st", "fastest"));
   // A contiguous run beats a gapped one of the same length.
   assert.ok(scoreText("nu", "nushell") > scoreText("nu", "n-x-u"));
+  // ... even when each scattered letter starts a word: the run carries its first letter's
+  // word-start bonus (fzf's rule), so "git" itself beats "g-i-t".
+  assert.ok(scoreText("git", "git") > scoreText("git", "g-i-t"));
+  assert.ok(scoreText("nu", "nushell") > scoreText("nu", "n-u"));
+  assert.ok(scoreText("code", "code") > scoreText("code", "c-o-d-e"));
+  assert.deepEqual(keys("git", [entry("g i t"), entry("Git")]), [1, 0]);
 });
 
 test("the name outranks the description, the category and the id", () => {
@@ -125,20 +131,38 @@ test("the finder's wiring in app.js changes no scope, no intention, no Apply, no
   const app = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
   const start = app.indexOf("// --- the Catalog finder ---");
   assert.notEqual(start, -1);
-  const block = app.slice(start, app.indexOf("function ensureTerm", start));
-  for (const banned of ["ws.send", "M.", "setToggle", "setScope", "innerHTML", "textContent =", "localStorage", "persist"]) {
-    const hits = block.split("\n").filter((l) => !l.trim().startsWith("//") && l.includes(banned));
+  // The block, plus the find branch of the category header's click (inside render()).
+  const branchAt = app.indexOf("if (findOn()) {");
+  assert.notEqual(branchAt, -1);
+  const branch = app.slice(branchAt, app.indexOf("}", branchAt));
+  const block = app.slice(start, app.indexOf("function ensureTerm", start)) + "\n" + branch;
+  const code = block.split("\n").filter((l) => !l.trim().startsWith("//"));
+  const banned = [/ws\.send/, /\bM\./, /setToggle/, /setScope/, /setDecision/, /innerHTML/,
+    /localStorage/, /persist/, /textContent\s*=/];
+  for (const re of banned) {
     // The empty line is the one text it writes, and it is its own element.
-    const allowed = hits.filter((l) => !(banned === "textContent =" && l.includes("empty.textContent")));
-    assert.deepEqual(allowed, [], `the finder must not use ${banned}`);
+    const hits = code.filter((l) => re.test(l) && !/empty\.textContent\s*=/.test(l));
+    assert.deepEqual(hits, [], `the finder must not use ${re}`);
+  }
+  // The only classes it sets are its own (find-*) and `finding` on the body.
+  for (const l of code) {
+    for (const m of l.matchAll(/classList\.(?:add|toggle|remove)\(([^)]*)\)/g)) {
+      for (const cls of m[1].matchAll(/"([^"]+)"/g)) {
+        assert.ok(/^find(ing|-)/.test(cls[1]), `the finder sets a class that is not its own: ${cls[1]}`);
+      }
+    }
   }
   const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
   // Catalog only: hidden by default, shown under tab-catalog, and the find's hiding rules
   // all scoped to it, so the Changes tab never sees a query.
   assert.match(html, /#finder \{ display:none; \}/);
   assert.match(html, /body\.tab-catalog #finder \{ display:flex;/);
-  for (const rule of html.match(/^.*find-(miss|fold).*$/gm)) {
-    assert.ok(!/display:none/.test(rule) || /tab-catalog/.test(rule) || rule.trim().startsWith("body.tab-catalog"),
-      `a find rule outside the Catalog: ${rule.trim()}`);
+  // Every rule that acts on the find is scoped to the Catalog and yields to an Apply's focus
+  // mode: a standing query must never hide the running row or a failure.
+  const rules = html.match(/^\s*body\.tab-catalog\.finding.*$/gm);
+  assert.ok(rules.length >= 4);
+  for (const rule of rules) assert.match(rule, /:not\(\.applying\)/, rule.trim());
+  for (const rule of html.match(/^.*details\.find-(miss|fold).*$/gm)) {
+    assert.match(rule, /body\.tab-catalog\.finding:not\(\.applying\)/, rule.trim());
   }
 });

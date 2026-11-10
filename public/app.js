@@ -1029,6 +1029,7 @@ function render(steps, profiles = [], columns = 2) {
   for (const k of Object.keys(rows)) delete rows[k];
   findRows = [];
   catHeaders.clear();
+  findToggled.clear(); // a new plan is a new view: the finder decides again
   // The scan starts now and won't settle until `state-done`. Freeze actions and
   // dim the panel until then: rows show "checking…", nothing is clickable, and
   // each lights up as its probe answers — no acting on an incomplete plan.
@@ -1277,7 +1278,10 @@ const catHeaders = new Map(); // category → its header element
 // at every keystroke: a new query is a new view, and the finder decides again.
 const findToggled = new Set();
 const findInput = document.getElementById("find-input");
-const findOn = () => document.body.classList.contains("finding");
+// A find is live only outside an Apply: during one, focus mode owns the list (index.html),
+// so a header click goes back to being the accordion's.
+const findOn = () =>
+  document.body.classList.contains("finding") && !document.body.classList.contains("applying");
 
 function applyFind() {
   const view = findView(findInput.value, findRows);
@@ -1326,6 +1330,8 @@ const typingElsewhere = (t) =>
   (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
 document.addEventListener("keydown", (ev) => {
   if (!document.body.classList.contains("tab-catalog") || typingElsewhere(ev.target)) return;
+  // An IME composition owns its keys: its Esc cancels the composition, not the query.
+  if (ev.isComposing || ev.keyCode === 229) return;
   // Esc clears the query and leaves the field — also once a header click took the focus
   // away, or the find would stand with no key to end it.
   if (ev.key === "Escape" && (ev.target === findInput || findInput.value)) {

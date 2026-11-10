@@ -665,9 +665,14 @@
       #find-input:focus { outline:none; border-color:var(--head); }
       #find-input::placeholder { color:var(--dim); }
       #find-empty { font-size:12px; color:var(--dim); }
-      body.tab-catalog.finding #steps { display:flex; flex-direction:column; }
-      body.tab-catalog.finding #steps > details.find-miss,
-      body.tab-catalog.finding #steps > details.find-fold { display:none; }
+      /* ⚠️ `:not(.applying)`: during an Apply, focus mode decides what shows and in which
+         order, in every tab — a standing query must never hide the running row or a failure.
+         The 3px margins: a flex column does not collapse the rows' 6px margins, so without
+         them the list would spread out on the first keystroke. */
+      body.tab-catalog.finding:not(.applying) #steps { display:flex; flex-direction:column; }
+      body.tab-catalog.finding:not(.applying) #steps > details { margin:3px 0; }
+      body.tab-catalog.finding:not(.applying) #steps > details.find-miss,
+      body.tab-catalog.finding:not(.applying) #steps > details.find-fold { display:none; }
       /* Catalog tab (spec §22) = browse the full list grouped by category. NO
          bundle cards, NO Apply/Reset header — just packages + their 3-state toggle.
          Those belong to the Bundles (action) tab. */
