@@ -1733,3 +1733,15 @@ test("minimum: the row's own minimum is said before a chain, in the server's ord
   setDecision(m, 2, "in");
   assert.equal(holdReason(m, 2), "requires Orca >= 3 (found 1.0)");
 });
+
+test("minimum: a row held by a minimum AND an unmoved upgrade says the minimum (the server's order)", () => {
+  const m = seedWithMinimum();
+  setInstalledVersion(m, 0, "1.4.237");
+  setPresence(m, 1, true);
+  setInstalledVersion(m, 1, "1.0");
+  setOutdated(m, 1, true, "2.0");
+  setDecision(m, 1, "in");
+  setUnmoved(m, 1, { reason: "ran toward 2.0 and moved nothing", found: "1.0", target: "2.0", ahead: false });
+  assert.equal(actionOf(m, 1), "upgrade");
+  assert.equal(holdReason(m, 1), "requires Orca >= 1.4.252 (found 1.4.237)");
+});

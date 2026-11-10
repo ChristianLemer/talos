@@ -770,16 +770,18 @@ export function planSeconds(model) {
 // a change the Apply would still make — once the row reaches its pin, there is nothing to hold.
 const HELD_ACTIONS = ["install", "upgrade", "downgrade"];
 export function holdReason(model, i) {
-  const unmoved = unmovedHold(model, i);
-  if (unmoved) return unmoved;
   const a = actionOf(model, i);
   const p = model.pkgs.get(i);
   // A requirement below its minimum holds what would RUN the row against it — install,
-  // upgrade, downgrade — never its removal (deps.rs `held_by_minimum`).
+  // upgrade, downgrade — never its removal (deps.rs `held_by_minimum`). FIRST, in the
+  // server's order (apply_diff asks `held_by_minimum` before `unmoved_in_view`), so a row
+  // held by both says the same words on both sides.
   if (HELD_ACTIONS.includes(a)) {
     const low = minimumReason(model, i);
     if (low) return low;
   }
+  const unmoved = unmovedHold(model, i);
+  if (unmoved) return unmoved;
   if (p?.hold && HELD_ACTIONS.includes(a)) return p.hold;
   // A removal kept because its replacement is not there (`server::send_kept`): only while the
   // override is what removes the row — never against the user's own refusal — and only until

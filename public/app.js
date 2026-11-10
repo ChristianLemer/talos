@@ -585,9 +585,13 @@ function paintVersion(i) {
   const r = rows[i];
   if (!r || !r.delta) return;
   const v = M.versionSummary(model, i);
-  const cur = (t) => `<span class="v-cur">${t}</span>`;
-  const push = (t) => `<span class="v-push">${t}</span>`;
-  const remove = (t) => `<span class="v-remove">${t}</span>`;
+  // EVERY text below is escaped where it enters the markup: versions are read off a probe
+  // (tool output), and a minimum's reason (`holdWord`) carries a content name and that
+  // version. This webview drives a server that runs commands — no probe text is markup.
+  const attr = (t) => String(t).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  const cur = (t) => `<span class="v-cur">${attr(t)}</span>`;
+  const push = (t) => `<span class="v-push">${attr(t)}</span>`;
+  const remove = (t) => `<span class="v-remove">${attr(t)}</span>`;
   // The word the operator reads when a gap is shown but not pushed.
   //
   // ⚠️ `arbitration`, and NOT "to arbitrate" / "to examine": the reader of this screen is NOT
@@ -604,14 +608,13 @@ function paintVersion(i) {
   // what its manager offers says `ahead`. The reason names a catalogue command, so it is escaped
   // into the attribute.
   const word = M.holdWord(model, i);
-  const attr = (t) => String(t).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
   const muted = (t, held) =>
     held
-      ? `<span class="v-muted" title="arbitration pending — seen, not pushed">${t}</span>` +
+      ? `<span class="v-muted" title="arbitration pending — seen, not pushed">${attr(t)}</span>` +
         ` <span class="v-held">arbitration</span>`
       : why
-      ? `<span class="v-muted" title="${attr(why)}">${t}</span> <span class="v-held">${word}</span>`
-      : `<span class="v-muted" title="available — not pushed past your pin">${t}</span>`;
+      ? `<span class="v-muted" title="${attr(why)}">${attr(t)}</span> <span class="v-held">${attr(word)}</span>`
+      : `<span class="v-muted" title="available — not pushed past your pin">${attr(t)}</span>`;
   const pin = (t) => `📌${t}`;
 
   // A PENDING uninstall reads current(blue) → absent(red) — same red as the row's
@@ -625,7 +628,7 @@ function paintVersion(i) {
     // Absent: no version to show — unless the Apply held its install: then the word, with
     // why, and the pin it could not reach when there is one (a dependent may have none).
     const p = model.pkgs.get(i);
-    const target = p?.pin ? `<span class="v-muted" title="${attr(why)}">${pin(p.pin)}</span> ` : "";
+    const target = p?.pin ? `<span class="v-muted" title="${attr(why)}">${attr(pin(p.pin))}</span> ` : "";
     // The word is `holdWord`'s, so a minimum says its reason in plain view, as the
     // version-bearing branches below already do through `muted`.
     r.delta.innerHTML = why ? `${target}<span class="v-held" title="${attr(why)}">${attr(word)}</span>` : "";
@@ -648,7 +651,7 @@ function paintVersion(i) {
     // At or past the announcement, the manager's record is what lags: held (the tool is ahead
     // of what the manager offers), or realigned by the Apply — the row says which.
     const lag = why
-      ? ` <span class="v-held" title="${attr(why)}">${word}</span>`
+      ? ` <span class="v-held" title="${attr(why)}">${attr(word)}</span>`
       : v.record !== undefined
         ? ` <span class="v-held" title="the package manager still records ${attr(v.record || "an older version")} and lists it as outdated; the Apply's upgrade realigns its record">record ${attr(v.record || "behind")}</span>`
         : "";

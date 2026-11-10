@@ -73,3 +73,35 @@ test("the dependents' repair judges a minimum on the requirement AFTER its step"
   assert.ok(present > 0 && judged > present, "presence refreshed too");
   assert.match(apply.slice(judged, judged + 300), /send_held\(socket, d, &low\)/, "the refusal leaves a trace");
 });
+
+test("a row held by a minimum AND an unmoved change gives the server's reason: the minimum first", () => {
+  const server = readFileSync(new URL("../src/server.rs", import.meta.url), "utf8");
+  const apply = slice(server, "async fn apply_diff(", "\nasync fn ");
+  const rsMin = apply.indexOf("held_by_minimum(a, &nodes[i]");
+  const rsUnmoved = apply.indexOf("unmoved_in_view(state, step, a,");
+  assert.ok(rsMin > 0 && rsUnmoved > rsMin, "server: minimum before unmoved");
+  const js = readFileSync(new URL("../public/model.js", import.meta.url), "utf8");
+  const hold = slice(js, "export function holdReason(", "\n}");
+  const jsMin = hold.indexOf("minimumReason(model, i)");
+  const jsUnmoved = hold.indexOf("unmovedHold(model, i)");
+  assert.ok(jsMin > 0 && jsUnmoved > jsMin, "front: minimum before unmoved");
+});
+
+test("paintVersion puts no probe text into innerHTML unescaped", () => {
+  // Pre-tag review: a minimum's reason (holdWord) carries a content name and a version read
+  // off a probe, and every version is probe output. This webview drives a server that runs
+  // commands, so each text enters the markup through `attr`.
+  const app = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
+  const body = slice(app, "function paintVersion(i) {", "\nfunction ");
+  const raw = [...body.matchAll(/\$\{([^}]*)\}/g)].map((m) => m[1].trim())
+    .filter((e) => !/^attr\(/.test(e))
+    // composed markup (already escaped inside), and the plain-text pin marker
+    .filter((e) => !/^(cur|remove|push|muted)\(|^(left|right|re|own|lag|target|t)$/.test(e));
+  assert.deepEqual(raw, [], "an interpolation that is neither attr(…) nor composed markup");
+  for (const leaf of ["cur", "push", "remove"]) {
+    assert.match(body, new RegExp(`const ${leaf} = \\(t\\) => \`<span class="v-[a-z]+">\\$\\{attr\\(t\\)\\}</span>\``), leaf);
+  }
+  assert.match(body, /const pin = \(t\) => `📌\$\{t\}`/, "pin stays plain text: the leaf escapes it once");
+  const muted = slice(body, "const muted = ", ";\n");
+  assert.ok(!/>\$\{t\}</.test(muted), "muted escapes its text");
+});
