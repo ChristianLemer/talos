@@ -655,6 +655,7 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
             .as_deref()
             .map(|m| format!("claude plugin marketplace add \"{m}\" && "))
             .unwrap_or_default();
+        let update = format!("claude plugin update {id} --scope user");
         return Commands {
             route: Some("claude-plugin".into()),
             // `install` THEN `update`, and the second is what actually does the work on a
@@ -669,19 +670,25 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
             // The root cause is upstream of this line and is NOT fixed here: `scan_outdated`
             // only asks the native manager (winget/brew), which knows nothing about Claude
             // plugins, so `f.outdated` is always false for this route and `action_for` can
-            // never choose `Upgrade`. Every plugin and skill in the catalogue is un-updatable
-            // by Talos for the same reason. Comparing the installed version against the
-            // marketplace's would fix it properly and let the existing machinery do the rest;
-            // that is its own piece of work.
+            // never choose `Upgrade` from it. A row that declares `update-on: apply` runs the
+            // route's `upgrade:` at each Apply instead (below) — the cadence, not a signal.
+            // Without it, a plugin moves only when this install runs.
             //
-            // Until then this chain is deliberately opportunistic: `update` on an
-            // already-current plugin is a no-op, so the cost is one extra command and the
-            // benefit is that a corrected source actually reaches the machine.
+            // So this chain stays deliberately opportunistic: `update` on an already-current
+            // plugin is a no-op, so the cost is one extra command and the benefit is that a
+            // corrected source actually reaches the machine.
             install: Some(format!(
-                "{git_diag}{add}claude plugin install {id} --scope user && claude plugin update {id}"
+                "{git_diag}{add}claude plugin install {id} --scope user && {update}"
             )),
             uninstall: Some(format!("claude plugin uninstall {id}")),
-            upgrade: Some(format!("claude plugin update {id}")),
+            // ⭐ Reached since `update-on: apply` (#13): nothing marks a plugin outdated, so this
+            // command runs only under that cadence — once per session, while the plugin is
+            // wanted and present. MEASURED (Claude Code 2.1.321, Linux, a local marketplace
+            // moved 1.0.0 → 1.1.0): exit 0 and "updated from 1.0.0 to 1.1.0 … Restart to apply
+            // changes"; exit 0 and "already at the latest version" when current; exit 1 for an
+            // unknown plugin; no question asked. `--scope user` because that is the scope the
+            // install writes: left to auto-detect, a plugin ALSO enabled in a project is ambiguous.
+            upgrade: Some(update),
             downgrade: None,
         };
     }
@@ -738,8 +745,10 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
             )),
             uninstall: Some(format!("copilot plugin uninstall '{name}'")),
             // ⬜ No upgrade: nothing marks a plugin outdated (`scan_outdated` asks winget/brew
-            // only), so a wired `upgrade:` would be unreachable — the claude-plugin route's
-            // mistake, not repeated. A re-Apply runs install + update, which is the gesture.
+            // only), so a wired `upgrade:` would be unreachable. A re-Apply runs install +
+            // update, which is the gesture. ⬜ `update-on: apply` as on claude-plugin is NOT
+            // offered: the verb exists, but Copilot 1.0.108 keeps its plugin state outside the
+            // `config.json` this route's detection reads — measure that before an update.
             upgrade: None,
             downgrade: None,
         };
@@ -859,9 +868,8 @@ fn commands_for(pkg: &RawPkg, os: Os) -> Commands {
                     )),
                     uninstall: Some(uninstall),
                     // ⬜ No upgrade, deliberately: nothing marks a plugin outdated (scan_outdated
-                    // asks winget/brew only), so a wired `upgrade:` would be unreachable — the
-                    // mistake the claude-plugin route made. Re-running install fetches the
-                    // declared tag, which is the honest gesture.
+                    // asks winget/brew only), so a wired `upgrade:` would be unreachable.
+                    // Re-running install fetches the declared tag, which is the honest gesture.
                     upgrade: None,
                     downgrade: None,
                 };
@@ -909,6 +917,7 @@ pub fn load_from_catalog(catalog_dir: &str, kit_dir: &str, os: Os, log: &dyn Fn(
     for cp in catalog.values() {
         let p = &cp.pkg;
         let cmd = commands_for(p, os);
+        let cmd_route = cmd.route.clone();
         let mgr = managers()
             .into_iter()
             .find(|m| Some(m.route) == cmd.route.as_deref());
@@ -1016,12 +1025,18 @@ pub fn load_from_catalog(catalog_dir: &str, kit_dir: &str, os: Os, log: &dyn Fn(
                 p.category.clone()
             },
             overrides: p.overrides(),
-            update_each_apply: declared == Some(PinKind::SelfUpdating)
-                && !is_extension
-                && p.update.is_some()
-                && p.update_on
-                    .as_deref()
-                    .is_some_and(|w| w.trim().eq_ignore_ascii_case("apply")),
+            // Two rows run their own update at each Apply: a `self` tool with its `update:`, and
+            // a Claude plugin, whose route carries the update (`claude plugin update`) — where
+            // that route is the one this OS takes. No other extension: their routes build no
+            // update, and a pin-less row with nothing to run would be skipped in silence.
+            update_each_apply: p
+                .update_on
+                .as_deref()
+                .is_some_and(|w| w.trim().eq_ignore_ascii_case("apply"))
+                && ((declared == Some(PinKind::SelfUpdating)
+                    && !is_extension
+                    && p.update.is_some())
+                    || cmd_route.as_deref() == Some("claude-plugin")),
             // A row's own `update:` is what its upgrade runs; `--check` refuses the two together.
             passage: (declared == Some(PinKind::SelfUpdating)
                 && !is_extension
@@ -1360,8 +1375,8 @@ mod tests {
             "nothing to force away: {uninstall}"
         );
         // ⬜ No upgrade: `scan_outdated` asks only winget/brew, so `outdated` is structurally
-        // false for this route. Wiring one would make it unreachable — the mistake the
-        // claude-plugin route made, whose `upgrade:` has never once been chosen.
+        // false for this route. Wiring one would make it unreachable — as the claude-plugin
+        // route's was, until `update-on: apply` gave it a cadence to run under.
         //
         // ⚠️ That closes only the `outdated` road to Upgrade. The PIN road is closed separately,
         // in `load_from_catalog` — see `an_extension_route_carries_no_pin_because_it_cannot_honour_one`.
@@ -2812,6 +2827,33 @@ slow: true
             steps[0].upgrade, None,
             "no update: → the app's own mechanism"
         );
+    }
+
+    #[test]
+    fn a_claude_plugin_with_update_on_apply_runs_the_routes_update() {
+        // #13: the route already knows the update; `update-on: apply` alone gives it a cadence.
+        // No `version:` and no `update:` — the plugin carries no pin, and the command is the
+        // route's, scoped where the install put it.
+        let mut p = pkg("Superpowers");
+        p.claude_plugin = Some("superpowers@claude-plugins-official".into());
+        p.update_on = Some("apply".into());
+        let s = &steps_from_pkgs(&[("superpowers", p.clone())], Os::Darwin)[0];
+        assert!(s.update_each_apply);
+        assert_eq!(s.pin, None, "an extension carries no pin");
+        assert_eq!(
+            s.upgrade.as_deref(),
+            Some("claude plugin update superpowers@claude-plugins-official --scope user")
+        );
+        // Without the word, presence only — the route's update is unreachable, as before.
+        p.update_on = None;
+        assert!(!steps_from_pkgs(&[("s", p.clone())], Os::Darwin)[0].update_each_apply);
+        // The same word on another extension builds nothing to run: never armed.
+        let mut c = pkg("Copilot Plug");
+        c.copilot_plugin = Some("plug@market".into());
+        c.update_on = Some("apply".into());
+        let cs = &steps_from_pkgs(&[("c", c)], Os::Linux)[0];
+        assert!(!cs.update_each_apply);
+        assert_eq!(cs.upgrade, None);
     }
 
     #[test]

@@ -99,10 +99,11 @@ pub struct MachineFacts<'a> {
     pub installed_version: &'a str,
     /// What the manager announces as the newest version, "" when it announces nothing.
     pub available: &'a str,
-    /// The package declares `version: self` AND its own `update:` command.
+    /// The row runs an update of its OWN: `version: self` with its `update:` command, or the
+    /// `claude-plugin` route's `claude plugin update` under `update-on: apply`.
     pub can_self_update: bool,
     /// ... AND `update-on: apply`: that command runs at each Apply, behind or not, until it
-    /// succeeds once (`updated_this_session`).
+    /// succeeds once (`updated_this_session`). Pin or no pin.
     pub update_each_apply: bool,
     /// That command already SUCCEEDED in this Talos session, and no Refresh has re-armed it.
     pub updated_this_session: bool,
@@ -121,6 +122,15 @@ pub fn action_for(desired: Desired, f: &MachineFacts) -> Option<Action> {
         return Some(Action::Install);
     }
     if desired == Desired::Present && f.present {
+        // `update-on: apply`: the row's own update command knows whether there is anything to
+        // do, so no announcement is needed — nor a version read, nor a pin. Once per session:
+        // after it succeeded the row is done until a Refresh, or the end of a run would find it
+        // pending again and the machine could never read as matching. Asked BEFORE the pin:
+        // the row is a `version: self` tool (its `update:`) or a `claude-plugin:` (the route's
+        // `claude plugin update`, and no pin at all) — one cadence for both.
+        if f.can_self_update && f.update_each_apply {
+            return (!f.updated_this_session).then_some(Action::Upgrade);
+        }
         if let Some(pin) = f.pin.filter(|p| !p.is_empty()) {
             // ⭐ THE KEYWORDS FIRST, because they are statements about POLICY, not versions
             // to converge on — and `compare_versions` would happily read them as 0.0.0.
@@ -142,17 +152,10 @@ pub fn action_for(desired: Desired, f: &MachineFacts) -> Option<Action> {
             // tool rewrote itself behind it. Without `update:`, nothing: not a decision left
             // pending, a decision to leave it to the application.
             if pin.eq_ignore_ascii_case("self") {
-                // Done for the session — its `update-on: apply` command ran ok, or the probe of
-                // its own download found it passing (`unblock:`) — until a Refresh.
+                // Done for the session — the probe of its own download found it passing
+                // (`unblock:`) — until a Refresh.
                 if f.updated_this_session {
                     return None;
-                }
-                // `update-on: apply`: the command itself knows whether there is anything to
-                // do, so no announcement is needed — nor a version read. Once per session: after
-                // it succeeded the row is done until a Refresh, or the end of a run would find it
-                // pending again and the machine could never read as matching.
-                if f.can_self_update && f.update_each_apply {
-                    return (!f.updated_this_session).then_some(Action::Upgrade);
                 }
                 // An unread version is no evidence: no verdict could follow the update, so it
                 // would run on every Apply. An outdated row naming no version: the scan decides.
@@ -536,6 +539,45 @@ mod tests {
         };
         assert_eq!(action_for(Desired::Present, &done), None);
         assert_eq!(action_for(Desired::Absent, &done), Some(Action::Uninstall));
+    }
+
+    #[test]
+    fn a_claude_plugin_updated_on_every_apply_needs_no_pin() {
+        // `claude-plugin:` + `update-on: apply` (#13): an extension carries no pin, and the
+        // route's own `claude plugin update` runs once per session while the plugin is present.
+        let base = MachineFacts {
+            present: true,
+            outdated: false,
+            can_uninstall: true,
+            pin: None,
+            installed_version: "6.2.0",
+            available: "",
+            can_self_update: true,
+            update_each_apply: true,
+            updated_this_session: false,
+        };
+        assert_eq!(action_for(Desired::Present, &base), Some(Action::Upgrade));
+        let done = MachineFacts {
+            updated_this_session: true,
+            ..base
+        };
+        assert_eq!(
+            action_for(Desired::Present, &done),
+            None,
+            "done until Refresh"
+        );
+        assert_eq!(action_for(Desired::Absent, &done), Some(Action::Uninstall));
+        let gone = MachineFacts {
+            present: false,
+            ..done
+        };
+        assert_eq!(action_for(Desired::Present, &gone), Some(Action::Install));
+        // Without the cadence, a plugin is checked by presence only, as before.
+        let plain = MachineFacts {
+            update_each_apply: false,
+            ..base
+        };
+        assert_eq!(action_for(Desired::Present, &plain), None);
     }
 
     #[test]

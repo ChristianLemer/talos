@@ -122,7 +122,19 @@ fn is_self_updating(step: &crate::bundles::Step) -> bool {
 /// or the probe of the download it makes itself (`unblock:`, passage.rs)? The rule's
 /// `can_self_update`, on both sides of the wire.
 fn runs_own_update(step: &crate::bundles::Step) -> bool {
-    is_self_updating(step) && (step.upgrade.is_some() || step.passage.is_some())
+    (is_self_updating(step) && (step.upgrade.is_some() || step.passage.is_some()))
+        || updates_each_apply(step)
+}
+
+/// Does this row run its own update at each Apply, once per session (`update-on: apply`)? A
+/// `version: self` tool with its `update:`, or a `claude-plugin:` row with the route's update
+/// (the load sets `update_each_apply` for exactly those two, and this says them again rather
+/// than trust a flag a manager's row could carry). The predicate every each-Apply rule below
+/// asks, so the two kinds cannot drift apart.
+fn updates_each_apply(step: &crate::bundles::Step) -> bool {
+    step.update_each_apply
+        && step.upgrade.is_some()
+        && (is_self_updating(step) || step.route.as_deref() == Some("claude-plugin"))
 }
 
 /// The row whose upgrade is the probe of its own download: `self`, an `unblock:` for this OS, and
@@ -150,15 +162,13 @@ fn always_probed(step: &crate::bundles::Step) -> bool {
     matches!(
         crate::bundles::classify_pin(step.pin.as_deref()),
         Some(crate::bundles::PinKind::Exact(_))
-    ) || (step.update_each_apply && step.upgrade.is_some())
+    ) || updates_each_apply(step)
 }
 
 /// Is this step judged by the version it leaves (`unmoved_reason`)? Not a tool whose own update
 /// runs at each Apply: "nothing to do" is its usual answer, and a success.
 fn judges_version(step: &crate::bundles::Step, action: crate::decision::Action) -> bool {
-    !(action == crate::decision::Action::Upgrade
-        && is_self_updating(step)
-        && step.update_each_apply)
+    !(action == crate::decision::Action::Upgrade && updates_each_apply(step))
 }
 
 /// Does this step, run to `ok`, make its row done for the rest of the session? Only for a tool
@@ -172,10 +182,35 @@ fn arms_session_done(
     ok: bool,
 ) -> bool {
     use crate::decision::Action;
-    ok && matches!(action, Action::Upgrade | Action::Install)
-        && is_self_updating(step)
-        && step.upgrade.is_some()
-        && step.update_each_apply
+    ok && matches!(action, Action::Upgrade | Action::Install) && updates_each_apply(step)
+}
+
+/// What an each-Apply update that exited ok did, from the versions read before and after it:
+/// "already current" when nothing moved, the two versions when it did. None when either version
+/// is unread — no verdict is better than a guessed one. A Claude plugin is loaded at Claude
+/// Code's next start (MEASURED: "Restart to apply changes"), so the line says when it counts.
+fn each_apply_outcome(
+    before: Option<&str>,
+    after: Option<&str>,
+    route: Option<&str>,
+) -> Option<String> {
+    use crate::decision::{bare_version, compare_versions};
+    let known = |v: Option<&str>| {
+        let v = bare_version(v.unwrap_or("").trim()).to_string();
+        (!v.is_empty() && v != "?").then_some(v)
+    };
+    let (was, now) = (known(before)?, known(after)?);
+    if compare_versions(&was, &now) == 0 {
+        return Some(format!(
+            "[update] already current at {now} — nothing to do."
+        ));
+    }
+    let when = if route == Some("claude-plugin") {
+        " — Claude Code loads it at its next start"
+    } else {
+        ""
+    };
+    Some(format!("[update] {was} → {now}{when}."))
 }
 
 /// Is this row done for the session — its own update exited ok, or the Apply installed it
@@ -1271,7 +1306,7 @@ fn step_json(
         "selfUpdate": runs_own_update(s),
         // ... and that upgrade is the probe of the download the application makes itself.
         "passage": probes_passage(s),
-        "updateEachApply": is_self_updating(s) && s.upgrade.is_some() && s.update_each_apply,
+        "updateEachApply": updates_each_apply(s),
         "pin": s.pin, "categories": s.categories,
         "requires": s.requires, // package names this one needs (B5 transitive pull, §8)
         // `{name: lowest version}` for each `Name >= x` requirement: model.js `requiresReason`
@@ -5094,6 +5129,15 @@ async fn do_step(
                 .await;
         }
     }
+    // What the update did, in words: an exit 0 is the success of an each-Apply update, and says
+    // nothing of whether it moved — the versions read before and after do.
+    if ok && !cancelled && action == Action::Upgrade && updates_each_apply(step) {
+        let before = aim.before.and_then(|p| p.version.as_deref());
+        let now = after.as_ref().and_then(|p| p.version.as_deref());
+        if let Some(line) = each_apply_outcome(before, now, step.route.as_deref()) {
+            say(socket, i, &line).await;
+        }
+    }
     if arms_session_done(step, action, ok && !cancelled) {
         state
             .updated_this_session
@@ -7308,6 +7352,62 @@ mod tests {
             !super::arms_session_done(&managed, Action::Upgrade, true),
             "a manager upgrade"
         );
+    }
+
+    /// A Claude plugin with `update-on: apply` (#13) is an each-Apply row like a `self` tool: its
+    /// update runs once per session, is never judged `unchanged`, and an ok makes it done. A
+    /// plugin without the word is none of these.
+    #[test]
+    fn a_claude_plugin_updated_on_every_apply_is_an_each_apply_row() {
+        let mut s = brew_step("plug@market", None);
+        s.route = Some("claude-plugin".into());
+        s.is_extension = true;
+        s.upgrade = Some("claude plugin update plug@market --scope user".into());
+        s.update_each_apply = true;
+        assert!(super::updates_each_apply(&s));
+        assert!(super::runs_own_update(&s), "the rule's canSelfUpdate");
+        assert!(super::always_probed(&s), "re-observed before every Apply");
+        assert!(
+            !super::judges_version(&s, Action::Upgrade),
+            "already current is a success"
+        );
+        assert!(super::arms_session_done(&s, Action::Upgrade, true));
+        assert!(!super::arms_session_done(&s, Action::Upgrade, false));
+        let row = super::step_json(&s, 0, &[], &crate::timings::Timings::new(), Os::Darwin);
+        assert_eq!(row["updateEachApply"], true, "{row}");
+        assert_eq!(row["selfUpdate"], true, "{row}");
+        let mut plain = s.clone();
+        plain.update_each_apply = false;
+        assert!(!super::updates_each_apply(&plain));
+        assert!(!super::runs_own_update(&plain));
+        assert!(super::judges_version(&plain, Action::Upgrade));
+    }
+
+    /// The row says what an each-Apply update did, from the versions read around it — and says
+    /// nothing when one of them is unread.
+    #[test]
+    fn an_each_apply_update_says_whether_it_moved() {
+        use super::each_apply_outcome as out;
+        assert_eq!(
+            out(Some("1.1.0"), Some("1.1.0"), Some("claude-plugin")).as_deref(),
+            Some("[update] already current at 1.1.0 — nothing to do.")
+        );
+        assert_eq!(
+            out(Some("6.2.0"), Some("7.0.0"), Some("claude-plugin")).as_deref(),
+            Some("[update] 6.2.0 → 7.0.0 — Claude Code loads it at its next start.")
+        );
+        assert_eq!(
+            out(Some("v2.1.308"), Some("2.1.321"), Some("npm")).as_deref(),
+            Some("[update] 2.1.308 → 2.1.321.")
+        );
+        assert_eq!(
+            out(Some("2.1"), Some("2.1.0"), None).as_deref(),
+            Some("[update] already current at 2.1.0 — nothing to do."),
+            "one version, two spellings"
+        );
+        assert_eq!(out(None, Some("1.0"), None), None);
+        assert_eq!(out(Some("1.0"), Some(""), None), None);
+        assert_eq!(out(Some("?"), Some("1.0"), None), None);
     }
 
     /// The plan tells the front which rows are done for the session, so the front's twin of

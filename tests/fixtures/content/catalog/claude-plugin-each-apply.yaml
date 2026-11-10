@@ -1,0 +1,12 @@
+# FORM: a Claude Code plugin kept current — `update-on: apply` alone. The route runs
+# `claude plugin update <id> --scope user` once per session while the plugin is wanted and
+# present; no `version:` (a plugin carries none) and no `update:` (the command is the route's).
+name: Claude Plugin Each Apply
+description: A plugin for the agent, updated by the Apply
+claude-plugin: kept@market
+marketplace: vendor/market
+detect: kept
+update-on: apply
+category: [automation]
+requires:
+  - Npm Agent

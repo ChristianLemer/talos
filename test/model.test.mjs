@@ -444,6 +444,24 @@ test("update-on apply: the Apply runs the tool's update every time, and the row 
   assert.equal(isUpdatedEachApply(m, 0), false, "only a row the Apply keeps present");
 });
 
+test("update-on apply on a claude plugin: no pin, the same labels and the same done-for-the-session", () => {
+  const m = seedPinned({ pin: null, isExtension: true, selfUpdate: true, updateEachApply: true });
+  setStatusData(m, 0, "ok");
+  setInstalledVersion(m, 0, "6.2.0");
+  assert.deepEqual(planActions(m), ["upgrade"], "the route's update is offered");
+  assert.equal(isUpdatedEachApply(m, 0), true, "the row says `updated at the next Apply`");
+  setUpdatedThisSession(m, 0);
+  assert.equal(actionOf(m, 0), null);
+  assert.deepEqual(applyPlan(m), [], "the end of the run: nothing to send");
+  assert.equal(isUpdatedThisSession(m, 0), true, "the row says `done this session`");
+  assert.equal(isUpdatedEachApply(m, 0), false);
+  // A plugin without the word: presence only, no label.
+  const plain = seedPinned({ pin: null, isExtension: true, selfUpdate: false, updateEachApply: false });
+  setStatusData(plain, 0, "ok");
+  assert.deepEqual(planActions(plain), []);
+  assert.equal(isUpdatedEachApply(plain, 0), false);
+});
+
 test("update-on apply: once the update succeeded, the end of the run already matches — until a Refresh", () => {
   const m = seedPinned({ pin: "self", selfUpdate: true, updateEachApply: true });
   setStatusData(m, 0, "ok");

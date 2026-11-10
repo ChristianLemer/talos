@@ -522,12 +522,12 @@ export function actionOf(model, i) {
     updatedThisSession: p.updatedThisSession,
   });
 }
-// Will the next Apply run this row's own `update:` (`update-on: apply`)? Only for a row
-// it will act on: an auto row is never touched, an unwanted or out-of-scope one is not updated.
+// Will the next Apply run this row's own update (`update-on: apply`) — a `self` tool's `update:`
+// or a Claude plugin's `claude plugin update`? Only for a row it will act on: an auto row is
+// never touched, an unwanted or out-of-scope one is not updated.
 export function isUpdatedEachApply(model, i) {
   const p = model.pkgs.get(i);
-  return !!(p?.selfUpdate && p?.updateEachApply) && isSelfUpdating(model, i)
-    && actionOf(model, i) === "upgrade";
+  return !!(p?.selfUpdate && p?.updateEachApply) && actionOf(model, i) === "upgrade";
 }
 // The server's `self-updated`: done for the session (its update exited ok, or the Apply installed
 // it), or — `done` false — forgotten by a removal that exited ok.
@@ -540,7 +540,7 @@ export function setUpdatedThisSession(model, i, done = true) {
 export function isUpdatedThisSession(model, i) {
   const p = model.pkgs.get(i);
   return !!(p?.selfUpdate && p?.updateEachApply && p?.updatedThisSession) && p.present === true
-    && isSelfUpdating(model, i) && actionOf(model, i) === null;
+    && actionOf(model, i) === null;
 }
 // Did the probe of this row's own download find it passing, in this session? The Apply leaves it
 // until a Refresh. `isPassageBehind`: and there is an update to run in the application — a probe

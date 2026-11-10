@@ -141,6 +141,11 @@ export function actionFor(
 ) {
   if (desired === "present" && !present) return "install";
   if (desired === "present" && present) {
+    // `update-on: apply`: the row's own update command knows whether there is anything to do,
+    // so no announcement, no version read and no pin are needed. Once per session: after it
+    // succeeded the row is done until a Refresh. Asked BEFORE the pin: a `version: self` tool
+    // (its `update:`) and a `claude-plugin:` (the route's update, no pin) share the cadence.
+    if (canSelfUpdate && updateEachApply) return updatedThisSession ? null : "upgrade";
     if (pin) {
       // ⭐ THE KEYWORDS FIRST — they state POLICY, not a version to converge on, and
       // compareVersions would read them as 0.0.0. MEASURED:
@@ -158,13 +163,9 @@ export function actionFor(
       // `update:` runs when the version the tool REPORTS is behind what the manager announces
       // (the receipt is stale by construction). Without `update:`, nothing.
       if (p === "self") {
-        // Done for the session — its `update-on: apply` command ran ok, or the probe of its own
-        // download found it passing (`unblock:`) — until a Refresh.
+        // Done for the session — the probe of its own download found it passing (`unblock:`) —
+        // until a Refresh.
         if (updatedThisSession) return null;
-        // `update-on: apply`: the command itself knows whether there is anything to do, so no
-        // announcement is needed — nor a version read. Once per session: after it succeeded the
-        // row is done until a Refresh, or the end of a run would find it pending again.
-        if (canSelfUpdate && updateEachApply) return updatedThisSession ? null : "upgrade";
         const inst = installedVersion || "";
         // An unread version is no evidence: no verdict could follow the update, so it would run
         // on every Apply. An outdated row naming no version: the scan decides.

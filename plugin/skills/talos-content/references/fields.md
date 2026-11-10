@@ -511,7 +511,8 @@ application — so the row is **not** arbitration and shows one number with `upd
 - Where an extension route wins (`claude-plugin`, `copilot-plugin`, `skill`,
   `vscode-extension`, a released `nu-plugin`), the package carries no version, so `self` and
   `update:` do not apply there and the route keeps its own update. `--check` names a package
-  where that is so on every OS.
+  where that is so on every OS. A Claude plugin is kept current with `update-on: apply` alone
+  (next section).
 - The command must fit how the tool is installed on the machine: `claude update` updates an
   npm or native install and does nothing under mise (measured), where `mise upgrade claude`
   is the one.
@@ -521,6 +522,35 @@ application — so the row is **not** arbitration and shows one number with `upd
 
 Brew casks declaring `auto_updates true` are **not** read as `self`: Talos scans brew with
 `--greedy-auto-updates` on purpose, so such a cask is upgraded unless its file says `self`.
+
+### `update-on: apply` on a `claude-plugin:` row — keeping a plugin current
+
+Once installed, a Claude plugin stays at its first version: nothing announces a newer one, and
+Claude Code updates by itself only the marketplaces a person switched on in `/plugin`. The route
+knows the update, so the row only says **when** to run it:
+
+```yaml
+  - name: Superpowers
+    claude-plugin: superpowers@claude-plugins-official
+    marketplace: anthropics/claude-plugins-official
+    detect: superpowers
+    update-on: apply           # runs `claude plugin update <id> --scope user`
+```
+
+- The Apply runs the update while the plugin is wanted and present, **once per session**, the
+  same contract as a `self` tool's `update-on: apply`: done after an ok update (or the install
+  that put it there), `done this session` on the row, until **Refresh** or a restart re-arms it.
+- The update decides whether there is anything to do. Its verdict is the version read before
+  and after: the row says `already current at 7.0.0` or `6.2.0 → 7.0.0`, and the journal keeps
+  both versions. An exit 0 that moved nothing is a success, never `unchanged`.
+- A new version loads at Claude Code's **next start** (`Restart to apply changes`).
+- **No `version:` and no `update:`.** A plugin carries no pin (the marketplace serves one
+  version), and the command is the route's. `--check` names either one, and the form it asks
+  for instead. `update-on:` on another extension (`copilot-plugin`, `skill`,
+  `vscode-extension`) does nothing, and `--check` says so too.
+- It needs an engine of **v0.2.0** or later: an older one reads the row as presence only.
+- MEASURED (Claude Code 2.1.321): `claude plugin update` asks nothing in a pty, exits 0 when
+  current and on an upgrade, and exits 1 for a plugin its marketplace does not list.
 
 ### `unblock:` — the download an application makes itself, behind a corporate firewall
 
@@ -621,8 +651,9 @@ version comparison reads it as `0.0.0`, concludes the machine is *above* the pin
 to be enough.
 
 ⚠️ **An extension route (`claude-plugin`, `copilot-plugin`, `skill`, `vscode-extension`) carries no pin at
-all**, keyword included. None of them builds an upgrade command, so a pin would produce an
-action with nothing to run — a row skipped in silence, which this engine refuses.
+all**, keyword included. None of them can install a chosen version, so a pin would produce an
+action with nothing honest to run — a row skipped in silence, which this engine refuses. A
+Claude plugin moves to the marketplace's version with `update-on: apply`, never toward a pin.
 
 ⚠️ Quote the value. Not because the parser needs it (the field is typed as a string, so
 `1.10` will not be read as a float here), but because the field now holds two natures —

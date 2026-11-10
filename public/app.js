@@ -637,9 +637,9 @@ function paintVersion(i) {
       : M.isPassageReady(model, i)
         ? ` <span class="v-held" title="the download this application makes itself came through the firewall (206); there is no newer version to take yet">download passes</span>`
         : M.isUpdatedThisSession(model, i)
-      ? ` <span class="v-held" title="installed, or its own update command ran ok, in this session; the Apply leaves it until Refresh, and the Apply after a Refresh runs the update again">done this session</span>`
+      ? ` <span class="v-held" title="installed, or its update command ran ok, in this session; the Apply leaves it until Refresh, and the Apply after a Refresh runs the update again">done this session</span>`
       : M.isUpdatedEachApply(model, i)
-        ? ` <span class="v-held" title="the next Apply runs the tool's own update command; the command knows when there is nothing to do, and once it ran ok the row is done until Refresh">updated at the next Apply</span>`
+        ? ` <span class="v-held" title="the next Apply runs its update command; the command knows when there is nothing to do, and once it ran ok the row is done until Refresh">updated at the next Apply</span>`
         : M.isSelfUpdating(model, i)
           ? ` <span class="v-held" title="the application keeps itself current; Talos installs it when it is missing">updates itself</span>`
           : "";

@@ -169,9 +169,25 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
                  `self` — the runtime ignores it, which is not what you meant"
             ));
         }
+        // A Claude plugin is the one extension whose route carries its own update (`claude
+        // plugin update`): `update-on: apply` alone runs it, so neither a command nor a version
+        // is the author's to write — said where the route is claude-plugin on every OS.
+        // Where it is the route on SOME OS only, the cadence runs on that one, and `update-on:`
+        // needs no command there either.
+        let routes: Vec<Option<String>> = [
+            crate::platform::Os::Windows,
+            crate::platform::Os::Darwin,
+            crate::platform::Os::Linux,
+        ]
+        .into_iter()
+        .map(|os| crate::bundles::route_for(&cp.pkg, os))
+        .collect();
+        let is_plugin = |r: &Option<String>| r.as_deref() == Some("claude-plugin");
+        let plugin_everywhere = routes.iter().all(is_plugin);
+        let plugin_somewhere = routes.iter().any(is_plugin);
         // `update:` is the tool's own update command, and it replaces the manager's upgrade
         // only for a package that updates itself. Anywhere else it would run never.
-        if cp.pkg.update.is_some() && pin != Some(PinKind::SelfUpdating) {
+        if cp.pkg.update.is_some() && pin != Some(PinKind::SelfUpdating) && !plugin_everywhere {
             r.errors.push(format!(
                 "{label}: `update:` runs only with `version: \"self\"` — here the manager \
                  upgrades the package and the command never runs"
@@ -200,21 +216,42 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
         ]
         .into_iter()
         .all(|os| crate::bundles::is_extension_route_for(&cp.pkg, os));
-        if cp.pkg.update.is_some() && extension_everywhere {
+        if cp.pkg.update.is_some() && plugin_everywhere {
+            r.errors.push(format!(
+                "{label}: `update:` never runs on a `claude-plugin:` row — the route updates the \
+                 plugin itself: write `update-on: apply` alone, and it runs `claude plugin \
+                 update` once per session"
+            ));
+        } else if cp.pkg.update.is_some() && extension_everywhere {
             r.errors.push(format!(
                 "{label}: `update:` never runs — an extension is the route on every OS, and an \
                  extension carries no version, so `self` does not apply"
             ));
         }
-        if cp.pkg.update_on.is_some() && cp.pkg.update.is_none() {
+        if plugin_everywhere && cp.pkg.version.is_some() {
             r.errors.push(format!(
-                "{label}: `update-on:` needs `update:` — there is no command to run"
+                "{label}: `version:` means nothing on a `claude-plugin:` row — the marketplace \
+                 serves one version, and `update-on: apply` is what keeps the plugin at it"
             ));
+        }
+        if cp.pkg.update_on.is_some() && cp.pkg.update.is_none() && !plugin_somewhere {
+            r.errors.push(if extension_everywhere {
+                format!(
+                    "{label}: `update-on:` does nothing here — among extensions, only a \
+                     `claude-plugin:` row updates at each Apply"
+                )
+            } else {
+                format!("{label}: `update-on:` needs `update:` — there is no command to run")
+            });
         }
         // Without `update-on: apply`, it runs when the version the tool reports is behind what
         // winget or brew announces: both halves must exist, or the command is dead or runs for
         // nothing. With `update-on: apply`, neither is needed.
-        if cp.pkg.update.is_some() && pin == Some(PinKind::SelfUpdating) && !each_apply {
+        if cp.pkg.update.is_some()
+            && pin == Some(PinKind::SelfUpdating)
+            && !each_apply
+            && !plugin_everywhere
+        {
             if cp.pkg.detect.is_none() {
                 r.errors.push(format!(
                     "{label}: `update:` needs `detect:` — without it the version read is the \
@@ -932,6 +969,74 @@ mod tests {
         );
         assert!(
             text.contains("catalog/e.yaml: `update:` needs a `winget:` or `brew:` id"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_claude_plugin_updates_with_update_on_apply_alone() {
+        // #13. The form: `update-on: apply`, no command, no version — clean.
+        let d = tmp("plugin-update-on");
+        write(
+            &d,
+            "catalog/a.yaml",
+            "name: A\nclaude-plugin: a@m\nmarketplace: v/m\ndetect: a\nupdate-on: apply\n",
+        );
+        // The form first asked for (`self` + `update:` + `update-on`): ONE finding, pointing at
+        // the form that works — not the `detect:`/`winget:` advice meant for a `self` tool.
+        write(
+            &d,
+            "catalog/b.yaml",
+            "name: B\nclaude-plugin: b@m\nversion: self\nupdate: claude plugin update b@m\n\
+             update-on: apply\n",
+        );
+        // `update:` without `self` on a plugin: the plugin's finding, not "needs `self`".
+        write(
+            &d,
+            "catalog/c.yaml",
+            "name: C\nclaude-plugin: c@m\nupdate: claude plugin update c@m\n",
+        );
+        // A version on a plugin row means nothing.
+        write(
+            &d,
+            "catalog/e.yaml",
+            "name: E\nclaude-plugin: e@m\nversion: \"1.2.0\"\n",
+        );
+        // Another extension: the word does nothing there, and says so.
+        write(
+            &d,
+            "catalog/f.yaml",
+            "name: F\ncopilot-plugin: f@m\nupdate-on: apply\n",
+        );
+        let text = run(&d.join("catalog"), &d.join("bundles")).render();
+        assert!(!text.contains("catalog/a.yaml"), "{text}");
+        assert!(
+            text.contains("catalog/b.yaml: `update:` never runs on a `claude-plugin:` row"),
+            "{text}"
+        );
+        assert!(
+            text.contains("catalog/b.yaml: `version:` means nothing"),
+            "{text}"
+        );
+        assert!(!text.contains("catalog/b.yaml: `update:` needs"), "{text}");
+        assert!(
+            !text.contains("catalog/b.yaml: `update:` runs only"),
+            "{text}"
+        );
+        assert!(
+            text.contains("catalog/c.yaml: `update:` never runs on a `claude-plugin:` row"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("catalog/c.yaml: `update:` runs only"),
+            "{text}"
+        );
+        assert!(
+            text.contains("catalog/e.yaml: `version:` means nothing"),
+            "{text}"
+        );
+        assert!(
+            text.contains("catalog/f.yaml: `update-on:` does nothing here"),
             "{text}"
         );
     }

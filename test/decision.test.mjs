@@ -276,6 +276,19 @@ test("actionFor: `update-on: apply` runs the tool's update whenever it is presen
   assert.equal(actionFor("absent", done), "uninstall");
 });
 
+test("actionFor: a claude plugin updated at each Apply needs no pin — as decision.rs", () => {
+  const base = {
+    present: true, outdated: false, canUninstall: true, pin: null,
+    installedVersion: "6.2.0", available: "", canSelfUpdate: true, updateEachApply: true,
+  };
+  assert.equal(actionFor("present", base), "upgrade");
+  const done = { ...base, updatedThisSession: true };
+  assert.equal(actionFor("present", done), null, "done until Refresh");
+  assert.equal(actionFor("absent", done), "uninstall");
+  assert.equal(actionFor("present", { ...done, present: false }), "install");
+  assert.equal(actionFor("present", { ...base, updateEachApply: false }), null, "presence only");
+});
+
 test("actionFor: a self row done this session is left, behind or not — as decision.rs", () => {
   // The probe of its own download passed (`unblock:`): the person updates it in the application.
   const behind = {

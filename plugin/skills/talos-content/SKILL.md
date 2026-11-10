@@ -140,10 +140,12 @@ requires: [Git]
 ```yaml
 # claude-plugin — `plugin@marketplace`; `marketplace:` is registered first.
 # `detect:` is the name `claude plugin list` reports, NOT a binary on PATH.
+# `update-on: apply` runs `claude plugin update` once per session (engine 0.2.0+).
 name: Superpowers
 claude-plugin: superpowers@claude-plugins-official
 marketplace: anthropics/claude-plugins-official
 detect: superpowers
+update-on: apply
 requires: [Claude Code]
 ```
 
@@ -223,8 +225,9 @@ a word has no leading digits, so the comparison would read `0.0.0`, decide the m
 **Quote the value.**
 
 **An extension route carries no pin at all.** `claude-plugin`, `copilot-plugin`, `skill`
-and `vscode-extension` build no upgrade command, so a `version:` on them — keyword included —
-produces an action with nothing to run.
+and `vscode-extension` cannot install a chosen version, so a `version:` on them — keyword
+included — produces an action with nothing honest to run. A Claude plugin is kept current with
+`update-on: apply` alone: no `version:`, no `update:`.
 
 **A sidecar is not a package.** `catalog/` holds `.yaml` files *and* the `.nu` scripts a
 config-atom calls. `--check` reads only the YAML. When you count packages, count YAML.
