@@ -1698,3 +1698,38 @@ test("minimum: the server's held message for a minimum is not stored, so it cann
   setHold(m, 1, "brew cannot serve the pin"); // a hold the front did not compute is kept
   assert.equal(holdReason(m, 1), "brew cannot serve the pin");
 });
+
+test("minimum: a held requirement the user put OUT of scope holds nothing — the server installs", () => {
+  // Third review: the server never acts on an out-of-scope row, so it never lands in
+  // `held_absent`, and what requires it is not dropped. The front must agree.
+  const m = seedChain();
+  setDecision(m, 1, "in");
+  setDecision(m, 2, "in");
+  setScope(m, 1, "out");
+  assert.equal(holdReason(m, 2), null);
+  assert.deepEqual(planActions(m).length, 1, "Ext's install is announced, as it will run");
+});
+
+test("minimum: the row's own minimum is said before a chain, in the server's order", () => {
+  const m = createModel();
+  loadPlan(
+    m,
+    [
+      { i: 0, name: "Orca", bundle: "", posture: "opt-in", canUninstall: true },
+      {
+        i: 1, name: "A", bundle: "", posture: "opt-in", canUninstall: true,
+        requires: ["Orca"], requiresMin: { Orca: "2" },
+      },
+      {
+        i: 2, name: "Ext", bundle: "", posture: "opt-in", canUninstall: true,
+        requires: ["A", "Orca"], requiresMin: { Orca: "3" },
+      },
+    ],
+    [],
+  );
+  setPresence(m, 0, true);
+  setInstalledVersion(m, 0, "1.0");
+  setDecision(m, 1, "in");
+  setDecision(m, 2, "in");
+  assert.equal(holdReason(m, 2), "requires Orca >= 3 (found 1.0)");
+});

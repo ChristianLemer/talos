@@ -256,22 +256,26 @@ export function minimumReason(model, i, seen = new Set()) {
   const p = model.pkgs.get(i);
   if (!p || seen.has(i)) return null;
   seen.add(i);
+  const reqs = [];
   for (const req of p.requires ?? []) {
     let j = null;
     for (const [k, c] of model.pkgs) if (c.name === req) { j = k; break; }
-    const q = j == null ? null : model.pkgs.get(j);
-    if (!q) continue; // a dangling name is requiresReason's to say
-    if (q.present === true) {
-      const why = belowMinimum(p, req, q);
-      if (why) return why;
-      continue;
-    }
-    // On its way in, but ITS install is held by a minimum: it will not be there, so neither
-    // can this row's install run — server.rs `drop_requiring_held`, same words. A hold too,
-    // never a scope verdict: a present row stays removable.
-    if (desiredOf(model, j) === "present" && q.canUninstall && minimumReason(model, j, seen)) {
-      return `requires ${req}`;
-    }
+    if (j != null) reqs.push([req, j, model.pkgs.get(j)]); // a dangling name is requiresReason's
+  }
+  // The server's order: the row's own minimum on a PRESENT requirement first
+  // (`held_by_minimum`), then the chain (`drop_requiring_held`), so both say the same words.
+  for (const [req, , q] of reqs) {
+    if (q.present !== true) continue;
+    const why = belowMinimum(p, req, q);
+    if (why) return why;
+  }
+  // On its way in, but ITS install is held by a minimum: it will not be there, so neither can
+  // this row's install run — `drop_requiring_held`, same words. "On its way in" is the
+  // requirement's own action, as the server decides it (scope, override and all). A hold too,
+  // never a scope verdict: a present row stays removable.
+  for (const [req, j, q] of reqs) {
+    if (q.present === true) continue;
+    if (actionOf(model, j) === "install" && minimumReason(model, j, seen)) return `requires ${req}`;
   }
   return null;
 }

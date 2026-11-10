@@ -69,5 +69,7 @@ test("the dependents' repair judges a minimum on the requirement AFTER its step"
   const refreshed = apply.indexOf("nodes[*i].version = after.version.clone();");
   const judged = apply.indexOf("held_by_minimum(Action::Install, &nodes[d]");
   assert.ok(refreshed > 0 && judged > refreshed, "refreshed before it is judged");
+  const present = apply.indexOf("nodes[*i].present_now = after.present == Some(true);");
+  assert.ok(present > 0 && judged > present, "presence refreshed too");
   assert.match(apply.slice(judged, judged + 300), /send_held\(socket, d, &low\)/, "the refusal leaves a trace");
 });
