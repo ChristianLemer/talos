@@ -72,6 +72,26 @@ pub fn read_requirements(raw: &[String]) -> Vec<Requirement> {
         .collect()
 }
 
+/// `(name, lowest version)` for each requirement that sets one, ONE entry per name. Two
+/// minimums on one name (`--check` refuses it) keep the HIGHER, so the engine
+/// (`below_minimum` takes the first match) and the front (a map, the last key wins) can
+/// never read different floors off the same list.
+pub fn minimums_of(reqs: &[Requirement]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for r in reqs {
+        let Some(min) = &r.min else { continue };
+        match out.iter_mut().find(|(n, _)| *n == r.name) {
+            Some((_, kept)) => {
+                if crate::decision::compare_versions(min, kept) > 0 {
+                    *kept = min.clone();
+                }
+            }
+            None => out.push((r.name.clone(), min.clone())),
+        }
+    }
+    out
+}
+
 /// The minimum deps reasons over. The real Steps satisfy it structurally.
 #[derive(Debug, Clone, Default)]
 pub struct DepNode {
@@ -718,5 +738,19 @@ mod tests {
         nodes.push(dep("Nushell", &[], true, true, true));
         let idx = make_index(&nodes);
         assert_eq!(requires_blocked(&nodes[0], &nodes, &idx), None);
+    }
+
+    #[test]
+    fn two_minimums_on_one_name_keep_the_higher_once() {
+        let reqs = read_requirements(&[
+            "Orca >= 2.0".into(),
+            "Nushell".into(),
+            "Orca >= 1.0".into(),
+            "Orca >= 2.1".into(),
+        ]);
+        assert_eq!(
+            minimums_of(&reqs),
+            vec![("Orca".to_string(), "2.1".to_string())]
+        );
     }
 }

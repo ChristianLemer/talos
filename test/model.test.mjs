@@ -37,6 +37,7 @@ import {
   profileStateOf,
   removeFromPersonal,
   removeProfile,
+  replacedBy,
   requiresReason,
   scopeOf,
   scopeReason,
@@ -1575,4 +1576,30 @@ test("requiresReason: a bare requirement still asks for presence only", () => {
   const m = seedWithMinimum();
   m.pkgs.get(1).requiresMin = {};
   assert.equal(requiresReason(m, 1), null, "present at no known version is enough");
+});
+
+test("a replacement held by a minimum replaces nothing (landsHere reads the minimum)", () => {
+  // Review finding: Beta `replaces: [Stable]` and requires `Orca >= 2`, Orca at 1.x. Beta is
+  // held, so it cannot land — Stable must not read "replaced by Beta" and go wanted-absent.
+  const m = createModel();
+  loadPlan(
+    m,
+    [
+      { i: 0, name: "Orca", bundle: "", posture: "opt-in", canUninstall: true },
+      { i: 1, name: "Stable", bundle: "", posture: "opt-in", canUninstall: true },
+      {
+        i: 2, name: "Beta", bundle: "", posture: "opt-in", canUninstall: true,
+        replaces: ["Stable"], requires: ["Orca"], requiresMin: { Orca: "2" },
+      },
+    ],
+    [],
+  );
+  setPresence(m, 0, true);
+  setInstalledVersion(m, 0, "1.9");
+  setPresence(m, 1, true);
+  setDecision(m, 1, "in");
+  setDecision(m, 2, "in");
+  assert.equal(replacedBy(m, 1), null, "held, so it replaces nothing");
+  setInstalledVersion(m, 0, "2.0");
+  assert.equal(replacedBy(m, 1), "Beta", "at the minimum, the override is back");
 });

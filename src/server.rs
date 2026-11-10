@@ -6328,6 +6328,19 @@ mod tests {
     }
 
     #[test]
+    fn a_row_sends_its_requirement_names_and_their_minimums_apart() {
+        // model.js reads `requires` as NAMES (the pull, the order) and `requiresMin` for the
+        // minimum check: `Orca >= 1.4.252` must never reach the front as a name.
+        let no_timings = crate::timings::Timings::new();
+        let mut s = brew_step("plugin", None);
+        s.requires = vec!["Orca".into(), "Nushell".into()];
+        s.minimums = vec![("Orca".into(), "1.4.252".into())];
+        let row = super::step_json(&s, 0, &[], &no_timings, Os::Darwin);
+        assert_eq!(row["requires"], serde_json::json!(["Orca", "Nushell"]));
+        assert_eq!(row["requiresMin"], serde_json::json!({"Orca": "1.4.252"}));
+    }
+
+    #[test]
     fn a_row_says_on_the_wire_whether_it_runs_its_own_update() {
         // The front's twin of `action_for` reads `canSelfUpdate` from here.
         let no_timings = crate::timings::Timings::new();

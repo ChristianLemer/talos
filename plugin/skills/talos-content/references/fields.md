@@ -67,7 +67,10 @@ requires:
   another row, and that row's own `version:` already says it.
 - **The rule.** If the requirement is present but **below** the minimum, the row is held
   before the Apply, and the reason names both versions: `requires Orca >= 1.4.252 (found
-  1.4.237)`. Versions are compared the same way as for pins.
+  1.4.237)`. Versions are compared numerically, segment by segment, with the engine's own
+  comparator (`1.10` is above `1.9`). The hold is the whole row's: out of scope, Talos neither
+  installs, updates nor removes it until the requirement is new enough. One entry per
+  package: `--check` refuses the same name twice.
 - **Unknown is held.** A present requirement whose version Talos cannot read gives
   `requires Orca >= 1.4.252 (version unknown)`. That is not a pass, and not "too old" either.
 - **Never upgraded by this rule.** The minimum holds the dependent. It never upgrades the

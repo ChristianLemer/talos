@@ -208,6 +208,19 @@ export function manualScope(model, i) {
 // only, also like the engine: a chain whose middle link is itself blocked reports
 // nothing here. That gap is real and shared by both sides — one rule, one hole,
 // never two behaviours.
+// Is the PRESENT requirement `q` (named `req`) too old for row `p`? The reason, or null —
+// deps.rs `below_minimum`, word for word (test/requires-min-parity.test.mjs reads both).
+// An unknown version is UNKNOWN: held and said, never satisfied on a guess, never called
+// "too old" either. The requirement's own row is never upgraded by this: it decides its
+// own version, as always.
+function belowMinimum(p, req, q) {
+  const min = Object.hasOwn(p.requiresMin ?? {}, req) ? p.requiresMin[req] : null;
+  if (min == null) return null;
+  const v = String(q.installedVersion ?? "").trim();
+  if (!v) return `requires ${req} >= ${min} (version unknown)`;
+  if (compareVersions(v, min) < 0) return `requires ${req} >= ${min} (found ${bareVersion(v)})`;
+  return null;
+}
 export function requiresReason(model, i) {
   const p = model.pkgs.get(i);
   if (!p) return null;
@@ -223,15 +236,9 @@ export function requiresReason(model, i) {
     // Presence FIRST and unconditionally — the day `cmd /c ver` answers, the row
     // behaves like any other. Without this ordering the fix would break Windows.
     if (q?.present === true) {
-      // Present, but maybe too old: `requires: [Orca >= 1.4.252]`. deps.rs
-      // `below_minimum`, word for word. An unknown version is UNKNOWN — held and said,
-      // never satisfied on a guess, never called "too old" either. The requirement's own
-      // row is never upgraded by this: it decides its own version, as always.
-      const min = p.requiresMin?.[req];
-      if (min == null) continue;
-      const v = String(q.installedVersion ?? "").trim();
-      if (!v) return `requires ${req} >= ${min} (version unknown)`;
-      if (compareVersions(v, min) < 0) return `requires ${req} >= ${min} (found ${bareVersion(v)})`;
+      // Present, but maybe too old: `requires: [Orca >= 1.4.252]` (belowMinimum).
+      const why = belowMinimum(p, req, q);
+      if (why) return why;
       continue;
     }
     // Otherwise: is it on its way in? Wanting it is NOT enough. `wantedNames` closes
@@ -420,7 +427,9 @@ function landsHere(model, j, first, nameToId) {
   return (p.requires ?? []).every((r) => {
     const k = nameToId.get(r);
     const q = k == null ? null : model.pkgs.get(k);
-    return !!q && (q.present === true || (first.has(r) && !!q.canUninstall && inScopeAtRest(model, k)));
+    // Present but below a minimum is no landing either: the row is held (belowMinimum).
+    if (q?.present === true) return !belowMinimum(p, r, q);
+    return !!q && first.has(r) && !!q.canUninstall && inScopeAtRest(model, k);
   });
 }
 function inScopeAtRest(model, i) {

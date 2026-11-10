@@ -1005,10 +1005,7 @@ pub fn load_from_catalog(catalog_dir: &str, kit_dir: &str, os: Os, log: &dyn Fn(
                 .as_deref()
                 .and_then(crate::managers::InstallScope::from_word),
             requires: reqs.iter().map(|r| r.name.clone()).collect(),
-            minimums: reqs
-                .iter()
-                .filter_map(|r| Some((r.name.clone(), r.min.clone()?)))
-                .collect(),
+            minimums: crate::deps::minimums_of(&reqs),
             replaces: p.replaces.clone(),
             posture: Posture::OptIn, // catalog default: free + out-by-default
             // (bundle-driven: the bundle pull decides "in", not the posture).
@@ -1520,6 +1517,23 @@ mod tests {
                 "{id}: route {route:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_requirement_with_a_minimum_loads_as_a_name_and_a_minimum() {
+        // Every reader of `Step.requires` (the pull, the order, the re-probe) wants NAMES;
+        // the floor travels apart, in `minimums`.
+        let plan = load_from_catalog(FIXTURE_CATALOG, "", Os::Darwin, &|_| {});
+        let s = plan
+            .steps
+            .iter()
+            .find(|s| s.id == "requires-minimum")
+            .expect("the fixture's minimum must be there");
+        assert_eq!(s.requires, vec!["Nushell".to_string()]);
+        assert_eq!(
+            s.minimums,
+            vec![("Nushell".to_string(), "0.100".to_string())]
+        );
     }
 
     #[test]

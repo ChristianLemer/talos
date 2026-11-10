@@ -19,7 +19,7 @@ test("the minimum's wordings are the same in deps.rs and model.js", () => {
   );
   const js = slice(
     readFileSync(new URL("../public/model.js", import.meta.url), "utf8"),
-    "export function requiresReason(",
+    "function belowMinimum(",
     "\n}",
   );
   // `{}` / `{min}` in Rust, `${…}` in JS: both become one placeholder.

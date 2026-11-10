@@ -366,6 +366,10 @@ pub fn run(catalog_dir: &Path, bundles_dir: &Path) -> Report {
         let mut req_names: Vec<String> = Vec::new();
         for entry in &cp.pkg.requires {
             match crate::deps::parse_requirement(entry) {
+                Ok(req) if req_names.contains(&req.name) => r.errors.push(format!(
+                    "{label}: requires `{}` twice — one entry per package",
+                    req.name
+                )),
                 Ok(req) => {
                     if let Some(min) = req.min {
                         minimums.push((label.clone(), req.name.clone(), min));
@@ -1121,6 +1125,14 @@ mod tests {
             "the well-formed minimum reads clean: {text}"
         );
         assert_eq!(r.errors.len(), 1, "{text}");
+        // One entry per package: a second minimum on the same name is refused.
+        write(
+            &d,
+            "catalog/plugin.yaml",
+            "name: Plugin\nbrew: p\nrequires:\n  - Orca >= 1.0\n  - Orca >= 2.0\n",
+        );
+        let text = run(&d.join("catalog"), &d.join("bundles")).render();
+        assert!(text.contains("requires `Orca` twice"), "{text}");
     }
 
     #[test]
